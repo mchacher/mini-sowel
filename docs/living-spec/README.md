@@ -61,6 +61,43 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
 `radio: error 0x<code>`, or the EZSP error (a version outside 13 to 19 is named); a malformed
 `--radio` prints the expected form and exits 2.
 
+### Pairs a device
+
+`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair [seconds]` (180 by default,
+1 to 254) starts the radio's Zigbee network and opens pairing:
+
+- the first time, the radio **forms** a network on channel 15, with random keys and identifiers,
+  and saves it in its own flash; the host writes a backup of it (identifiers and keys) to
+  `mini-sowel-data/network.json` (`--data <dir>` for another folder), readable by its owner only,
+  never printed;
+- after that, the radio **resumes** its network; a coordinator network another program made is
+  used as it is, never destroyed, and named so;
+- a device that joins is shown with its address, then with the manufacturer and model it sends
+  (an original Sonoff SNZB-02 sends `eWeLink TH01`); `device: <address> unknown unknown` when it
+  does not answer, `device: <address> not identified (radio busy)` when the radio stays busy;
+  beyond 32 devices in one session, `pairing: too many devices, <address> ignored`; a device
+  already in the network that announces itself again is shown again;
+- pairing closes at the end of the time (identifications in progress finish first, at most 40 s),
+  or on Ctrl-C (exit 130).
+
+With `--pair`, the identification's `network: <state>` line is replaced by the `network:` line
+below; `network: resumed (made by another program), ...` for a network the host has no backup
+of. When a network is formed, the backup is written as soon as the radio accepts it, before the
+steps after it; a backup of another network already in the folder is kept, renamed
+`network-<PAN id>.json`. Warnings (a refused setting, a dropped callback) go to the error output.
+
+```
+network: formed, channel 15, PAN 0x1A2B, extended PAN 0xDDDDDDDDDDDDDDDD
+pairing: open for 180 s
+joined: 0x00124B0012345678 (0x5C3D)
+device: 0x00124B0012345678 eWeLink TH01
+pairing: closed
+```
+
+New errors: `radio: network did not start`, `radio: the radio is not a coordinator`,
+`radio: the radio refused <command> (status 0x<code>)`, `no random source: <reason>`,
+`cannot write <path>`. The host keeps nothing about devices between runs.
+
 ### Measures the coverage of Zigbee2MQTT's definitions
 
 A tool on the Mac, `tools/z2m-coverage` (`npm run report` in its folder), loads the pinned version
@@ -82,8 +119,9 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
-No device, equipment, zone, mode or recipe exists in the tool: it has no storage and no API; it
-talks to the radio only to identify it.
+No device, equipment, zone, mode or recipe exists in the tool: it stores no device and has no
+API; the host keeps one file, the network backup. It talks to the radio to identify it, start
+its network and pair devices.
 
 ## History
 
@@ -93,3 +131,4 @@ talks to the radio only to identify it.
 | 002 | Measures the coverage of Zigbee2MQTT's definitions for the leading brands |
 | 003 | The firmware shows its free memory and boots in QEMU on the Mac |
 | 004 | The host identifies the Dongle Max's radio over TCP (ASH, EZSP) |
+| 005 | The radio runs a Zigbee network; the host pairs a device and shows what it is |

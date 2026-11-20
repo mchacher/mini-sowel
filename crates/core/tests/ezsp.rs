@@ -121,27 +121,30 @@ fn a_version_response_with_stack_type_1_is_an_error() {
 }
 
 #[test]
-fn a_callback_frame_between_command_and_response_is_ignored() {
+fn a_callback_frame_between_command_and_response_is_returned_apart_and_the_response_still_matches()
+{
     let mut ezsp = Ezsp::new();
     ezsp.version_command();
     // Callback bit (0x10) set, any sequence.
-    let callback = [0x77, 0x90, 0x19];
-    assert_eq!(ezsp.parse_response(&callback), Ok(Parsed::Callback));
+    let callback = [0x77, 0x90, 0x01, 0x19, 0x00, 0x15];
+    assert_eq!(
+        ezsp.parse_response(&callback),
+        Ok(Parsed::Callback(Callback {
+            id: 0x19,
+            params: vec![0x15]
+        }))
+    );
     let params = params_of(ezsp.parse_response(&legacy_response(0, 0, &[13, 2, 0, 0x74])));
     assert_eq!(params, vec![13, 2, 0, 0x74]);
 }
 
 #[test]
-fn responses_with_truncated_or_overflow_bit_or_without_response_bit_are_errors() {
+fn responses_with_truncated_bit_or_without_response_bit_are_errors() {
     let mut ezsp = Ezsp::new();
     ezsp.version_command();
     assert_eq!(
         ezsp.parse_response(&[0, 0x82, 0, 13, 2, 0, 0]),
         Err(EzspError::Truncated)
-    );
-    assert_eq!(
-        ezsp.parse_response(&[0, 0x81, 0, 13, 2, 0, 0]),
-        Err(EzspError::Overflow)
     );
     assert_eq!(
         ezsp.parse_response(&[0, 0x00, 0, 13, 2, 0, 0]),
@@ -203,4 +206,213 @@ fn the_response_format_is_read_from_the_response_itself() {
     ezsp.on_first_version(&first).unwrap();
     let params = params_of(ezsp.parse_response(&legacy_response(1, 0, &[13, 2, 0x40, 0x74])));
     assert_eq!(params, vec![13, 2, 0x40, 0x74]);
+}
+
+#[test]
+fn a_response_with_the_overflow_flag_is_used_and_the_flag_is_reported_once() {
+    let mut ezsp = Ezsp::new();
+    ezsp.version_command();
+    let params = params_of(ezsp.parse_response(&[0, 0x81, 0, 13, 2, 0x40, 0x74]));
+    assert_eq!(params, vec![13, 2, 0x40, 0x74]);
+    assert!(ezsp.take_overflow());
+    assert!(!ezsp.take_overflow());
+}
+
+// ---- commands and callbacks of the coordinator (spec 005) ----
+
+#[test]
+fn form_network_parameters_are_20_bytes_in_the_order_of_the_reference() {
+    let ext = [1, 2, 3, 4, 5, 6, 7, 8];
+    let bytes = NetworkParameters::new(ext, 0x1A2B, 15).encode();
+    assert_eq!(
+        bytes,
+        vec![
+            1, 2, 3, 4, 5, 6, 7, 8, // extended PAN
+            0x2B, 0x1A, // PAN, little-endian
+            5,    // power
+            15,   // channel
+            0, 0, 0, 0, // join method, network manager (2), update id
+            0x00, 0xF8, 0xFF, 0x07, // channels 0x07FFF800
+        ]
+    );
+}
+
+#[test]
+fn set_initial_security_state_is_43_bytes_with_bitmask_0b84_keys_sequence_0_and_blank_address() {
+    let tc = [0xAA; 16];
+    let network = [0xBB; 16];
+    let bytes = initial_security_state(&tc, &network);
+    assert_eq!(bytes.len(), 43);
+    assert_eq!(&bytes[..2], &[0x84, 0x0B]);
+    assert_eq!(&bytes[2..18], &tc);
+    assert_eq!(&bytes[18..34], &network);
+    assert_eq!(bytes[34], 0);
+    assert_eq!(&bytes[35..], &[0xFF; 8]);
+}
+
+#[test]
+fn stack_status_network_up_is_one_byte_in_ezsp_13_and_four_in_14_and_later() {
+    assert_eq!(
+        parse_stack_status(false, &[0x90]),
+        Ok(StackStatus::NetworkUp)
+    );
+    assert_eq!(
+        parse_stack_status(true, &[0x15, 0, 0, 0]),
+        Ok(StackStatus::NetworkUp)
+    );
+    assert_eq!(
+        parse_stack_status(false, &[0x91]),
+        Ok(StackStatus::NetworkDown)
+    );
+    assert_eq!(
+        parse_stack_status(true, &[0x16, 0, 0, 0]),
+        Ok(StackStatus::NetworkDown)
+    );
+    // A short callback is an error, not a panic.
+    assert_eq!(parse_stack_status(true, &[0x15]), Err(EzspError::TooShort));
+}
+
+#[test]
+fn trust_center_join_handler_gives_node_id_address_status_and_decision() {
+    let mut bytes = vec![0x3D, 0x5C];
+    bytes.extend_from_slice(&[0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00]);
+    bytes.extend_from_slice(&[1, 0, 0x00, 0x00]); // status, decision, parent
+    bytes.push(0xEE); // a field a newer stack appends
+    let join = parse_trust_center_join(&bytes).unwrap();
+    assert_eq!(join.node_id, 0x5C3D);
+    assert_eq!(join.eui64, [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x78]);
+    assert_eq!(join.status, 1);
+    assert_eq!(join.decision, 0);
+}
+
+fn aps_bytes(profile: u16, cluster: u16) -> Vec<u8> {
+    ApsFrame {
+        profile,
+        cluster,
+        source_endpoint: 1,
+        destination_endpoint: 1,
+        options: 0x1140,
+        group_id: 0,
+        sequence: 7,
+    }
+    .encode()
+}
+
+#[test]
+fn incoming_message_handler_in_13_and_14_layouts_gives_the_same_message() {
+    let payload = [0x18, 0x42, 0x01, 0xAA];
+    // EZSP 13: type, APS, lqi, rssi, sender, binding index, address index, payload.
+    let mut v13 = vec![0x00];
+    v13.extend(aps_bytes(0x0104, 0x0000));
+    v13.extend_from_slice(&[0xC8, 0xD0, 0x3D, 0x5C, 0xFF, 0xFF]);
+    v13.push(payload.len() as u8);
+    v13.extend_from_slice(&payload);
+    // EZSP 14+: type, APS, packet info (18 bytes), payload.
+    let mut v14 = vec![0x00];
+    v14.extend(aps_bytes(0x0104, 0x0000));
+    v14.extend_from_slice(&[0x3D, 0x5C]);
+    v14.extend_from_slice(&[0; 8]);
+    v14.extend_from_slice(&[0xFF, 0xFF, 0xC8, 0xD0]);
+    v14.extend_from_slice(&[0; 4]);
+    v14.push(payload.len() as u8);
+    v14.extend_from_slice(&payload);
+    v14.push(0xEE); // trailing byte
+
+    let a = parse_incoming_message(false, &v13).unwrap();
+    let b = parse_incoming_message(true, &v14).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.aps.profile, 0x0104);
+    assert_eq!(a.aps.cluster, 0x0000);
+    assert_eq!(a.aps.source_endpoint, 1);
+    assert_eq!(a.aps.destination_endpoint, 1);
+    assert_eq!(a.sender, 0x5C3D);
+    assert_eq!(a.payload, payload);
+}
+
+#[test]
+fn message_sent_handler_in_13_and_14_gives_status_and_tag() {
+    // EZSP 13: type, destination, APS, tag (1 byte), status (1 byte).
+    let mut v13 = vec![0x00, 0x3D, 0x5C];
+    v13.extend(aps_bytes(0, 5));
+    v13.extend_from_slice(&[0x2A, 0x66]); // tag 42, delivery failed
+    // EZSP 14+: status (4 bytes), type, destination, APS, tag (2 bytes).
+    let mut v14 = vec![0x02, 0x0C, 0x00, 0x00, 0x00, 0x3D, 0x5C];
+    v14.extend(aps_bytes(0, 5));
+    v14.extend_from_slice(&[0x2A, 0x00]);
+
+    let a = parse_message_sent(false, &v13).unwrap();
+    let b = parse_message_sent(true, &v14).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.tag, 42);
+    assert_eq!(a.status, STATUS_DELIVERY_FAILED);
+    assert_eq!(a.destination, 0x5C3D);
+}
+
+#[test]
+fn message_sent_handler_ezsp_13_with_a_trailing_length_byte_is_parsed() {
+    let mut v13 = vec![0x00, 0x3D, 0x5C];
+    v13.extend(aps_bytes(0, 5));
+    v13.extend_from_slice(&[0x2A, 0x00, 0x00]); // tag, status OK, length of contents 0
+    let sent = parse_message_sent(false, &v13).unwrap();
+    assert_eq!(sent.status, STATUS_OK);
+    assert_eq!(sent.tag, 42);
+}
+
+#[test]
+fn send_unicast_in_13_has_a_one_byte_tag_and_in_14_a_two_byte_tag() {
+    let aps = ApsFrame {
+        profile: 0x0104,
+        cluster: 0x0000,
+        source_endpoint: 1,
+        destination_endpoint: 2,
+        options: 0x1140,
+        group_id: 0,
+        sequence: 0,
+    };
+    let message = [0x10, 0x05, 0x00, 0x04, 0x00];
+    let v13 = send_unicast(false, 0x5C3D, &aps, 0x0105, &message);
+    let v14 = send_unicast(true, 0x5C3D, &aps, 0x0105, &message);
+    let head = [
+        0x00, // type: direct
+        0x3D, 0x5C, // destination
+        0x04, 0x01, 0x00, 0x00, 0x01, 0x02, 0x40, 0x11, 0x00, 0x00, 0x00, // APS
+    ];
+    let mut expected13 = head.to_vec();
+    expected13.push(0x05); // tag cut to one byte
+    expected13.push(5);
+    expected13.extend_from_slice(&message);
+    let mut expected14 = head.to_vec();
+    expected14.extend_from_slice(&[0x05, 0x01]); // tag in two bytes
+    expected14.push(5);
+    expected14.extend_from_slice(&message);
+    assert_eq!(v13, expected13);
+    assert_eq!(v14, expected14);
+}
+
+#[test]
+fn a_response_with_no_parameters_is_a_response() {
+    // clearTransientLinkKeys answers with nothing: it must be awaited and matched.
+    let mut ezsp = Ezsp::new();
+    ezsp.version_command();
+    let first = params_of(ezsp.parse_response(&legacy_response(0, 0, &[13, 2, 0x40, 0x74])));
+    ezsp.on_first_version(&first).unwrap(); // extended format from now on, sequence 1
+    let command = ezsp.command(ID_CLEAR_TRANSIENT_LINK_KEYS, &[]);
+    assert_eq!(command, vec![2, 0x00, 0x01, 0x6B, 0x00]);
+    let response = extended_response(2, ID_CLEAR_TRANSIENT_LINK_KEYS, &[]);
+    assert_eq!(ezsp.parse_response(&response), Ok(Parsed::Response(vec![])));
+}
+
+#[test]
+fn statuses_of_ezsp_13_are_read_as_the_statuses_of_14_and_later() {
+    assert_eq!(
+        read_status(false, &[0x93, 9]),
+        Ok((STATUS_NOT_JOINED, &[9u8][..]))
+    );
+    assert_eq!(
+        read_status(true, &[0x17, 0, 0, 0, 9]),
+        Ok((STATUS_NOT_JOINED, &[9u8][..]))
+    );
+    assert_eq!(read_status(false, &[0xA1]).unwrap().0, STATUS_BUSY);
+    assert!(status_is_busy(STATUS_BUSY));
+    assert!(!status_is_busy(STATUS_OK));
 }

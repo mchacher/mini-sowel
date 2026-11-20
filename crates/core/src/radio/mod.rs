@@ -3,19 +3,31 @@
 //! the transport and the time.
 
 pub mod ash;
+mod coordinator;
 pub mod ezsp;
 pub mod transport;
+pub mod zcl;
+pub mod zdo;
 
+use std::collections::VecDeque;
 use std::fmt;
 
 use ash::{AshError, AshFailure, Event, Output, Session};
-use ezsp::{Ezsp, EzspError, NetworkState, Parsed};
+pub use coordinator::{Network, NetworkKeys, NetworkSettings, PairingEvent, network_line};
+use ezsp::{Callback, Ezsp, EzspError, NetworkState, Parsed};
 pub use transport::{RadioTransport, TransportError};
 
 /// How long one read waits, in milliseconds.
 const READ_SLICE_MS: u64 = 50;
 /// Milliseconds to wait for the answer to an EZSP command once it is acknowledged.
 const RESPONSE_TIMEOUT_MS: u64 = 5000;
+/// Callbacks kept while a command waits for its response: the oldest is dropped past this.
+const MAX_QUEUED_CALLBACKS: usize = 16;
+/// Bytes given to the ASH session at a time: a burst of frames read at once is handed over in
+/// small parts, so that the session's own bound on unread payloads is never reached.
+const FEED_CHUNK: usize = 16;
+/// Payloads taken from the session and not yet read; the oldest is dropped past this.
+const MAX_INBOX: usize = 64;
 
 /// What the radio is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +75,23 @@ pub enum RadioError {
     Ezsp(EzspError),
     /// The command was acknowledged but never answered.
     NoResponse,
+    /// A command was refused by the radio: its name and the status it answered.
+    Refused {
+        command: &'static str,
+        status: u32,
+    },
+    /// The network did not come up in time.
+    NetworkDidNotStart,
+    /// The radio holds a network it is only a member of (router or end device).
+    NotCoordinator,
+    /// The radio was not identified first.
+    NotIdentified,
+    /// An argument out of range.
+    InvalidArgument(&'static str),
+    /// The caller's random source failed.
+    Random(String),
+    /// The caller's `on_formed` callback failed: its message, shown as it is.
+    OnFormed(String),
 }
 
 impl fmt::Display for RadioError {
@@ -73,6 +102,15 @@ impl fmt::Display for RadioError {
             RadioError::Send(e) => write!(f, "{e}"),
             RadioError::Ezsp(e) => write!(f, "{e}"),
             RadioError::NoResponse => write!(f, "no answer to command"),
+            RadioError::Refused { command, status } => {
+                write!(f, "the radio refused {command} (status 0x{status:X})")
+            }
+            RadioError::NetworkDidNotStart => write!(f, "network did not start"),
+            RadioError::NotCoordinator => write!(f, "the radio is not a coordinator"),
+            RadioError::NotIdentified => write!(f, "the radio was not identified"),
+            RadioError::InvalidArgument(what) => write!(f, "{what}"),
+            RadioError::Random(reason) => write!(f, "no random source: {reason}"),
+            RadioError::OnFormed(message) => write!(f, "{message}"),
         }
     }
 }
@@ -97,6 +135,12 @@ pub struct Radio<T: RadioTransport, C: FnMut() -> u64> {
     now: C,
     session: Session,
     ezsp: Ezsp,
+    /// Callbacks received while a command waited for its response; at most
+    /// `MAX_QUEUED_CALLBACKS`, the oldest dropped.
+    callbacks: VecDeque<Callback>,
+    /// EZSP frames received and not yet read; at most `MAX_INBOX`.
+    inbox: VecDeque<Vec<u8>>,
+    pairing: coordinator::Pairing,
 }
 
 impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
@@ -107,7 +151,47 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             now,
             session: Session::new(),
             ezsp: Ezsp::new(),
+            callbacks: VecDeque::new(),
+            inbox: VecDeque::new(),
+            pairing: coordinator::Pairing::default(),
         }
+    }
+
+    /// Keeps a callback for later if it is one of the four the coordinator uses; the others
+    /// are ignored.
+    fn queue_callback(&mut self, callback: Callback) {
+        if !matches!(
+            callback.id,
+            ezsp::ID_STACK_STATUS_HANDLER
+                | ezsp::ID_TRUST_CENTER_JOIN_HANDLER
+                | ezsp::ID_INCOMING_MESSAGE_HANDLER
+                | ezsp::ID_MESSAGE_SENT_HANDLER
+        ) {
+            return;
+        }
+        if self.callbacks.len() >= MAX_QUEUED_CALLBACKS {
+            self.callbacks.pop_front();
+            log::warn!("callback queue full: the oldest callback was dropped");
+        }
+        self.callbacks.push_back(callback);
+    }
+
+    /// Logs the overflow flag if a frame carried it: the radio is short of buffers.
+    fn log_overflow(&self) {
+        if self.ezsp.take_overflow() {
+            log::warn!("the radio reports an overflow (short of buffers)");
+        }
+    }
+
+    /// Reads the payloads the session delivered outside a command: callbacks are queued, any
+    /// other frame is dropped.
+    fn drain_payloads(&mut self) {
+        while let Some(payload) = self.inbox.pop_front() {
+            if let Ok(Parsed::Callback(callback)) = self.ezsp.parse_response(&payload) {
+                self.queue_callback(callback);
+            }
+        }
+        self.log_overflow();
     }
 
     fn write(&mut self, out: &Output) -> Result<(), RadioError> {
@@ -123,11 +207,17 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let mut buf = [0u8; 256];
         let n = self.transport.read(&mut buf, READ_SLICE_MS)?;
         let now = (self.now)();
-        let mut out = if n > 0 {
-            self.session.receive(&buf[..n], now)
-        } else {
-            Output::default()
-        };
+        let mut out = Output::default();
+        for chunk in buf[..n].chunks(FEED_CHUNK) {
+            out.merge(self.session.receive(chunk, now));
+            while let Some(payload) = self.session.next_payload() {
+                if self.inbox.len() >= MAX_INBOX {
+                    self.inbox.pop_front();
+                    log::warn!("too many unread frames: the oldest was dropped");
+                }
+                self.inbox.push_back(payload);
+            }
+        }
         out.merge(self.session.poll(now));
         self.write(&out)?;
         let mut connected = false;
@@ -160,9 +250,21 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let mut acknowledged_at: Option<u64> = None;
         self.transport.write(&bytes)?;
         loop {
-            while let Some(payload) = self.session.next_payload() {
-                match self.ezsp.parse_response(&payload)? {
-                    Parsed::Callback => {}
+            while let Some(payload) = self.inbox.pop_front() {
+                let parsed = match self.ezsp.parse_response(&payload) {
+                    Ok(parsed) => parsed,
+                    // A response to an earlier command, arrived after its timeout: ignored.
+                    Err(EzspError::WrongSequence { expected, got })
+                        if (1..128).contains(&expected.wrapping_sub(got)) =>
+                    {
+                        log::warn!("a late response (sequence {got}) was ignored");
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                self.log_overflow();
+                match parsed {
+                    Parsed::Callback(callback) => self.queue_callback(callback),
                     Parsed::Response(params) => return Ok(params),
                 }
             }

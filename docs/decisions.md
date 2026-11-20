@@ -157,3 +157,14 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   cannot be lifted even on one function. Keeping such calls few, small and commented keeps the
   rest of the firmware checked by the compiler. Below revision 3 the PSRAM needs a workaround the
   C compiler applies and Rust code would not get; the Dongle Max's ESP32-D0WDR2-V3 is revision 3.
+
+## D12: Small crates in the host when std cannot do it
+
+- **Date**: 2026-11-21
+- **Choice**: the host may use a small, widely used crate when the standard library cannot do
+  the job portably; the first is `ctrlc` (spec 005), so that Ctrl-C during pairing closes the
+  radio's joining. Randomness is read from the system (`/dev/urandom`) without a crate. The core
+  stays free of operating-system crates; it uses `log` only.
+- **Why**: leaving joining open on the radio after the user stopped the host would let a device
+  join a network nobody watches; std has no signal handling. Each crate added is named in a
+  spec and its review.

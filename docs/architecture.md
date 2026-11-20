@@ -7,7 +7,8 @@ exists: the target architecture is decision D1, and what comes next is in the ro
 
 ```
           crates/core  (Rust library: name, version, banner, memory line;
-                        radio/: ASH and EZSP, no socket and no clock)
+                        radio/: ASH, EZSP, ZDO, ZCL, the coordinator; no socket, no
+                        clock, no random source)
                   │                         │
      crates/host (Rust, Mac)          firmware/ (Rust std on ESP-IDF, ESP32)
      prints the banner; with          writes the banner and its free memory
@@ -28,8 +29,8 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
-| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer and the EZSP commands, as state machines fed with bytes and time; `RadioTransport` is the trait a transport implements | `crates/core/` |
-| Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio | `crates/host/` |
+| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, and the coordinator (start or resume the network, pairing, identifying a device), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
+| Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system | `ui/` |
 | Tools | Node programs run on the Mac, never shipped in the box: `z2m-coverage` loads Zigbee2MQTT's device library (`zigbee-herdsman-converters`, pinned) and writes its coverage report | `tools/` (each tool its own `package.json`) |
@@ -55,5 +56,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 ## Data
 
-The box stores and exchanges no data. On the Mac, `tools/z2m-coverage/report.md` is the coverage
+The box stores no data. On the Mac, the host writes `network.json` (the network's identifiers
+and keys, mode 0600) to its data folder after forming a network; the radio keeps the network
+itself in its own flash. On the Mac, `tools/z2m-coverage/report.md` is the coverage
 report, committed with the library version and date it measures.
