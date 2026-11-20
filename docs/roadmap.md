@@ -29,16 +29,39 @@ on the Sowel side.
 | A4 | Form a network and let the SNZB-02 join: network key and channel kept in a file; the host shows the joining device's address, manufacturer and model | The SNZB-02 shows with its name after a press on its button | |
 | A5 | Read its temperature and survive a restart: temperature, humidity and battery shown at each report, through a generic reading of the standard clusters; after a restart of the host the network resumes and the sensor keeps reporting | Readings scroll, then come back after a restart | |
 
+## Next milestone
+
+**B. The engine on the Mac**. The user can then: on the Mac, with the Dongle Max, pair sensors
+and a relay, put them in rooms, and see a motion sensor switch the light on (`motion-light`, as in
+Sowel); everything readable through an API in Sowel's format, and live in the interface.
+Why next: it proves the heart of the true north, a minimal Sowel automating on its own, before it
+moves into the box (E). Done when: a real Sonoff motion sensor switches a real Sonoff ZBMINIR2
+relay through `motion-light`, each room's state shows in the interface, and all of it survives a
+restart.
+
+Hardware: the Dongle Max, the SNZB-02, a Sonoff motion sensor and a Sonoff ZBMINIR2 relay (the
+user has them). Approved by the user on 2026-11-21, to be built in an autonomous run as far as
+possible without hardware.
+
+| # | Increment | Done when | Status |
+| - | --------- | --------- | ------ |
+| B1 | Simulated radio: the host replays a scenario (a sensor joins, temperatures, motion) without the dongle (first: makes everything after it testable without hardware, in CI) | `--sim <scenario>` shows the same lines as the real radio | |
+| B2 | Devices in Sowel's format: a paired device becomes a Sowel `Device` with its data read generically (temperature, humidity, battery, motion, on/off, level), stored on disk, read with `GET /api/v1/devices`; memory ceilings tested from here (second: Sowel's contract, D3, is the base of the rest) | The JSON matches Sowel's, for the real SNZB-02 | |
+| B3 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | |
+| B4 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | |
+| B5 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
+| B6 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
+
 ## Later milestones
 
 One line each, planned when their turn comes. The letter D is skipped: decisions are D1, D2...
 
-- **B. Engine on the Mac**: devices, equipments, zones, modes, API and WebSocket in Sowel's format,
-  simulated radio, generic reading of the standard ZCL clusters, Zigbee2MQTT definitions export
-  (Tuya datapoint interpreter included), memory ceilings in the tests, `motion-light` lighting a
-  real bulb.
-- **C. Recipe proposals**: pair a sensor, pick the room, accept the proposal (depends on a
-  prototype in the current Sowel).
+- **C. Recipe proposals**: pair a sensor, pick the room, accept the proposal; Sowel's modes
+  (depends on a prototype in the current Sowel).
+- **I. Device recognition beyond the standard clusters**: Zigbee2MQTT definitions export (Tuya
+  datapoint interpreter included), Philips' brand library, hand-written definitions for the
+  common Legrand, Sonoff and Aqara devices (the A1 report: the generic reading already covers
+  71 % of the library).
 - **E. On the box**: firmware with the real adapters, the interface built in, OTA with rollback,
   commissioning password; first exercised in QEMU (emulated Ethernet serving the interface, OTA
   rollback, the emulated UART bridged to the Dongle Max's TCP radio).
@@ -56,10 +79,8 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-| 2026-11-20 | The generic reading of the standard clusters first, the export second: it handles 71 % of the library (50 % fully, 21 % with only the manufacturer's extras missed), the export 44 %; lighting is standard but its commands are brand or device code | Spec 002 report |
 | 2026-11-20 | Count the distinct brand functions per brand (Philips' 584 lights rely on one brand library: porting it once may cover them) | Spec 002 report |
 | 2026-11-20 | The first CI run after the push proves QEMU starts on the Ubuntu runner with its five system libraries (not run locally) | Spec 003 review |
-| 2026-11-20 | Legrand (86 % gap), Sonoff (51 %), Aqara (38 %): hand-written definitions for their common devices | Spec 002 report |
 
 ## Done
 
@@ -87,3 +108,7 @@ Every change to this roadmap: date, what changed, why.
   report added to the inbox (for milestone B).
 - 2026-11-20: A2 done (spec 003), autonomous run: firmware revision 3 with PSRAM, 362 KB internal
   and 2045 KB PSRAM free at start in QEMU; one inbox line (first CI run with QEMU).
+- 2026-11-21: milestone B planned with the user (six increments, B1 to B6); the ZBMINIR2 relay
+  and a Sonoff motion sensor replace a bulb; modes moved to C; the definitions export and the
+  hand-written definitions grouped in a new milestone I (after C), as the A1 report shows the
+  generic reading covers more; two inbox lines from the A1 report placed (B2, I).
