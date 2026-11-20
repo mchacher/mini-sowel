@@ -17,13 +17,15 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 | `crates/host` | mini-Sowel on a Mac (or a Linux or Windows computer) |
 | `firmware/` | mini-Sowel on the ESP32 of the Dongle Max (Rust on ESP-IDF) |
 | `ui/` | The web interface (Preact, TypeScript), in Sowel's design system |
+| `tools/` | Node tools run on the Mac, not shipped in the box: `z2m-coverage` measures how many of Zigbee2MQTT's device definitions the box can reuse |
 | `docs/`, `specs/` | What the tool does, how it is built, every change |
 
 ## Install
 
 1. **Rust**: install [rustup](https://rustup.rs). The repository pins its Rust version; `rustup`
    installs it on the first `cargo` command.
-2. **Node.js** 24 or newer, then the interface's packages: `cd ui && npm ci`.
+2. **Node.js** 24 or newer, then the packages of the interface and of the tools:
+   `cd ui && npm ci`, and `cd tools/z2m-coverage && npm ci`.
 3. **The ESP32 toolchain**, to build the firmware:
    - macOS: `brew install cmake ninja`; Linux: install `cmake`, `ninja-build`, `python3`,
      `python3-venv` and `libudev-dev` with the system's package manager; Windows: follow the
@@ -42,6 +44,7 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 cargo run -p mini-sowel-host                      # on the computer
 cd ui && npm run dev                              # the interface, on http://localhost:5173
 cd firmware && cargo build --release              # the ESP32 firmware
+cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```
 

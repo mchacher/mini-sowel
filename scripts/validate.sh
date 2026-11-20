@@ -21,6 +21,11 @@ if [ ! -d ui/node_modules ]; then
   exit 1
 fi
 
+if [ ! -d tools/z2m-coverage/node_modules ]; then
+  echo "validate: tools/z2m-coverage/node_modules is missing. Run: cd tools/z2m-coverage && npm ci" >&2
+  exit 1
+fi
+
 step "Docs"
 sh scripts/check-docs.sh
 
@@ -31,8 +36,9 @@ rustfmt --check --edition 2024 firmware/build.rs firmware/src/*.rs
 step "Rust: lint (core, host)"
 cargo clippy --workspace --all-targets --quiet -- -D warnings
 
-step "UI: format, lint"
+step "UI and tools: format, lint"
 (cd ui && npm run -s format:check && npm run -s lint)
+(cd tools/z2m-coverage && npm run -s format:check)
 
 if $fast; then
   printf '\nvalidate --fast: OK\n'
@@ -44,6 +50,9 @@ cargo test --workspace --quiet
 
 step "UI: types, tests, build, budget"
 (cd ui && npm run -s typecheck && npm test --silent && npm run -s build >/dev/null && npm run -s check:bundle)
+
+step "Tools: types, tests"
+(cd tools/z2m-coverage && npm run -s typecheck && npm test --silent)
 
 step "Firmware: ESP32 build and lint"
 if [ -f "$HOME/export-esp.sh" ]; then

@@ -132,3 +132,15 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   requests are made with `gh pr create`; merges stay squash merges after the user's yes.
 - **Why**: a backup and a public home for the open-source project (D5), and a CI that checks
   every change, the firmware build included, on a machine other than the author's.
+
+## D10: Node tools in `tools/`
+
+- **Date**: 2026-11-20
+- **Choice**: the Node tools of D1 live in `tools/<name>/`, each with its own `package.json` and
+  lock file, outside the interface; TypeScript run directly by Node 24 (type stripping, no build
+  step), checked by `tsc` and `node:test`, formatted by Prettier with the interface's settings,
+  and part of `sh scripts/validate.sh` and of the CI. A library a tool measures or exports is
+  pinned to an exact version. The first one is `tools/z2m-coverage` (spec 002).
+- **Why**: a tool's dependencies (Zigbee2MQTT's library, about 5 000 definitions) must not weigh
+  on the interface's packages or budget; Node runs TypeScript the user already knows without a
+  build step; pinning makes a measure repeatable.

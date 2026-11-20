@@ -12,6 +12,8 @@ exists: the target architecture is decision D1, and what comes next is in the ro
      prints the banner                writes the banner to the serial log
 
      ui/ (Preact + TypeScript, browser): Sowel layout, the tool's name
+
+     tools/z2m-coverage (Node, Mac only): Zigbee2MQTT's library → report.md
 ```
 
 The core has no hardware or operating-system dependency: the same code is compiled for the Mac
@@ -26,6 +28,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 | Host | The program on the Mac | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system | `ui/` |
+| Tools | Node programs run on the Mac, never shipped in the box: `z2m-coverage` loads Zigbee2MQTT's device library (`zigbee-herdsman-converters`, pinned) and writes its coverage report | `tools/` (each tool its own `package.json`) |
 | Checks | The verdict and the docs check | `scripts/validate.sh`, `scripts/check-docs.sh`, `.githooks/` |
 
 ## Builds
@@ -36,9 +39,12 @@ app, run by Vite's development server; neither the host nor the box serves it.
   `xtensa-esp32-espidf`, ESP-IDF version pinned in `firmware/.cargo/config.toml`; the build
   downloads ESP-IDF into `firmware/.embuild/` (ignored by git). Settings of ESP-IDF:
   `firmware/sdkconfig.defaults`.
+- **Tools** (`tools/<name>/`): TypeScript run directly by Node 24, no build step; type-checked by
+  `tsc`, tested with `node:test`.
 - **Interface** (`ui/`): Vite builds `ui/dist/`; `ui/scripts/check-bundle-budget.mjs` checks the
   first load against its budget.
 
 ## Data
 
-None: the tool stores and exchanges no data.
+The box stores and exchanges no data. On the Mac, `tools/z2m-coverage/report.md` is the coverage
+report, committed with the library version and date it measures.

@@ -7,6 +7,8 @@
 # UI
 /ui/node_modules/
 /ui/dist/
+# Tools
+/tools/*/node_modules/
 # Secrets and local settings
 .env
 .claude/settings.local.json

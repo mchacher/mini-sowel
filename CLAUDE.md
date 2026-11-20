@@ -51,11 +51,13 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 
 ```
 cd ui && npm ci                                  # once, after a clone
+cd tools/z2m-coverage && npm ci                  # once, after a clone
 cargo run -p mini-sowel-host                     # the host program (Mac)
 cd ui && npm run dev                             # the interface, on http://localhost:5173
 cargo test --workspace                           # Rust tests (core, host)
 cargo test -p mini-sowel-core --test banner      # one Rust test file
 cd ui && npx vitest run src/App.test.tsx         # one UI test file
+cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release   # ESP32 firmware (macOS, Linux)
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
