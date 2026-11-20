@@ -6,3 +6,4 @@ Every change ever specified. One row per folder in `specs/`.
 | ---- | ---- | ------------ | ---- | ------ |
 | 001 | walking-skeleton | The tool starts and shows its name on the Mac, on the ESP32 and in the browser; the whole chain of checks works | 2026-11-20 | done |
 | 002 | z2m-coverage | Measures, per leading Zigbee brand, the share of Zigbee2MQTT definitions the box can reuse by export, and the share a generic reading of standard clusters handles | 2026-11-20 | done |
+| 003 | firmware-in-qemu | The firmware boots in Espressif's QEMU on the Mac and shows its free memory; a broken boot fails the checks | 2026-11-20 | done |

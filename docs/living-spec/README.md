@@ -27,7 +27,15 @@ its web interface or from Sowel.
 Each of the three programs starts and says which tool it is, with its version:
 
 - **On the Mac**: `cargo run -p mini-sowel-host` prints `mini-sowel 0.1.0` and exits.
-- **On the ESP32**: the firmware starts ESP-IDF and writes `mini-sowel 0.1.0` to the serial log.
+- **On the ESP32**: the firmware starts ESP-IDF and writes `mini-sowel 0.1.0` to the serial log,
+  then its free memory: internal RAM (free, and largest free block) and PSRAM (free, of total),
+  for example `memory: internal 245 KB free (largest block 110 KB), psram 2039 KB free of
+  2048 KB`, or `psram none` without PSRAM. It runs on chips of revision 3 and later, like the
+  Dongle Max's.
+- **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the same firmware in
+  Espressif's QEMU, with 2 MB of PSRAM, and prints its banner and memory line; it fails, with the
+  last lines of the log, when the firmware panics, reboots, or does not show its memory within
+  60 seconds. `sh scripts/validate.sh` runs it.
 - **In the browser**: the interface opens on Sowel's layout: the sidebar with the Sowel logo and
   the name MINI-SOWEL, and a page titled `mini-sowel`. It follows Sowel's light theme (Hybrid).
 
@@ -61,3 +69,4 @@ API.
 | ---- | ------ |
 | 001 | Walking skeleton: the tool starts and shows its name |
 | 002 | Measures the coverage of Zigbee2MQTT's definitions for the leading brands |
+| 003 | The firmware shows its free memory and boots in QEMU on the Mac |

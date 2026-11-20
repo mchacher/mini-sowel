@@ -31,6 +31,10 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
      `python3-venv` and `libudev-dev` with the system's package manager; Windows: follow the
      [espup prerequisites](https://github.com/esp-rs/espup#requirements);
    - then `cargo install espup ldproxy espflash --locked` and `espup install --targets esp32`;
+   - QEMU's system libraries, to boot the firmware in an emulated ESP32: macOS:
+     `brew install libgcrypt glib pixman sdl2 libslirp`; Debian or Ubuntu: `libgcrypt20
+     libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0`. QEMU itself is downloaded into
+     `firmware/.embuild/` the first time `sh scripts/qemu.sh` (or the validate command) runs;
    - before building the firmware, in each new terminal: `. "$HOME/export-esp.sh"` (macOS, Linux)
      or `. "$HOME\export-esp.ps1"` (Windows PowerShell).
 
@@ -44,6 +48,7 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 cargo run -p mini-sowel-host                      # on the computer
 cd ui && npm run dev                              # the interface, on http://localhost:5173
 cd firmware && cargo build --release              # the ESP32 firmware
+sh scripts/qemu.sh                                # the firmware, booted in an emulated ESP32
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```

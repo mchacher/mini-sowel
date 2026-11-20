@@ -58,13 +58,14 @@ cargo test --workspace                           # Rust tests (core, host)
 cargo test -p mini-sowel-core --test banner      # one Rust test file
 cd ui && npx vitest run src/App.test.tsx         # one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
+sh scripts/qemu.sh                               # the firmware, booted in Espressif's QEMU
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release   # ESP32 firmware (macOS, Linux)
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, ESP32
-firmware build. It must be green before any commit. After a fresh clone: `git config
+firmware build and boot in QEMU. It must be green before any commit. After a fresh clone: `git config
 core.hooksPath .githooks` (Claude's commit hook also sets it). **Never flash the Dongle Max**
 without the user's explicit yes: its original firmware exposes the radio over TCP for development
 (decision D6).

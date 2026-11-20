@@ -28,4 +28,4 @@ log = "0.4"
 embuild = "0.33"
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"

@@ -9,7 +9,9 @@ exists: the target architecture is decision D1, and what comes next is in the ro
                  crates/core  (Rust library: name, version, banner)
                   │                         │
      crates/host (Rust, Mac)          firmware/ (Rust std on ESP-IDF, ESP32)
-     prints the banner                writes the banner to the serial log
+     prints the banner                writes the banner and its free memory
+                                      to the serial log; booted on the Mac
+                                      in Espressif's QEMU (scripts/qemu.sh)
 
      ui/ (Preact + TypeScript, browser): Sowel layout, the tool's name
 
@@ -38,7 +40,12 @@ app, run by Vite's development server; neither the host nor the box serves it.
 - **Firmware** (`firmware/Cargo.toml`): built with the Xtensa toolchain from `espup`, target
   `xtensa-esp32-espidf`, ESP-IDF version pinned in `firmware/.cargo/config.toml`; the build
   downloads ESP-IDF into `firmware/.embuild/` (ignored by git). Settings of ESP-IDF:
-  `firmware/sdkconfig.defaults`.
+  `firmware/sdkconfig.defaults` (16 MB flash, PSRAM in the heap, chip revision 3 and later).
+  `sh scripts/qemu.sh` assembles a flash image with ESP-IDF's `esptool` and boots it in
+  Espressif's QEMU (`qemu-system-xtensa`, installed into `firmware/.embuild/` by ESP-IDF's tool
+  installer), with 2 MB of PSRAM; it fails on a panic, a reboot or a missing memory line.
+- **Unsafe code**: the core and the host forbid it; the firmware denies it, except in the small
+  functions that call ESP-IDF's C functions, each with a `SAFETY` comment (decision D11).
 - **Tools** (`tools/<name>/`): TypeScript run directly by Node 24, no build step; type-checked by
   `tsc`, tested with `node:test`.
 - **Interface** (`ui/`): Vite builds `ui/dist/`; `ui/scripts/check-bundle-budget.mjs` checks the

@@ -1,5 +1,5 @@
 # The verdict of CLAUDE.md, on every pull request and on main: sh scripts/validate.sh
-# (docs, Rust, interface, ESP32 firmware build).
+# (docs, Rust, interface, ESP32 firmware build and boot in QEMU).
 name: CI
 
 on:
@@ -25,6 +25,9 @@ jobs:
 
       - name: System packages for ESP-IDF
         run: sudo apt-get update && sudo apt-get install -y ninja-build python3-venv
+
+      - name: System libraries for QEMU
+        run: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
 
       - uses: actions/setup-node@v4
         with:
@@ -58,6 +61,15 @@ jobs:
         with:
           path: firmware/.embuild
           key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml', 'firmware/Cargo.lock') }}
+
+      # QEMU has its own cache: the ESP-IDF cache key above does not change when QEMU is added, so
+      # it would be downloaded on every run. On a miss, scripts/qemu.sh installs it (after the
+      # firmware build has downloaded ESP-IDF, which the installer needs) and this step saves it.
+      - name: QEMU download cache
+        uses: actions/cache@v4
+        with:
+          path: firmware/.embuild/espressif/tools/qemu-xtensa
+          key: qemu-xtensa-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
 
       - name: Interface packages
         working-directory: ui

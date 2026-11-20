@@ -1,5 +1,6 @@
 #!/bin/sh
-# The verdict, one command: docs, format, lint, types, tests, UI budget, ESP32 firmware build.
+# The verdict, one command: docs, format, lint, types, tests, UI budget, ESP32 firmware build
+# and boot in QEMU.
 #
 #   sh scripts/validate.sh          everything (before a commit, in CI)
 #   sh scripts/validate.sh --fast   the quick checks only (the pre-commit hook): docs, format, lint
@@ -62,5 +63,8 @@ else
   exit 1
 fi
 (cd firmware && cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings)
+
+step "Firmware: boots in QEMU"
+sh scripts/qemu.sh
 
 printf '\nvalidate: OK\n'

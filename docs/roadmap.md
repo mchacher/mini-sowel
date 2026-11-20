@@ -24,8 +24,8 @@ on the Sowel side.
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
 | A1 | Zigbee2MQTT coverage of the leading brands: a tool in `tools/` reports, per brand, the share of definitions that are declarative, Tuya datapoint tables, or code, and the share a generic reading of the standard ZCL clusters would catch (first: no hardware, measures the device-coverage risk) | The report exists, with the SNZB-02's line | done (spec 002) |
-| A2 | The firmware boots in Espressif's QEMU on the Mac and shows its banner and free memory (internal RAM, PSRAM); part of `sh scripts/validate.sh` (second: no hardware, measures the memory risk from day one) | The banner and the memory figures show on the Mac | next |
-| A3 | Talk to the radio: ASH and EZSP in Rust, in the core, tested against Silicon Labs' reference frames; the host connects to the Dongle Max over TCP and shows the EmberZNet version and the network state | The version shows, with the real Dongle Max | |
+| A2 | The firmware boots in Espressif's QEMU on the Mac and shows its banner and free memory (internal RAM, PSRAM); part of `sh scripts/validate.sh` (second: no hardware, measures the memory risk from day one) | The banner and the memory figures show on the Mac | done (spec 003) |
+| A3 | Talk to the radio: ASH and EZSP in Rust, in the core, tested against Silicon Labs' reference frames; the host connects to the Dongle Max over TCP and shows the EmberZNet version and the network state | The version shows, with the real Dongle Max | next |
 | A4 | Form a network and let the SNZB-02 join: network key and channel kept in a file; the host shows the joining device's address, manufacturer and model | The SNZB-02 shows with its name after a press on its button | |
 | A5 | Read its temperature and survive a restart: temperature, humidity and battery shown at each report, through a generic reading of the standard clusters; after a restart of the host the network resumes and the sensor keeps reporting | Readings scroll, then come back after a restart | |
 
@@ -58,6 +58,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | ---- | ---- | --------- |
 | 2026-11-20 | The generic reading of the standard clusters first, the export second: it handles 71 % of the library (50 % fully, 21 % with only the manufacturer's extras missed), the export 44 %; lighting is standard but its commands are brand or device code | Spec 002 report |
 | 2026-11-20 | Count the distinct brand functions per brand (Philips' 584 lights rely on one brand library: porting it once may cover them) | Spec 002 report |
+| 2026-11-20 | The first CI run after the push proves QEMU starts on the Ubuntu runner with its five system libraries (not run locally) | Spec 003 review |
 | 2026-11-20 | Legrand (86 % gap), Sonoff (51 %), Aqara (38 %): hand-written definitions for their common devices | Spec 002 report |
 
 ## Done
@@ -66,6 +67,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | ---- | --------- | ---- |
 | 2026-11-20 | Walking skeleton: the tool starts and shows its name on the Mac, the ESP32 and in the browser | 001 |
 | 2026-11-20 | A1: Zigbee2MQTT coverage of the leading brands | 002 |
+| 2026-11-20 | A2: the firmware boots in QEMU and shows its memory | 003 |
 
 ## Log
 
@@ -83,3 +85,5 @@ Every change to this roadmap: date, what changed, why.
   increment: it comes with `/add-remote`.
 - 2026-11-20: A1 done (spec 002), in an autonomous run approved by the user; three needs from its
   report added to the inbox (for milestone B).
+- 2026-11-20: A2 done (spec 003), autonomous run: firmware revision 3 with PSRAM, 362 KB internal
+  and 2045 KB PSRAM free at start in QEMU; one inbox line (first CI run with QEMU).

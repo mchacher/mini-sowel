@@ -144,3 +144,16 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: a tool's dependencies (Zigbee2MQTT's library, about 5 000 definitions) must not weigh
   on the interface's packages or budget; Node runs TypeScript the user already knows without a
   build step; pinning makes a measure repeatable.
+
+## D11: Unsafe code in the firmware's adapters only
+
+- **Date**: 2026-11-20
+- **Choice**: the core and the host forbid `unsafe` code. The firmware denies it
+  (`unsafe_code = "deny"` in `firmware/Cargo.toml`, instead of `forbid`), and allows it only on
+  the small functions that call ESP-IDF's C functions with no safe wrapper in `esp-idf-svc` (the
+  first: reading the heap sizes, spec 003), each with a `SAFETY` comment saying why the call is
+  sound. The firmware targets ESP32 chips of revision 3 and later (`CONFIG_ESP32_REV_MIN_3`).
+- **Why**: Rust cannot check C code, so every call into ESP-IDF's C API is `unsafe`; `forbid`
+  cannot be lifted even on one function. Keeping such calls few, small and commented keeps the
+  rest of the firmware checked by the compiler. Below revision 3 the PSRAM needs a workaround the
+  C compiler applies and Rust code would not get; the Dongle Max's ESP32-D0WDR2-V3 is revision 3.

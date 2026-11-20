@@ -11,3 +11,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn banner() -> String {
     format!("{NAME} {VERSION}")
 }
+
+mod memory;
+pub use memory::{MemoryStats, PsramStats, memory_line};
