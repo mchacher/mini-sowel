@@ -3,6 +3,7 @@ name = "mini-sowel-host"
 description = "mini-Sowel on the Mac: the core with simulated or networked hardware."
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]

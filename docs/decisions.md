@@ -112,3 +112,12 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the roadmap inbox (Sowel is AGPL-3.0).
 - **Why**: the license is the author's decision, and it weighs on the product door left open in
   D5.
+
+## D8: License (replaces D7)
+
+- **Date**: 2026-11-20
+- **Choice**: GNU Affero General Public License v3.0 only (`AGPL-3.0-only`), the same as Sowel:
+  `LICENSE` at the root, `license` in every Cargo manifest and in `ui/package.json`.
+- **Why**: mini-Sowel is part of the Sowel family and reuses Sowel's code (design system,
+  components, recipes); one license keeps that reuse simple. As the author holds the copyright,
+  the product door of D5 stays open (a separate license can be granted for a product).

@@ -3,6 +3,7 @@ name = "mini-sowel-firmware"
 description = "mini-Sowel on the ESP32 of the Sonoff Dongle Max: the core with the real adapters, on ESP-IDF."
 version = "0.1.0"
 edition = "2024"
+license = "AGPL-3.0-only"
 repository = "https://github.com/mchacher/mini-sowel"
 # Built with the Xtensa toolchain (rust-toolchain.toml here), outside the Mac workspace.
 build = "build.rs"

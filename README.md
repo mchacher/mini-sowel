@@ -52,3 +52,7 @@ The firmware is built, not flashed: the Dongle Max keeps its original firmware d
 
 With Claude Code, spec first: `/mini-sowel-roadmap`, `/mini-sowel-feature`, `/mini-sowel-fix`,
 `/mini-sowel-release`. Rules: [CLAUDE.md](CLAUDE.md).
+
+## License
+
+[GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`), as Sowel.
