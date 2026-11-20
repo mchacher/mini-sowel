@@ -7,19 +7,47 @@ milestone. A new need, at any time: one line in the inbox.
 
 ## Current milestone
 
-Not planned yet: run `/mini-sowel-roadmap` right after the setup.
+**A. The radio speaks Rust**. The user can then: from the Mac, `mini-sowel-host` forms its own
+Zigbee network through the Dongle Max, a real sensor (Sonoff SNZB-02) joins it, and its
+temperature arrives live, still after a restart, without pairing again. The firmware boots in an
+emulated ESP32 (Espressif's QEMU) with its free memory shown, and the share of Zigbee2MQTT
+definitions the box can reuse is known for the leading brands.
+Why first: it removes the three main risks of the framing note (EZSP in Rust, device coverage,
+the ESP32's memory) before anything is built on them. Done when: the SNZB-02, paired from the Mac,
+reports its temperature for a day, restart included; the coverage report and the QEMU memory
+figures exist.
 
-<!-- Once planned:
-**<milestone name>**. The user can then: ... Done when: ...
+Hardware: the Dongle Max and a Sonoff SNZB-02, both arriving 2026-11-21. A1 and A2 need none;
+A3's code is written and tested without hardware, its demo needs the Dongle Max. Nothing is needed
+on the Sowel side.
 
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
-| 1 | ...       | ...       | next   |
--->
+| A1 | Zigbee2MQTT coverage of the leading brands: a tool in `tools/` reports, per brand, the share of definitions that are declarative, Tuya datapoint tables, or code, and the share a generic reading of the standard ZCL clusters would catch (first: no hardware, measures the device-coverage risk) | The report exists, with the SNZB-02's line | next |
+| A2 | The firmware boots in Espressif's QEMU on the Mac and shows its banner and free memory (internal RAM, PSRAM); part of `sh scripts/validate.sh` (second: no hardware, measures the memory risk from day one) | The banner and the memory figures show on the Mac | |
+| A3 | Talk to the radio: ASH and EZSP in Rust, in the core, tested against Silicon Labs' reference frames; the host connects to the Dongle Max over TCP and shows the EmberZNet version and the network state | The version shows, with the real Dongle Max | |
+| A4 | Form a network and let the SNZB-02 join: network key and channel kept in a file; the host shows the joining device's address, manufacturer and model | The SNZB-02 shows with its name after a press on its button | |
+| A5 | Read its temperature and survive a restart: temperature, humidity and battery shown at each report, through a generic reading of the standard clusters; after a restart of the host the network resumes and the sensor keeps reporting | Readings scroll, then come back after a restart | |
 
 ## Later milestones
 
-One line each, planned when their turn comes.
+One line each, planned when their turn comes. The letter D is skipped: decisions are D1, D2...
+
+- **B. Engine on the Mac**: devices, equipments, zones, modes, API and WebSocket in Sowel's format,
+  simulated radio, generic reading of the standard ZCL clusters, Zigbee2MQTT definitions export
+  (Tuya datapoint interpreter included), memory ceilings in the tests, `motion-light` lighting a
+  real bulb.
+- **C. Recipe proposals**: pair a sensor, pick the room, accept the proposal (depends on a
+  prototype in the current Sowel).
+- **E. On the box**: firmware with the real adapters, the interface built in, OTA with rollback,
+  commissioning password; first exercised in QEMU (emulated Ethernet serving the interface, OTA
+  rollback, the emulated UART bridged to the Dongle Max's TCP radio).
+- **F. WebAssembly recipes**: signed `.wasm` recipes run in `wasmi`, signed files updated without
+  restart.
+- **G. Link with Sowel**: the box's equipments in Sowel (depends on `sowel-plugin-mini`).
+- **H. Daily use**: 24 h history, MQTT export, mini PWA, interface languages, radio firmware
+  update.
+- Beyond the true north, not planned: Matter bridge; product track (decision D5).
 
 ## Inbox
 
@@ -28,27 +56,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-| 2026-11-20 | Radio spike: from the Mac, in Rust, form a Zigbee network through the Dongle Max (radio over TCP, EZSP), have a real sensor join, read its temperature | Note, Steps 1; Risks (EZSP in Rust) |
-| 2026-11-20 | Measure the share of Zigbee2MQTT converters (`zigbee-herdsman-converters`) exportable automatically | Note, Steps 1; Key functions |
-| 2026-11-20 | Zigbee2MQTT definitions export: a Node tool in CI exports, signs and publishes the declarative converters; the box interprets them without JavaScript; hand-written definitions for common missing devices | Note, Key functions; Risks |
-| 2026-11-20 | Simulated radio on the Mac replaying scenarios (sensor joining, temperatures, motion) | Note, Development and tests 1 |
-| 2026-11-20 | Engine on the Mac: devices, equipments (light, shutter, sensor, switch, thermostat, button), zones with Sowel's aggregation, modes, API and WebSocket in Sowel's format | Note, Steps 2; Scope |
-| 2026-11-20 | `motion-light` recipe lighting a real bulb, same name, parameters and behaviour as Sowel's | Note, Steps 2 |
-| 2026-11-20 | Recipe proposals: pair a sensor, pick the room, the box proposes the valid recipes; one tap creates the instance (prototype in the current Sowel first, judged on production) | Note, Key functions; Steps 3 |
-| 2026-11-20 | The engine on the box: firmware with the real adapters (EZSP over UART, flash storage, HTTP/WebSocket), Ethernet first and Wi-Fi as fallback | Note, Steps 4; Architecture |
-| 2026-11-20 | Interface built into the firmware: pre-compressed hashed assets, `Cache-Control: immutable`, chunked from flash, a bounded number of WebSocket clients (about 4); the interface served by the host on the Mac too | Note, Interface |
-| 2026-11-20 | OTA updates of the ESP32 firmware: manifest, inactive partition, sha256 then signature check, health check and automatic rollback | Note, Security and updates |
-| 2026-11-20 | Commissioning: the user creates their own password, confirmed by a press on the button (EN 18031: no common default password) | Note, Security and updates (Compliance) |
-| 2026-11-20 | Memory ceilings in the tests (for example a 200 KB peak for 50 devices), binary size tracked, firmware booted under Espressif's QEMU in CI | Note, Development and tests (Guardrails) |
-| 2026-11-20 | WebAssembly recipes: `.wasm` recipes downloaded from a registry, signature checked, run in `wasmi` with access to data, orders and timers only; first ports: motion-light, motion-light-dimmable, switch-light, schedule-on-off, presence-thermostat, vmc-humidity | Note, Key functions; Steps 5 |
-| 2026-11-20 | Signed recipe and device-definition files updated without restart (Ed25519) | Note, Security and updates |
-| 2026-11-20 | Radio firmware update: `.gbl` file pushed to the EFR32 Gecko bootloader over UART, checked by the ESP32 first | Note, Security and updates |
-| 2026-11-20 | Short history in the box (24 h, low resolution) and optional MQTT export | Note, Scope |
-| 2026-11-20 | Mini PWA: manifest and icons, add to home screen; full-screen on iPhone to check | Note, Interface |
-| 2026-11-20 | Interface languages: the active language only in the bundle | Note, Interface |
-| 2026-11-20 | Link with Sowel: `sowel-plugin-mini` (in the Sowel ecosystem) shows the box's equipments in Sowel; the box keeps running if the link drops; the box's page through Sowel's HTTPS for a real PWA with notifications | Note, Key functions; Steps 6; Interface |
-| 2026-11-20 | Matter bridge: equipments and zones exposed as Matter devices (Apple Home, Google Home); check the maturity of `rs-matter` | Note, Key functions; Risks |
-| 2026-11-20 | Product track: ESP32-S3 board, secure boot, backup keys, factory without secrets, OEM, CRA (vulnerability reporting, SBOM from Cargo) | Note, Steps 7; Hardware; Security |
 
 ## Done
 
@@ -64,3 +71,9 @@ Every change to this roadmap: date, what changed, why.
   setup.
 - 2026-11-20: license chosen (AGPL-3.0-only, decision D8): its inbox item removed.
 - 2026-11-20: remote and CI connected (decision D9): the CI inbox item removed.
+- 2026-11-20: milestone A planned; every inbox item placed (A1 to A5, B to H, or beyond the true
+  north; none dropped). The coverage measure is limited to the leading Zigbee brands (the user's
+  wish, widened to the leaders beyond their first list: Philips Hue, Tuya and its white labels,
+  Aqara, IKEA, Innr, Sonoff, Schneider, Legrand, Ledvance, Heiman, Lexman...). QEMU added (A2)
+  so the memory risk is measured before the hardware arrives. CI on the remote is not an
+  increment: it comes with `/add-remote`.
