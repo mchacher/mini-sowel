@@ -1,0 +1,137 @@
+/* Sowel Design System, Tailwind v4 theme: copied from Sowel ui/src/index.css (@theme and @theme static).
+   Source and the changes made for the box: docs/design-system.md. */
+
+@theme {
+  /* Colors — resolved from design-system/tokens.css */
+  --color-primary: var(--p-500);
+  --color-primary-mid: var(--p-mid); /* logo mid-blue (smile/eyes), soft selection border */
+  --color-primary-light: var(--p-50);
+  --color-primary-hover: var(--p-600);
+  /* Primary fill (spec 196, slice 4b): the background of a button, selected
+     segment, checked box or switch. bg-primary is the ink (dots, bars, the
+     light blue of dark links) and never carries text. */
+  --color-primary-fill: var(--p-fill);
+  --color-primary-fill-hover: var(--p-fill-hover);
+  --color-on-primary: var(--p-on);
+  /* Dashboard illustrations at rest (WidgetIcons, EvCarGauge). */
+  --color-illu: var(--illu-ink);
+  --color-background: var(--n-50);
+  --color-surface: var(--n-0);
+  --color-surface-raised: var(--n-0);
+  --color-text: var(--n-700);
+  --color-text-secondary: var(--n-600);
+  --color-text-tertiary: var(--n-400);
+  --color-border: var(--line-2);
+  --color-border-light: var(--line);
+  /* Colour roles (spec 196) — one meaning each, see design-system/tokens.md
+     §1.2. Contrast of every text/background pair: lib/color-roles.test.ts. */
+  --color-active: var(--a-500); /* on or running now: fill, icon */
+  --color-active-ink: var(--a-ink); /* on or running now: text */
+  --color-active-bg: var(--a-50); /* on or running now: tinted pill */
+  --color-on-active: var(--a-on); /* content on an amber fill */
+  --color-warning: var(--orange-500); /* needs attention: dot, fill, icon */
+  --color-warning-ink: var(--orange-700); /* needs attention: text */
+  --color-warning-bg: var(--orange-50);
+  --color-success: var(--green-500); /* works as expected */
+  --color-error: var(--red-500); /* fault, failure, destructive */
+  --color-info: var(--info-500); /* informational: icon, fill */
+  --color-info-ink: var(--info-700); /* informational: text */
+  --color-heat: var(--red-500); /* heating now (alias of error) */
+  --color-on-status: var(--on-status); /* text on a success/error/warning-ink fill */
+
+  /* Typography */
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+
+  /* Type scale — resolved from design-system/tokens.css (spec 196). Use these
+     text-* utilities; arbitrary sizes (text-[13px]) are rejected by eslint. */
+  --text-micro: var(--fs-micro);
+  --text-caption: var(--fs-caption);
+  --text-small: var(--fs-small);
+  --text-body: var(--fs-body);
+  --text-lead: var(--fs-lead);
+  --text-title: var(--fs-title);
+  --text-display: var(--fs-display);
+  --text-value: var(--fs-value);
+
+  /* Border radius (spec 196, decision pr7-rayons): three steps and full.
+     sm 6 px = controls (buttons, fields, chips, icon buttons), md 10 px =
+     cards, tiles, rows, panels, popovers, lg 16 px = modals and bottom
+     sheets. xs 2 px is for chart bars and legend swatches only. Tailwind's
+     other steps are removed, and eslint rejects rounded-[Npx]. */
+  --radius-*: initial;
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius: var(--r-sm);
+
+  /* Shadows — resolved from design-system tokens (auto-darken in dark mode) */
+  --shadow-sm: var(--sh-1);
+  --shadow-md: var(--sh-2);
+  --shadow-lg: var(--sh-3);
+
+  /* Shutter state tint — the « Fermé » pill and the shutter slider. */
+  --color-shutter-50: var(--shutter-50);
+  --color-shutter-500: var(--shutter-500);
+
+  /* Equipment families (spec 208): bg-fam-<family>-50, text-fam-<family>-ink,
+     bg-fam-<family>-fill, text-fam-<family>-on. Class strings live in
+     ui/src/lib/equipment-family.ts. */
+  --color-fam-lighting-50: var(--fam-lighting-50);
+  --color-fam-lighting-ink: var(--fam-lighting-ink);
+  --color-fam-lighting-fill: var(--fam-lighting-fill);
+  --color-fam-lighting-on: var(--fam-lighting-on);
+  --color-fam-openings-50: var(--fam-openings-50);
+  --color-fam-openings-ink: var(--fam-openings-ink);
+  --color-fam-openings-fill: var(--fam-openings-fill);
+  --color-fam-openings-on: var(--fam-openings-on);
+  --color-fam-climate-50: var(--fam-climate-50);
+  --color-fam-climate-ink: var(--fam-climate-ink);
+  --color-fam-climate-fill: var(--fam-climate-fill);
+  --color-fam-climate-on: var(--fam-climate-on);
+  --color-fam-water-50: var(--fam-water-50);
+  --color-fam-water-ink: var(--fam-water-ink);
+  --color-fam-water-fill: var(--fam-water-fill);
+  --color-fam-water-on: var(--fam-water-on);
+  --color-fam-energy-50: var(--fam-energy-50);
+  --color-fam-energy-ink: var(--fam-energy-ink);
+  --color-fam-energy-fill: var(--fam-energy-fill);
+  --color-fam-energy-on: var(--fam-energy-on);
+  --color-fam-sensors-50: var(--fam-sensors-50);
+  --color-fam-sensors-ink: var(--fam-sensors-ink);
+  --color-fam-sensors-fill: var(--fam-sensors-fill);
+  --color-fam-sensors-on: var(--fam-sensors-on);
+
+  /* Compact top bar (phones and tablets): the bar's height (h-topbar) and the
+     spacer that holds its place under the fixed bar (TopBarFrame). */
+  --spacing-topbar: 56px;
+}
+
+/* Energy and series palettes (spec 196, FR-E) — `static`, so Tailwind emits
+   every variable even when no utility class names it. The charts paint them
+   through inline styles and SVG attributes (`var(--color-series-5)`), which
+   Tailwind's scanner does not count as a use; a plain @theme would drop the
+   ones no class mentions. Checked by ui/src/theme-static.test.ts. */
+@theme static {
+  /* Energy palette (spec 148) — shared by energy/production charts + arbiter */
+  --color-solar-injection: var(--solar-injection);
+  --color-solar-auto: var(--solar-auto);
+  --color-solar-production: var(--solar-production);
+  /* Spec 197 — solar as text only (a figure or a word), never a fill. */
+  --color-solar-ink: var(--solar-ink);
+  --color-energy-hp: var(--energy-hp);
+  --color-energy-hc: var(--energy-hc);
+  --color-energy-grid: var(--energy-grid);
+  --color-slate: var(--slate-neutral);
+  --color-energy-other: var(--energy-other);
+  /* Series palette (spec 196, FR-E): sub-meters, phases, Analyse. */
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-6: var(--series-6);
+  --color-series-7: var(--series-7);
+  --color-series-8: var(--series-8);
+}

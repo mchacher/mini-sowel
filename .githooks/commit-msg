@@ -1,0 +1,12 @@
+#!/bin/sh
+# Installed by /start-software-project in .githooks/ (git config core.hooksPath .githooks, or
+# through the stack's hook manager). Runs on every commit, Claude's included.
+
+# No AI attribution line.
+if grep -qiE '^Co-Authored-By:.*(Claude|Anthropic)|Generated with \[?Claude' "$1"; then
+  echo "commit-msg: remove the AI attribution line from the message (project rule, see CLAUDE.md)." >&2
+  exit 1
+fi
+
+# The living spec changes with the code (see scripts/check-docs.sh).
+sh scripts/check-docs.sh commit-msg "$1"

@@ -1,0 +1,7 @@
+/* mini-Sowel: what changes from the Sowel tokens for the box (docs/design-system.md, "Embedded").
+   Loaded after tokens.css. The box serves its own pages and has no room for web fonts: the system
+   fonts replace Inter and JetBrains Mono. */
+:root {
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, Menlo, Consolas, monospace;
+}

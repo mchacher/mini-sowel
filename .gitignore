@@ -1,0 +1,14 @@
+# Rust
+/target/
+/firmware/target/
+# ESP-IDF and its tools, downloaded by the firmware build
+/firmware/.embuild/
+/firmware/sdkconfig
+# UI
+/ui/node_modules/
+/ui/dist/
+# Secrets and local settings
+.env
+.claude/settings.local.json
+# System
+.DS_Store

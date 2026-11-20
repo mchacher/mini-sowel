@@ -1,0 +1,239 @@
+/* ============================================================ */
+/* Sowel Design System — Tokens                                 */
+/* Version: 1.0 — extracted 2026-05-13 from polished.html       */
+/* ============================================================ */
+/* Drop this file into any Sowel surface. Switch theme via      */
+/* <html data-theme="hybrid"> or <html data-theme="dark">.      */
+/* ============================================================ */
+
+/* ── Theme 1: HYBRID (default, light, neutral grey + Sowel amber) ── */
+:root,
+[data-theme="hybrid"] {
+  /* Primary — ocean blue, used for nav active, links, focus rings */
+  --p-50:#EEF5F8;  --p-100:#D9E7EF; --p-500:#1A4F6E; --p-600:#144159; --p-700:#0F3146;
+  /* Primary fill vs primary ink (spec 196, slice 4b). p-500 is the ink:
+     links, icons, outlines, selected text. p-fill is the background of a
+     button, a selected segment, a checked box or switch, always carrying
+     white (p-on). The two are the same ocean in light; in dark the ink goes
+     light (#5BA5CC) and the fill stays a deep ocean that white text reads on. */
+  --p-fill:#1A4F6E; --p-fill-hover:#144159; --p-on:#FFFFFF;
+  /* Logo mid-blue (the smile and eyes of SowelLogo), also a soft primary
+     border on a selection header. Same value in both themes. */
+  --p-mid:#7FB8D4;
+
+  /* Amber — means "on or running right now" and nothing else (spec 196).
+     a-500 is the fill and the icon colour; a-ink is the text variant (never
+     a-500 as text on a light surface: 1.70:1); a-on is what sits on an amber
+     fill (never white: 1.70:1). Roles: design-system/tokens.md §1.2. */
+  --a-50:#FFF6D6;  --a-100:#FCE89A; --a-500:#F2C035; --a-600:#D4A41C;
+  --a-ink:#8A6100; --a-on:#1C1A14;
+
+  /* Neutrals — ocean-tinted (spec 196, slice 7a): generated in OKLCH on the
+     brand hue (238.5°), lightness of the old zinc steps, chroma fading at both
+     ends. n-0 is the card surface, n-50 the page, n-400 the tertiary text
+     (≥ 4.5:1 on both). Ratios: ui/src/lib/color-roles.test.ts. */
+  --n-0:#FFFFFF;   --n-25:#F6FAFC;  --n-50:#ECF2F7;  --n-100:#E0E8ED; --n-200:#CCD5DB;
+  --n-300:#9AA4AB; --n-400:#626C73; --n-500:#4A545B; --n-600:#394249; --n-700:#21282D; --n-800:#11171B;
+
+  /* Semantic colors — one token each for success and error (a darkened green
+     or red stays a good dot); orange keeps a bright fill (500) and a text
+     variant (700). Ratios are checked by ui/src/lib/color-roles.test.ts. */
+  --green-50:#E6F7EE; --green-500:#13794A; --green-700:#0E6B3F; /* success: connected, done, active */
+  --info-50:#E0EFFA;  --info-500:#247EB5; --info-700:#1D6A9A;    /* informational: humidity, contacts (700 = text) */
+  --orange-50:#FDF1E7; --orange-500:#E8730C; --orange-700:#A85500; /* warning: needs attention, not a fault */
+  --red-50:#FBE9E1;   --red-500:#B42318;                          /* error: fault, failure, offline, destructive */
+  --on-status:#FFFFFF;                                            /* text on a success/error/warning-ink fill */
+
+  /* Energy palette (spec 148) — shared by the production/energy charts and the
+     arbiter surface. Solar greens match ProductionBarChart. Spec 196 (FR-E):
+     the same-family series that sit side by side on one chart (HP/HC,
+     autoconsumption/injection, house/grid, grid/unmanaged) differ by lightness,
+     >= 2:1 in dark and >= 1.5:1 in light; a blue next to a green differs by
+     >= 30 deg of hue. Checked by ui/src/lib/energy-palette.test.ts. Legends
+     and swatches use these tokens, never a hex copy (eslint rejects colour
+     literals in the energy and history components). */
+  --solar-injection:#2D8F3E;  /* surplus / injection (dark green) */
+  --solar-auto:#6BCB77;       /* auto-consumption / "accordé"     */
+  --solar-production:#4CA85C; /* solar production                 */
+  --solar-ink:#1E7B34;        /* solar as text (spec 197) or a flow node icon (#1146): the fills above are 2:1 on a card */
+  --energy-hp:#4F7BE8;        /* consumption, peak (vivid blue)   */
+  --energy-hc:#93B5F0;        /* consumption, off-peak (light blue) */
+  --energy-grid:#405682;      /* grid import (slate blue; was #4A6396, 1.39:1 from the slate) */
+  --slate-neutral:#6E7C88;    /* On (hors pilotage) / manual      */
+  --energy-other:#A69E96;     /* "Other": not metered apart. A warm grey: every series >= 1.5:1 and >= 30 deg away */
+
+  /* Series palette (spec 196, FR-E) — sub-meters (by usage, Live donut),
+     phases and Analyse curves, in this order. No red, orange, amber or solar
+     green: those carry a role. Neighbours differ by >= 2:1 or >= 30 deg of
+     hue (they sit >= 70 deg apart); series 1 is the brand ocean. The server
+     sends a by-usage series' index (colorIndex), which the UI paints with
+     these; its `color` field keeps the pre-196 hex for API clients. */
+  --series-1:#1A4F6E; --series-2:#6A7B27; --series-3:#00867A; --series-4:#7C61A8;
+  --series-5:#006574; --series-6:#A0557B; --series-7:#526FB2; --series-8:#915A95;
+
+  /* Dashboard illustrations (WidgetIcons.tsx, AwningIcon.tsx, EvCarGauge.tsx).
+     ink = strokes at rest, ink-2 = the darker shade of a gradient, fill and
+     fill-2 = the pale parts (awning stripes), water = water seen in a pipe.
+     On or running, an illustration takes amber (text-active) instead. */
+  --illu-ink:#1A4F6E; --illu-ink-2:#13405A; --illu-fill:#E6F0F6; --illu-fill-2:#D6E5EF;
+  --illu-water:#247EB5;
+
+  /* Shutter state tint — the « Fermé » pill and the shutter slider fill. */
+  --shutter-50:#E8EBEE;  --shutter-500:#4F5763;
+
+  /* Equipment families (spec 208) — what an equipment acts on or measures.
+     50 = the tile and the title chip at rest, ink = the section title and the
+     icon, fill = the tile while the equipment runs, on = the icon on the fill.
+     Lighting IS the amber role: its ink, fill and on are a-ink, a-500 and
+     a-on (repeated here as hex for the contrast test); its pale is close to
+     a-50. Energy is the solar green in light (solar-ink, solar-injection).
+     Ratios: ui/src/lib/color-roles.test.ts. */
+  --fam-lighting-50:#FFF3CC; --fam-lighting-ink:#8A6100; --fam-lighting-fill:#F2C035; --fam-lighting-on:#1C1A14;
+  --fam-openings-50:#E7EBF8; --fam-openings-ink:#3D55A3; --fam-openings-fill:#4F67BA; --fam-openings-on:#FFFFFF;
+  --fam-climate-50:#FBE7DF;  --fam-climate-ink:#A8441C;  --fam-climate-fill:#C4572E;  --fam-climate-on:#FFFFFF;
+  --fam-water-50:#DDF3F1;    --fam-water-ink:#00756B;    --fam-water-fill:#00867A;    --fam-water-on:#FFFFFF;
+  --fam-energy-50:#E3F2E7;   --fam-energy-ink:#1E7B34;   --fam-energy-fill:#2D8F3E;   --fam-energy-on:#FFFFFF;
+  --fam-sensors-50:#EEE8F8;  --fam-sensors-ink:#6A4BA6;  --fam-sensors-fill:#7C61A8;  --fam-sensors-on:#FFFFFF;
+
+  /* Borders / dividers */
+  --line:rgba(17,23,27,.08);
+  --line-2:rgba(17,23,27,.14);
+
+  /* Shadows (elevation scale: 1=subtle, 2=card hover, 3=modal) */
+  --sh-1: 0 1px 2px rgba(15,42,60,.04), 0 1px 3px rgba(15,42,60,.06);
+  --sh-2: 0 4px 14px -4px rgba(15,42,60,.10);
+  --sh-3: 0 24px 56px -16px rgba(15,42,60,.14);
+  /* A card's elevation (spec 196): no border, a soft shadow on the tinted
+     page. None in dark, where the lighter surface does the job. */
+  --sh-card: var(--sh-1);
+}
+
+/* ── Theme 2: DARK (ocean night, spec 196 slice 7a) ──
+   The same ocean hue as the light neutrals. Cards (n-0) are lighter than
+   the page (n-50): elevation reads as tone, not as a darker hole. n-25 is
+   the page colour too, so a band painted n-25 inside a card is a well.
+   Note: also matches the `.dark` class for compatibility with apps that
+   toggle dark mode via a class on <html> (e.g. ui/src/theme.ts). */
+[data-theme="dark"], .dark {
+  --p-50:#1D303D;  --p-100:#243B4E; --p-500:#5BA5CC; --p-600:#82BCDD; --p-700:#A8CEE6;
+  --p-fill:#2B7299; --p-fill-hover:#276B8F;
+  --a-50:#332715;  --a-100:#5C3F1A; --a-500:#F2BC6E; --a-600:#FFCF8C;
+  --a-ink:#F2BC6E; --a-on:#1C1A14;
+  --n-0:#17232B;   --n-25:#0E191F;  --n-50:#0E191F;  --n-100:#212D35; --n-200:#303C45;
+  --n-300:#515D65; --n-400:#939DA4; --n-500:#A8B1B7; --n-600:#C9CFD3; --n-700:#E4E8EB; --n-800:#F1F4F6;
+  --green-50:#0F2A1E; --green-500:#3DDB89; --green-700:#9AF0C6;
+  --info-50:#0F1F33;  --info-500:#5DA8F0; --info-700:#5DA8F0;
+  /* Illustrations: logo blue strokes, night fills (p-50 / p-100 of the ocean
+     night); no brightness filter. */
+  --illu-ink:#7FB8D4; --illu-ink-2:#5BA5CC; --illu-fill:#1D303D; --illu-fill-2:#243B4E;
+  --illu-water:#5DA8F0;
+  --orange-50:#2D2422; --orange-500:#F99549; --orange-700:#F99549;
+  --red-50:#2E1614;   --red-500:#F97066;
+  --on-status:#0E191F;
+  /* Energy palette (spec 148) — brightened for dark surfaces. Spec 196
+     (FR-E): the 2025 values left neighbours indistinguishable (HP/HC 1.34:1,
+     house/grid 1.04:1, grid/slate 1.03:1, autoconso/injection 1.47:1). Peak
+     stays the vivid blue and off-peak the pale one, as in light; the grid
+     goes pale, the slate and the injection go deeper. */
+  --solar-injection:#2C8C3C; --solar-auto:#74C77F; --solar-production:#57BE6C;
+  --solar-ink:var(--solar-auto); /* the light green already reads as text on the night card */
+  --energy-hp:#5681E9; --energy-hc:#A5C2F3; --energy-grid:#BDC8DF;
+  --slate-neutral:#7C8B98; /* also a text colour (pill, caption): 4.58:1 */
+  --energy-other:#78726B; /* subdued on the night card, still 3.4:1; was #6E7A82, 1.46:1 and 15 deg from series 5 */
+  --series-1:#7CC0E3; --series-2:#ACBE74; --series-3:#5FC9BC; --series-4:#BEA6EB;
+  --series-5:#44A1B1; --series-6:#E59ABD; --series-7:#95B3F5; --series-8:#D59ED8;
+  /* Shutter state tint on the ocean night (spec 196, slice 7b). */
+  --shutter-50:#222C3A; --shutter-500:#94A3B8;
+  /* Equipment families on the ocean night (spec 208): a night pale that still
+     reads on the card, a light ink, a fill that carries the night ink. */
+  --fam-lighting-50:#372A16; --fam-lighting-ink:#F2BC6E; --fam-lighting-fill:#F2BC6E; --fam-lighting-on:#1C1A14;
+  --fam-openings-50:#212949; --fam-openings-ink:#A3B3F0; --fam-openings-fill:#7F95E0; --fam-openings-on:#0E191F;
+  --fam-climate-50:#3E241B;  --fam-climate-ink:#F0936B;  --fam-climate-fill:#E07A52;  --fam-climate-on:#0E191F;
+  --fam-water-50:#10302D;    --fam-water-ink:#5FC9BC;    --fam-water-fill:#3DAA9E;    --fam-water-on:#0E191F;
+  --fam-energy-50:#16301E;   --fam-energy-ink:#74C77F;   --fam-energy-fill:#4CA85C;   --fam-energy-on:#0E191F;
+  --fam-sensors-50:#2F2545;  --fam-sensors-ink:#B9A3EC;  --fam-sensors-fill:#9A82D6;  --fam-sensors-on:#0E191F;
+  --line:rgba(255,255,255,.06);
+  --line-2:rgba(255,255,255,.14);
+  --sh-1: 0 1px 2px rgba(0,0,0,.4),  0 1px 3px rgba(0,0,0,.5);
+  --sh-2: 0 4px 14px -4px rgba(0,0,0,.5);
+  --sh-3: 0 24px 56px -16px rgba(0,0,0,.6);
+  --sh-card: none;
+}
+
+/* ── Theme-agnostic primitives ── */
+:root {
+  /* Spacing scale (4 px base) */
+  --s-1:4px;  --s-2:8px;  --s-3:12px; --s-4:16px;
+  --s-5:20px; --s-6:24px; --s-8:32px;
+
+  /* Radii (spec 196): 6 controls, 10 cards, 16 sheets and modals, full for
+     pills, dots and switches. r-xs (2 px) is for chart bars and legend
+     swatches only. */
+  --r-xs:2px; --r-sm:6px; --r-md:10px; --r-lg:16px; --r-full:999px;
+
+  /* Typography — Fontsource names the variable build "Inter Variable"; with
+     plain 'Inter' the face never matches and everything falls back to
+     system-ui without an error (spec 196, slice 5a). */
+  --font-body: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Type scale (spec 196): seven text steps and one value size, exposed as
+     Tailwind text-* utilities in ui/src/index.css (@theme). Size only: the
+     line height stays the inherited 20 px of body unless a leading-* class
+     sets it, as before the scale (slice 5a keeps every row its height). */
+  --fs-micro:   11px; /* ticks, timestamps, counters — never a sentence */
+  --fs-caption: 12px; /* secondary info, help, table headers, pills */
+  --fs-small:   13px; /* field labels, buttons, dense rows, breadcrumb */
+  --fs-body:    14px; /* running text (body default), equipment names */
+  --fs-lead:    16px; /* panel, section and card titles */
+  --fs-title:   20px; /* sheet and modal titles, values in a detail row */
+  --fs-display: 28px; /* page title, a card's main value */
+  --fs-value:   40px; /* headline values: thermostat, mobile weather */
+}
+
+/* ── Defaults wired to body ── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-body);
+  color: var(--n-700);
+  background: var(--n-50);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11" 1, "ss01" 1;
+  transition: background 240ms ease, color 240ms ease;
+}
+
+/* Tabular numbers everywhere we display data */
+.strip__pill-val, .eq__value, .panel__count, .cat-head__count,
+.activity__time, .topbar__chip, .mode-row__meta, .recipe__sub,
+.hero__count, .therm-target-val, .therm-current, .energy-val,
+.water-val, .forecast-day b {
+  font-feature-settings: "tnum" 1, "cv11" 1, "ss01" 1;
+}
+
+/* ── Motion ── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--a-500) 30%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--a-500) 14%, transparent); }
+}
+@keyframes pulseAlert {
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--red-500) 25%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--red-500) 8%, transparent); }
+}
+@keyframes connPing {
+  0%   { transform: scale(1); opacity: .6; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,4 @@
+# The Mac toolchain (core and host). The firmware pins its own in firmware/rust-toolchain.toml.
+[toolchain]
+channel = "1.100"
+components = ["rustfmt", "clippy"]

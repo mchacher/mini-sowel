@@ -1,0 +1,30 @@
+[package]
+name = "mini-sowel-firmware"
+description = "mini-Sowel on the ESP32 of the Sonoff Dongle Max: the core with the real adapters, on ESP-IDF."
+version = "0.1.0"
+edition = "2024"
+repository = "https://github.com/mchacher/mini-sowel"
+# Built with the Xtensa toolchain (rust-toolchain.toml here), outside the Mac workspace.
+build = "build.rs"
+
+[[bin]]
+name = "mini-sowel-firmware"
+harness = false # no std test harness on the ESP32: the logic is tested on the Mac, in crates/
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+mini-sowel-core = { path = "../crates/core" }
+esp-idf-svc = "0.53"
+log = "0.4"
+
+[build-dependencies]
+embuild = "0.33"
+
+[lints.rust]
+unsafe_code = "forbid"

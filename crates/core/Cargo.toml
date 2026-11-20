@@ -1,0 +1,9 @@
+[package]
+name = "mini-sowel-core"
+description = "The Sowel core of mini-Sowel: no hardware dependency, runs on the Mac and on the ESP32."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

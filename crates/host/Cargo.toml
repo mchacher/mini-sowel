@@ -1,0 +1,12 @@
+[package]
+name = "mini-sowel-host"
+description = "mini-Sowel on the Mac: the core with simulated or networked hardware."
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+
+[dependencies]
+mini-sowel-core = { path = "../core" }
+
+[lints]
+workspace = true
