@@ -87,7 +87,8 @@ without the user's explicit yes: its original firmware exposes the radio over TC
   what it makes false elsewhere (feature skill 3.4, fix skill), and the code review checks it.
 - **Git**: never commit to `main` except trivial fixes (the hook asks the user to confirm);
   branches `feat/`, `fix/`, `docs/`, `chore/`; conventional commits in English, scopes in
-  `.claude/skills/mini-sowel-feature/reference.md`; **no AI attribution line** (no
+  `.claude/skills/mini-sowel-feature/reference.md`; remote `origin` on GitHub, pull requests
+  with `gh pr create`, CI runs `sh scripts/validate.sh` (decision D9); **no AI attribution line** (no
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
 - **Review agents**: `.claude/agents/` (`spec-reviewer`, `code-reviewer`), launched by the skills.

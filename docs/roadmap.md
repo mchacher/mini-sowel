@@ -49,7 +49,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-20 | Link with Sowel: `sowel-plugin-mini` (in the Sowel ecosystem) shows the box's equipments in Sowel; the box keeps running if the link drops; the box's page through Sowel's HTTPS for a real PWA with notifications | Note, Key functions; Steps 6; Interface |
 | 2026-11-20 | Matter bridge: equipments and zones exposed as Matter devices (Apple Home, Google Home); check the maturity of `rs-matter` | Note, Key functions; Risks |
 | 2026-11-20 | Product track: ESP32-S3 board, secure boot, backup keys, factory without secrets, OEM, CRA (vulnerability reporting, SBOM from Cargo) | Note, Steps 7; Hardware; Security |
-| 2026-11-20 | CI on the remote: `sh scripts/validate.sh` on every pull request, with the ESP32 toolchain | Setup, decision D2 |
 
 ## Done
 
@@ -64,3 +63,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-20: roadmap created at setup; inbox filled with the needs of the framing note and of the
   setup.
 - 2026-11-20: license chosen (AGPL-3.0-only, decision D8): its inbox item removed.
+- 2026-11-20: remote and CI connected (decision D9): the CI inbox item removed.

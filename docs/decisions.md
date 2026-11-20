@@ -121,3 +121,14 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: mini-Sowel is part of the Sowel family and reuses Sowel's code (design system,
   components, recipes); one license keeps that reuse simple. As the author holds the copyright,
   the product door of D5 stays open (a separate license can be granted for a product).
+
+## D9: Remote and CI (replaces the remote part of D2)
+
+- **Date**: 2026-11-20
+- **Choice**: remote `origin` on GitHub, `https://github.com/mchacher/mini-sowel.git`, beside
+  Sowel. CI: GitHub Actions, `.github/workflows/ci.yml`, runs `sh scripts/validate.sh` on every
+  pull request and on every push to `main`, with the Rust version of `rust-toolchain.toml`, Node
+  24, and the ESP32 toolchain (espup v0.19.0, ldproxy); ESP-IDF's download is cached. Pull
+  requests are made with `gh pr create`; merges stay squash merges after the user's yes.
+- **Why**: a backup and a public home for the open-source project (D5), and a CI that checks
+  every change, the firmware build included, on a machine other than the author's.

@@ -342,8 +342,8 @@ the feature leaves `docs/living-spec/` unchanged, add the line `Living-Spec: non
 git push -u origin feat/NNN-<short-name>
 ```
 
-On GitHub (decision D2, once `/add-remote` has connected it): `gh pr create --base main --title
-"<title>" --body "<body>"`. With no remote, skip this step. Title: `feat(<scope>): <description> (spec
+On GitHub (decision D9): `gh pr create --base main --title "<title>" --body "<body>"`, then
+`gh pr checks --watch` and report the CI result in plain words: a red CI blocks the merge. Title: `feat(<scope>): <description> (spec
 NNN)`. Body: summary, living spec delta (or the `Living-Spec: none — <reason>` line), changes,
 test plan with the validate output, review outcome, demo seen and approved. Share the link with the user. Without a remote, skip this step.
 
