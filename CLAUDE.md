@@ -53,6 +53,7 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 cd ui && npm ci                                  # once, after a clone
 cd tools/z2m-coverage && npm ci                  # once, after a clone
 cargo run -p mini-sowel-host                     # the host program (Mac)
+cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
 cd ui && npm run dev                             # the interface, on http://localhost:5173
 cargo test --workspace                           # Rust tests (core, host)
 cargo test -p mini-sowel-core --test banner      # one Rust test file

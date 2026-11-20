@@ -46,6 +46,7 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 
 ```
 cargo run -p mini-sowel-host                      # on the computer
+cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
 cd ui && npm run dev                              # the interface, on http://localhost:5173
 cd firmware && cargo build --release              # the ESP32 firmware
 sh scripts/qemu.sh                                # the firmware, booted in an emulated ESP32

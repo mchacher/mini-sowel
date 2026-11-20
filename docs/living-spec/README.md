@@ -26,7 +26,8 @@ its web interface or from Sowel.
 
 Each of the three programs starts and says which tool it is, with its version:
 
-- **On the Mac**: `cargo run -p mini-sowel-host` prints `mini-sowel 0.1.0` and exits.
+- **On the Mac**: `cargo run -p mini-sowel-host`, without `--radio`, prints `mini-sowel 0.1.0`
+  and exits.
 - **On the ESP32**: the firmware starts ESP-IDF and writes `mini-sowel 0.1.0` to the serial log,
   then its free memory: internal RAM (free, and largest free block) and PSRAM (free, of total),
   for example `memory: internal 245 KB free (largest block 110 KB), psram 2039 KB free of
@@ -38,6 +39,27 @@ Each of the three programs starts and says which tool it is, with its version:
   60 seconds. `sh scripts/validate.sh` runs it.
 - **In the browser**: the interface opens on Sowel's layout: the sidebar with the Sowel logo and
   the name MINI-SOWEL, and a page titled `mini-sowel`. It follows Sowel's light theme (Hybrid).
+
+### Talks to the radio
+
+`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638` connects to the radio of a Dongle
+Max that runs its original firmware (its ESP32 relays the radio over TCP, port 6638, one client at
+a time). It resets the radio, speaks Silicon Labs' ASH and EZSP protocols with it, and shows:
+
+```
+radio: tcp://192.168.1.50:6638
+ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0
+radio address: 0x8C6FB9FFFE123456
+network: no network
+```
+
+The network state is one of: no network, joining, joined, joined with no parent, leaving, or
+`unknown (<n>)`. It accepts radios speaking EZSP 13 to 19 (EmberZNet 7.2 and later). On a
+failure it prints one line on the error output and exits 1: `radio: cannot connect to <address>:
+<reason>`, `radio: no answer to reset`, `radio: no answer to command`, `radio: link lost`,
+`radio: connection closed by the radio`,
+`radio: error 0x<code>`, or the EZSP error (a version outside 13 to 19 is named); a malformed
+`--radio` prints the expected form and exits 2.
 
 ### Measures the coverage of Zigbee2MQTT's definitions
 
@@ -60,8 +82,8 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
-No device, equipment, zone, mode or recipe exists in the tool: it has no radio, no storage and no
-API.
+No device, equipment, zone, mode or recipe exists in the tool: it has no storage and no API; it
+talks to the radio only to identify it.
 
 ## History
 
@@ -70,3 +92,4 @@ API.
 | 001 | Walking skeleton: the tool starts and shows its name |
 | 002 | Measures the coverage of Zigbee2MQTT's definitions for the leading brands |
 | 003 | The firmware shows its free memory and boots in QEMU on the Mac |
+| 004 | The host identifies the Dongle Max's radio over TCP (ASH, EZSP) |

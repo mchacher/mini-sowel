@@ -6,10 +6,12 @@ exists: the target architecture is decision D1, and what comes next is in the ro
 ## Overview
 
 ```
-                 crates/core  (Rust library: name, version, banner)
+          crates/core  (Rust library: name, version, banner, memory line;
+                        radio/: ASH and EZSP, no socket and no clock)
                   │                         │
      crates/host (Rust, Mac)          firmware/ (Rust std on ESP-IDF, ESP32)
-     prints the banner                writes the banner and its free memory
+     prints the banner; with          writes the banner and its free memory
+     --radio, TCP transport ──► Dongle Max's radio (original firmware, port 6638)
                                       to the serial log; booted on the Mac
                                       in Espressif's QEMU (scripts/qemu.sh)
 
@@ -26,8 +28,8 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
-| Core | The Sowel core: shared by every program, no hardware | `crates/core/` |
-| Host | The program on the Mac | `crates/host/` |
+| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer and the EZSP commands, as state machines fed with bytes and time; `RadioTransport` is the trait a transport implements | `crates/core/` |
+| Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system | `ui/` |
 | Tools | Node programs run on the Mac, never shipped in the box: `z2m-coverage` loads Zigbee2MQTT's device library (`zigbee-herdsman-converters`, pinned) and writes its coverage report | `tools/` (each tool its own `package.json`) |
