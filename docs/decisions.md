@@ -125,7 +125,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 ## D9: Remote and CI (replaces the remote part of D2)
 
 - **Date**: 2026-11-20
-- **Choice**: remote `origin` on GitHub, `https://github.com/mchacher/mini-sowel.git`, beside
+- **Choice**: remote `origin` on GitHub, `https://github.com/mchacher/solite.git` (renamed from mini-sowel on 2026-11-21), beside
   Sowel. CI: GitHub Actions, `.github/workflows/ci.yml`, runs `sh scripts/validate.sh` on every
   pull request and on every push to `main`, with the Rust version of `rust-toolchain.toml`, Node
   24, and the ESP32 toolchain (espup v0.19.0, ldproxy); ESP-IDF's download is cached. Pull

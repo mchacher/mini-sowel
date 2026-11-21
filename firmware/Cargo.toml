@@ -4,7 +4,7 @@ description = "Solite on the ESP32 of the Sonoff Dongle Max: the core with the r
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-repository = "https://github.com/mchacher/mini-sowel"
+repository = "https://github.com/mchacher/solite"
 # Built with the Xtensa toolchain (rust-toolchain.toml here), outside the Mac workspace.
 build = "build.rs"
 
