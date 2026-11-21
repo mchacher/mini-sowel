@@ -7,6 +7,7 @@ mod devices;
 mod equipments;
 mod input;
 mod orders;
+mod pairing;
 mod recipes;
 mod static_files;
 mod zones;
@@ -223,6 +224,7 @@ fn dispatch(
         Some("devices") => devices::route(home, &segments, request, now),
         Some("zones") => zones::route(home, &segments, request, now, random),
         Some("equipments") => equipments::route(home, &segments, request, now, random),
+        Some("integrations") => pairing::route(home, &segments, request),
         Some("recipes" | "recipe-instances") => {
             recipes::route(home, &segments, request, now, random)
         }

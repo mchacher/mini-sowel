@@ -92,6 +92,8 @@ pub struct Ncp {
     pub network_up_delay_ms: u64,
     /// `setConcentrator` is refused.
     pub refuse_concentrator: bool,
+    /// `permitJoining` with a time (opening) is refused.
+    pub refuse_permit_joining: bool,
     /// Every response is preceded by a late response to the previous sequence number.
     pub stale_response_first: bool,
     /// Callbacks of kinds the host does not use, sent when pairing opens.
@@ -209,6 +211,7 @@ impl Ncp {
             no_network_up: false,
             network_up_delay_ms: 0,
             refuse_concentrator: false,
+            refuse_permit_joining: false,
             stale_response_first: false,
             unused_burst: 0,
             overflow_flag: false,
@@ -1402,6 +1405,9 @@ impl Ncp {
             // importTransientKey answers a 32-bit status on every version.
             0x111 => 0u32.to_le_bytes().to_vec(),
             0x6B => Vec::new(),
+            0x22 if self.refuse_permit_joining && args.first().is_some_and(|s| *s > 0) => {
+                self.st(SL_FAIL)
+            }
             0x22 => {
                 match args.first() {
                     Some(seconds) if *seconds > 0 => {

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Sets up the garage of the demos (specs 010 to 014) through the API of a running host
-# (`--sim scenarios/garage.json --serve`, after `--pair`): the zone "Garage", the paired
-# devices placed in it (simulated TH01, MS01, or the real SNZB-02 (optional), SNZB-03PR2, ZBMINIR2),
+# (`--sim scenarios/garage.json --serve`, after `--pair` or after adding the devices from the
+# interface): the zone "Garage", the paired devices placed in it (simulated TH01, MS01, or the real SNZB-02 (optional), SNZB-03PR2, ZBMINIR2),
 # their equipments (climate and motion sensors, the light), and the
 # motion-light recipe (spec 012) with a timeout of 20 s. Prints the ids.
 # usage: sh scripts/demo-garage.sh [port]      (port 8080 by default)

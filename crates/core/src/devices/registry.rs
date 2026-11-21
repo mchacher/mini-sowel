@@ -280,7 +280,15 @@ impl Devices {
         });
         self.definitions = true;
         self.refused.retain(|e| *e != eui64);
-        Ok(Some(self.items.len() - 1))
+        let index = self.items.len() - 1;
+        // Sowel's `device.discovered`, on first discovery only; built when a client listens.
+        if let Some(live) = &self.live {
+            let device = &self.items[index].device;
+            live.emit(Topic::Devices, || EngineEvent::DeviceDiscovered {
+                device: device.clone(),
+            });
+        }
+        Ok(Some(index))
     }
 
     /// A device was identified: added if new (named `<model> <last 4 digits>`), else its

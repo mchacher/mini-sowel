@@ -16,9 +16,11 @@ pub use storage::{
 };
 
 use crate::devices::lock;
-use crate::home::Home;
+use crate::home::{Home, Phase};
 use crate::orders::{Clock, OrderRunner};
-use crate::radio::{Radio, RadioTransport};
+use crate::radio::{PairingEvent, Radio, RadioError, RadioTransport, cut_short_line};
+
+pub use crate::home::CLOSE_GRACE_MS;
 
 /// The two clocks the engine runs on.
 pub struct Clocks {
@@ -28,11 +30,16 @@ pub struct Clocks {
     pub monotonic: Clock,
 }
 
-/// Runs the loop until `stop` is set; `Ok(true)` then. The radio is identified and listening: the
-/// caller did it, and shows what it wants of it. `fill` is the random source. With `verbose`, the
-/// lines of the measures received go to `sink`, one call per line. A radio or storage error ends
-/// the loop. The files due are written each turn, and by the caller on stop (`Saver::tick` with
-/// `stopping`).
+/// Runs the loop until `stop` is set; `Ok(true)` then. The radio's network is started and the
+/// radio only listens: the caller did it, and shows what it wants of it. `fill` is the random
+/// source. With `verbose`, the lines of the measures received go to `sink`, one call per line; the
+/// lines of pairing (`pairing: open for 30 s`, `joined:`, `device:`, `reporting:`...) always do.
+/// A radio or storage error ends the loop. The files due are written each turn, and by the caller
+/// on stop (`Saver::tick` with `stopping`).
+///
+/// The pairing window (spec 017) lives in the home: the API records a request, this loop takes
+/// it between two polls, opens joining on the radio, follows the devices that join until the time
+/// is over and their setups are done (at most the window's grace later), then only listens again.
 #[allow(clippy::too_many_arguments)]
 pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
     radio: &mut Radio<T, C>,
@@ -48,23 +55,37 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
     // that sends them.
     let orders = lock(home).orders().clone();
     orders.set_clock(clocks.monotonic.clone());
+    lock(home).pairing_mut().set_clock(clocks.monotonic.clone());
     let mut runner = OrderRunner::new();
     while !stop.load(Ordering::SeqCst) {
-        let events = radio.poll().map_err(|e| format!("radio: {e}"))?;
+        pairing_step(radio, home, clocks, sink)?;
+        let events = radio.poll_pairing().map_err(|e| format!("radio: {e}"))?;
         let activity = radio.take_activity();
         let routes = radio.take_routes();
         let now = (clocks.now)();
+        let busy = radio.busy_devices();
         {
             let mut guard = lock(home);
+            // The announces first: a device's power source is known when it is added.
             for item in &activity {
                 guard.devices.apply_activity(item, now);
             }
+            for event in &events {
+                match event {
+                    PairingEvent::Measures(measures) => guard.measures(measures, now, fill)?,
+                    other => {
+                        sink(&other.line());
+                        for note in guard.devices.apply(other, now, fill)? {
+                            sink(&note);
+                        }
+                    }
+                }
+            }
+            // After the events: a device is in the store once it was identified.
             for update in &routes {
                 guard.devices.set_route(update);
             }
-            for event in &events {
-                guard.measures(event, now, fill)?;
-            }
+            guard.pairing_mut().set_busy(&busy);
             let status_changed = guard.devices.refresh_status(now);
             // The zone aggregation (and the motion times) after each batch of measures, and
             // when silence alone turned a device offline.
@@ -82,12 +103,107 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
         runner.step(radio, &orders, (clocks.monotonic)());
         if verbose {
             for event in &events {
-                for line in event.lines() {
-                    sink(&line);
+                if let PairingEvent::Measures(measures) = event {
+                    for line in measures.lines() {
+                        sink(&line);
+                    }
                 }
             }
         }
         saver.tick(home, now, false)?;
     }
+    // Joining is never left open: closed on stop too (best effort).
+    let open = matches!(lock(home).pairing().phase(), Phase::Open { .. });
+    if open {
+        let _ = radio.close_joining();
+        sink("pairing: closed");
+        lock(home).pairing_mut().finished();
+    }
     Ok(true)
+}
+
+/// One turn of the pairing window: the request of the API, the end of the time, the end of the
+/// setups that follow it. The radio is called outside the home's lock.
+fn pairing_step<T: RadioTransport, C: FnMut() -> u64>(
+    radio: &mut Radio<T, C>,
+    home: &Mutex<Home>,
+    clocks: &Clocks,
+    sink: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    let now = (clocks.monotonic)();
+    let (request, phase, grace) = {
+        let mut guard = lock(home);
+        let window = guard.pairing_mut();
+        (window.take_request(), window.phase(), window.grace_ms())
+    };
+    let mut phase = phase;
+    match request {
+        // Closing what is not open does nothing; an open window ends like any other.
+        Some(0) => {
+            if matches!(phase, Phase::Open { .. }) {
+                end_window(radio, home, now, grace, sink);
+                phase = lock(home).pairing().phase();
+            }
+        }
+        Some(seconds) => {
+            // A window opening lets go of the devices whose pairing finished earlier, and keeps
+            // the ones still being set up.
+            radio.forget_finished();
+            radio.set_following(true);
+            match radio.permit_join(seconds) {
+                Ok(()) => {
+                    lock(home)
+                        .pairing_mut()
+                        .opened(now + u64::from(seconds) * 1000);
+                    sink(&format!("pairing: open for {seconds} s"));
+                }
+                Err(error @ RadioError::Refused { .. }) => {
+                    let reason = error.to_string();
+                    sink(&format!("pairing: failed: {reason}"));
+                    let mut guard = lock(home);
+                    guard.pairing_mut().refused(&reason);
+                    if radio.pairing_busy() {
+                        guard.pairing_mut().ended(now + grace);
+                    } else {
+                        radio.set_following(false);
+                    }
+                }
+                Err(other) => return Err(format!("radio: {other}")),
+            }
+            phase = lock(home).pairing().phase();
+        }
+        None => {}
+    }
+    match phase {
+        Phase::Open { ends_at } if now >= ends_at => end_window(radio, home, now, grace, sink),
+        Phase::Finishing { until } => {
+            let busy = radio.pairing_busy();
+            if !busy || now >= until {
+                // The time cap cut the setups in progress short: say which.
+                for eui64 in radio.setups_in_progress() {
+                    sink(&cut_short_line(&eui64));
+                }
+                radio.set_following(false);
+                lock(home).pairing_mut().finished();
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Closes joining (a failure is only a warning: the radio closes it by itself when its time is
+/// over) and leaves the devices of the window time to finish.
+fn end_window<T: RadioTransport, C: FnMut() -> u64>(
+    radio: &mut Radio<T, C>,
+    home: &Mutex<Home>,
+    now: u64,
+    grace: u64,
+    sink: &mut dyn FnMut(&str),
+) {
+    if let Err(error) = radio.close_joining() {
+        log::warn!("pairing: closing joining failed: {error}");
+    }
+    sink("pairing: closed");
+    lock(home).pairing_mut().ended(now + grace);
 }

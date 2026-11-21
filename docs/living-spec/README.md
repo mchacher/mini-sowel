@@ -134,6 +134,10 @@ device: 0x00124B0012345678 eWeLink TH01
 pairing: closed
 ```
 
+While serving, pairing also opens from the API or the interface (see "Serves Sowel's device API"
+and "Shows the home in the browser"); the devices that join are followed, identified and kept
+exactly as with `--pair`, with the same lines.
+
 New errors: `radio: network did not start`, `radio: the radio is not a coordinator`,
 `radio: the radio refused <command> (status 0x<code>)`, `no random source: <reason>`,
 `cannot write <path>`. Devices are kept as described below.
@@ -191,8 +195,9 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 
 ### Serves Sowel's device API
 
-`--serve [port]` (8080 by default), with `--radio` or `--sim`, resumes the network, listens, keeps
-the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
+`--serve [port]` (8080 by default), with `--radio` or `--sim`, starts the network as `--pair`
+does (it forms one, with its backup, on a radio that has none; the errors and the `network:` line
+are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
 from another site is refused by a `Host` check, and by an `Origin` check on `/ws`):
 
 | Route | Answer |
@@ -201,6 +206,8 @@ from another site is refused by a `Host` check, and by an `Origin` check on `/ws
 | `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
 | `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
+| `GET /api/v1/integrations/solite/permit-join` | 200 `{"permitJoin": <bool>, "remaining": <seconds>}`, plus `"error"` when the radio refused the last opening |
+| `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
@@ -213,6 +220,20 @@ their size never weighs on memory; the files are written the same way. It prints
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
 the same file. Ctrl-C writes the store and exits 130.
 
+**The pairing window.** Joining stays closed until the route opens it; the radio loop applies the
+request at its next turn (a request made before the first turn is applied at the first), the
+window is open until its time ends, on `time` 0, or on Ctrl-C (joining closed, best effort). From
+the opening, the coordinator follows the devices that join or announce themselves (at most 32 per
+window; the devices of earlier windows are let go at each opening, and the ones still being set up
+are kept), then, once the time is over, until their identifications, enrollments and reporting
+setups are done (at most 70 s; `reporting: <address> cut short` for a setup cut), and only
+listens again after that. `remaining` counts whole seconds, rounded up. The lines are printed
+without `--verbose`: `pairing: open for <n> s`, `joined:`, `device:`, `reporting:`, `pairing:
+closed`, `pairing: device store full (64), <address> ignored`, and `pairing: failed: <reason>`
+when the radio refuses the opening (kept in `error` until the next `POST`; the window stays
+closed and the engine goes on). A device deleted from the home that announces itself during a
+window comes back as a new device. The route has no authentication (decision D28).
+
 #### Live events
 
 `GET /ws` is Sowel's WebSocket: a `bearer.` subprotocol is echoed back (its token is not
@@ -221,7 +242,7 @@ checked); the first message is `{"type":"connected","message":"Connected to Sowe
 topics (`system` always included; unknown names ignored), and then receives, every 200 ms when
 there is something, one JSON array of Sowel's events in the order they happened, keeping only
 the last event of a device data, an equipment binding, a status or a zone within the 200 ms.
-Fed topics: `devices` (data updated, status changed, removed), `zones` (created, updated,
+Fed topics: `devices` (discovered, data updated, status changed, removed), `zones` (created, updated,
 removed, aggregate changed), `equipments` (created, updated, removed, data changed, status
 changed, order executed or failed, with the recipe as source when a recipe sent it), `recipes`
 (instance created, removed, started, stopped, state changed, error). At most 4 clients; a client
@@ -321,8 +342,15 @@ it on `http://localhost:5173` with the API of a host running on port 8080.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
   with its values, any other equipment with its name, icon and status badge; a disabled one
-  dimmed without control. "No room yet: create one with the API" when only the home's root
-  exists; "No equipment in this room".
+  dimmed without control. "No room yet: create one from the devices page" when only the home's
+  root exists; "No equipment in this room".
+- **Devices**: a "Devices" entry under the rooms in the sidebar (and in the phone drawer), at
+  `#/devices`. "Add a device" opens pairing for 180 s (a countdown from the route's `remaining`,
+  and "Stop"); the list shows every device, newest first, marked "New" when it was discovered
+  since the page opened, with its name (editable), manufacturer and model, status, a room select
+  ("No room", the rooms, "New room..." which creates one under the home's root) and a delete
+  button (confirmed); a refusal shows its text for 5 s. It follows `device.discovered`,
+  `device.removed` and `device.status_changed` live.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
@@ -416,3 +444,4 @@ measures.
 | 014 | The interface: the rooms and their equipments, live, served by the host |
 | 015 | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot |
 | 016 | The engine's loop and saver in the core, run by the firmware on its data partition with the simulated radio under QEMU, memory measured |
+| 017 | Pairing while serving, from the API and the interface's devices page: new devices appear live, named and placed in a room |

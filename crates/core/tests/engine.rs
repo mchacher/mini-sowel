@@ -6,7 +6,7 @@ mod support;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -17,7 +17,7 @@ use solite_core::engine::{
     self, Clocks, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, RETRY_MS, Saver, ZONES_FILE,
     load_home,
 };
-use solite_core::home::Home;
+use solite_core::home::{Home, Phase};
 use solite_core::radio::{NetworkSettings, Radio, RadioTransport, TransportError};
 use solite_sim::{DeviceReport, FakeClock, Kind, Ncp, SimDevice, SimTransport};
 use support::{PIR, RELAY, Rig, T0, eui, motion};
@@ -28,11 +28,15 @@ struct Stopper {
     inner: SimTransport<FakeClock>,
     stop: Arc<AtomicBool>,
     done: Rc<RefCell<Box<dyn Fn() -> bool>>>,
+    /// The fake time, copied after every read for the engine's clocks (which must be `Send`).
+    time: Rc<Cell<u64>>,
+    mirror: Arc<AtomicU64>,
 }
 
 impl RadioTransport for Stopper {
     fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
         let n = self.inner.read(buf, timeout_ms)?;
+        self.mirror.store(self.time.get(), Ordering::SeqCst);
         if (self.done.borrow())() {
             self.stop.store(true, Ordering::SeqCst);
         }
@@ -51,6 +55,7 @@ struct Bench {
     ncp: Rc<RefCell<Ncp>>,
     stop: Arc<AtomicBool>,
     done: Rc<RefCell<Box<dyn Fn() -> bool>>>,
+    mirror: Arc<AtomicU64>,
 }
 
 fn scripted() -> impl FnMut(&mut [u8]) -> Result<(), String> {
@@ -76,15 +81,29 @@ fn device(kind: Kind, last: u8, nwk: u16) -> SimDevice {
 fn bench(devices: Vec<SimDevice>) -> Bench {
     let mut ncp = Ncp::recording();
     ncp.devices = devices;
+    bench_on(ncp, false)
+}
+
+/// A radio as `--serve` leaves it: the network started, joining closed, devices not followed.
+fn serving_bench(devices: Vec<SimDevice>) -> Bench {
+    let mut ncp = Ncp::recording();
+    ncp.devices = devices;
+    bench_on(ncp, true)
+}
+
+fn bench_on(ncp: Ncp, serving: bool) -> Bench {
     let ncp = Rc::new(RefCell::new(ncp));
     let clock = FakeClock::default();
     let time = Rc::clone(&clock.time);
     let stop = Arc::new(AtomicBool::new(false));
     let done: Rc<RefCell<Box<dyn Fn() -> bool>>> = Rc::new(RefCell::new(Box::new(|| false)));
+    let mirror = Arc::new(AtomicU64::new(0));
     let transport = Stopper {
         inner: SimTransport::new(Rc::clone(&ncp), Vec::new(), 1, clock),
         stop: Arc::clone(&stop),
         done: Rc::clone(&done),
+        time: Rc::clone(&time),
+        mirror: Arc::clone(&mirror),
     };
     let mut radio: Wired = Radio::new(transport, Box::new(move || time.get()));
     radio.identify().unwrap();
@@ -95,6 +114,16 @@ fn bench(devices: Vec<SimDevice>) -> Bench {
             &mut |_| Ok(()),
         )
         .unwrap();
+    if serving {
+        radio.set_following(false);
+        return Bench {
+            radio,
+            ncp,
+            stop,
+            done,
+            mirror,
+        };
+    }
     radio.permit_join(180).unwrap();
     let mut polls = 0;
     while polls < 2000 {
@@ -110,6 +139,7 @@ fn bench(devices: Vec<SimDevice>) -> Bench {
         ncp,
         stop,
         done,
+        mirror,
     }
 }
 
@@ -412,4 +442,346 @@ mod interrupted_save {
         assert!(!recover(&none));
         assert!(none.borrow().is_empty());
     }
+}
+
+// ---- The pairing window in the loop (spec 017) ----
+
+/// The engine's clocks on the radio's fake time.
+fn fake_clocks(bench: &Bench) -> Clocks {
+    let mirror = Arc::clone(&bench.mirror);
+    let again = Arc::clone(&bench.mirror);
+    Clocks {
+        now: Arc::new(move || T0 + mirror.load(Ordering::SeqCst)),
+        monotonic: Arc::new(move || again.load(Ordering::SeqCst)),
+    }
+}
+
+/// What a test of the window sees: the home, the lines of the sink, the radio's handle.
+struct Window {
+    bench: Bench,
+    home: Arc<Mutex<Home>>,
+    lines: Vec<String>,
+    /// The window as it was when the run reached its end time, before the stop closes it.
+    seen: Rc<RefCell<Option<Seen>>>,
+    /// Where the random source goes on from, so that two runs give different ids.
+    seed: u8,
+}
+
+struct Seen {
+    phase: Phase,
+    open: bool,
+    remaining: u32,
+    busy: bool,
+}
+
+impl Window {
+    fn new(devices: Vec<SimDevice>) -> Window {
+        Window::on(serving_bench(devices), Home::new(T0))
+    }
+
+    fn on(bench: Bench, home: Home) -> Window {
+        Window {
+            bench,
+            home: Arc::new(Mutex::new(home)),
+            lines: Vec::new(),
+            seen: Rc::new(RefCell::new(None)),
+            seed: 0,
+        }
+    }
+
+    fn ask(&self, seconds: u8) {
+        lock(&self.home).pairing_mut().request(seconds);
+    }
+
+    /// Runs the loop until the fake time reaches `ms` (one more request is made at each of the
+    /// `asks`, in milliseconds of fake time, once).
+    fn run(&mut self, ms: u64, asks: &[(u64, u8)]) -> bool {
+        let mirror = Arc::clone(&self.bench.mirror);
+        let home = Arc::clone(&self.home);
+        let recorded = Rc::clone(&self.seen);
+        *recorded.borrow_mut() = None;
+        let asks: Vec<(u64, u8, Cell<bool>)> = asks
+            .iter()
+            .map(|(at, seconds)| (*at, *seconds, Cell::new(false)))
+            .collect();
+        *self.bench.done.borrow_mut() = Box::new(move || {
+            let now = mirror.load(Ordering::SeqCst);
+            for (at, seconds, made) in &asks {
+                if now >= *at && !made.get() {
+                    made.set(true);
+                    lock(&home).pairing_mut().request(*seconds);
+                }
+            }
+            if now >= ms && recorded.borrow().is_none() {
+                let guard = lock(&home);
+                let window = guard.pairing();
+                let (open, remaining, _) = window.state(window.now());
+                *recorded.borrow_mut() = Some(Seen {
+                    phase: window.phase(),
+                    open,
+                    remaining,
+                    busy: window.is_busy(&eui(0x24)),
+                });
+            }
+            now >= ms
+        });
+        self.bench.stop.store(false, Ordering::SeqCst);
+        let storage = MemStorage::default();
+        let mut saver = Saver::new(&storage, T0);
+        let seed = self.seed;
+        self.seed = self.seed.wrapping_add(50);
+        let mut n = seed;
+        let mut random = move |buffer: &mut [u8]| {
+            n = n.wrapping_add(1);
+            buffer.fill(n);
+            buffer[0] = 1;
+            Ok(())
+        };
+        let lines = &mut self.lines;
+        let clocks = fake_clocks(&self.bench);
+        engine::run(
+            &mut self.bench.radio,
+            &self.home,
+            &mut saver,
+            &clocks,
+            &self.bench.stop,
+            &mut random,
+            false,
+            &mut |line| lines.push(line.to_string()),
+        )
+        .unwrap()
+    }
+
+    fn count(&self, prefix: &str) -> usize {
+        self.lines.iter().filter(|l| l.starts_with(prefix)).count()
+    }
+
+    fn joining_closed(&self) -> bool {
+        // permitJoining (0x22) with 0 seconds
+        self.bench
+            .ncp
+            .borrow()
+            .commands
+            .iter()
+            .any(|c| c.0 == 0x22 && c.1 == [0])
+    }
+
+    fn devices(&self) -> usize {
+        lock(&self.home).devices.list().len()
+    }
+}
+
+fn three_devices() -> Vec<SimDevice> {
+    vec![
+        device(Kind::TemperatureHumidity, 0x20, 0x2000),
+        device(Kind::Motion, 0x21, 0x2001),
+        device(Kind::Relay, 0x22, 0x2002),
+    ]
+}
+
+#[test]
+fn without_a_request_no_device_joins_and_the_measures_of_known_devices_go_on() {
+    let mut window = Window::new(three_devices());
+    assert!(window.run(20_000, &[]));
+    assert_eq!(window.devices(), 0);
+    assert!(window.lines.is_empty(), "{:?}", window.lines);
+}
+
+#[test]
+fn a_request_recorded_before_the_first_turn_opens_a_window_and_the_devices_join() {
+    let mut window = Window::new(three_devices());
+    window.ask(30);
+    assert!(window.run(60_000, &[]));
+    assert_eq!(window.devices(), 3);
+    assert_eq!(window.lines[0], "pairing: open for 30 s");
+    assert_eq!(window.count("joined:"), 3, "{:?}", window.lines);
+    assert_eq!(window.count("device:"), 3);
+    assert_eq!(window.count("reporting:"), 3);
+    // The measures of the sensors came through as outside a window: the data has values.
+    let mut home = lock(&window.home);
+    let data = home.devices.list()[0].data.clone();
+    assert!(!data.is_empty());
+    let _ = &mut home;
+}
+
+#[test]
+fn the_end_of_the_time_closes_joining_and_a_device_joining_later_does_not_join() {
+    let mut late = device(Kind::Relay, 0x23, 0x2003);
+    late.join_delay_ms = 40_000;
+    let mut window = Window::new(vec![device(Kind::Relay, 0x22, 0x2002), late]);
+    window.ask(30);
+    window.run(50_000, &[]);
+    assert!(window.joining_closed());
+    assert_eq!(window.count("pairing: closed"), 1, "{:?}", window.lines);
+    assert_eq!(window.devices(), 1, "the late device never joined");
+    assert_eq!(lock(&window.home).pairing().phase(), Phase::Closed);
+}
+
+#[test]
+fn a_close_request_while_open_closes_at_the_next_turn() {
+    let mut window = Window::new(three_devices());
+    window.ask(120);
+    window.run(10_000, &[(4_000, 0)]);
+    assert!(window.joining_closed());
+    assert_eq!(window.count("pairing: closed"), 1);
+    assert_eq!(lock(&window.home).pairing().phase(), Phase::Closed);
+}
+
+#[test]
+fn a_new_request_while_open_restarts_the_window_with_the_new_time() {
+    let mut window = Window::new(Vec::new());
+    window.ask(30);
+    window.run(12_000, &[(10_000, 60)]);
+    assert_eq!(window.count("pairing: open for"), 2, "{:?}", window.lines);
+    assert_eq!(window.lines[1], "pairing: open for 60 s");
+    let seen = window.seen.borrow();
+    let seen = seen.as_ref().expect("seen");
+    assert!(
+        seen.open && (57..=60).contains(&seen.remaining),
+        "{}",
+        seen.remaining
+    );
+}
+
+#[test]
+fn a_setup_still_running_at_the_cap_is_cut_short_and_the_coordinator_listens_again() {
+    let mut stuck = device(Kind::Relay, 0x24, 0x2004);
+    stuck.ignore_configures = u32::MAX;
+    let mut window = Window::new(vec![stuck]);
+    lock(&window.home).pairing_mut().set_grace_ms(3_000);
+    window.ask(10);
+    window.run(30_000, &[]);
+    assert!(
+        window
+            .lines
+            .iter()
+            .any(|l| l.starts_with("reporting: 0x") && l.ends_with("cut short")),
+        "{:?}",
+        window.lines
+    );
+    assert_eq!(lock(&window.home).pairing().phase(), Phase::Closed);
+}
+
+#[test]
+fn a_device_still_being_set_up_is_busy_in_the_window_and_kept_by_a_new_request_while_finishing() {
+    let mut stuck = device(Kind::Relay, 0x24, 0x2004);
+    stuck.ignore_configures = u32::MAX;
+    let mut window = Window::new(vec![stuck]);
+    window.ask(5);
+    // The first window is over at 5 s, its setup is still running; a request at 8 s opens a new
+    // window and the device is kept.
+    window.run(12_000, &[(8_000, 30)]);
+    assert_eq!(window.count("pairing: open for"), 2, "{:?}", window.lines);
+    {
+        let seen = window.seen.borrow();
+        let seen = seen.as_ref().expect("seen");
+        assert!(matches!(seen.phase, Phase::Open { .. }));
+        assert!(seen.busy, "the device being set up is busy in the window");
+    }
+    // And the API refuses to delete it while the window says so.
+    lock(&window.home).pairing_mut().set_busy(&[eui(0x24)]);
+    let id = lock(&window.home).devices.list()[0].device.id.to_string();
+    let (status, _) = {
+        let mut home = lock(&window.home);
+        let response = solite_core::api::handle(
+            &mut home,
+            &solite_core::api::Request {
+                method: "DELETE",
+                path: &format!("/api/v1/devices/{id}"),
+                host: Some("127.0.0.1:8080"),
+                port: 8080,
+                content_type: None,
+                body: b"",
+            },
+            T0,
+            &mut scripted(),
+        );
+        (response.status, response.body)
+    };
+    assert_eq!(status, 409);
+}
+
+#[test]
+fn the_radio_refusing_the_opening_closes_the_window_sets_the_error_and_the_loop_goes_on() {
+    let mut ncp = Ncp::recording();
+    ncp.devices = three_devices();
+    ncp.refuse_permit_joining = true;
+    let mut window = Window::on(bench_on(ncp, true), Home::new(T0));
+    window.ask(30);
+    assert!(window.run(5_000, &[]));
+    assert!(
+        window
+            .lines
+            .iter()
+            .any(|l| l.starts_with("pairing: failed: the radio refused permitJoining")),
+        "{:?}",
+        window.lines
+    );
+    let mut home = lock(&window.home);
+    let now = home.pairing().now();
+    let (open, _, error) = home.pairing().state(now);
+    assert!(!open);
+    assert!(error.is_some_and(|e| e.contains("permitJoining")));
+    // The next request clears it.
+    home.pairing_mut().request(30);
+    assert!(home.pairing().state(now).2.is_none());
+}
+
+#[test]
+fn stopping_while_open_closes_joining_and_the_loop_returns_true() {
+    let mut window = Window::new(Vec::new());
+    window.ask(120);
+    assert!(window.run(3_000, &[]));
+    assert!(window.joining_closed());
+    assert_eq!(window.count("pairing: closed"), 1);
+}
+
+#[test]
+fn a_device_deleted_from_the_home_comes_back_as_new_when_it_announces_itself_in_a_window() {
+    let mut window = Window::new(vec![device(Kind::Relay, 0x22, 0x2002)]);
+    window.ask(30);
+    window.run(40_000, &[]);
+    let first = lock(&window.home).devices.list()[0].device.id.to_string();
+    assert!(lock(&window.home).remove_device(&first));
+    // The device is still in the simulated network: it announces itself again.
+    let mut ncp = window.bench.ncp.borrow_mut();
+    let mut again = device(Kind::Relay, 0x22, 0x2002);
+    again.announce = true;
+    ncp.devices = vec![again];
+    drop(ncp);
+    let hub = lock(&window.home).live();
+    let client = hub.connect().unwrap();
+    assert!(hub.subscribe(client, r#"{"type":"subscribe","topics":["devices"]}"#));
+    window.ask(30);
+    window.run(80_000, &[]);
+    let list = lock(&window.home).devices.list().len();
+    assert_eq!(list, 1);
+    let second = lock(&window.home).devices.list()[0].device.id.to_string();
+    assert_ne!(first, second, "a new id");
+    let batch = hub.take_batch(client).unwrap_or_default();
+    assert!(batch.contains("device.discovered"), "{batch}");
+}
+
+#[test]
+fn a_full_device_store_gives_a_note_and_no_device() {
+    let mut home = Home::new(T0);
+    let mut random = scripted();
+    for n in 0..64u8 {
+        let mut eui = [0u8; 8];
+        eui[0] = 0xAA;
+        eui[7] = n;
+        home.devices
+            .identified(eui, Some("X"), Some("Y"), T0, &mut random)
+            .unwrap();
+    }
+    let mut window = Window::on(serving_bench(vec![device(Kind::Relay, 0x22, 0x2002)]), home);
+    window.ask(30);
+    window.run(40_000, &[]);
+    assert_eq!(window.devices(), 64);
+    assert_eq!(
+        window.count("pairing: device store full (64)"),
+        1,
+        "{:?}",
+        window.lines
+    );
 }

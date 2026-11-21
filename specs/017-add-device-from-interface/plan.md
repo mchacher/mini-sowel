@@ -2,20 +2,20 @@
 
 ## Steps
 
-- [ ] 1. Living spec updated (spec, "Living spec delta", History row 017); D28 written with the
+- [x] 1. Living spec updated (spec, "Living spec delta", History row 017); D28 written with the
       box constraint, D18 amended, the E3 constraint in the roadmap; the
       sentences of "No longer true" corrected.
-- [ ] 2. Core, window: `home/pairing.rs` with its unit tests; `Home` owns it.
-- [ ] 3. Core, API: `api/pairing.rs`, the `integrations` segment in `api/mod.rs`; tests in
+- [x] 2. Core, window: `home/pairing.rs` with its unit tests; `Home` owns it.
+- [x] 3. Core, API: `api/pairing.rs`, the `integrations` segment in `api/mod.rs`; tests in
       `crates/core/tests/api.rs`.
-- [ ] 4. Core, coordinator: `set_following`, `forget_finished`; tests in
+- [x] 4. Core, coordinator: `set_following`, `forget_finished`; tests in
       `crates/core/tests/coordinator.rs`.
-- [ ] 5. Core, live: `device.discovered` from `Devices::ensure`; tests in
+- [x] 5. Core, live: `device.discovered` from `Devices::ensure`; tests in
       `crates/core/tests/live.rs`.
-- [ ] 6. Core, engine: the window in `engine::run`, `poll_pairing`, the lines to the sink, the
+- [x] 6. Core, engine: the window in `engine::run`, `poll_pairing`, the lines to the sink, the
       grace, the close on stop; `CLOSE_GRACE_MS` in the core; tests in
       `crates/core/tests/engine.rs` with the simulator.
-- [ ] 7. Host: `--serve` starts the network (shared with `pair`), `set_following(false)`;
+- [x] 7. Host: `--serve` starts the network (shared with `pair`), `set_following(false)`;
       `main.rs` uses the core's grace; tests in `crates/host/tests/serve.rs` and `ws.rs`.
 - [ ] 8. Interface: types, `api/devices.ts`, `api/pairing.ts`, `createZone`, `useDevices`
       (ported), `usePairing`, `useLive`, `DeviceNameEditor` (ported), `DevicesPage`,

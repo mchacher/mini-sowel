@@ -959,6 +959,33 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             .any(|d| d.step != Step::Done || d.setup.is_some())
     }
 
+    /// The addresses of the devices still being identified or set up (at most `MAX_DEVICES`).
+    pub fn busy_devices(&self) -> Vec<[u8; 8]> {
+        self.pairing
+            .devices
+            .iter()
+            .filter(|d| d.step != Step::Done || d.setup.is_some())
+            .map(|d| d.eui64)
+            .collect()
+    }
+
+    /// Follows the devices that join or announce themselves (`true`), or only listens (`false`,
+    /// as after `listen`): their measures are still read. A device being followed when it is
+    /// turned off finishes its setup.
+    pub fn set_following(&mut self, following: bool) {
+        self.pairing.listening = !following;
+    }
+
+    /// Lets go of the devices whose pairing is finished (identified, no setup running), and of
+    /// the addresses ignored for lack of room: the limit of `MAX_DEVICES` then applies to the
+    /// window that opens. A device still being identified or set up is kept.
+    pub fn forget_finished(&mut self) {
+        self.pairing
+            .devices
+            .retain(|d| d.step != Step::Done || d.setup.is_some());
+        self.pairing.ignored.clear();
+    }
+
     /// Reads the radio for a moment, follows the devices and returns what happened.
     pub fn poll_pairing(&mut self) -> Result<Vec<PairingEvent>, RadioError> {
         let wide = self.wide()?;
