@@ -13,6 +13,8 @@ argument-hint: "[a new need, optional]"
 
 New need: $ARGUMENTS
 
+Models (table in `CLAUDE.md`): this skill runs on Sonnet; any agent you launch names its `model:`.
+
 The roadmap says what gets built next and why, toward the **true north** in `CLAUDE.md`. It is
 never frozen: every feature teaches something, and new needs come up at any time. It is planned
 once at the start, reviewed briefly after every feature, and re-planned at every milestone.

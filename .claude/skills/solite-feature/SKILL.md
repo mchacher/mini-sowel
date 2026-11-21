@@ -16,6 +16,9 @@ The user decides **what**; you handle **how**. They review the spec before the c
 after it, not the code itself: the checks and the review agent do that. They often cannot see when
 a step was skipped, so **you never skip one**.
 
+**Models** (table in `CLAUDE.md`): Opus only for Phase 2's spec; ask the user to `/model opus`
+before it and `/model sonnet` after the approval. Every agent you launch names its `model:`.
+
 Follow EVERY phase below IN ORDER. Each phase ends with a GATE: a checklist that MUST be fully true
 before going on. Gates marked **STOP** wait for the user's explicit yes ("yes", "oui", "go"),
 whatever the permission mode, Auto included. Do NOT combine phases.
@@ -195,6 +198,12 @@ git branch --show-current                 # must NOT be main
    If a step does not apply to the feature, write "not applicable" against it in `plan.md`.
 3. **Tests**: see 3.3.
 4. **Docs**: see 3.4.
+
+**To save tokens**, steps 2 to 4 go to one agent (Agent tool, `model: "sonnet"`) that follows the
+approved `plan.md` and the rules of 3.2 to 3.4; give it the spec folder, not your conclusions, and
+ask for a short report (what changed, tests run, anything the spec did not cover). Take the work
+back on Opus only if it loops on the same failure (see "Models" in `CLAUDE.md`). Then you run
+the checks yourself.
 
 Do only what the spec says. No unrelated refactor, no extra option, no "while I was there". If the
 spec turns out wrong or incomplete, stop, tell the user, update the spec, and get their yes again.

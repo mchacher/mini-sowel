@@ -101,9 +101,12 @@ without the user's explicit yes: its original firmware exposes the radio over TC
   with `gh pr create`, CI runs `sh scripts/validate.sh` (decision D9); **no AI attribution line** (no
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
-- **Models, to save tokens**: the session runs on Sonnet (`/model sonnet`); switch to Opus only to
-  write a spec and arbitrate. Code and tests go to Sonnet agents; `spec-reviewer` runs on Sonnet,
-  `code-reviewer` on Opus (set in their files).
+- **Models, to save tokens**: the session runs on Sonnet (`/model sonnet`); Opus is the exception.
+  Whoever launches an agent writes `model:` explicitly (an agent without it inherits the session's).
+  **Opus**: writing a spec, arbitrating, `code-reviewer` (set in its file), an agent that loops
+  (e.g. EZSP). **Sonnet**: everything else: reading (`Explore`), code and tests (an agent following
+  the approved `plan.md`), `spec-reviewer`, `validate.sh`, roadmap, docs, small fixes. The user
+  switches with `/model opus` for a spec, then back; remind them when a session drifts to Opus.
 - **Review agents**: `.claude/agents/` (`spec-reviewer`, `code-reviewer`), launched by the skills.
   If one is not available as an agent type (a conversation started outside the project folder),
   launch a general-purpose agent and tell it to follow that file word for word.
