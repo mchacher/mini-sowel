@@ -1,5 +1,5 @@
-//! Sowel's routes for devices, zones and equipments (`src/api/routes/{devices,zones,
-//! equipments}.ts` of the Sowel repository), as a pure function: a request in, a status and a
+//! Sowel's routes for devices, zones, equipments and recipes (`src/api/routes/{devices,zones,
+//! equipments,recipes}.ts` of the Sowel repository), as a pure function: a request in, a status and a
 //! JSON body out. The host (or the box) only moves bytes. The time and the random bytes come from
 //! the caller.
 
@@ -7,6 +7,7 @@ mod devices;
 mod equipments;
 mod input;
 mod orders;
+mod recipes;
 mod zones;
 
 pub use crate::home::{CHUNK_ITEMS, ListCursor};
@@ -193,6 +194,7 @@ fn dispatch(
                     now,
                 ));
             }
+            ["recipe-instances"] => return Reply::List(ListCursor::recipe_instances(home)),
             _ => {}
         }
     }
@@ -206,6 +208,9 @@ fn dispatch(
         Some("devices") => devices::route(home, &segments, request, now),
         Some("zones") => zones::route(home, &segments, request, now, random),
         Some("equipments") => equipments::route(home, &segments, request, now, random),
+        Some("recipes" | "recipe-instances") => {
+            recipes::route(home, &segments, request, now, random)
+        }
         _ => error(404, "Not found"),
     };
     if request.method != "GET" && response.status < 300 {

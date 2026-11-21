@@ -11,6 +11,7 @@ use serde::Serialize;
 use super::Home;
 use crate::devices::{Id, stored_item};
 use crate::equipments::{EquipmentType, details};
+use crate::recipes::StateKeys;
 
 /// Items written per chunk.
 pub const CHUNK_ITEMS: usize = 4;
@@ -27,9 +28,14 @@ enum Kind {
     SavedZones,
     /// `equipments.json`.
     SavedEquipments,
+    /// The API's recipe instances, each with its `state`.
+    RecipeInstances,
+    /// `recipes.json`.
+    SavedRecipes,
 }
 
-/// Where a streamed list stands. At most 64 ids (devices, equipments and zones are bounded).
+/// Where a streamed list stands. At most 64 ids (devices, equipments and zones are bounded, and
+/// so are the 16 recipe instances).
 #[derive(Debug)]
 pub struct ListCursor {
     kind: Kind,
@@ -39,6 +45,21 @@ pub struct ListCursor {
     wrote_any: bool,
     done: bool,
     now: u64,
+}
+
+/// An instance with its state keys, as `GET /recipe-instances` lists it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WithState<'a> {
+    id: Id,
+    recipe_id: &'a str,
+    // Raw text, which `flatten` cannot carry: the instance's fields are written out in order.
+    #[serde(with = "crate::recipes::raw_json")]
+    params: &'a str,
+    enabled: bool,
+    #[serde(with = "crate::devices::iso")]
+    created_at: u64,
+    state: StateKeys,
 }
 
 /// Counts the bytes written to it and keeps none.
@@ -112,6 +133,18 @@ impl ListCursor {
         ListCursor::new(Kind::SavedEquipments, ids, 0)
     }
 
+    /// The API's recipe instances, oldest first, each with its `state`.
+    pub fn recipe_instances(home: &Home) -> Self {
+        let ids = home.recipes().instances().map(|i| i.id).collect();
+        ListCursor::new(Kind::RecipeInstances, ids, 0)
+    }
+
+    /// `recipes.json`: the instances only.
+    pub fn saved_recipes(home: &Home) -> Self {
+        let ids = home.recipes().instances().map(|i| i.id).collect();
+        ListCursor::new(Kind::SavedRecipes, ids, 0)
+    }
+
     fn new(kind: Kind, ids: Vec<Id>, now: u64) -> Self {
         ListCursor {
             kind,
@@ -157,6 +190,7 @@ impl ListCursor {
         match self.kind {
             Kind::Devices | Kind::SavedDevices => home.devices.get_by_id(id).is_some(),
             Kind::SavedZones => home.zones().get(id).is_some(),
+            Kind::RecipeInstances | Kind::SavedRecipes => home.recipes().get(id).is_some(),
             Kind::Equipments | Kind::SavedEquipments => {
                 home.equipments().get(&id.to_string()).is_some()
             }
@@ -185,6 +219,24 @@ impl ListCursor {
             },
             Kind::SavedEquipments => match home.equipments().get(&id.to_string()) {
                 Some(item) => item.serialize(&mut serde_json::Serializer::new(&mut *w)),
+                None => return Ok(()),
+            },
+            Kind::SavedRecipes => match home.recipes().get(id) {
+                Some(instance) => serde_json::to_writer(&mut *w, instance),
+                None => return Ok(()),
+            },
+            Kind::RecipeInstances => match home.recipes().get(id) {
+                Some(instance) => serde_json::to_writer(
+                    &mut *w,
+                    &WithState {
+                        id: instance.id,
+                        recipe_id: &instance.recipe_id,
+                        params: &instance.params,
+                        enabled: instance.enabled,
+                        created_at: instance.created_at,
+                        state: home.recipes().state_of(id).unwrap_or_default(),
+                    },
+                ),
                 None => return Ok(()),
             },
         };

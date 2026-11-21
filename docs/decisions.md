@@ -232,3 +232,21 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: a light that switches after the client was told it failed is worse than no answer; the
   ZBMINIR2 is not set up for reporting by Zigbee2MQTT, so its state must be read; the box serves
   few HTTP clients at once and must stay readable while orders wait.
+
+## D17: Recipes in native Rust first, and motion-light's divergences from Sowel
+
+- **Date**: 2026-11-21
+- **Choice**: until milestone F (recipes loaded at run time, `wasmi`, D1), recipes are written in
+  Rust in the core, with Sowel's id, slots, messages, behaviour and routes; `motion-light` 1.1.2
+  first, its quirks kept as Sowel has them and filed as Sowel issues. Divergences: recipes read
+  compact, filtered engine events (not Sowel's full events); the zone aggregate is recomputed once
+  per batch of measures, not per measure; orders from the API go before recipe orders, and the
+  limit of 2 orders at once (D16) counts orders from the API only, recipe orders having their own
+  limit (32); at most 16 instances, 16 lights and 16 buttons each, 50 log lines of at most 200
+  bytes; logs and state are not kept across a restart; no 24.8-day timer limit; numbers Sowel
+  would pass through (negative or fractional durations) are clamped; the body error text is
+  `Invalid body`; `isDaylight` is always `null`; no `recipe.instance.*` events yet.
+- **Why**: the milestone's demo needs one recipe now, and WebAssembly is a milestone of its own;
+  the user is Sowel's author, so a quirk is fixed in Sowel first; the bounds keep the box's memory
+  known; a person waiting at the API goes before an automation.
+

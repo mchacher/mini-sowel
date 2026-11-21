@@ -7,6 +7,8 @@
 use mini_sowel_core::api::{Reply, Request, handle, handle_stream};
 use mini_sowel_core::devices::Devices;
 use mini_sowel_core::home::{Home, ListCursor};
+use mini_sowel_core::radio::measures::{Measure, Value as MeasureValue};
+use mini_sowel_core::radio::{MeasureEvent, Sender};
 use peak_alloc::PeakAlloc;
 
 #[global_allocator]
@@ -78,9 +80,14 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
         zone_ids.push(zone["id"].as_str().unwrap().to_string());
     }
     for (i, device) in device_ids.iter().enumerate() {
+        // The last 16 are lights of the first zone, for the recipes below.
+        let (kind, zone) = if i >= 34 {
+            ("light_onoff", &zone_ids[0])
+        } else {
+            ("sensor", &zone_ids[i % 10])
+        };
         let body = format!(
-            r#"{{"name":"Equipment number {i}","type":"sensor","zoneId":"{}","deviceIds":["{device}"]}}"#,
-            zone_ids[i % 10]
+            r#"{{"name":"Equipment number {i}","type":"{kind}","zoneId":"{zone}","deviceIds":["{device}"]}}"#
         );
         let created = handle(
             &mut home,
@@ -98,6 +105,111 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
             .iter()
             .all(|e| e.data_bindings.len() == 6 && e.order_bindings.len() == 1)
     );
+
+    // Spec 012: 3 instances of `motion-light`, each on the same 16 lights and the first zone,
+    // with the first equipment as the button (its voltage rebound as `action`).
+    let lights: Vec<String> = home
+        .equipments()
+        .list()
+        .iter()
+        .filter(|e| e.equipment.kind.is_light())
+        .map(|e| e.equipment.id.to_string())
+        .collect();
+    assert_eq!(lights.len(), 16);
+    let button = home.equipments().list()[0].equipment.id.to_string();
+    let (voltage_binding, voltage_data) = {
+        let item = home.equipments().get(&button).unwrap();
+        let binding = item
+            .data_bindings
+            .iter()
+            .find(|b| b.alias == "voltage")
+            .unwrap();
+        (binding.id.to_string(), binding.device_data_id.to_string())
+    };
+    let path = format!("/api/v1/equipments/{button}/data-bindings/{voltage_binding}");
+    assert_eq!(
+        handle(&mut home, &request("DELETE", &path, b""), T0, &mut random).status,
+        204
+    );
+    let path = format!("/api/v1/equipments/{button}/data-bindings");
+    let body = format!(r#"{{"deviceDataId":"{voltage_data}","alias":"action"}}"#);
+    assert_eq!(
+        handle(
+            &mut home,
+            &request("POST", &path, body.as_bytes()),
+            T0,
+            &mut random
+        )
+        .status,
+        201
+    );
+    let mut instance_ids = Vec::new();
+    for _ in 0..3 {
+        let body = serde_json::json!({
+            "recipeId": "motion-light",
+            "params": {"zone": zone_ids[0], "lights": lights, "buttons": [button],
+                       "timeout": "20s", "maxOnDuration": "5m"}
+        })
+        .to_string();
+        let created = handle(
+            &mut home,
+            &request("POST", "/api/v1/recipe-instances", body.as_bytes()),
+            T0,
+            &mut random,
+        );
+        assert_eq!(created.status, 201, "{created:?}");
+        let instance: serde_json::Value = serde_json::from_str(&created.body.unwrap()).unwrap();
+        instance_ids.push(instance["id"].as_str().unwrap().to_string());
+    }
+    // The lights lose their order bindings after the start, so that every switching logs an
+    // error line (16 lights named, cut at 200 bytes) besides its info line.
+    for light in &lights {
+        let bindings: Vec<String> = home
+            .equipments()
+            .get(light)
+            .unwrap()
+            .order_bindings
+            .iter()
+            .map(|b| b.id.to_string())
+            .collect();
+        for binding in bindings {
+            let path = format!("/api/v1/equipments/{light}/order-bindings/{binding}");
+            let removed = handle(&mut home, &request("DELETE", &path, b""), T0, &mut random);
+            assert_eq!(removed.status, 204);
+        }
+    }
+    // The button is pressed (a voltage report) until every log is full: 2 lines per press.
+    let press = MeasureEvent {
+        sender: Sender::Eui64([0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0]),
+        endpoint: 1,
+        measures: vec![Measure {
+            kind: "voltage",
+            value: MeasureValue::Number(3000.0),
+            unit: "mV",
+            device_value: None,
+        }],
+    };
+    let mut now = T0;
+    for _ in 0..30 {
+        now += 1000;
+        home.measures(&press, now, &mut random).unwrap();
+        home.recompute(now);
+        home.run_recipes(now, now);
+    }
+    // The queue of events full: more reports than it holds, not handed over.
+    for _ in 0..130 {
+        home.measures(&press, now, &mut random).unwrap();
+    }
+    assert_eq!(home.events().len(), 128);
+    // The logs: 50 entries each, about half of them 200 bytes. The worst case (every entry 200
+    // bytes) is added to the peak to show that it fits too.
+    let mut log_bytes = 0usize;
+    for id in &instance_ids {
+        let log = home.recipes().log(id, 50);
+        assert_eq!(log.len(), 50);
+        log_bytes += log.iter().map(|e| e.message.len() + 56).sum::<usize>();
+    }
+    let worst_log_bytes: usize = 3 * 50 * (200 + 56);
 
     // The long lists are streamed, as the server does: one chunk alive at a time, taken and
     // dropped before the next. Only the length is kept.
@@ -136,11 +248,27 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
     }
     let (saved_devices, saved_zones, saved_equipments) =
         (sizes_saved[0], sizes_saved[1], sizes_saved[2]);
+    // The recipes' list and file, one chunk at a time like the others.
+    let mut recipes_listed = 0;
+    let mut cursor = ListCursor::recipe_instances(&home);
+    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+        recipes_listed += chunk.len();
+    }
+    let mut cursor = home
+        .take_recipes_cursor()
+        .expect("the recipes are to be written");
+    let mut recipes_saved = 0;
+    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+        recipes_saved += chunk.len();
+    }
     let peak = ALLOCATOR.peak_usage().saturating_sub(base);
+    let worst = peak + worst_log_bytes.saturating_sub(log_bytes);
     println!(
-        "memory ceiling: peak {peak} bytes ({} KB), GET /equipments {body_len} bytes (streamed), GET /devices {} bytes (streamed), devices.json {saved_devices} bytes, zones.json {saved_zones} bytes, equipments.json {saved_equipments} bytes, ceiling {CEILING_BYTES}",
+        "memory ceiling: peak {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), logs {log_bytes} bytes, GET /recipe-instances {recipes_listed} bytes, recipes.json {recipes_saved} bytes, GET /equipments {body_len} bytes (streamed), GET /devices {} bytes (streamed), devices.json {saved_devices} bytes, zones.json {saved_zones} bytes, equipments.json {saved_equipments} bytes, ceiling {CEILING_BYTES}",
         peak / 1024,
+        worst / 1024,
         sizes[1],
     );
     assert!(peak < CEILING_BYTES, "peak {peak} bytes");
+    assert!(worst < CEILING_BYTES, "worst case {worst} bytes");
 }

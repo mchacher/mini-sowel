@@ -176,9 +176,10 @@ from another site is refused by a `Host` check):
 | `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
+| `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
 Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415; 502 for an order no device took; 503 `Busy` beyond 4 requests at
-once, or beyond 2 orders at once). A request with a body is refused with 415 unless it is sent as
+once, or beyond 2 orders from the API at once). A request with a body is refused with 415 unless it is sent as
 `application/json`, so a web page cannot send one from the browser. The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
@@ -216,17 +217,46 @@ binds device data and orders under **aliases**.
   second one. The new state is
   read back from the device, then shows in its data, its equipment and the zone aggregation.
   Each device's last network address and endpoint are kept, so a relay is reachable after a
-  restart before it speaks.
+  restart before it speaks. Orders also come from recipes (below): those are never waited for,
+  have their own bound (32), and an order from the API is sent before them.
 - **Zone aggregation** (`GET /api/v1/zones/aggregation`), as Sowel computes it, over each zone and
   its sub-zones: average `temperature` (1 decimal), `humidity`, `luminosity`; `motion`, the
   number of motion sensors and `motionSince`; open doors and windows; water leak, smoke; lights
-  on and in total; shutters; equipments unavailable by category. It is recomputed after every
-  measure, status change and edit.
+  on and in total; shutters; equipments unavailable by category. It is recomputed after every batch of measures, status change and edit.
 
 Zones and equipments are kept in `zones.json` and `equipments.json` beside `devices.json`, written
 at once when they change; on load, references to things that no longer exist are dropped or moved
 under the root. A `zones.json` or `equipments.json` that cannot be read stops the host, like
 `devices.json`.
+
+### Runs the motion-light recipe
+
+The host runs Sowel's `motion-light` recipe (the same id, settings, messages and behaviour as
+Sowel's 1.1.2), through Sowel's routes:
+
+- **What it does**: when motion is seen in its zone, it switches its lights on (`light_onoff`
+  equipments of that zone); after the timeout (`10m` by default) with no motion, it switches them
+  off. With a lux threshold, it does not switch on above it, and switches off above it plus 10 %.
+  A light switched off by hand while motion lasts, or on by hand above the threshold, puts it in
+  override until the zone has been still for the timeout; a light switched on by hand with no
+  motion goes off after the timeout. The safety auto-off forces the lights off after its duration
+  without fresh motion. A button press switches the lights off (override) or on. "Inactive during
+  day" has no effect: the tool does not know the sun's times (the root zone's `isDaylight` is
+  `null`, night). At every start it sets the lights to what the zone calls for (off with no
+  motion).
+- **Routes**: `GET /api/v1/recipes`, `GET /api/v1/recipes/:id`; `GET`/`POST
+  /api/v1/recipe-instances`, `PUT`/`DELETE /api/v1/recipe-instances/:id`, `POST .../enable`,
+  `.../disable`, `.../actions`, `GET .../log?limit=`; texts and statuses as Sowel's (`Invalid
+  params: <reason>`, `Recipe not found: <id>`, `Instance not found`, `Instance not running`,
+  `Invalid body`).
+- **Its log**: the last 50 lines of each instance, newest first, each message at most 200 bytes;
+  its state (`overrideMode`, `timerExpiresAt`, `failsafeExpiresAt`) is shown with the instance.
+- **What survives a restart**: the instances, in `recipes.json` beside the other files, written at
+  once; each enabled one is started again (one that no longer validates logs `Failed to restore:
+  <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
+  read stops the host; an entry beyond 16, or with an id already seen, is dropped.
+- **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
+  waiting for the recipes.
 
 ### Runs without the dongle
 
@@ -272,8 +302,9 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
-No mode or recipe exists in the tool; the host keeps the devices, zones, equipments and the
-network backup, serves Sowel's device, zone and equipment API (above), executes equipment orders,
+No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
+zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
+equipment and recipe API (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
 measures.
 
@@ -292,3 +323,4 @@ measures.
 | 009 | Alarm sensors enrolled; their motion, contact, leak or smoke becomes device data |
 | 010 | Zones, equipments and zone aggregation, with Sowel's routes |
 | 011 | Equipment orders sent to the Zigbee devices (`POST .../orders/:alias`) |
+| 012 | The `motion-light` recipe, with Sowel's recipe routes |

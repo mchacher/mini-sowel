@@ -30,8 +30,9 @@ app, run by Vite's development server; neither the host nor the box serves it.
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
 | Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, enrolling alarm devices, listening to its measures, sending commands and waiting for their acknowledgement in `commands.rs`), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
-| Devices and API | In the core: `devices/` (Sowel's `Device`, `DeviceData`, `DeviceOrder`; the catalog from clusters to data and orders; the registry with its bounds; the `DeviceStore` trait) and `api/` (Sowel's routes as a function from request to response, reused by the box; an order comes back as an order request, which the host's radio loop executes through a queue of at most 2 orders at once (one being sent, one waiting), the core's own orders using the same queue in `orders/`); in the host: `store.rs` (`devices.json`) and `serve.rs` (`tiny_http` on 127.0.0.1) | `crates/core/src/{devices,api,orders}/`, `crates/host/src/{store,serve}.rs` |
+| Devices and API | In the core: `devices/` (Sowel's `Device`, `DeviceData`, `DeviceOrder`; the catalog from clusters to data and orders; the registry with its bounds; the `DeviceStore` trait) and `api/` (Sowel's routes as a function from request to response, reused by the box; an order comes back as an order request, which the host's radio loop executes through the queue in `orders/`: at most 2 orders from the API at once (one being sent, one waiting), sent before the recipes' orders, which have their own bound of 32); in the host: `store.rs` (`devices.json`) and `serve.rs` (`tiny_http` on 127.0.0.1) | `crates/core/src/{devices,api,orders}/`, `crates/host/src/{store,serve}.rs` |
 | Zones and equipments | In the core: `zones/` (the tree, Sowel's rules, the aggregation) and `equipments/` (bindings by alias, status and stale as Sowel); the API serves them; the host stores `zones.json` and `equipments.json` | `crates/core/src/{zones,equipments}/` |
+| Recipes | In the core: `recipes/` (the engine: instances, their state and log, timers checked on each loop turn; `motion_light/`, Sowel's recipe in Rust: settings, validation, state machine) and `home/events.rs` (the compact events recipes listen to, filtered and bounded); a recipe's orders go through the order queue after the API's; the API serves Sowel's recipe routes; the host runs the engine in its radio loop and stores `recipes.json` | `crates/core/src/{recipes,home}/`, `crates/host/src/{serve,store}.rs` |
 | Simulator | A simulated EmberZNet radio and simulated devices (temperature-humidity, motion, relay) playing scenario files (`scenarios/`); it implements the core's `RadioTransport`, so the host and the tests run the real protocol code against it; Mac only | `crates/sim/` |
 | Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
@@ -59,7 +60,8 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 ## Data
 
-The box stores no data. On the Mac, the host keeps `zones.json` and `equipments.json` (written
+The box stores no data. On the Mac, the host keeps `zones.json`, `equipments.json` and
+`recipes.json` (written
 at once when they change), `devices.json` (Sowel's devices with their
 data and orders, and each device's last network address and endpoint; definitions written at once, values every 10 minutes and on stop) and writes
 `network.json` (the network's identifiers

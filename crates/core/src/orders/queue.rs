@@ -1,6 +1,8 @@
 //! The queue of orders between whoever asks and the radio loop, with the slot an answer comes
-//! back through. Bounded: at most `MAX_ORDERS` orders in the system (waiting or being sent), so
-//! the HTTP workers waiting for them never take them all.
+//! back through. Bounded: at most `MAX_ORDERS` orders of the API in the system (waiting or being
+//! sent), so the HTTP workers waiting for them never take them all; the orders the core gives
+//! itself (a recipe's, nobody waits for them) have their own bound, `MAX_UNATTENDED`. The runner
+//! takes a waiting order of the API before a waiting order of the core.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -8,15 +10,19 @@ use std::time::Duration;
 
 use super::OrderRequest;
 
-/// Orders in the system at once (waiting in the queue, plus the one being sent); one more is
-/// refused. With 4 HTTP workers, at least 2 stay free for reads.
+/// Orders of the API in the system at once (waiting in the queue, plus the one being sent if it
+/// is one of them); one more is refused. With 4 HTTP workers, at least 2 stay free for reads.
 pub const MAX_ORDERS: usize = 2;
+/// Orders the core gave itself (a recipe's) waiting in the queue; one more is dropped. A recipe
+/// switches at most 16 lights at a time, so this holds two switchings at once.
+pub const MAX_UNATTENDED: usize = 32;
 /// An order is answered, and never sent, after this long in the system, in milliseconds.
 pub const DEADLINE_MS: u64 = 12_000;
 /// What an order that was not sent in time is answered with.
 const NOT_SENT: &str = "device did not answer";
 
-/// The queue is full: `MAX_ORDERS` orders are in the system.
+/// The queue is full: `MAX_ORDERS` orders of the API (or `MAX_UNATTENDED` of the core) are in the
+/// system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Busy;
 
@@ -102,10 +108,14 @@ pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 struct Inner {
     /// The clock the deadlines of the orders of the API are read on, when the host gave one.
     clock: Option<Clock>,
-    /// At most `MAX_ORDERS` with `active`.
+    /// Orders of the API: at most `MAX_ORDERS` with `active_http`.
     waiting: VecDeque<Queued>,
+    /// Orders of the core: at most `MAX_UNATTENDED`.
+    unattended: VecDeque<Queued>,
     /// An order was taken and is not done.
     active: bool,
+    /// The order taken is one of the API's.
+    active_http: bool,
 }
 
 /// The queue: a handle that is cloned to wherever orders are given or taken.
@@ -143,7 +153,9 @@ impl OrderQueue {
     }
 
     /// Puts an order in the queue at `now` (on the queue's clock); its deadline is
-    /// `DEADLINE_MS` later. `Err(Busy)` when `MAX_ORDERS` orders are already in the system.
+    /// `DEADLINE_MS` later. An order with a reply slot is the API's: `Err(Busy)` when
+    /// `MAX_ORDERS` of them are already in the system. An order without one is the core's:
+    /// `Err(Busy)` when `MAX_UNATTENDED` of them are waiting.
     pub fn push(
         &self,
         request: OrderRequest,
@@ -151,14 +163,23 @@ impl OrderQueue {
         now: u64,
     ) -> Result<(), Busy> {
         let mut inner = self.inner();
-        if inner.waiting.len() + usize::from(inner.active) >= MAX_ORDERS {
-            return Err(Busy);
-        }
-        inner.waiting.push_back(Queued {
+        let http = reply.is_some();
+        let queued = Queued {
             request,
             reply,
             deadline: now.saturating_add(DEADLINE_MS),
-        });
+        };
+        if http {
+            if inner.waiting.len() + usize::from(inner.active && inner.active_http) >= MAX_ORDERS {
+                return Err(Busy);
+            }
+            inner.waiting.push_back(queued);
+        } else {
+            if inner.unattended.len() >= MAX_UNATTENDED {
+                return Err(Busy);
+            }
+            inner.unattended.push_back(queued);
+        }
         Ok(())
     }
 
@@ -174,21 +195,33 @@ impl OrderQueue {
         Ok(wait)
     }
 
-    /// The next order to send at `now`. An order past its deadline, or whose waiter is gone, is
-    /// dropped without being sent (its waiter, if any, is told the device did not answer). The
-    /// order returned is the active one until `done`.
+    /// The next order to send at `now`: the first waiting order of the API, else the first of
+    /// the core. An order past its deadline, or whose waiter is gone, is dropped without being
+    /// sent (its waiter, if any, is told the device did not answer). The order returned is the
+    /// active one until `done`.
     pub fn take(&self, now: u64) -> Option<Queued> {
         let mut inner = self.inner();
         if inner.active {
             return None;
         }
-        while let Some(queued) = inner.waiting.pop_front() {
-            let gone = queued.reply.as_ref().is_some_and(OrderReply::waiter_gone);
-            if now >= queued.deadline || gone {
-                continue;
+        for http in [true, false] {
+            loop {
+                let next = if http {
+                    inner.waiting.pop_front()
+                } else {
+                    inner.unattended.pop_front()
+                };
+                let Some(queued) = next else {
+                    break;
+                };
+                let gone = queued.reply.as_ref().is_some_and(OrderReply::waiter_gone);
+                if now >= queued.deadline || gone {
+                    continue;
+                }
+                inner.active = true;
+                inner.active_http = http;
+                return Some(queued);
             }
-            inner.active = true;
-            return Some(queued);
         }
         None
     }
@@ -198,10 +231,15 @@ impl OrderQueue {
         self.inner().active = false;
     }
 
-    /// Orders in the system: waiting, plus the active one.
+    /// Orders in the system: waiting (the API's and the core's), plus the active one.
     pub fn len(&self) -> usize {
         let inner = self.inner();
-        inner.waiting.len() + usize::from(inner.active)
+        inner.waiting.len() + inner.unattended.len() + usize::from(inner.active)
+    }
+
+    /// Orders of the core waiting in the queue.
+    pub fn unattended_len(&self) -> usize {
+        self.inner().unattended.len()
     }
 
     pub fn is_empty(&self) -> bool {

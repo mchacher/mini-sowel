@@ -426,7 +426,7 @@ fn a_third_order_is_busy_and_an_order_past_its_deadline_or_without_a_waiter_is_n
     let _first = queue.push_waited(on(), now).unwrap();
     let _second = queue.push_waited(on(), now).unwrap();
     assert!(queue.push_waited(on(), now).is_err());
-    assert!(queue.push_unattended(on(), now).is_err());
+    // The core's own orders have their own bound (spec 012, R8.3): this is not one of them.
     // The first is taken: it counts until it is done.
     runner.step(&mut h.radio, &queue, now);
     assert!(runner.busy());
@@ -753,4 +753,140 @@ fn the_deadline_of_an_order_of_the_api_is_counted_on_the_queues_monotonic_clock(
     assert!(matches!(reply, Reply::Order(_)));
     // ...on the monotonic clock it is taken.
     assert!(rig.home.orders().take(5_000 + DEADLINE_MS - 1).is_some());
+}
+
+// ---- Orders of the core and orders of the API (spec 012, R4, R8.3) ----
+
+fn tagged(tag: &str) -> OrderRequest {
+    OrderRequest {
+        equipment: mini_sowel_core::devices::Id::ROOT_ZONE,
+        alias: tag.to_string(),
+        commands: Vec::new(),
+    }
+}
+
+/// Takes every order in the queue, in the order the runner would.
+fn drained(queue: &OrderQueue, now: u64) -> Vec<String> {
+    std::iter::from_fn(|| {
+        let queued = queue.take(now)?;
+        queue.done();
+        Some(queued.request.alias)
+    })
+    .collect()
+}
+
+#[test]
+fn three_orders_of_the_core_and_two_of_the_api_are_all_accepted_and_the_api_goes_first() {
+    let queue = OrderQueue::new();
+    let now = T0;
+    queue.push_unattended(tagged("u1"), now).unwrap();
+    queue.push_unattended(tagged("u2"), now).unwrap();
+    let h1 = queue.push_waited(tagged("h1"), now).unwrap();
+    queue.push_unattended(tagged("u3"), now).unwrap();
+    let h2 = queue.push_waited(tagged("h2"), now).unwrap();
+    // Two of the API in the system: a third is busy, whatever the core has queued.
+    assert!(queue.push_waited(tagged("h3"), now).is_err());
+    assert_eq!(queue.len(), 5);
+    assert_eq!(queue.unattended_len(), 3);
+    // The API's orders first, each kind in the order it was queued.
+    assert_eq!(drained(&queue, now), ["h1", "h2", "u1", "u2", "u3"]);
+    drop((h1, h2));
+    assert!(queue.is_empty());
+}
+
+#[test]
+fn the_thirty_third_order_of_the_core_is_dropped_and_the_api_is_not_affected() {
+    let queue = OrderQueue::new();
+    for n in 0..32 {
+        queue.push_unattended(tagged(&format!("u{n}")), T0).unwrap();
+    }
+    assert!(queue.push_unattended(tagged("u32"), T0).is_err());
+    assert_eq!(queue.unattended_len(), 32);
+    // The API still has its two places.
+    let _a = queue.push_waited(tagged("h1"), T0).unwrap();
+    let _b = queue.push_waited(tagged("h2"), T0).unwrap();
+    assert!(queue.push_waited(tagged("h3"), T0).is_err());
+    // One taken: the core has room again once it is sent (the API's go first).
+    let first = queue.take(T0).unwrap();
+    assert_eq!(first.request.alias, "h1");
+    queue.done();
+    let second = queue.take(T0).unwrap();
+    assert_eq!(second.request.alias, "h2");
+    queue.done();
+    let third = queue.take(T0).unwrap();
+    assert_eq!(third.request.alias, "u0");
+    queue.done();
+    queue.push_unattended(tagged("u32"), T0).unwrap();
+}
+
+#[test]
+fn an_order_of_the_api_arriving_while_a_core_order_is_sent_goes_before_the_next_core_order() {
+    let mut h = paired(vec![relay(0x7A, 0x2001), relay(0x7B, 0x2002)]);
+
+    let home = Home::new(T0);
+    let queue = home.orders().clone();
+    let mut runner = OrderRunner::new();
+    let now = || T0 + h.clock.get();
+    // A core order is being sent, another one waits.
+    queue
+        .push_unattended(request(vec![to(0x7A, None, Command::On)]), now())
+        .unwrap();
+    queue
+        .push_unattended(request(vec![to(0x7B, None, Command::Off)]), now())
+        .unwrap();
+    runner.step(&mut h.radio, &queue, now());
+    assert!(runner.busy());
+    // An order of the API arrives meanwhile.
+    let wait = queue
+        .push_waited(request(vec![to(0x7B, None, Command::On)]), now())
+        .unwrap();
+    run(&mut h.radio, &mut runner, &queue, &h.clock, 13_000);
+    assert_eq!(wait.wait(std::time::Duration::from_millis(1)), Ok(()));
+    // The relay B got the API's `On` first, then the core's `Off`.
+    let to_b: Vec<u8> = command_sends(&h)
+        .iter()
+        .filter(|m| m.destination == 0x2002)
+        .map(|m| m.message[2])
+        .collect();
+    assert_eq!(to_b, [0x01, 0x00]);
+    assert!(queue.is_empty());
+}
+
+#[test]
+fn an_order_of_the_api_that_waits_behind_a_core_order_past_its_deadline_is_a_device_did_not_answer()
+{
+    let mut h = paired(vec![relay(0x7A, 0x2001), relay(0x7B, 0x2002)]);
+    h.ncp.borrow_mut().devices[0].silent = true;
+    let home = Home::new(T0);
+    let queue = home.orders().clone();
+    let mut runner = OrderRunner::new();
+    queue
+        .push_unattended(
+            request(vec![to(0x7A, None, Command::On)]),
+            T0 + h.clock.get(),
+        )
+        .unwrap();
+    runner.step(&mut h.radio, &queue, T0 + h.clock.get());
+    assert!(runner.busy());
+    let wait = queue
+        .push_waited(
+            request(vec![to(0x7B, None, Command::On)]),
+            T0 + h.clock.get(),
+        )
+        .unwrap();
+    // The silent send takes the radio past the API order's 12 s.
+    h.clock.set(h.clock.get() + DEADLINE_MS + 1);
+    run(&mut h.radio, &mut runner, &queue, &h.clock, 200);
+    assert_eq!(
+        wait.wait(std::time::Duration::from_millis(1)),
+        Err("device did not answer".to_string())
+    );
+    assert_eq!(
+        command_sends(&h)
+            .iter()
+            .filter(|m| m.destination == 0x2002)
+            .count(),
+        0,
+        "never sent"
+    );
 }

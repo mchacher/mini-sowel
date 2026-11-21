@@ -1,6 +1,6 @@
 //! The home on disk, in the data folder: `devices.json` (a JSON list of Sowel's
-//! `DeviceWithDetails`), `zones.json` (`Zone`s) and `equipments.json` (equipments with their
-//! bindings), each readable by its owner only. Written under a temporary name, then renamed, so
+//! `DeviceWithDetails`), `zones.json` (`Zone`s), `equipments.json` (equipments with their
+//! bindings) and `recipes.json` (the recipe instances), each readable by its owner only. Written under a temporary name, then renamed, so
 //! a stop in the middle never leaves half a file. Only the radio loop writes (`Saver`).
 
 use std::fs::{self, OpenOptions};
@@ -14,11 +14,13 @@ use mini_sowel_core::devices::{
 };
 use mini_sowel_core::equipments::{self, StoredEquipment};
 use mini_sowel_core::home::{Home, ListCursor};
+use mini_sowel_core::recipes::RecipeInstance;
 use mini_sowel_core::zones::{self, Zone};
 
 const FILE_NAME: &str = "devices.json";
 const ZONES_FILE_NAME: &str = "zones.json";
 const EQUIPMENTS_FILE_NAME: &str = "equipments.json";
+const RECIPES_FILE_NAME: &str = "recipes.json";
 /// A zones or equipments file that could not be written is tried again after this, in
 /// milliseconds (never in a tight loop).
 const RETRY_MS: u64 = 60 * 1000;
@@ -28,6 +30,7 @@ pub struct FileStore {
     path: PathBuf,
     zones: PathBuf,
     equipments: PathBuf,
+    recipes: PathBuf,
 }
 
 /// Reads a file; a missing file is `None` (first run), one that cannot be read is the error.
@@ -90,6 +93,7 @@ impl FileStore {
             path: dir.join(FILE_NAME),
             zones: dir.join(ZONES_FILE_NAME),
             equipments: dir.join(EQUIPMENTS_FILE_NAME),
+            recipes: dir.join(RECIPES_FILE_NAME),
         }
     }
 
@@ -129,15 +133,28 @@ impl FileStore {
         write(&self.equipments, text, "equipments")
     }
 
-    /// The whole home, made consistent; a file that cannot be read stops everything.
+    /// The recipe instances; none when there is no file. A file that cannot be read or parsed is
+    /// an error, and the file is left as it is.
+    pub fn load_recipes(&self) -> Result<Vec<RecipeInstance>, String> {
+        let Some(text) = read(&self.recipes, "recipes")? else {
+            return Ok(Vec::new());
+        };
+        serde_json::from_str(&text)
+            .map_err(|e| format!("recipes: {}: cannot read: {e}", self.recipes.display()))
+    }
+
+    #[cfg(test)]
+    pub fn save_recipes(&self, text: &str) -> Result<(), String> {
+        write(&self.recipes, text, "recipes")
+    }
+
+    /// The whole home, made consistent; a file that cannot be read stops everything. The recipe
+    /// instances are loaded, not started: the caller starts them (`Home::start_recipes`).
     pub fn load_home(&self, now: u64) -> Result<Home, String> {
         let devices = Devices::from_list(self.load()?);
-        Ok(Home::from_parts(
-            devices,
-            self.load_zones()?,
-            self.load_equipments()?,
-            now,
-        ))
+        let mut home = Home::from_parts(devices, self.load_zones()?, self.load_equipments()?, now);
+        home.load_recipes(self.load_recipes()?);
+        Ok(home)
     }
 }
 
@@ -224,6 +241,17 @@ impl Saver {
             }
             eprintln!("{message}");
             lock(home).mark_equipments_changed();
+            self.retry_at = now + RETRY_MS;
+        }
+        let recipes = lock(home).take_recipes_cursor();
+        if let Some(cursor) = recipes
+            && let Err(message) = self.write(home, cursor, &self.store.recipes)
+        {
+            if stopping {
+                return Err(message);
+            }
+            eprintln!("{message}");
+            lock(home).mark_recipes_changed();
             self.retry_at = now + RETRY_MS;
         }
         Ok(())
@@ -380,6 +408,67 @@ mod tests {
             assert_eq!(mode, 0o600, "{name}");
             assert!(!dir.join(name.replace(".json", ".json.tmp")).exists());
         }
+    }
+
+    fn instance(n: u8) -> RecipeInstance {
+        RecipeInstance {
+            id: mini_sowel_core::devices::Id::from_random([n; 16]),
+            recipe_id: "motion-light".into(),
+            params: serde_json::json!({"zone": "z", "timeout": "20s"})
+                .to_string()
+                .into(),
+            enabled: n % 2 == 1,
+            created_at: 1_795_252_323_120,
+        }
+    }
+
+    #[test]
+    fn recipes_are_saved_and_loaded_the_same_with_the_owner_only_mode() {
+        let dir = dir("recipes-roundtrip");
+        let store = FileStore::new(&dir);
+        // No file: no instance.
+        assert!(store.load_recipes().unwrap().is_empty());
+        let list = vec![instance(1), instance(2)];
+        store
+            .save_recipes(&serde_json::to_string(&list).unwrap())
+            .unwrap();
+        assert_eq!(store.load_recipes().unwrap(), list);
+        let mode = fs::metadata(dir.join("recipes.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(!dir.join("recipes.json.tmp").exists());
+        // The instances reach the home, not started.
+        let home = store.load_home(1).unwrap();
+        assert_eq!(home.recipes().len(), 2);
+    }
+
+    #[test]
+    fn a_recipes_file_that_does_not_parse_is_the_error_and_stays_as_it_is() {
+        let dir = dir("recipes-garbage");
+        let file = dir.join("recipes.json");
+        fs::write(&file, "[ not json").unwrap();
+        let message = FileStore::new(&dir).load_home(1).expect_err("an error");
+        assert!(
+            message.starts_with(&format!("recipes: {}: cannot read: ", file.display())),
+            "{message}"
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), "[ not json");
+    }
+
+    #[test]
+    fn the_saver_writes_recipes_at_once_when_they_changed() {
+        let dir = dir("saver-recipes");
+        let home = std::sync::Mutex::new(home_with_garage());
+        let mut saver = Saver::new(FileStore::new(&dir), 0);
+        saver.tick(&home, 1, true).unwrap();
+        assert!(!dir.join("recipes.json").exists(), "nothing to write yet");
+        lock(&home).mark_recipes_changed();
+        saver.tick(&home, 2, false).unwrap();
+        assert!(dir.join("recipes.json").exists());
+        assert_eq!(fs::read_to_string(dir.join("recipes.json")).unwrap(), "[]");
     }
 
     #[test]

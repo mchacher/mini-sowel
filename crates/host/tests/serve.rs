@@ -1275,3 +1275,113 @@ fn an_order_is_answered_while_slow_clients_hold_the_long_lists_open() {
     drop(slow);
     assert_eq!(serving.interrupt(), Some(130));
 }
+
+// ---- Spec 012: the motion-light recipe ----
+
+/// The id of the garage light equipment.
+fn garage_light(serving: &Serving) -> String {
+    let (_, equipments) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Garage light")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn messages(serving: &Serving, instance: &str) -> Vec<String> {
+    let (status, log) = serving.send(
+        "GET",
+        &format!("/api/v1/recipe-instances/{instance}/log"),
+        &Value::Null,
+    );
+    assert_eq!(status, 200);
+    log.as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["message"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn a_motion_light_instance_switches_the_garage_light_and_runs_again_after_a_restart() {
+    let dir = data_dir();
+    pair(&dir);
+    // Speed 60: the scenario's motions (1 and 3 minutes) come after 1 s and 3 s, and each clears
+    // a second later; with a timeout of 3 s the light goes off about 7 s after the start.
+    let serving = serve(&dir, "60", &[]);
+    let zone = set_up_the_garage(&serving);
+    let light = garage_light(&serving);
+    let (status, created) = serving.send(
+        "POST",
+        "/api/v1/recipe-instances",
+        &serde_json::json!({
+            "recipeId": "motion-light",
+            "params": {"zone": zone, "lights": [light], "timeout": "3s"}
+        }),
+    );
+    assert_eq!(status, 201, "{created}");
+    let instance = created["id"].as_str().unwrap().to_string();
+    // The instance is written at once.
+    let file = dir.join("recipes.json");
+    wait_until("recipes.json written", || file.exists());
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(saved[0]["id"], instance.as_str());
+    assert_eq!(saved[0]["params"]["timeout"], "3s");
+    assert_eq!(serving.interrupt(), Some(130));
+
+    // The host again: the instance is running from its start.
+    let serving = serve(&dir, "60", &[]);
+    let (status, head, body) = serving.request_full(
+        "GET",
+        "/api/v1/recipe-instances",
+        &format!("127.0.0.1:{}", serving.port),
+        "",
+    );
+    assert_eq!(status, 200);
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("transfer-encoding: chunked"),
+        "{head}"
+    );
+    let list: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list[0]["id"], instance.as_str());
+    assert_eq!(list[0]["enabled"], true);
+    assert!(list[0]["state"].is_object());
+    wait_until("the light on", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    wait_until("the light off", || {
+        binding_value(&serving, &light, "state") == false
+    });
+    // Newest first; the log of the run before is not kept.
+    wait_until("three lines", || messages(&serving, &instance).len() >= 3);
+    assert_eq!(
+        messages(&serving, &instance),
+        [
+            "No motion for 3s — lights turned off",
+            "Motion detected — 1 light(s) turned on",
+            "Recipe activated — no motion, lights off"
+        ]
+    );
+    // The routes over HTTP.
+    let (status, body) = serving.send(
+        "POST",
+        &format!("/api/v1/recipe-instances/{instance}/disable"),
+        &serde_json::json!({}),
+    );
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    let (status, _) = serving.send(
+        "DELETE",
+        &format!("/api/v1/recipe-instances/{instance}"),
+        &Value::Null,
+    );
+    assert_eq!(status, 204);
+    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(recipes[0]["id"], "motion-light");
+    assert_eq!(serving.interrupt(), Some(130));
+}

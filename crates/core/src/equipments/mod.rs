@@ -53,6 +53,19 @@ impl EquipmentType {
         })
     }
 
+    /// The type as Sowel writes it (`light_onoff`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EquipmentType::LightOnoff => "light_onoff",
+            EquipmentType::LightDimmable => "light_dimmable",
+            EquipmentType::Shutter => "shutter",
+            EquipmentType::Sensor => "sensor",
+            EquipmentType::Switch => "switch",
+            EquipmentType::Thermostat => "thermostat",
+            EquipmentType::Button => "button",
+        }
+    }
+
     pub fn is_light(self) -> bool {
         matches!(
             self,
@@ -266,6 +279,10 @@ impl Equipments {
     pub fn get(&self, id: &str) -> Option<&StoredEquipment> {
         let id = Id::parse(id)?;
         self.items.iter().find(|e| e.equipment.id == id)
+    }
+
+    pub fn get_by_id(&self, id: &Id) -> Option<&StoredEquipment> {
+        self.items.iter().find(|e| e.equipment.id == *id)
     }
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut StoredEquipment> {

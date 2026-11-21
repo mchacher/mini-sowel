@@ -23,4 +23,5 @@ pub mod equipments;
 pub mod failure;
 pub mod home;
 pub mod orders;
+pub mod recipes;
 pub mod zones;

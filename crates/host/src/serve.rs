@@ -1,5 +1,5 @@
 //! `--serve`: resume the network, keep the devices up to date from what they send, and serve
-//! Sowel's device, zone and equipment API on 127.0.0.1. The radio loop runs in the calling thread
+//! Sowel's device, zone, equipment and recipe API on 127.0.0.1. The radio loop runs in the calling thread
 //! and is the only writer of the files; HTTP workers answer requests, with the home behind a lock
 //! that is never held during radio I/O, a file write, or the wait for an order's answer. An order
 //! goes through the home's queue to the radio loop, which sends it between two polls. The random
@@ -213,6 +213,15 @@ pub fn serve<T: RadioTransport>(
 ) -> Result<bool, String> {
     let store = FileStore::new(data);
     let home = Arc::new(Mutex::new(store.load_home(now_ms())?));
+    {
+        // The recipes' timers and the orders' deadlines run on the same monotonic clock from the
+        // first moment, API calls included.
+        let mut guard = lock(&home);
+        guard.orders().set_clock(Arc::new(monotonic_ms));
+        // The recipe instances start once the home is loaded: their start sync queues its
+        // orders, which wait for the radio.
+        guard.start_recipes(monotonic_ms(), now_ms());
+    }
     let random = Arc::new(Mutex::new(SystemRandom::open()?));
     let server = bind(port)?;
     let _ = SERVER.set(Arc::clone(&server));
@@ -280,7 +289,7 @@ fn radio_loop<T: RadioTransport>(
                 guard.devices.set_route(update);
             }
             for event in &events {
-                guard.devices.measures(event, now, &mut fill)?;
+                guard.measures(event, now, &mut fill)?;
             }
             let status_changed = guard.devices.refresh_status(now);
             // The zone aggregation (and the motion times) after each batch of measures, and
@@ -288,6 +297,9 @@ fn radio_loop<T: RadioTransport>(
             if status_changed || !events.is_empty() || !activity.is_empty() {
                 guard.recompute(now);
             }
+            // The recipes get the events of this batch (and of the API's edits since the last
+            // turn), then the timers that are due fire. Their orders join the queue below.
+            guard.run_recipes(monotonic_ms(), now);
         }
         // After the measures: the answer of an order (and the state it makes the device read
         // back) comes through the same polls.

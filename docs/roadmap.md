@@ -50,7 +50,7 @@ possible without hardware.
 | B3 | Alarm sensors: IAS zone devices (the Sonoff motion sensor) are enrolled; their motion, contact, leak or smoke becomes device data | The motion sensor's `occupancy` turns true in the API | built (spec 009), real sensor pending |
 | B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | built (spec 010) |
 | B5 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | built (spec 011), real ZBMINIR2 pending |
-| B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
+| B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | built (spec 012), real Dongle Max pending |
 | B7 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
 
 ## Later milestones
@@ -80,6 +80,12 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-21 | Sun times: sunrise and sunset from a location, so `isDaylight` and motion-light's "inactive during day" work | Spec 012 |
+| 2026-11-21 | Keep recipe logs and state across a restart, if the box's flash allows it | Spec 012 |
+| 2026-11-21 | Sowel issue: motion-light enters override when a zone event arrives between its ON and the light's echo (stale state read) | Spec 012 |
+| 2026-11-21 | Sowel issue: motion-light's failsafe leaves override mode set; the button's ON arms no off timer | Spec 012 |
+| 2026-11-21 | Sowel issue: motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
+| 2026-11-21 | Sowel issue: `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
 | 2026-11-21 | G: `sowel-plugin-mini` first publishes the box's devices only (Sowel plugins can publish nothing else today); then its equipments and zones, once Sowel lets a plugin publish the equipments and zones it owns (Sowel issue to open, draft ready) | Conversation on the link with Sowel |
 | 2026-11-21 | A memory budget of the box per item (engine, HTTP, WebSocket clients, WebAssembly recipes, TLS, OTA buffers, history), written in `docs/` and checked by tests, before milestone E | Spec 010, discussion with the user |
 | 2026-11-21 | Equipment types beyond D3's six, zone orders (all lights off), zone reorder, window contacts (a contact device as `contact_window`) | Spec 010 review |

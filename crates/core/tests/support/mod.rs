@@ -6,7 +6,9 @@
 use mini_sowel_core::api::{Request, Response, handle};
 use mini_sowel_core::devices::{Devices, parse_list};
 use mini_sowel_core::home::Home;
+use mini_sowel_core::orders::DeviceCommand;
 use mini_sowel_core::radio::measures::{Measure, Value};
+use mini_sowel_core::radio::zcl::Command;
 use mini_sowel_core::radio::{MeasureEvent, Sender};
 use serde_json::{Value as Json, json};
 
@@ -240,6 +242,10 @@ fn event(last: u8, kind: &'static str, value: Value, unit: &'static str) -> Meas
     }
 }
 
+pub fn luminosity(last: u8, value: f64) -> MeasureEvent {
+    event(last, "luminosity", Value::Number(value), "lx")
+}
+
 pub fn temperature(last: u8, value: f64) -> MeasureEvent {
     event(last, "temperature", Value::Number(value), "°C")
 }
@@ -309,4 +315,145 @@ pub fn device_json_id(device: &Json) -> String {
 /// The id of data number `i` of a device made by `device_json`.
 pub fn data_id(device: &Json, i: usize) -> String {
     device["data"][i]["id"].as_str().unwrap().to_string()
+}
+
+// ---- Recipes (spec 012) ----
+
+/// The garage of the recipe tests: a zone, a motion and luminosity sensor in an equipment, a
+/// relay in a `light_onoff` equipment.
+pub struct Garage {
+    pub zone: String,
+    pub motion_device: String,
+    pub motion_equipment: String,
+    pub relay_device: String,
+    pub light: String,
+}
+
+pub const PIR: u8 = 0x50;
+pub const RELAY: u8 = 0x7A;
+
+impl Rig {
+    /// The garage; its relay is OFF (it reported once) and nothing moves.
+    pub fn garage(&mut self) -> Garage {
+        let zone = self.zone("Garage");
+        let e = eui(PIR);
+        self.home.devices.announced(e, 0x80, self.now);
+        self.home
+            .devices
+            .identified(
+                e,
+                Some("eWeLink"),
+                Some("MS01"),
+                self.now,
+                &mut *self.random,
+            )
+            .unwrap();
+        self.home
+            .devices
+            .reporting_configured(e, &[0x0406, 0x0400], self.now, &mut *self.random)
+            .unwrap();
+        let motion_device = self.device(PIR);
+        let relay_device = self.relay(RELAY);
+        let motion_equipment = self.equipment("Garage motion", "sensor", &zone, &[&motion_device]);
+        let light = self.equipment("Garage light", "light_onoff", &zone, &[&relay_device]);
+        self.measure(&state(RELAY, false));
+        self.measure(&motion(PIR, false));
+        Garage {
+            zone,
+            motion_device,
+            motion_equipment,
+            relay_device,
+            light,
+        }
+    }
+
+    /// One turn of the radio loop at the current time: the zones are recomputed, the recipes get
+    /// the events waiting and their timers fire.
+    pub fn turn(&mut self) {
+        self.home.recompute(self.now);
+        self.home.run_recipes(self.now, self.now);
+    }
+
+    /// Time passes (milliseconds), with a loop turn at the end.
+    pub fn advance(&mut self, ms: u64) {
+        self.now += ms;
+        self.turn();
+    }
+
+    /// A message of a device, as the radio loop applies it: the measures (with their events), the
+    /// zones recomputed, the recipes run.
+    pub fn report(&mut self, event: &MeasureEvent) {
+        self.home
+            .measures(event, self.now, &mut *self.random)
+            .unwrap();
+        self.turn();
+    }
+
+    /// The commands of the orders waiting in the queue, in the order they were queued; the queue
+    /// is emptied (as the radio loop would send them).
+    pub fn sent(&mut self) -> Vec<Command> {
+        let mut commands = Vec::new();
+        while let Some(queued) = self.home.orders().take(self.now) {
+            commands.extend(
+                queued
+                    .request
+                    .commands
+                    .iter()
+                    .map(|c: &DeviceCommand| c.command),
+            );
+            self.home.orders().done();
+        }
+        commands
+    }
+
+    /// Creates an instance of `motion-light`; (status, body).
+    pub fn instance(&mut self, params: Json) -> (u16, Json) {
+        self.post(
+            "/api/v1/recipe-instances",
+            json!({ "recipeId": "motion-light", "params": params }),
+        )
+    }
+
+    /// An instance of the garage's light with these parameters added to the zone and the light.
+    pub fn garage_instance(&mut self, garage: &Garage, extra: Json) -> String {
+        let mut params = json!({
+            "zone": garage.zone,
+            "lights": [garage.light],
+            "timeout": "20s",
+        });
+        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                params.insert(key.clone(), value.clone());
+            }
+        }
+        let (status, body) = self.instance(params);
+        assert_eq!(status, 201, "{body}");
+        body["id"].as_str().unwrap().to_string()
+    }
+
+    /// The messages of an instance's log, oldest first.
+    pub fn messages(&mut self, id: &str) -> Vec<String> {
+        let (status, body) = self.get(&format!("/api/v1/recipe-instances/{id}/log"));
+        assert_eq!(status, 200);
+        let mut list: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["message"].as_str().unwrap().to_string())
+            .collect();
+        list.reverse();
+        list
+    }
+
+    /// The state keys of an instance, from `GET /recipe-instances`.
+    pub fn state(&mut self, id: &str) -> Json {
+        let (status, body) = self.get("/api/v1/recipe-instances");
+        assert_eq!(status, 200);
+        body.as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()["state"]
+            .clone()
+    }
 }

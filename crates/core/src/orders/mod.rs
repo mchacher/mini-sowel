@@ -8,7 +8,8 @@ mod resolve;
 mod runner;
 
 pub use queue::{
-    Busy, Clock, DEADLINE_MS, MAX_ORDERS, OrderQueue, OrderReply, OrderResult, OrderWait, Queued,
+    Busy, Clock, DEADLINE_MS, MAX_ORDERS, MAX_UNATTENDED, OrderQueue, OrderReply, OrderResult,
+    OrderWait, Queued,
 };
 pub use resolve::{commands_for, prepare};
 pub use runner::OrderRunner;

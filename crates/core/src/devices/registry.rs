@@ -516,6 +516,18 @@ impl Devices {
         now: u64,
         random: Random,
     ) -> Result<(), String> {
+        self.measures_with(event, now, random, &mut |_, _| {})
+    }
+
+    /// `measures`, telling `updated` each data that got a value (changed or not): the id of its
+    /// device and the data as it is now. The home turns these into the events recipes listen to.
+    pub fn measures_with(
+        &mut self,
+        event: &MeasureEvent,
+        now: u64,
+        random: Random,
+        updated: &mut dyn FnMut(Id, &DeviceData),
+    ) -> Result<(), String> {
         let Sender::Eui64(eui64) = event.sender else {
             return Ok(());
         };
@@ -533,6 +545,7 @@ impl Devices {
         if added {
             self.sorted(index, now);
         }
+        let device_id = self.items[index].device.id;
         for measure in &event.measures {
             if measure.kind == "alarm" {
                 // The zone's data: `contact` is true when closed, the alarm bit clear.
@@ -543,6 +556,7 @@ impl Devices {
                 if let (Some(data), MeasureValue::Bool(alarm)) = (data, measure.value) {
                     let on = if data.key == "contact" { !alarm } else { alarm };
                     set_value(data, Value::Bool(on), now);
+                    updated(device_id, data);
                 }
                 continue;
             }
@@ -560,6 +574,7 @@ impl Devices {
                 _ => continue,
             };
             set_value(data, value, now);
+            updated(device_id, data);
         }
         self.mark_seen(index, now);
         self.refresh_status(now);

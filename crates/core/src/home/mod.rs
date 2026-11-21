@@ -6,8 +6,12 @@
 
 mod cursor;
 mod equipment_ops;
+pub mod events;
+mod recipe_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
+
+use std::io::{self, Write};
 
 use serde::{Serialize, Serializer};
 
@@ -15,8 +19,11 @@ use crate::devices::{Device, Devices, Id, Random};
 use crate::equipments::{Alias, Equipments, StoredEquipment};
 use crate::failure::{Failure, Outcome};
 use crate::orders::OrderQueue;
+use crate::radio::MeasureEvent;
+use crate::recipes::RecipeEngine;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
+use events::{Event, EventQueue, EventValue, Interest};
 
 pub use equipment_ops::{EquipmentUpdate, NewEquipment};
 
@@ -30,12 +37,41 @@ pub(crate) fn new_id(random: Random) -> Outcome<Id> {
     Ok(Id::from_random(bytes))
 }
 
-/// The last `(motion, motionSince)` of a zone.
+/// What the home remembers of the last aggregate it computed for a zone: its motion and
+/// luminosity (what recipes read), `motionSince`, and a fingerprint of the rest to tell whether
+/// the next aggregate differs (Sowel's `aggregatedDataEqual`, `motionSince` left out).
 #[derive(Debug, Clone, Copy)]
 struct Motion {
     zone: Id,
     motion: bool,
+    luminosity: Option<i64>,
     since: Option<u64>,
+    fingerprint: u64,
+}
+
+/// A 64-bit FNV-1a hash over what is written to it.
+struct Fnv(u64);
+
+impl Write for Fnv {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x0100_0000_01b3);
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The fingerprint of an aggregate: its JSON, hashed. `motionSince` must still be empty.
+fn fingerprint(data: &ZoneAggregatedData) -> u64 {
+    let mut hash = Fnv(0xcbf2_9ce4_8422_2325);
+    // Writing to a hash cannot fail; a failure would only make two aggregates look different.
+    let _ = serde_json::to_writer(&mut hash, data);
+    hash.0
 }
 
 /// Devices, zones and equipments.
@@ -49,8 +85,16 @@ pub struct Home {
     motion: Vec<Motion>,
     zones_changed: bool,
     equipments_changed: bool,
-    /// The orders waiting for the radio (spec 011); at most `MAX_ORDERS`.
+    /// The orders waiting for the radio (spec 011): at most `MAX_ORDERS` of the API, and
+    /// `MAX_UNATTENDED` of the core's own.
     orders: OrderQueue,
+    /// The recipe instances (spec 012), with their logs.
+    recipes: RecipeEngine,
+    recipes_changed: bool,
+    /// What the running instances listen to, and the events that match, waiting for the engine
+    /// (at most `MAX_EVENTS`).
+    interest: Interest,
+    events: EventQueue,
 }
 
 impl Home {
@@ -123,6 +167,10 @@ impl Home {
             zones_changed: zones_repaired,
             equipments_changed: repaired,
             orders: OrderQueue::new(),
+            recipes: RecipeEngine::new(),
+            recipes_changed: false,
+            interest: Interest::new(),
+            events: EventQueue::default(),
         }
     }
 
@@ -199,12 +247,21 @@ impl Home {
     /// The aggregated data of every zone as of `now`, with `motionSince`: the time of the first
     /// computation that saw `motion` change (after a restart, the first computation's time),
     /// unchanged while `motion` stays the same, `null` without motion sensors. Kept per zone, at
-    /// most 32.
+    /// most 32. A zone whose aggregate differs from the last one computed (every zone the first
+    /// time) gives a `zone.data.changed` event when a running recipe listens to it.
     pub fn aggregate(&mut self, now: u64) -> Vec<(Id, ZoneAggregatedData)> {
         let mut all = compute(&self.zones, &self.equipments, &self.devices, now);
         let mut next: Vec<Motion> = Vec::with_capacity(all.len());
         for (zone, data) in &mut all {
             let previous = self.motion.iter().find(|m| m.zone == *zone);
+            let print = fingerprint(data);
+            if previous.is_none_or(|p| p.fingerprint != print) && self.interest.wants_zone(zone) {
+                self.events.push(Event::Zone {
+                    zone: *zone,
+                    motion: data.motion,
+                    luminosity: data.luminosity,
+                });
+            }
             let since = if data.motion_sensors == 0 {
                 None
             } else {
@@ -217,7 +274,9 @@ impl Home {
             next.push(Motion {
                 zone: *zone,
                 motion: data.motion,
+                luminosity: data.luminosity,
                 since,
+                fingerprint: print,
             });
         }
         self.motion = next;
@@ -228,6 +287,69 @@ impl Home {
     /// statuses were refreshed, and after each change made through the API.
     pub fn recompute(&mut self, now: u64) {
         let _ = self.aggregate(now);
+    }
+
+    /// The aggregate of one zone computed now, without remembering it.
+    pub fn zone_aggregate(&self, zone: &Id, now: u64) -> Option<ZoneAggregatedData> {
+        compute(&self.zones, &self.equipments, &self.devices, now)
+            .into_iter()
+            .find(|(id, _)| id == zone)
+            .map(|(_, data)| data)
+    }
+
+    /// `(motion, luminosity)` of a zone as of the last aggregate (computed now when there is none
+    /// yet); `None` for a zone that does not exist.
+    pub fn zone_reading(&self, zone: &Id, now: u64) -> Option<(bool, Option<i64>)> {
+        match self.motion.iter().find(|m| m.zone == *zone) {
+            Some(m) => Some((m.motion, m.luminosity)),
+            None => self
+                .zone_aggregate(zone, now)
+                .map(|d| (d.motion, d.luminosity)),
+        }
+    }
+
+    /// The measures of a message, applied to the devices; each data that got a value, changed or
+    /// not, gives the `device.data.updated` and `equipment.data.changed` events a running recipe
+    /// listens to.
+    pub fn measures(
+        &mut self,
+        event: &MeasureEvent,
+        now: u64,
+        random: Random,
+    ) -> Result<(), String> {
+        let Home {
+            devices,
+            equipments,
+            interest,
+            events,
+            ..
+        } = self;
+        devices.measures_with(event, now, random, &mut |device, data| {
+            if !interest.wants_data() {
+                return;
+            }
+            let value = EventValue::from_json(&data.value);
+            if interest.wants_device(&device, &data.key) {
+                events.push(Event::Device {
+                    device,
+                    key: data.key.clone(),
+                    value: value.clone(),
+                });
+            }
+            for item in equipments.list() {
+                for binding in &item.data_bindings {
+                    if binding.device_data_id == data.id
+                        && interest.wants_equipment(&item.equipment.id, &binding.alias)
+                    {
+                        events.push(Event::Equipment {
+                            equipment: item.equipment.id,
+                            alias: binding.alias.clone(),
+                            value: value.clone(),
+                        });
+                    }
+                }
+            }
+        })
     }
 
     // ---- Zones ----
