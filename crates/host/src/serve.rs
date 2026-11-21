@@ -15,6 +15,7 @@
 
 use std::io::{self, Read};
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -31,6 +32,7 @@ use tiny_http::{Header, Response, Server};
 
 use crate::front::{self, Door};
 use crate::random::SystemRandom;
+use crate::static_files;
 use crate::store::{FileStore, Saver};
 use crate::ws::{Context, Timing};
 use crate::{backup, clock};
@@ -126,6 +128,7 @@ fn answer(
     random: &Mutex<SystemRandom>,
     port: u16,
     content_type: &Header,
+    ui: &Path,
 ) {
     let method = request.method().to_string();
     let path = request.url().to_string();
@@ -162,6 +165,13 @@ fn answer(
             &mut fill,
         )
     };
+    // The interface's files do not need the home: its lock is already let go.
+    if let Reply::Static(file) = &reply {
+        return static_files::send(request, ui, file);
+    }
+    if let Reply::StaticError(response) = reply {
+        return static_files::send_refusal(request, response.status, response.body);
+    }
     // An order waits for the radio loop's answer, without the lock.
     let reply = match reply {
         Reply::Order(wait) => Reply::Whole(order_response(wait)),
@@ -182,7 +192,9 @@ fn answer(
             None,
             None,
         )),
-        Reply::Order(_) => request.respond(Response::empty(500)),
+        Reply::Order(_) | Reply::Static(_) | Reply::StaticError(_) => {
+            request.respond(Response::empty(500))
+        }
         Reply::Whole(response) => match response.body {
             Some(text) => request.respond(
                 Response::from_string(text)
@@ -202,6 +214,7 @@ fn http_loop(
     random: &Arc<Mutex<SystemRandom>>,
     port: u16,
     content_type: &Header,
+    ui: &Arc<PathBuf>,
 ) {
     let busy = Arc::new(AtomicUsize::new(0));
     for request in server.incoming_requests() {
@@ -214,14 +227,15 @@ fn http_loop(
             );
             continue;
         }
-        let (home, random, worker_busy, content_type) = (
+        let (home, random, worker_busy, content_type, ui) = (
             Arc::clone(home),
             Arc::clone(random),
             Arc::clone(&busy),
             content_type.clone(),
+            Arc::clone(ui),
         );
         let spawned = thread::Builder::new().spawn(move || {
-            answer(request, &home, &random, port, &content_type);
+            answer(request, &home, &random, port, &content_type, &ui);
             worker_busy.fetch_sub(1, Ordering::SeqCst);
         });
         if spawned.is_err() {
@@ -237,6 +251,7 @@ pub fn serve<T: RadioTransport>(
     port: u16,
     verbose: bool,
     data: &std::path::Path,
+    ui: &Path,
     stop: &AtomicBool,
 ) -> Result<bool, String> {
     let store = FileStore::new(data);
@@ -274,11 +289,15 @@ pub fn serve<T: RadioTransport>(
         .map_err(|()| "serve: cannot build the Content-Type header".to_string())?;
     {
         let (server, home, random) = (Arc::clone(&server), Arc::clone(&home), Arc::clone(&random));
-        thread::spawn(move || http_loop(&server, &home, &random, port, &content_type));
+        let ui = Arc::new(ui.to_path_buf());
+        thread::spawn(move || http_loop(&server, &home, &random, port, &content_type, &ui));
     }
     // Ctrl-C before the server existed: nobody unblocked it.
     if stop.load(Ordering::SeqCst) {
         unblock();
+    }
+    if !static_files::is_built(ui) {
+        println!("{}", static_files::missing_line(ui));
     }
     let mut saver = Saver::new(store, now_ms());
     let result = radio_loop(

@@ -37,8 +37,8 @@ Each of the three programs starts and says which tool it is, with its version:
   Espressif's QEMU, with 2 MB of PSRAM, and prints its banner and memory line; it fails, with the
   last lines of the log, when the firmware panics, reboots, or does not show its memory within
   60 seconds. `sh scripts/validate.sh` runs it.
-- **In the browser**: the interface opens on Sowel's layout: the sidebar with the Sowel logo and
-  the name MINI-SOWEL, and a page titled `mini-sowel`. It follows Sowel's light theme (Hybrid).
+- **In the browser**: the home screen (see "Shows the home in the browser"), in Sowel's Hybrid or
+  Dark theme as the system asks.
 
 ### Talks to the radio
 
@@ -177,6 +177,7 @@ from another site is refused by a `Host` check, and by an `Origin` check on `/ws
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
+| `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
 Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415, 426; 502 for an order no device took; 503 `Busy` beyond 4 requests at
@@ -280,6 +281,30 @@ Sowel's 1.1.2), through Sowel's routes:
 - **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
   waiting for the recipes.
 
+### Shows the home in the browser
+
+With `--serve`, `http://127.0.0.1:<port>/` opens the interface (built by `npm run build` in
+`ui/`, served from `ui/dist`, or from the folder given by `--ui <folder>`). Without it, the API
+still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, and the host
+prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
+it on `http://localhost:5173` with the API of a host running on port 8080.
+
+- **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
+  picked; Sowel's logo and the rooms as a tree; the room shown is kept in the address
+  (`#/zone/<id>`); at first the first room with equipments.
+- **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
+  line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
+  with its values, any other equipment with its name, icon and status badge; a disabled one
+  dimmed without control. "No room yet: create one with the API" when only the home's root
+  exists; "No equipment in this room".
+- **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
+  connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
+  30 s) and reloads everything when it is back.
+- **A light's button** sends the order (`ON` or `OFF`); the button waits, and the light shows its
+  new state when the device confirms it; a refusal shows its text for 5 s.
+- **Language**: French when the browser is in French, English otherwise.
+- The pages carry headers that forbid showing them inside another site's page.
+
 ### Runs without the dongle
 
 `--sim <scenario>` replaces `--radio tcp://<address>:6638` in every command (identify, `--pair`,
@@ -326,7 +351,7 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
-equipment and recipe API and its live events (above), executes equipment orders, runs the recipe instances,
+equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
 measures.
 
@@ -347,3 +372,4 @@ measures.
 | 011 | Equipment orders sent to the Zigbee devices (`POST .../orders/:alias`) |
 | 012 | The `motion-light` recipe, with Sowel's recipe routes |
 | 013 | Live events on Sowel's WebSocket (`/ws`) |
+| 014 | The interface: the rooms and their equipments, live, served by the host |

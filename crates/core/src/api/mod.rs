@@ -8,10 +8,12 @@ mod equipments;
 mod input;
 mod orders;
 mod recipes;
+mod static_files;
 mod zones;
 
 pub use crate::home::{CHUNK_ITEMS, ListCursor};
 pub use orders::order_response;
+pub use static_files::{StaticFile, content_type};
 
 use serde_json::{Map, Value};
 
@@ -51,6 +53,12 @@ pub enum Reply {
     /// the radio loop's answer with `OrderWait::wait` and turns it into a response with
     /// `order_response`.
     Order(OrderWait),
+    /// A file of the interface (`/`, `/assets/<name>`): the host opens it under its `--ui` folder
+    /// and streams it. The path is already checked.
+    Static(StaticFile),
+    /// A refusal (404, 405) of a path of the interface: a whole response like `Whole`, but the host
+    /// adds the interface's security headers to it.
+    StaticError(Response),
 }
 
 /// The answer: a status, and a JSON body (`None` for 204). The content type is
@@ -110,6 +118,9 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
         Reply::Whole(response) => response,
         // Not reachable: without the streaming handler, an order is refused before it is queued.
         Reply::Order(_) => error(501, ORDERS_NEED_STREAMING),
+        // The interface's files are the host's to send.
+        Reply::Static(_) => error(404, "Not found"),
+        Reply::StaticError(response) => response,
         Reply::List(mut cursor) => {
             let mut body = String::new();
             loop {
@@ -159,6 +170,10 @@ fn dispatch(
 ) -> Reply {
     if !host_allowed(request.host, request.port) {
         return Reply::Whole(error(403, "Forbidden host"));
+    }
+    // The interface's files come before the API's checks: they take no body and no JSON.
+    if let Some(reply) = static_files::route(request) {
+        return reply;
     }
     if request.body.len() > MAX_BODY_BYTES {
         return Reply::Whole(error(413, "Body too large"));

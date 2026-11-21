@@ -6,6 +6,7 @@ mod logger;
 mod radio_tcp;
 mod random;
 mod serve;
+mod static_files;
 mod store;
 mod ws;
 
@@ -27,7 +28,7 @@ use random::SystemRandom;
 use store::{FileStore, Saver};
 
 const USAGE: &str = "usage: mini-sowel-host [--radio tcp://<address>:<port> | \
---sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose]] \
+--sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
 [--data <dir>]";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
@@ -73,6 +74,8 @@ struct Args {
     serve: Option<u16>,
     /// Print the measures too while serving.
     verbose: bool,
+    /// The folder of the interface's files (`--serve` only).
+    ui: Option<PathBuf>,
     data: PathBuf,
 }
 
@@ -86,6 +89,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         listen: false,
         serve: None,
         verbose: false,
+        ui: None,
         data: PathBuf::new(),
     };
     let mut data = None;
@@ -145,6 +149,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 });
             }
             "--verbose" => parsed.verbose = true,
+            "--ui" => parsed.ui = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--data" => data = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             _ => return Err(usage()),
         }
@@ -155,7 +160,10 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     }
     // One mode at a time; `--verbose` belongs to `--serve`.
     let modes = [parsed.pair.is_some(), parsed.listen, parsed.serve.is_some()];
-    if modes.iter().filter(|on| **on).count() > 1 || (parsed.verbose && parsed.serve.is_none()) {
+    if modes.iter().filter(|on| **on).count() > 1
+        || (parsed.verbose && parsed.serve.is_none())
+        || (parsed.ui.is_some() && parsed.serve.is_none())
+    {
         return Err(usage());
     }
     if speed_given && !matches!(parsed.source, Some(Source::Sim(_))) {
@@ -328,7 +336,11 @@ enum Task {
     Identify,
     Pair(u8),
     Listen,
-    Serve { port: u16, verbose: bool },
+    Serve {
+        port: u16,
+        verbose: bool,
+        ui: PathBuf,
+    },
 }
 
 /// The simulated radio of a scenario file: its memory is `sim-<scenario name>.json` in the data
@@ -359,8 +371,8 @@ fn run<T: RadioTransport>(
         }
         Task::Pair(seconds) => pair(transport, label, *seconds, data, stop),
         Task::Listen => listen(transport, label, data, stop),
-        Task::Serve { port, verbose } => {
-            serve::serve(transport, label, *port, *verbose, data, stop)
+        Task::Serve { port, verbose, ui } => {
+            serve::serve(transport, label, *port, *verbose, data, ui, stop)
         }
     }
 }
@@ -385,6 +397,10 @@ fn main() -> ExitCode {
         (None, false, Some(port)) => Task::Serve {
             port,
             verbose: args.verbose,
+            ui: args
+                .ui
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(static_files::DEFAULT_UI_DIR)),
         },
         (None, false, None) => Task::Identify,
     };

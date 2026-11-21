@@ -16,14 +16,15 @@ exists: the target architecture is decision D1, and what comes next is in the ro
                                       to the serial log; booted on the Mac
                                       in Espressif's QEMU (scripts/qemu.sh)
 
-     ui/ (Preact + TypeScript, browser): Sowel layout, the tool's name
+     ui/ (Preact + TypeScript, browser): the rooms and equipments, live;
+         served from ui/dist by the host's --serve, through /api and /ws
 
      tools/z2m-coverage (Node, Mac only): Zigbee2MQTT's library → report.md
 ```
 
 The core has no hardware or operating-system dependency: the same code is compiled for the Mac
 (`aarch64`/`x86_64`) and for the ESP32 (`xtensa-esp32-espidf`). The interface is a separate web
-app, run by Vite's development server; neither the host nor the box serves it.
+app, built by Vite into `ui/dist`, which the host's `--serve` serves; the box does not serve it.
 
 ## Blocks
 
@@ -37,7 +38,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 | Simulator | A simulated EmberZNet radio and simulated devices (temperature-humidity, motion, relay) playing scenario files (`scenarios/`); it implements the core's `RadioTransport`, so the host and the tests run the real protocol code against it; Mac only | `crates/sim/` |
 | Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
-| Interface | The web app, Sowel's design system | `ui/` |
+| Interface | The web app, Sowel's design system: Sowel's components and stores ported (`store/`, `components/`, `lib/`, `api/`), its own page, live store (`useLive`) and `t()`; the core answers `/` and `/assets/*` with the file to send (`api/static_files.rs`), the host streams it from `--ui` (`static_files.rs`) | `ui/`, `crates/core/src/api/static_files.rs`, `crates/host/src/static_files.rs` |
 | Tools | Node programs run on the Mac, never shipped in the box: `z2m-coverage` loads Zigbee2MQTT's device library (`zigbee-herdsman-converters`, pinned) and writes its coverage report | `tools/` (each tool its own `package.json`) |
 | Checks | The verdict and the docs check | `scripts/validate.sh`, `scripts/check-docs.sh`, `.githooks/` |
 
@@ -56,7 +57,8 @@ app, run by Vite's development server; neither the host nor the box serves it.
   functions that call ESP-IDF's C functions, each with a `SAFETY` comment (decision D11).
 - **Tools** (`tools/<name>/`): TypeScript run directly by Node 24, no build step; type-checked by
   `tsc`, tested with `node:test`.
-- **Interface** (`ui/`): Vite builds `ui/dist/`; `ui/scripts/check-bundle-budget.mjs` checks the
+- **Interface** (`ui/`): Vite builds `ui/dist/`, which the host serves; `npm run dev` proxies
+  `/api` and `/ws` to a host on port 8080; `ui/scripts/check-bundle-budget.mjs` checks the
   first load against its budget.
 
 ## Data

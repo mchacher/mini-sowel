@@ -17,3 +17,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 011 | orders | Equipment orders (on, off, toggle, brightness) sent to the Zigbee devices through the radio loop, with Sowel's route, texts and value rules | 2026-11-21 | in progress |
 | 012 | motion-light | Sowel's `motion-light` recipe in native Rust, with Sowel's recipe routes, its log and `recipes.json` | 2026-11-21 | in progress |
 | 013 | live-events | Sowel's WebSocket (`/ws`): topics, 200 ms batches, dedup, the events of devices, zones, equipments, orders and recipes | 2026-11-21 | in progress |
+| 014 | interface | The interface served by the host: rooms, their state and equipments, live, with a light's switch; Sowel's components ported | 2026-11-21 | in progress |

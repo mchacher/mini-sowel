@@ -17,7 +17,9 @@
     "jsxImportSource": "preact",
     "paths": {
       "react": ["./node_modules/preact/compat/"],
-      "react-dom": ["./node_modules/preact/compat/"]
+      "react-dom": ["./node_modules/preact/compat/"],
+      "react-i18next": ["./src/i18n/react-i18next.ts"],
+      "i18next": ["./src/i18n/react-i18next.ts"]
     },
 
     "strict": true,

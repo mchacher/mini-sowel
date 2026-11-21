@@ -57,8 +57,9 @@ cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Do
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen # show the measures
 cargo run -p mini-sowel-host -- --sim scenarios/garage.json --pair 30 --speed 10  # no dongle
-cargo run -p mini-sowel-host -- --sim scenarios/garage.json --serve --speed 10    # API :8080
-cd ui && npm run dev                             # the interface, on http://localhost:5173
+cargo run -p mini-sowel-host -- --sim scenarios/garage.json --serve --speed 10    # API, interface :8080
+sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
+cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
 cargo test --workspace                           # Rust tests (core, host)
 cargo test -p mini-sowel-core --test banner      # one Rust test file
 cd ui && npx vitest run src/App.test.tsx         # one UI test file

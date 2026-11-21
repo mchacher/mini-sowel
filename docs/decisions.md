@@ -274,3 +274,16 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: Sowel's interface works unchanged against it; the bounds keep the box's memory known
   and a sleeping laptop from holding a slot for good; the host has no async runtime.
 
+## D19: The interface ports Sowel's leaf components, not its pages
+
+- **Date**: 2026-11-21
+- **Choice**: the interface (spec 014) ports Sowel's small components and stores unchanged where
+  possible (light control, sensor values, zone pills and lights line, status badge, the zone,
+  equipment and aggregation stores, the API client) and writes its own page, WebSocket store and
+  `t()` (French and English, Sowel's keys, `react-i18next` aliased to it); no router (the room in
+  the address's hash); the host serves `ui/dist` from disk on the Mac. Target: first load at most
+  80 KB gzip.
+- **Why**: Sowel's home page pulls about 35 modules, an 11-store WebSocket, i18next with 67 KB of
+  locales and a router, over the 170 KB budget; redrawing would break "ported, not redrawn" (D4);
+  the box will embed the files (E).
+
