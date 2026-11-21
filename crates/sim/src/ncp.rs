@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use mini_sowel_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
-    AWAKE_MS, Attr, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
+    AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
     battery_report, humidity_report, on_off_report, temperature_report, zone_notification,
 };
 use crate::memory::{self, Memory};
@@ -75,6 +75,8 @@ pub struct Ncp {
     pub commands: Vec<(u16, Vec<u8>)>,
     /// Every `sendUnicast` received (at most `MAX_RECORDS`).
     pub sent: Vec<SentMessage>,
+    /// The radio's time, in milliseconds, when each message of `sent` was sent.
+    pub sent_at: Vec<u64>,
     /// The network in the radio's flash. It outlives the connection: a second host run finds it.
     pub network: Option<StoredNetwork>,
     /// The keys received by `setInitialSecurityState`: network key then trust-centre key.
@@ -109,6 +111,11 @@ pub struct Ncp {
     pub crowd: usize,
     /// Milliseconds between two joins of the crowd.
     pub crowd_spread_ms: u64,
+    /// How much faster than real time the scenario runs: a motion sensor clears its alarm 60 s
+    /// of scenario time after raising it.
+    pub speed: u32,
+    /// `getEui64` answers nothing usable (after the identification).
+    pub eui64_fails: bool,
     decoder: Decoder,
     tx_frm: u8,
     rx_next: u8,
@@ -193,6 +200,7 @@ impl Ncp {
             received: Vec::new(),
             commands: Vec::new(),
             sent: Vec::new(),
+            sent_at: Vec::new(),
             network: None,
             keys: None,
             endpoint_registered: false,
@@ -209,6 +217,8 @@ impl Ncp {
             packet_eui_wire: None,
             crowd: 0,
             crowd_spread_ms: 50,
+            speed: 1,
+            eui64_fails: false,
             join_before_response: false,
             decoder: Decoder::new(),
             tx_frm: 0,
@@ -430,7 +440,8 @@ impl Ncp {
             let tsn = device.next_tsn();
             let cleared = zone_notification(tsn, false);
             let message = self.incoming(nwk, 0x0104, 0x0500, 1, &cleared);
-            self.scheduled.push((now + MOTION_CLEAR_MS, message));
+            let clear_after = MOTION_CLEAR_MS / u64::from(self.speed.max(1));
+            self.scheduled.push((now + clear_after, message));
         }
         self.flush();
         sent
@@ -955,31 +966,81 @@ impl Ncp {
             && device.kind == Kind::Motion
             && device.input_clusters.contains(&0x0500)
         {
-            // IAS zone: writing the CIE address, then the Zone Enroll Response, enrolls it.
+            // IAS zone: it tells its state, type and CIE address; writing the CIE address, then
+            // the Zone Enroll Response, enrolls it.
             let Some(tsn) = message.get(1).copied() else {
                 reply.after.push(message_sent);
                 return;
             };
             let command = message.get(2).copied();
             let cluster_specific = control & 0x03 == 0x01;
-            if !cluster_specific && command == Some(0x02) {
-                if let Some(device) = self.devices.get_mut(index)
-                    && u16_at(message, 3) == Some(0x0010)
-                {
-                    device.cie_written = true;
-                    self.dirty = true;
+            if !cluster_specific && command == Some(0x00) {
+                let Some(live) = self.devices.get_mut(index) else {
+                    reply.after.push(message_sent);
+                    return;
+                };
+                if live.ignore_zone_reads > 0 {
+                    if live.ignore_zone_reads != u32::MAX {
+                        live.ignore_zone_reads -= 1;
+                    }
+                    reply.after.push(message_sent);
+                    return;
                 }
-                answers.push(self.incoming(
-                    device.nwk,
-                    0x0104,
-                    0x0500,
-                    1,
-                    &[0x18, tsn, 0x04, 0x00],
-                ));
+                if live.zone_reads_answered == 0 {
+                    reply.after.push(message_sent);
+                    return;
+                }
+                if live.zone_reads_answered != u32::MAX {
+                    live.zone_reads_answered -= 1;
+                }
+                let mut frame = vec![0x18, tsn, 0x01];
+                for pair in message.get(3..).unwrap_or(&[]).as_chunks::<2>().0 {
+                    let attribute = u16::from_le_bytes([pair[0], pair[1]]);
+                    frame.extend_from_slice(&attribute.to_le_bytes());
+                    match (attribute, live.zone_type) {
+                        (0x0000, _) => {
+                            frame.extend_from_slice(&[0x00, 0x30, u8::from(live.enrolled)]);
+                        }
+                        (0x0001, Some(zone_type)) => {
+                            frame.extend_from_slice(&[0x00, 0x31]);
+                            frame.extend_from_slice(&zone_type.to_le_bytes());
+                        }
+                        (0x0010, _) => {
+                            frame.extend_from_slice(&[0x00, 0xF0]);
+                            frame.extend_from_slice(&live.cie);
+                        }
+                        _ => frame.push(0x86),
+                    }
+                }
+                answers.push(self.incoming(device.nwk, 0x0104, 0x0500, 1, &frame));
+            } else if !cluster_specific && command == Some(0x02) {
+                let Some(live) = self.devices.get_mut(index) else {
+                    reply.after.push(message_sent);
+                    return;
+                };
+                let is_cie = u16_at(message, 3) == Some(0x0010);
+                let answer = match live.cie_answer {
+                    CieAnswer::Silent => None,
+                    CieAnswer::Refuse(status) => Some(vec![0x18, tsn, 0x04, status, 0x10, 0x00]),
+                    CieAnswer::Accept => {
+                        if is_cie && let Some(bytes) = message.get(6..14) {
+                            live.cie.copy_from_slice(bytes);
+                            live.cie_written = true;
+                            self.dirty = true;
+                        }
+                        Some(vec![0x18, tsn, 0x04, 0x00])
+                    }
+                };
+                let Some(answer) = answer else {
+                    reply.after.push(message_sent);
+                    return;
+                };
+                answers.push(self.incoming(device.nwk, 0x0104, 0x0500, 1, &answer));
             } else if cluster_specific
                 && command == Some(0x00)
                 && let Some(device) = self.devices.get_mut(index)
                 && device.cie_written
+                && !device.zone_stays_unenrolled
             {
                 device.enrolled = true;
                 self.dirty = true;
@@ -1160,6 +1221,7 @@ impl Ncp {
                 vec![self.protocol, self.stack_type, v[0], v[1]]
             }
             0x0018 => vec![self.network_state],
+            0x0026 if self.eui64_fails => Vec::new(),
             0x0026 => self.eui64_wire.to_vec(),
             // setConfigurationValue, setPolicy, setValue, clearKeyTable, setConcentrator
             0x10 if self.refuse_concentrator => self.st(SL_FAIL),
@@ -1288,6 +1350,9 @@ impl Ncp {
                     message: message.to_vec(),
                 };
                 if self.record {
+                    if self.sent.len() < MAX_RECORDS {
+                        self.sent_at.push(self.now);
+                    }
                     keep(&mut self.sent, sent.clone());
                 }
                 let status = if self.busy_sends > 0 {

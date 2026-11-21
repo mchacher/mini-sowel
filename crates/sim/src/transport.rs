@@ -35,6 +35,9 @@ impl<C: Clock> SimTransport<C> {
     /// `speed` times the clock's speed.
     pub fn new(ncp: Rc<RefCell<Ncp>>, events: Vec<Event>, speed: u32, clock: C) -> Self {
         let start_ms = clock.now_ms();
+        if let Ok(mut radio) = ncp.try_borrow_mut() {
+            radio.speed = speed.max(1);
+        }
         SimTransport {
             ncp,
             clock,

@@ -442,6 +442,7 @@ fn a_device_that_announces_and_answers_the_endpoint_request_and_the_basic_read_i
                     ok: vec![0x0402, 0x0405, 0x0001],
                     failed: vec![],
                     no_descriptor: false,
+                    enrollment: None,
                 },
             ],
             "protocol {protocol}"
@@ -1329,4 +1330,408 @@ fn a_frame_without_measures_costs_no_lookup_and_still_gets_its_default_response(
             sender: Sender::Eui64([0x11, 0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A])
         }]
     );
+}
+
+// ---- Spec 009: enrollment of IAS zone devices ----
+
+use mini_sowel_core::radio::{Enrollment, EnrollmentOutcome};
+use mini_sowel_sim::{CieAnswer, Kind};
+
+const IAS: u16 = 0x0500;
+const OWN_WIRE: [u8; 8] = [0x56, 0x34, 0x12, 0xFE, 0xFF, 0xB9, 0x6F, 0x8C];
+const BIND_CLUSTER: u16 = 0x0021;
+
+/// A motion sensor like the SNZB-03: an IAS zone and a battery, always awake.
+fn motion() -> SimDevice {
+    let mut device = SimDevice::of_kind(
+        Kind::Motion,
+        [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
+        None,
+        None,
+    );
+    device.nwk = DEVICE_NWK;
+    device.auto_join = true;
+    device.sleepy_ms = None;
+    device
+}
+
+fn enrollments(events: &[PairingEvent]) -> Vec<Option<Enrollment>> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            PairingEvent::ReportingConfigured { enrollment, .. } => Some(*enrollment),
+            _ => None,
+        })
+        .collect()
+}
+
+fn enrolled(zone_type: Option<u16>) -> Option<Enrollment> {
+    Some(Enrollment {
+        zone_type,
+        outcome: EnrollmentOutcome::Enrolled,
+    })
+}
+
+fn unconfirmed(zone_type: Option<u16>) -> Option<Enrollment> {
+    Some(Enrollment {
+        zone_type,
+        outcome: EnrollmentOutcome::Unconfirmed,
+    })
+}
+
+fn failed_enrollment() -> Option<Enrollment> {
+    Some(Enrollment {
+        zone_type: None,
+        outcome: EnrollmentOutcome::Failed,
+    })
+}
+
+/// What the host sent to the IAS Zone cluster, in order.
+fn zone_sends(h: &Harness) -> Vec<SentMessage> {
+    sends_on(h, 0x0104, IAS)
+}
+
+fn is_read(m: &SentMessage) -> bool {
+    m.message[0] & 0x03 == 0 && m.message[2] == 0x00
+}
+
+fn is_write(m: &SentMessage) -> bool {
+    m.message[0] & 0x03 == 0 && m.message[2] == 0x02
+}
+
+fn is_response(m: &SentMessage) -> bool {
+    m.message[0] & 0x03 == 1 && m.message[2] == 0x00
+}
+
+fn enroll_request(tsn: u8, zone_type: u16) -> Vec<u8> {
+    let mut frame = vec![0x09, tsn, 0x01];
+    frame.extend_from_slice(&zone_type.to_le_bytes());
+    frame.extend_from_slice(&[0x34, 0x12]);
+    frame
+}
+
+#[test]
+fn a_motion_sensor_not_enrolled_is_read_given_our_address_sent_the_response_and_read_before_the_binds()
+ {
+    let (h, events) = paired(motion());
+    assert_eq!(enrollments(&events), vec![enrolled(Some(0x000D))]);
+    let zone = zone_sends(&h);
+    let kinds: Vec<&str> = zone
+        .iter()
+        .map(|m| {
+            if is_read(m) {
+                "read"
+            } else if is_write(m) {
+                "write"
+            } else if is_response(m) {
+                "response"
+            } else {
+                "other"
+            }
+        })
+        .collect();
+    assert_eq!(kinds, vec!["read", "write", "response", "read"]);
+    // The first read asks for the zone state, zone type and CIE address.
+    assert_eq!(&zone[0].message[3..], &[0x00, 0x00, 0x01, 0x00, 0x10, 0x00]);
+    // The write carries the coordinator's own address.
+    assert_eq!(&zone[1].message[3..6], &[0x10, 0x00, 0xF0]);
+    assert_eq!(&zone[1].message[6..14], &OWN_WIRE);
+    // The response: success, zone 23.
+    assert_eq!(
+        zone[2].message,
+        vec![0x11, zone[2].message[1], 0x00, 0x00, 0x17]
+    );
+    assert_eq!(&zone[3].message[3..], &[0x00, 0x00]);
+    // 500 ms before the response, 500 ms before the read that follows it.
+    let times: Vec<u64> = {
+        let ncp = h.ncp.borrow();
+        ncp.sent
+            .iter()
+            .zip(&ncp.sent_at)
+            .filter(|(m, _)| m.cluster == IAS)
+            .map(|(_, at)| *at)
+            .collect()
+    };
+    assert!(times[2] >= times[1] + 500, "{times:?}");
+    assert!(times[3] >= times[2] + 500, "{times:?}");
+    // The binds come after the enrollment.
+    let sent = h.ncp.borrow().sent.clone();
+    let last_zone = sent.iter().rposition(|m| m.cluster == IAS).unwrap();
+    let first_bind = sent.iter().position(|m| m.cluster == BIND_CLUSTER).unwrap();
+    assert!(first_bind > last_zone);
+    assert_eq!(h.ncp.borrow().devices[0].cie, OWN_WIRE);
+    assert_eq!(bound_clusters(&h), vec![POWER]);
+}
+
+#[test]
+fn a_sensor_already_enrolled_with_our_address_is_not_written_to() {
+    let (h, events) = paired(motion().enrolled_with(OWN_WIRE));
+    assert_eq!(enrollments(&events), vec![enrolled(Some(0x000D))]);
+    let zone = zone_sends(&h);
+    assert_eq!(zone.len(), 1, "one read, nothing else");
+    assert!(is_read(&zone[0]));
+}
+
+#[test]
+fn a_sensor_enrolled_with_another_address_is_given_ours_and_enrolled_again() {
+    let (h, events) = paired(motion().enrolled_with([1, 2, 3, 4, 5, 6, 7, 8]));
+    assert_eq!(enrollments(&events), vec![enrolled(Some(0x000D))]);
+    let zone = zone_sends(&h);
+    assert!(zone.iter().any(is_write));
+    assert!(zone.iter().any(is_response));
+    assert_eq!(h.ncp.borrow().devices[0].cie, OWN_WIRE);
+}
+
+#[test]
+fn a_zone_state_that_is_never_1_is_read_20_times_then_unconfirmed_with_its_zone_type() {
+    let mut device = motion();
+    device.zone_stays_unenrolled = true;
+    let (h, events) = paired(device);
+    assert_eq!(enrollments(&events), vec![unconfirmed(Some(0x000D))]);
+    let zone = zone_sends(&h);
+    // The first read, then 20 reads of the state; the response is sent once.
+    assert_eq!(zone.iter().filter(|m| is_read(m)).count(), 21);
+    assert_eq!(zone.iter().filter(|m| is_response(m)).count(), 1);
+    // The setup goes on.
+    assert_eq!(bound_clusters(&h), vec![POWER]);
+}
+
+#[test]
+fn a_zone_state_poll_without_an_answer_ends_the_enrollment_unconfirmed_within_the_cap() {
+    let mut device = motion();
+    device.zone_reads_answered = 1; // the first read only
+    let mut h = started(with_device(device));
+    let started_at = h.clock.get();
+    h.radio.permit_join(180).unwrap();
+    let events = poll_until_idle(&mut h);
+    assert_eq!(enrollments(&events), vec![unconfirmed(Some(0x000D))]);
+    // One poll, not answered; no second one, and the whole thing within the 70 s cap.
+    assert_eq!(zone_sends(&h).iter().filter(|m| is_read(m)).count(), 2);
+    assert!(h.clock.get() - started_at < 70_000);
+    assert!(!h.radio.pairing_busy());
+}
+
+#[test]
+fn a_cie_write_refused_or_unanswered_fails_the_enrollment_and_the_binds_go_on() {
+    let mut refused = motion();
+    refused.cie_answer = CieAnswer::Refuse(0x88);
+    let (h, events) = paired(refused);
+    assert_eq!(enrollments(&events), vec![failed_enrollment()]);
+    assert!(!zone_sends(&h).iter().any(is_response), "no response sent");
+    assert_eq!(bound_clusters(&h), vec![POWER]);
+
+    let mut silent = motion();
+    silent.cie_answer = CieAnswer::Silent;
+    let (h, events) = paired(silent);
+    assert_eq!(enrollments(&events), vec![failed_enrollment()]);
+    // The write is sent twice (one retry), as the requests of spec 005.
+    assert_eq!(zone_sends(&h).iter().filter(|m| is_write(m)).count(), 2);
+    assert_eq!(bound_clusters(&h), vec![POWER]);
+}
+
+#[test]
+fn a_failed_enrollment_is_tried_once_more_when_the_device_next_sends_a_message() {
+    let mut device = motion();
+    device.ignore_zone_reads = 2; // the first read and its retry are not answered
+    let (mut h, events) = paired(device);
+    assert_eq!(enrollments(&events), vec![failed_enrollment()]);
+
+    // Any message from the device: it is awake.
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, 0x0001, 1, &report_frame(0x50, &[]));
+    let events = poll_until_idle(&mut h);
+    assert_eq!(enrollments(&events), vec![enrolled(Some(0x000D))]);
+
+    // Once only: a later message starts nothing.
+    let sent = h.ncp.borrow().sent.len();
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, 0x0001, 1, &report_frame(0x51, &[]));
+    let events = poll_for(&mut h, 500);
+    assert!(enrollments(&events).is_empty());
+    assert_eq!(h.ncp.borrow().sent.len(), sent);
+}
+
+/// A radio that resumed a network, listening.
+fn listening() -> Harness {
+    let mut ncp = Ncp::recording();
+    ncp.network = Some(StoredNetwork {
+        extended_pan_wire: [1, 2, 3, 4, 5, 6, 7, 8],
+        pan_id: 0x4321,
+        channel: 20,
+        node_type: 1,
+    });
+    let mut h = harness(ncp);
+    h.radio.identify().unwrap();
+    h.radio.listen().unwrap();
+    h
+}
+
+#[test]
+fn a_zone_enroll_request_in_listen_mode_is_answered() {
+    let mut h = listening();
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, IAS, 1, &enroll_request(0x42, 0x000D));
+    poll_for(&mut h, 500);
+    let sent = zone_sends(&h);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].destination, DEVICE_NWK);
+    assert_eq!(sent[0].message, vec![0x11, 0x42, 0x00, 0x00, 0x17]);
+}
+
+#[test]
+fn a_zone_enroll_request_after_the_outcome_with_another_zone_type_is_answered_and_adds_nothing() {
+    let (mut h, events) = paired(motion());
+    assert_eq!(enrollments(&events), vec![enrolled(Some(0x000D))]);
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, IAS, 1, &enroll_request(0x43, 0x0015));
+    let events = poll_for(&mut h, 500);
+    let last = zone_sends(&h).pop().unwrap();
+    assert_eq!(last.message, vec![0x11, 0x43, 0x00, 0x00, 0x17]);
+    // No new outcome: nothing reaches the registry.
+    assert!(enrollments(&events).is_empty());
+}
+
+#[test]
+fn a_zone_enroll_request_after_pairing_gets_a_response_with_its_own_tsn_and_no_default_response() {
+    let (mut h, _) = paired(motion());
+    let before = zone_sends(&h).len();
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, IAS, 1, &enroll_request(0x77, 0x000D));
+    poll_for(&mut h, 500);
+    let sent = zone_sends(&h);
+    assert_eq!(
+        sent.len(),
+        before + 1,
+        "the response, and no Default Response"
+    );
+    let response = &sent[before];
+    assert_eq!(response.message[1], 0x77);
+    assert_eq!(
+        response.message[0] & 0x10,
+        0x10,
+        "default response disabled"
+    );
+    assert_eq!(response.message[0] & 0x08, 0, "client to server");
+    assert_eq!(response.destination_endpoint, 1);
+}
+
+#[test]
+fn a_read_without_a_zone_type_then_an_enroll_request_with_one_gives_that_zone_type() {
+    let mut device = motion();
+    device.zone_type = None;
+    device.zone_stays_unenrolled = true;
+    let mut h = started(with_device(device));
+    h.radio.permit_join(180).unwrap();
+    let mut events = Vec::new();
+    let mut sent_request = false;
+    let end = h.clock.get() + 60_000;
+    while (!sent_request || h.radio.pairing_busy()) && h.clock.get() < end {
+        events.extend(h.radio.poll_pairing().unwrap());
+        // The enrollment is under way once the response is sent: the request comes now.
+        if !sent_request && zone_sends(&h).iter().any(is_response) {
+            h.ncp
+                .borrow_mut()
+                .inject(DEVICE_NWK, 0x0104, IAS, 1, &enroll_request(0x44, 0x0015));
+            sent_request = true;
+        }
+    }
+    assert_eq!(enrollments(&events), vec![unconfirmed(Some(0x0015))]);
+}
+
+#[test]
+fn no_answer_to_the_first_read_fails_the_enrollment_with_no_zone_and_the_setup_goes_on() {
+    let mut device = motion();
+    device.ignore_zone_reads = u32::MAX;
+    let (h, events) = paired(device);
+    assert_eq!(enrollments(&events), vec![failed_enrollment()]);
+    assert_eq!(
+        zone_sends(&h).len(),
+        2,
+        "the read and its retry, nothing else"
+    );
+    assert_eq!(bound_clusters(&h), vec![POWER]);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![POWER], vec![], false)],
+        "the reporting setup still runs"
+    );
+}
+
+#[test]
+fn the_reporting_line_says_how_the_enrollment_ended_and_nothing_after_no_descriptor() {
+    let line = |ok: Vec<u16>, failed: Vec<u16>, no_descriptor: bool, enrollment| {
+        PairingEvent::ReportingConfigured {
+            eui64: DEVICE_EUI,
+            ok,
+            failed,
+            no_descriptor,
+            enrollment,
+        }
+        .line()
+    };
+    let motion = enrolled(Some(0x000D));
+    assert_eq!(
+        line(vec![POWER], vec![], false, motion),
+        "reporting: 0x00124B0012345678 battery, enrolled (motion)"
+    );
+    assert_eq!(
+        line(vec![], vec![], false, motion),
+        "reporting: 0x00124B0012345678 none, enrolled (motion)"
+    );
+    assert_eq!(
+        line(vec![POWER], vec![TEMPERATURE], false, motion),
+        "reporting: 0x00124B0012345678 battery failed: temperature, enrolled (motion)"
+    );
+    assert_eq!(
+        line(vec![], vec![], true, motion),
+        "reporting: 0x00124B0012345678 failed: no descriptor"
+    );
+    assert_eq!(
+        line(vec![POWER], vec![], false, failed_enrollment()),
+        "reporting: 0x00124B0012345678 battery, enrollment failed"
+    );
+    assert_eq!(
+        line(vec![POWER], vec![], false, unconfirmed(Some(0x000D))),
+        "reporting: 0x00124B0012345678 battery, enrollment unconfirmed (motion)"
+    );
+    // The names of the zone types, and the number of one that is not known.
+    for (zone_type, name) in [
+        (0x0015, "contact"),
+        (0x002A, "water leak"),
+        (0x0028, "fire"),
+        (0x002D, "zone 0x002D"),
+    ] {
+        assert_eq!(
+            line(vec![], vec![], false, enrolled(Some(zone_type))),
+            format!("reporting: 0x00124B0012345678 none, enrolled ({name})")
+        );
+    }
+    assert_eq!(
+        line(vec![], vec![], false, None),
+        "reporting: 0x00124B0012345678 none"
+    );
+}
+
+#[test]
+fn an_unknown_own_address_never_stops_the_run_the_enrollment_fails_and_the_clusters_fail() {
+    let mut h = started(with_device(motion().enrolled_with(OWN_WIRE)));
+    // After the identification the radio cannot tell its address again.
+    h.radio.forget_own_eui64();
+    h.ncp.borrow_mut().eui64_fails = true;
+    h.radio.permit_join(180).unwrap();
+    let end = h.clock.get() + 60_000;
+    let mut events = Vec::new();
+    while h.clock.get() < end && (events.is_empty() || h.radio.pairing_busy()) {
+        events.extend(h.radio.poll_pairing().expect("the run goes on"));
+    }
+    // Enrolled with an address that cannot be compared, so "not enrolled with us": the write
+    // cannot be built, the enrollment fails; the bind cannot be built either, the cluster fails.
+    assert_eq!(enrollments(&events), vec![failed_enrollment()]);
+    assert_eq!(reporting(&events), vec![(vec![], vec![POWER], false)]);
+    assert!(!zone_sends(&h).iter().any(is_write));
 }

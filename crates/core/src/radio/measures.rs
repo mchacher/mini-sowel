@@ -4,13 +4,14 @@
 
 use std::fmt;
 
-use super::zcl::{AttributeRecord, ReportingRecord};
+use super::zcl::{ATTRIBUTE_ZONE_STATUS, AttributeRecord, CLUSTER_IAS_ZONE, ReportingRecord};
 
 /// A frame gives at most this many measures: the rest is dropped.
 pub const MAX_MEASURES_PER_FRAME: usize = 16;
 
 const TYPE_BOOLEAN: u8 = 0x10;
 const TYPE_BITMAP8: u8 = 0x18;
+const TYPE_BITMAP16: u8 = 0x19;
 const TYPE_UINT8: u8 = 0x20;
 const TYPE_UINT16: u8 = 0x21;
 const TYPE_INT16: u8 = 0x29;
@@ -34,8 +35,8 @@ pub enum Value {
 /// One measure of a device.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Measure {
-    /// A name of Sowel's `DataCategory` (`temperature`, `humidity`, `battery`...), or `alarm`
-    /// and `tamper` for an IAS zone.
+    /// A name of Sowel's `DataCategory` (`temperature`, `humidity`, `battery`...), or `alarm`,
+    /// `tamper` and `battery_low` for an IAS zone.
     pub kind: &'static str,
     pub value: Value,
     /// `°C`, `%`, `hPa`, `lx`, `V`; empty when the value has none.
@@ -152,20 +153,33 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
 }
 
 /// The measures of the records of one frame, for the cluster it came on: at most
-/// `MAX_MEASURES_PER_FRAME`.
+/// `MAX_MEASURES_PER_FRAME`. The zone status attribute of the IAS Zone cluster, which some
+/// devices report instead of sending notifications, reads as a notification does.
 pub fn from_records(cluster: u16, records: &[AttributeRecord]) -> Vec<Measure> {
     records
         .iter()
-        .filter_map(|r| decode(cluster, r.attribute, r.data_type, &r.value))
+        .flat_map(|r| {
+            let zone_status = cluster == CLUSTER_IAS_ZONE
+                && r.attribute == ATTRIBUTE_ZONE_STATUS
+                && r.data_type == TYPE_BITMAP16;
+            match r.value.as_slice() {
+                [low, high] if zone_status => from_zone_status(u16::from_le_bytes([*low, *high])),
+                _ => decode(cluster, r.attribute, r.data_type, &r.value)
+                    .into_iter()
+                    .collect(),
+            }
+        })
         .take(MAX_MEASURES_PER_FRAME)
         .collect()
 }
 
-/// The measures of an IAS zone status: `alarm` (bit 0) and `tamper` (bit 2).
+/// The measures of an IAS zone status: `alarm` (bit 0), `tamper` (bit 2) and `battery_low`
+/// (bit 3).
 pub fn from_zone_status(status: u16) -> Vec<Measure> {
     [
         ("alarm", status & 0x0001 != 0),
         ("tamper", status & 0x0004 != 0),
+        ("battery_low", status & 0x0008 != 0),
     ]
     .into_iter()
     .filter_map(|(kind, on)| flag(kind, on))

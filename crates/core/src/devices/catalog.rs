@@ -44,6 +44,20 @@ const OCCUPANCY: DataSpec = DataSpec {
     category: "motion",
     unit: None,
 };
+const fn flag(key: &'static str, category: &'static str) -> DataSpec {
+    DataSpec {
+        key,
+        value_type: ValueType::Boolean,
+        category,
+        unit: None,
+    }
+}
+
+const CONTACT: DataSpec = flag("contact", "contact_door");
+const WATER_LEAK: DataSpec = flag("water_leak", "water_leak");
+const SMOKE: DataSpec = flag("smoke", "smoke");
+const TAMPER: DataSpec = flag("tamper", "generic");
+const BATTERY_LOW: DataSpec = flag("battery_low", "generic");
 const STATE: DataSpec = DataSpec {
     key: "state",
     value_type: ValueType::Boolean,
@@ -88,6 +102,30 @@ pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
     }
 }
 
+/// The data of an IAS zone type (spec 009, R2): the zone's own alarm; none for a zone type that
+/// is not known.
+pub fn data_for_zone_type(zone_type: u16) -> &'static [DataSpec] {
+    match zone_type {
+        0x000D => &[OCCUPANCY],
+        0x0015 => &[CONTACT],
+        0x002A => &[WATER_LEAK],
+        0x0028 => &[SMOKE],
+        _ => &[],
+    }
+}
+
+/// The data a zone status bit adds the first time a notification has it set (spec 009, R4.5).
+pub fn data_for_zone_flag(kind: &str) -> Option<DataSpec> {
+    match kind {
+        "tamper" => Some(TAMPER),
+        "battery_low" => Some(BATTERY_LOW),
+        _ => None,
+    }
+}
+
+/// The data keys the `alarm` of a zone sets, whichever the device has.
+pub const ZONE_KEYS: [&str; 4] = ["occupancy", "contact", "water_leak", "smoke"];
+
 /// The orders of a cluster.
 pub fn orders_for_cluster(cluster: u16) -> &'static [OrderSpec] {
     match cluster {
@@ -98,8 +136,8 @@ pub fn orders_for_cluster(cluster: u16) -> &'static [OrderSpec] {
 }
 
 /// The data key of a measure of the radio (its `kind`): `light_state` is `state`, `motion` is
-/// `occupancy`... `None` for a measure that is no data (`alarm`, `tamper`: IAS zones come with
-/// their enrollment).
+/// `occupancy`... `None` for a measure that is no data of its own (`alarm`: the registry gives it
+/// to the zone's data, see `ZONE_KEYS`).
 pub fn key_for_measure(kind: &str) -> Option<&'static str> {
     Some(match kind {
         "temperature" => "temperature",
@@ -111,22 +149,29 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
         "light_brightness" => "brightness",
         "battery" => "battery",
         "voltage" => "voltage",
+        "tamper" => "tamper",
+        "battery_low" => "battery_low",
         _ => return None,
     })
 }
 
 /// Where a data key comes in the table of spec 008 (R2): the order data are listed in.
 pub fn data_rank(key: &str) -> usize {
-    const ORDER: [&str; 9] = [
+    const ORDER: [&str; 14] = [
         "temperature",
         "humidity",
         "pressure",
         "illuminance",
         "occupancy",
+        "contact",
+        "water_leak",
+        "smoke",
         "state",
         "brightness",
         "battery",
         "voltage",
+        "tamper",
+        "battery_low",
     ];
     ORDER.iter().position(|k| *k == key).unwrap_or(ORDER.len())
 }

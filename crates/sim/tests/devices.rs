@@ -106,3 +106,94 @@ fn an_event_at_40_seconds_at_speed_10_is_played_at_4_seconds_of_clock_time() {
     );
     assert!(s.clock.get() >= 4_000);
 }
+
+const PIR: &str = r#"{
+  "devices": [ { "id": "pir", "kind": "motion", "eui64": "00124B0000000002" } ],
+  "events": [
+    { "at": "2s", "device": "pir", "do": "join" },
+    { "at": "20s", "device": "pir", "do": "report", "motion": true }
+  ]
+}"#;
+
+/// The IAS zone messages the host sent, as (command kind, ...): reads, writes, responses.
+fn zone_commands(s: &support::Sim) -> Vec<&'static str> {
+    s.ncp
+        .borrow()
+        .sent
+        .iter()
+        .filter(|m| m.profile == 0x0104 && m.cluster == 0x0500)
+        .map(|m| match (m.message[0] & 0x03, m.message[2]) {
+            (0, 0x00) => "read",
+            (0, 0x02) => "write",
+            (1, 0x00) => "response",
+            _ => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn a_motion_sensor_sends_its_notifications_once_enrolled_and_none_before() {
+    // Enrolled by the host's pairing: the motion of the scenario reaches it.
+    let mut s = sim(PIR, None, 1);
+    s.start().unwrap();
+    let events = s.pair(30);
+    assert_eq!(
+        measure_lines(&events),
+        vec![
+            "0x00124B0000000002 alarm true".to_string(),
+            "0x00124B0000000002 tamper false".to_string()
+        ]
+    );
+    assert_eq!(zone_commands(&s)[..3], ["read", "write", "response"]);
+
+    // A sensor that never reads as enrolled still got the response, but the scenario's
+    // motion is not sent by a device that is not enrolled: a device never given the CIE
+    // address stays silent.
+    let mut silent = sim(PIR, None, 1);
+    silent.start().unwrap();
+    silent.ncp.borrow_mut().devices[0].zone_stays_unenrolled = true;
+    let events = silent.pair(30);
+    assert!(
+        measure_lines(&events).is_empty(),
+        "{:?}",
+        measure_lines(&events)
+    );
+}
+
+#[test]
+fn a_second_pairing_finds_the_sensor_enrolled_with_our_address_and_writes_nothing() {
+    let dir = support::scratch();
+    let file = dir.join("sim-pir.json");
+    let mut first = sim(PIR, Some(&file), 1);
+    first.start().unwrap();
+    first.pair(10);
+    assert_eq!(zone_commands(&first)[..3], ["read", "write", "response"]);
+    drop(first);
+
+    // A fresh program on the same memory: the sensor announces itself again.
+    let mut second = sim(PIR, Some(&file), 1);
+    second.start().unwrap();
+    let wire = mini_sowel_sim::devices::wire([0x00, 0x12, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x02]);
+    let mut announce = vec![0x01, 0x00, 0x20];
+    announce.extend_from_slice(&wire);
+    announce.push(0x80);
+    second
+        .ncp
+        .borrow_mut()
+        .inject(0x2000, 0x0000, 0x0013, 0, &announce);
+    let events = second.pair(10);
+    assert_eq!(
+        zone_commands(&second),
+        ["read"],
+        "the CIE address read back is ours"
+    );
+    let outcome = events.iter().find_map(|e| match e {
+        mini_sowel_core::radio::PairingEvent::ReportingConfigured { enrollment, .. } => *enrollment,
+        _ => None,
+    });
+    assert_eq!(
+        outcome.map(|e| e.outcome),
+        Some(mini_sowel_core::radio::EnrollmentOutcome::Enrolled)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

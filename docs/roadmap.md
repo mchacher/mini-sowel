@@ -47,7 +47,7 @@ possible without hardware.
 | - | --------- | --------- | ------ |
 | B1 | Simulated radio: the host replays a scenario (a sensor joins, temperatures, motion) without the dongle (first: makes everything after it testable without hardware, in CI) | `--sim <scenario>` shows the same lines as the real radio | done (spec 007), on the branch of A3 to A5 |
 | B2 | Devices in Sowel's format: a paired device becomes a Sowel `Device` with its data read generically (temperature, humidity, battery, motion, on/off, level), stored on disk, read with `GET /api/v1/devices`; memory ceilings tested from here (second: Sowel's contract, D3, is the base of the rest) | The JSON matches Sowel's, for the real SNZB-02 | built (spec 008), real SNZB-02 pending |
-| B3 | Alarm sensors: IAS zone devices (the Sonoff motion sensor) are enrolled; their motion, contact, leak or smoke becomes device data | The motion sensor's `occupancy` turns true in the API | |
+| B3 | Alarm sensors: IAS zone devices (the Sonoff motion sensor) are enrolled; their motion, contact, leak or smoke becomes device data | The motion sensor's `occupancy` turns true in the API | built (spec 009), real sensor pending |
 | B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | |
 | B5 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | |
 | B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
@@ -80,6 +80,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-21 | Alarm devices beyond motion, contact, leak and smoke: sirens and keypads (IAS WD, ACE), CO and vibration zones, IAS on a second endpoint | Spec 009 review |
 | 2026-11-20 | Count the distinct brand functions per brand (Philips' 584 lights rely on one brand library: porting it once may cover them) | Spec 002 report |
 | 2026-11-20 | The first CI run after the push proves QEMU starts on the Ubuntu runner with its five system libraries (not run locally) | Spec 003 review |
 

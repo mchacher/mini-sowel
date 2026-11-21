@@ -80,6 +80,17 @@ pub enum ConfigureAnswer {
     Silent,
 }
 
+/// How the device answers the write of the CIE address to its IAS zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CieAnswer {
+    /// It keeps the address and answers with the single status byte 0x00.
+    Accept,
+    /// It refuses with this status (the address is not kept).
+    Refuse(u8),
+    /// No answer (the address is not kept).
+    Silent,
+}
+
 /// How long a sleepy device listens after joining or after one of its reports, in milliseconds.
 pub const AWAKE_MS: u64 = 10_000;
 /// A motion sensor clears its alarm this long after raising it, in milliseconds.
@@ -125,7 +136,11 @@ pub fn on_off_report(tsn: u8, on: bool) -> Vec<u8> {
 /// An IAS Zone Status Change Notification (cluster-specific, server to client): the alarm bit
 /// is set or cleared.
 pub fn zone_notification(tsn: u8, alarm: bool) -> Vec<u8> {
-    let status: u16 = u16::from(alarm);
+    zone_status_notification(tsn, u16::from(alarm))
+}
+
+/// An IAS Zone Status Change Notification with these zone status bits.
+pub fn zone_status_notification(tsn: u8, status: u16) -> Vec<u8> {
     let mut frame = vec![0x19, tsn, 0x00];
     frame.extend_from_slice(&status.to_le_bytes());
     frame.push(0x00); // extended status
@@ -205,6 +220,18 @@ pub struct SimDevice {
     pub(crate) cie_written: bool,
     /// The Zone Enroll Response was received: the zone reports.
     pub(crate) enrolled: bool,
+    /// The CIE address held by the IAS zone, as on the wire; zeros before any write.
+    pub cie: [u8; 8],
+    /// The zone type its IAS zone gives; `None`: it answers "unsupported attribute".
+    pub zone_type: Option<u16>,
+    /// How it answers the write of the CIE address.
+    pub cie_answer: CieAnswer,
+    /// The zone state stays "not enrolled" whatever it is sent.
+    pub zone_stays_unenrolled: bool,
+    /// Number of IAS zone reads it ignores before it answers; `u32::MAX`: never.
+    pub ignore_zone_reads: u32,
+    /// Number of IAS zone reads it answers; the next ones get no answer.
+    pub zone_reads_answered: u32,
     // State of the run, not kept.
     pub(crate) awake_until: u64,
     pub(crate) tsn: u8,
@@ -261,6 +288,12 @@ impl SimDevice {
             relay_on: false,
             cie_written: false,
             enrolled: false,
+            cie: [0; 8],
+            zone_type: None,
+            cie_answer: CieAnswer::Accept,
+            zone_stays_unenrolled: false,
+            ignore_zone_reads: 0,
+            zone_reads_answered: u32::MAX,
             awake_until: 0,
             tsn: 0,
         }
@@ -299,6 +332,9 @@ impl SimDevice {
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
         device.model = text(model.unwrap_or(default_model));
         device.input_clusters = clusters;
+        if kind == Kind::Motion {
+            device.zone_type = Some(0x000D);
+        }
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
         if kind == Kind::Relay {
             device.capability = CAPABILITY_MAINS;
@@ -327,6 +363,14 @@ impl SimDevice {
         ];
         device.reports_on_resume = true;
         device
+    }
+
+    /// The IAS zone starts enrolled with this CIE address (as on the wire).
+    pub fn enrolled_with(mut self, cie: [u8; 8]) -> Self {
+        self.cie = cie;
+        self.cie_written = true;
+        self.enrolled = true;
+        self
     }
 
     /// The next transaction number of a frame the device sends.

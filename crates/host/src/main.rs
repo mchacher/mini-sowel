@@ -38,6 +38,15 @@ const DEFAULT_SIM_DATA_DIR: &str = "mini-sowel-data/sim";
 /// After the pairing time is over, identifications and reporting setups in progress may go on
 /// this long, in seconds.
 const CLOSE_GRACE_SECONDS: u64 = 70;
+/// The grace after the pairing time: `CLOSE_GRACE_SECONDS`, or the number of seconds the
+/// variable `MINI_SOWEL_CLOSE_GRACE_SECONDS` gives (for the tests).
+fn close_grace() -> Duration {
+    let seconds = std::env::var("MINI_SOWEL_CLOSE_GRACE_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(CLOSE_GRACE_SECONDS);
+    Duration::from_secs(seconds)
+}
 /// What a shell reports for a program stopped by Ctrl-C.
 const EXIT_INTERRUPTED: u8 = 130;
 
@@ -242,10 +251,11 @@ fn pair<T: RadioTransport>(
             }
             // After the time is over, the identifications and reporting setups in progress
             // finish, at most `CLOSE_GRACE_SECONDS` later.
-            if closed
-                && (!radio.pairing_busy()
-                    || Instant::now() >= deadline + Duration::from_secs(CLOSE_GRACE_SECONDS))
-            {
+            if closed && (!radio.pairing_busy() || Instant::now() >= deadline + close_grace()) {
+                // The time cap cut the setups in progress short: say which.
+                for eui64 in radio.setups_in_progress() {
+                    println!("{}", mini_sowel_core::radio::cut_short_line(&eui64));
+                }
                 return Ok(false);
             }
             let events = radio.poll_pairing().map_err(|e| format!("radio: {e}"))?;

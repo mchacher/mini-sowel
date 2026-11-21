@@ -410,3 +410,38 @@ fn a_client_that_stalls_in_its_body_blocks_neither_other_requests_nor_ctrl_c() {
     assert_ne!(before, after, "the store was written on stop");
     drop(stalled);
 }
+
+/// Waits until the `occupancy` of the motion sensor is `wanted`.
+fn wait_for_occupancy(serving: &Serving, wanted: bool) {
+    let start = Instant::now();
+    loop {
+        let devices = serving.devices();
+        if data(find(&devices, "MS01"), "occupancy")["value"] == wanted {
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "occupancy never became {wanted}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn the_motion_sensor_enrolled_at_pairing_sets_occupancy_true_on_motion_and_false_a_minute_later() {
+    let dir = data_dir();
+    pair(&dir);
+    // Speed 20: motion at 1 min of the scenario comes after 3 s, the clearing 60 s of scenario
+    // time (3 s) after it.
+    let serving = serve(&dir, "20", &[]);
+    let devices = serving.devices();
+    let motion = find(&devices, "MS01");
+    assert_eq!(data(motion, "occupancy")["category"], "motion");
+    assert_eq!(data(motion, "occupancy")["type"], "boolean");
+    wait_for_occupancy(&serving, true);
+    // The device API shows the sensor as the spec says, after its motion event.
+    let devices = serving.devices();
+    assert_eq!(data(find(&devices, "MS01"), "occupancy")["value"], true);
+    wait_for_occupancy(&serving, false);
+    assert_eq!(serving.interrupt(), Some(130));
+}

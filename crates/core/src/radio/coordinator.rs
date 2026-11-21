@@ -35,11 +35,19 @@ const MAX_IGNORED: usize = 32;
 const MAX_ATTEMPTS: u8 = 2;
 /// The Configure Reporting command of ZCL, to recognise the Default Response it gets.
 const COMMAND_CONFIGURE_REPORTING: u8 = 0x06;
+/// The Write Attributes command of ZCL, to recognise the Default Response it gets.
+const COMMAND_WRITE_ATTRIBUTES: u8 = 0x02;
 /// Pairs (sender, transaction number) remembered as already given a Default Response; the oldest
 /// is dropped past this.
 const MAX_ANSWERED: usize = 32;
 /// Node addresses whose 64-bit address is remembered; the oldest is dropped past this.
 const MAX_ADDRESSES: usize = 64;
+/// Wait between the steps of an enrollment (before the Zone Enroll Response, between two reads
+/// of the zone state), in milliseconds (Zigbee2MQTT's value).
+const ENROLL_WAIT_MS: u64 = 500;
+/// The zone state is read at most this many times after the Zone Enroll Response; the bound of
+/// the enrollment's work per device.
+const MAX_ZONE_POLLS: u8 = 20;
 /// The host's endpoint, Home Automation profile.
 const HOST_ENDPOINT: u8 = 1;
 /// The Zigbee channels.
@@ -87,6 +95,11 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect()
 }
 
+/// The line the host prints for a device whose setup the time cap cut short.
+pub fn cut_short_line(eui64: &[u8; 8]) -> String {
+    format!("reporting: 0x{} cut short", hex(eui64))
+}
+
 /// The `network:` line of the host. `foreign` is true for a resumed network the host has no
 /// backup of.
 pub fn network_line(network: &Network, foreign: bool) -> String {
@@ -105,6 +118,52 @@ pub fn network_line(network: &Network, foreign: bool) -> String {
     )
 }
 
+/// How the enrollment of an IAS zone device ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentOutcome {
+    /// The device reads as enrolled with this coordinator.
+    Enrolled,
+    /// The Zone Enroll Response was sent, but the device never read as enrolled.
+    Unconfirmed,
+    /// The device did not answer, or refused the coordinator's address.
+    Failed,
+}
+
+/// The enrollment of an IAS zone device: its zone type (when known) and how it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Enrollment {
+    /// `None` when the device gave none; always `None` for a failed enrollment.
+    pub zone_type: Option<u16>,
+    pub outcome: EnrollmentOutcome,
+}
+
+/// The name of a zone type for the `reporting:` line; the number for one that is not known.
+fn zone_type_name(zone_type: u16) -> String {
+    match zone_type {
+        0x000D => "motion".to_string(),
+        0x0015 => "contact".to_string(),
+        0x002A => "water leak".to_string(),
+        0x0028 => "fire".to_string(),
+        other => format!("zone 0x{other:04X}"),
+    }
+}
+
+impl Enrollment {
+    /// The text of the `reporting:` line: `enrolled (motion)`, `enrollment unconfirmed (motion)`,
+    /// `enrollment failed`.
+    fn text(&self) -> String {
+        let zone = self
+            .zone_type
+            .map(|z| format!(" ({})", zone_type_name(z)))
+            .unwrap_or_default();
+        match self.outcome {
+            EnrollmentOutcome::Enrolled => format!("enrolled{zone}"),
+            EnrollmentOutcome::Unconfirmed => format!("enrollment unconfirmed{zone}"),
+            EnrollmentOutcome::Failed => "enrollment failed".to_string(),
+        }
+    }
+}
+
 /// What happens while pairing is open.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PairingEvent {
@@ -121,13 +180,14 @@ pub enum PairingEvent {
     /// More devices than the session follows: this one is ignored.
     TooManyDevices { eui64: [u8; 8] },
     /// The reporting of a device's standard clusters was set up (or tried): the clusters set
-    /// up, the clusters that failed, and whether the device never gave its descriptor (nothing
-    /// was tried then).
+    /// up, the clusters that failed, whether the device never gave its descriptor (nothing
+    /// was tried then), and the enrollment of an IAS zone device (`None` for any other).
     ReportingConfigured {
         eui64: [u8; 8],
         ok: Vec<u16>,
         failed: Vec<u16>,
         no_descriptor: bool,
+        enrollment: Option<Enrollment>,
     },
     /// A device sent measures.
     Measures(MeasureEvent),
@@ -173,10 +233,12 @@ pub struct MeasureEvent {
 }
 
 impl MeasureEvent {
-    /// The lines the host prints: `0x00124B0012345678 temperature 19.52 °C`, one per measure.
+    /// The lines the host prints: `0x00124B0012345678 temperature 19.52 °C`, one per measure
+    /// (`battery_low` is data of the device registry only, not shown).
     pub fn lines(&self) -> Vec<String> {
         self.measures
             .iter()
+            .filter(|m| m.kind != "battery_low")
             .map(|m| format!("{} {m}", self.sender))
             .collect()
     }
@@ -211,6 +273,7 @@ impl PairingEvent {
                 ok,
                 failed,
                 no_descriptor,
+                enrollment,
             } => {
                 let names = |clusters: &[u16]| {
                     clusters
@@ -233,6 +296,10 @@ impl PairingEvent {
                         line.push_str(" failed: ");
                         line.push_str(&names(failed));
                     }
+                }
+                if let (false, Some(enrollment)) = (*no_descriptor, enrollment) {
+                    line.push_str(", ");
+                    line.push_str(&enrollment.text());
                 }
                 line
             }
@@ -277,12 +344,48 @@ enum Stage {
         tsn: u8,
         until: u64,
     },
+    /// Enrollment of an IAS zone device (spec 009): read the zone state, zone type and CIE
+    /// address.
+    EnrollSendRead,
+    EnrollWaitRead {
+        tsn: u8,
+        until: u64,
+    },
+    /// Write the CIE address.
+    EnrollSendWrite,
+    EnrollWaitWrite {
+        tsn: u8,
+        until: u64,
+    },
+    /// Send the Zone Enroll Response (not waited for).
+    EnrollSendResponse,
+    /// Read the zone state again.
+    EnrollSendPoll,
+    EnrollWaitPoll {
+        tsn: u8,
+        until: u64,
+    },
     /// Nothing left to do: the result is reported.
     Finish,
 }
 
-/// The reporting setup of one device: a descriptor request, then for each cluster a bind and a
-/// Configure Reporting, one request at a time.
+impl Stage {
+    fn is_enrollment(self) -> bool {
+        matches!(
+            self,
+            Stage::EnrollSendRead
+                | Stage::EnrollWaitRead { .. }
+                | Stage::EnrollSendWrite
+                | Stage::EnrollWaitWrite { .. }
+                | Stage::EnrollSendResponse
+                | Stage::EnrollSendPoll
+                | Stage::EnrollWaitPoll { .. }
+        )
+    }
+}
+
+/// The reporting setup of one device: a descriptor request, the enrollment of an IAS zone
+/// device, then for each cluster a bind and a Configure Reporting, one request at a time.
 #[derive(Debug)]
 struct Setup {
     stage: Stage,
@@ -300,6 +403,14 @@ struct Setup {
     no_descriptor: bool,
     /// This run tries again the clusters that failed in the first one.
     retry: bool,
+    /// How the enrollment ended, once it did.
+    enrollment: Option<Enrollment>,
+    /// The zone type the device gave when read.
+    zone_type: Option<u16>,
+    /// The zone type of a Zone Enroll Request that came before the outcome.
+    request_zone: Option<u16>,
+    /// Reads of the zone state sent after the Zone Enroll Response; at most `MAX_ZONE_POLLS`.
+    polls: u8,
 }
 
 impl Setup {
@@ -314,16 +425,42 @@ impl Setup {
             busy: 0,
             no_descriptor: false,
             retry: false,
+            enrollment: None,
+            zone_type: None,
+            request_zone: None,
+            polls: 0,
         }
     }
 
-    fn retrying(clusters: Vec<u16>, now: u64) -> Self {
+    /// A second try at what failed: the enrollment if `enroll`, then `clusters`.
+    fn retrying(clusters: Vec<u16>, enroll: bool, now: u64) -> Self {
         Setup {
-            stage: Stage::SendBind,
+            stage: if enroll {
+                Stage::EnrollSendRead
+            } else {
+                Stage::SendBind
+            },
             todo: clusters,
             retry: true,
             ..Setup::new(now)
         }
+    }
+
+    /// The enrollment is over: on to the binds, or to the end if no cluster is left.
+    fn enrollment_done(&mut self, now: u64, outcome: EnrollmentOutcome) {
+        let zone_type = match outcome {
+            EnrollmentOutcome::Failed => None,
+            _ => self.zone_type.or(self.request_zone),
+        };
+        self.enrollment = Some(Enrollment { zone_type, outcome });
+        self.attempts = 0;
+        self.busy = 0;
+        self.due = now;
+        self.stage = if self.todo.is_empty() {
+            Stage::Finish
+        } else {
+            Stage::SendBind
+        };
     }
 
     /// The cluster in progress is done, well or not: on to the next.
@@ -366,6 +503,8 @@ struct Device {
     /// Clusters that failed, to try once more at the device's next message; at most the table's
     /// size.
     retry: Vec<u16>,
+    /// The enrollment failed or was unconfirmed: tried once more at the next message too.
+    retry_enroll: bool,
 }
 
 /// What the coordinator follows while pairing, and what it remembers of the network.
@@ -782,6 +921,22 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         permit.and(keys).and(policy)
     }
 
+    /// Forgets the radio's own address (tests: it is asked again when needed).
+    #[doc(hidden)]
+    pub fn forget_own_eui64(&mut self) {
+        self.pairing.own_eui64 = None;
+    }
+
+    /// The devices whose reporting setup or enrollment is still going on.
+    pub fn setups_in_progress(&self) -> Vec<[u8; 8]> {
+        self.pairing
+            .devices
+            .iter()
+            .filter(|d| d.setup.is_some())
+            .map(|d| d.eui64)
+            .collect()
+    }
+
     /// True while a device that joined is still being identified.
     pub fn pairing_busy(&self) -> bool {
         self.pairing
@@ -926,9 +1081,13 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let Some(device) = self.device_at(nwk) else {
             return;
         };
-        if device.step == Step::Done && device.setup.is_none() && !device.retry.is_empty() {
+        if device.step == Step::Done
+            && device.setup.is_none()
+            && (!device.retry.is_empty() || device.retry_enroll)
+        {
             let clusters = std::mem::take(&mut device.retry);
-            device.setup = Some(Setup::retrying(clusters, now));
+            let enroll = std::mem::take(&mut device.retry_enroll);
+            device.setup = Some(Setup::retrying(clusters, enroll, now));
         }
     }
 
@@ -952,7 +1111,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 setup.attempts = 0;
                 setup.busy = 0;
                 setup.due = now;
-                setup.stage = if setup.todo.is_empty() {
+                setup.stage = if descriptor.input_clusters.contains(&zcl::CLUSTER_IAS_ZONE) {
+                    Stage::EnrollSendRead
+                } else if setup.todo.is_empty() {
                     Stage::Finish
                 } else {
                     Stage::SendBind
@@ -1004,12 +1165,19 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             self.on_basic_answer(message, now, events);
         }
         self.on_configure_answer(message, now);
+        if cluster == zcl::CLUSTER_IAS_ZONE {
+            self.on_enroll_request(wide, message)?;
+            self.on_enroll_answer(message, now)?;
+        }
         self.report_finished_at(message.sender, events);
 
         let measured = if cluster == zcl::CLUSTER_IAS_ZONE {
-            zcl::parse_zone_status_change(frame)
-                .map(measures::from_zone_status)
-                .unwrap_or_default()
+            match zcl::parse_zone_status_change(frame) {
+                Ok(status) => measures::from_zone_status(status),
+                Err(_) => zcl::parse_attribute_report(frame)
+                    .map(|report| measures::from_records(cluster, &report.records))
+                    .unwrap_or_default(),
+            }
         } else {
             zcl::parse_attribute_report(frame)
                 .map(|report| measures::from_records(cluster, &report.records))
@@ -1104,6 +1272,150 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             return;
         };
         setup.cluster_done(now, succeeded);
+    }
+
+    /// A Zone Enroll Request: answered with a Zone Enroll Response carrying its transaction
+    /// number, whatever the mode. Its zone type is kept if the enrollment has no outcome yet.
+    fn on_enroll_request(
+        &mut self,
+        wide: bool,
+        message: &IncomingMessage,
+    ) -> Result<(), RadioError> {
+        let Ok(request) = zcl::parse_zone_enroll_request(&message.payload) else {
+            return Ok(());
+        };
+        if let Some(setup) = self
+            .device_at(message.sender)
+            .and_then(|d| d.setup.as_mut())
+            && setup.enrollment.is_none()
+        {
+            setup.request_zone.get_or_insert(request.zone_type);
+        }
+        if !message.is_unicast() {
+            return Ok(());
+        }
+        let aps = ApsFrame {
+            profile: zcl::PROFILE_HOME_AUTOMATION,
+            cluster: zcl::CLUSTER_IAS_ZONE,
+            source_endpoint: message.aps.destination_endpoint,
+            destination_endpoint: message.aps.source_endpoint,
+            options: ezsp::APS_OPTIONS_DEFAULT,
+            group_id: 0,
+            sequence: 0,
+        };
+        // Nobody waits for it: the device asks again if it needs to.
+        self.send_to_device(
+            wide,
+            message.sender,
+            &aps,
+            request.tsn,
+            &zcl::zone_enroll_response(request.tsn),
+        )?;
+        Ok(())
+    }
+
+    /// The answer to the enrollment step in progress: the read of the zone state (first or
+    /// polled) or the write of the CIE address.
+    fn on_enroll_answer(&mut self, message: &IncomingMessage, now: u64) -> Result<(), RadioError> {
+        let Some(stage) = self
+            .device_at(message.sender)
+            .and_then(|d| d.setup.as_ref())
+            .map(|s| s.stage)
+        else {
+            return Ok(());
+        };
+        let frame = &message.payload;
+        match stage {
+            Stage::EnrollWaitRead { tsn, .. } | Stage::EnrollWaitPoll { tsn, .. } => {
+                let Ok(report) = zcl::parse_attribute_report(frame) else {
+                    return Ok(());
+                };
+                if report.tsn != tsn {
+                    return Ok(());
+                }
+                let record = |attribute: u16| {
+                    report
+                        .records
+                        .iter()
+                        .find(|r| r.attribute == attribute)
+                        .map(|r| r.value.as_slice())
+                };
+                let state = record(zcl::ATTRIBUTE_ZONE_STATE).and_then(|v| v.first().copied());
+                let zone_type = record(zcl::ATTRIBUTE_ZONE_TYPE)
+                    .and_then(|v| <[u8; 2]>::try_from(v).ok())
+                    .map(u16::from_le_bytes);
+                let cie = record(zcl::ATTRIBUTE_CIE_ADDRESS).and_then(|v| {
+                    let mut eui64 = <[u8; 8]>::try_from(v).ok()?;
+                    eui64.reverse();
+                    Some(eui64)
+                });
+                let first = matches!(stage, Stage::EnrollWaitRead { .. });
+                // Only the first read tells the address: the polls ask for the state only.
+                let enrolled_with_us = if first && state == Some(1) {
+                    // An address nobody can tell is "not enrolled with us": on to the write.
+                    let own = self.own_eui64().ok();
+                    cie.is_some() && cie == own
+                } else {
+                    false
+                };
+                let Some(setup) = self
+                    .device_at(message.sender)
+                    .and_then(|d| d.setup.as_mut())
+                else {
+                    return Ok(());
+                };
+                if first {
+                    setup.zone_type = zone_type;
+                    if enrolled_with_us {
+                        setup.enrollment_done(now, EnrollmentOutcome::Enrolled);
+                    } else {
+                        setup.attempts = 0;
+                        setup.busy = 0;
+                        setup.due = now;
+                        setup.stage = Stage::EnrollSendWrite;
+                    }
+                } else if state == Some(1) {
+                    setup.enrollment_done(now, EnrollmentOutcome::Enrolled);
+                } else {
+                    setup.polls += 1;
+                    if setup.polls >= MAX_ZONE_POLLS {
+                        setup.enrollment_done(now, EnrollmentOutcome::Unconfirmed);
+                    } else {
+                        setup.due = now + ENROLL_WAIT_MS;
+                        setup.stage = Stage::EnrollSendPoll;
+                    }
+                }
+            }
+            Stage::EnrollWaitWrite { tsn, .. } => {
+                let written = if let Ok(response) = zcl::parse_write_attributes_response(frame) {
+                    (response.tsn == tsn).then_some(response.written)
+                } else if let Ok(response) = zcl::parse_default_response(frame) {
+                    (response.tsn == tsn && response.command == COMMAND_WRITE_ATTRIBUTES)
+                        .then_some(response.status == 0)
+                } else {
+                    None
+                };
+                let Some(written) = written else {
+                    return Ok(());
+                };
+                let Some(setup) = self
+                    .device_at(message.sender)
+                    .and_then(|d| d.setup.as_mut())
+                else {
+                    return Ok(());
+                };
+                if written {
+                    setup.attempts = 0;
+                    setup.busy = 0;
+                    setup.due = now + ENROLL_WAIT_MS;
+                    setup.stage = Stage::EnrollSendResponse;
+                } else {
+                    setup.enrollment_done(now, EnrollmentOutcome::Failed);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// The 64-bit address of the sender of a message: the device followed in this session, what
@@ -1232,6 +1544,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             endpoint: 1,
             setup: None,
             retry: Vec::new(),
+            retry_enroll: false,
         });
         events.push(PairingEvent::Joined { eui64, nwk });
     }
@@ -1379,12 +1692,19 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         };
         if !setup.retry && !setup.no_descriptor {
             device.retry = setup.failed.clone();
+            device.retry_enroll = setup.enrollment.is_some_and(|e| {
+                matches!(
+                    e.outcome,
+                    EnrollmentOutcome::Failed | EnrollmentOutcome::Unconfirmed
+                )
+            });
         }
         events.push(PairingEvent::ReportingConfigured {
             eui64: device.eui64,
             ok: setup.ok,
             failed: setup.failed,
             no_descriptor: setup.no_descriptor,
+            enrollment: setup.enrollment,
         });
     }
 
@@ -1397,6 +1717,115 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let eui64 = ezsp::parse_eui64(&response)?;
         self.pairing.set_own_eui64(eui64);
         Ok(eui64)
+    }
+
+    /// Does what the enrollment of an IAS zone device is due to do: send its next request, send
+    /// it again, give up (the enrollment failed, or stays unconfirmed once the response is
+    /// sent).
+    fn drive_enrollment(&mut self, wide: bool, index: usize) -> Result<(), RadioError> {
+        let now = (self.now)();
+        let device = &mut self.pairing.devices[index];
+        let (nwk, endpoint) = (device.nwk, device.endpoint);
+        let Some(setup) = device.setup.as_mut() else {
+            return Ok(());
+        };
+        let stage = setup.stage;
+        match stage {
+            Stage::EnrollWaitRead { until, .. } | Stage::EnrollWaitWrite { until, .. }
+                if now >= until =>
+            {
+                // No answer: the same request again, then the end of the enrollment.
+                setup.attempts += 1;
+                if setup.attempts < MAX_ATTEMPTS {
+                    setup.due = now;
+                    setup.stage = if matches!(stage, Stage::EnrollWaitRead { .. }) {
+                        Stage::EnrollSendRead
+                    } else {
+                        Stage::EnrollSendWrite
+                    };
+                } else {
+                    setup.enrollment_done(now, EnrollmentOutcome::Failed);
+                }
+            }
+            // A poll without an answer ends the polling at once.
+            Stage::EnrollWaitPoll { until, .. } if now >= until => {
+                setup.enrollment_done(now, EnrollmentOutcome::Unconfirmed);
+            }
+            Stage::EnrollSendRead
+            | Stage::EnrollSendWrite
+            | Stage::EnrollSendResponse
+            | Stage::EnrollSendPoll
+                if now >= setup.due =>
+            {
+                let tsn = self.next_tsn();
+                let message = match stage {
+                    Stage::EnrollSendRead => zcl::read_attributes_request(
+                        tsn,
+                        &[
+                            zcl::ATTRIBUTE_ZONE_STATE,
+                            zcl::ATTRIBUTE_ZONE_TYPE,
+                            zcl::ATTRIBUTE_CIE_ADDRESS,
+                        ],
+                    ),
+                    Stage::EnrollSendWrite => match self.own_eui64() {
+                        Ok(own) => zcl::write_cie_address_request(tsn, &own),
+                        Err(_) => {
+                            // No address to write: the enrollment fails, the run goes on.
+                            if let Some(setup) = self.pairing.devices[index].setup.as_mut() {
+                                setup.enrollment_done(now, EnrollmentOutcome::Failed);
+                            }
+                            return Ok(());
+                        }
+                    },
+                    Stage::EnrollSendResponse => zcl::zone_enroll_response(tsn),
+                    _ => zcl::read_attributes_request(tsn, &[zcl::ATTRIBUTE_ZONE_STATE]),
+                };
+                let aps = ApsFrame {
+                    profile: zcl::PROFILE_HOME_AUTOMATION,
+                    cluster: zcl::CLUSTER_IAS_ZONE,
+                    source_endpoint: HOST_ENDPOINT,
+                    destination_endpoint: endpoint,
+                    options: ezsp::APS_OPTIONS_DEFAULT,
+                    group_id: 0,
+                    sequence: 0,
+                };
+                let taken = self.send_to_device(wide, nwk, &aps, tsn, &message)?;
+                let until = (self.now)() + ANSWER_TIMEOUT_MS;
+                let Some(setup) = self.pairing.devices[index].setup.as_mut() else {
+                    return Ok(());
+                };
+                if taken {
+                    setup.busy = 0;
+                    setup.stage = match stage {
+                        Stage::EnrollSendRead => Stage::EnrollWaitRead { tsn, until },
+                        Stage::EnrollSendWrite => Stage::EnrollWaitWrite { tsn, until },
+                        Stage::EnrollSendResponse => {
+                            setup.polls = 0;
+                            setup.due = now + ENROLL_WAIT_MS;
+                            Stage::EnrollSendPoll
+                        }
+                        _ => Stage::EnrollWaitPoll { tsn, until },
+                    };
+                } else {
+                    setup.busy += 1;
+                    if setup.busy < MAX_BUSY {
+                        setup.due = now + BUSY_RETRY_MS;
+                    } else if matches!(stage, Stage::EnrollSendResponse) {
+                        // The response is lost: the state is read all the same.
+                        setup.busy = 0;
+                        setup.polls = 0;
+                        setup.due = now + ENROLL_WAIT_MS;
+                        setup.stage = Stage::EnrollSendPoll;
+                    } else if matches!(stage, Stage::EnrollSendPoll) {
+                        setup.enrollment_done(now, EnrollmentOutcome::Unconfirmed);
+                    } else {
+                        setup.enrollment_done(now, EnrollmentOutcome::Failed);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Does what the reporting setup of one device is due to do: send its next request, send
@@ -1413,6 +1842,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let Some(setup) = device.setup.as_mut() else {
             return Ok(());
         };
+        if setup.stage.is_enrollment() {
+            return self.drive_enrollment(wide, index);
+        }
         let cluster = setup.todo.first().copied();
         match setup.stage {
             Stage::Finish => self.report_finished(index, events),
@@ -1455,7 +1887,13 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                         ZDO_ANSWER_TIMEOUT_MS,
                     ),
                     (Stage::SendBind, Some(cluster)) => {
-                        let own = self.own_eui64()?;
+                        let Ok(own) = self.own_eui64() else {
+                            // No address to bind to: the cluster fails, the run goes on.
+                            if let Some(setup) = self.pairing.devices[index].setup.as_mut() {
+                                setup.cluster_done(now, false);
+                            }
+                            return Ok(());
+                        };
                         (
                             zdo_aps(zdo::CLUSTER_BIND_REQUEST),
                             zdo::bind_request(tsn, eui64, endpoint, cluster, own, HOST_ENDPOINT),

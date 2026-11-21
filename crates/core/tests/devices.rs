@@ -135,14 +135,17 @@ fn voltage_is_in_millivolts_and_brightness_keeps_the_device_scale() {
         .unwrap();
     let battery = decode(0x0001, 0x0020, 0x20, &[30]).unwrap(); // 3.0 V
     let level = decode(0x0008, 0x0000, 0x20, &[128]).unwrap(); // 50 % shown
-    devices.measures(
-        &MeasureEvent {
-            sender: Sender::Eui64(EUI),
-            endpoint: 1,
-            measures: vec![battery, level],
-        },
-        T0,
-    );
+    devices
+        .measures(
+            &MeasureEvent {
+                sender: Sender::Eui64(EUI),
+                endpoint: 1,
+                measures: vec![battery, level],
+            },
+            T0,
+            &mut counter(),
+        )
+        .unwrap();
     let item = &devices.list()[0];
     let value = |key: &str| {
         item.data
@@ -207,7 +210,9 @@ fn a_measure_sets_the_value_and_last_seen_but_not_updated_at() {
     let mut devices = Devices::new();
     snzb02(&mut devices, &mut counter());
     let updated = devices.list()[0].device.updated_at;
-    devices.measures(&temperature(19.52), T0 + 3000);
+    devices
+        .measures(&temperature(19.52), T0 + 3000, &mut counter())
+        .unwrap();
     let item = &devices.list()[0];
     assert_eq!(item.data[0].value, serde_json::json!(19.52));
     assert_eq!(item.data[0].last_updated, Some(T0 + 3000));
@@ -218,7 +223,9 @@ fn a_measure_sets_the_value_and_last_seen_but_not_updated_at() {
 #[test]
 fn a_measure_from_a_device_not_in_the_store_is_ignored() {
     let mut devices = Devices::new();
-    devices.measures(&temperature(19.52), T0);
+    devices
+        .measures(&temperature(19.52), T0, &mut counter())
+        .unwrap();
     assert!(devices.list().is_empty());
     assert_eq!(devices.changes(), (false, false));
 }
@@ -229,7 +236,9 @@ fn a_measure_for_a_data_the_device_lacks_is_ignored() {
     devices
         .reporting_configured(EUI, &[0x0405], T0, &mut counter())
         .unwrap();
-    devices.measures(&temperature(19.52), T0 + 1000);
+    devices
+        .measures(&temperature(19.52), T0 + 1000, &mut counter())
+        .unwrap();
     let item = &devices.list()[0];
     assert_eq!(keys(item), ["humidity"]);
     assert!(item.data[0].value.is_null());
@@ -283,7 +292,9 @@ fn status_follows_the_silence_by_power_source() {
         .unwrap();
     devices.refresh_status(T0 + 26 * HOUR);
     assert_eq!(devices.list()[0].device.status, DeviceStatus::Offline);
-    devices.measures(&temperature(20.0), T0 + 26 * HOUR + 1000);
+    devices
+        .measures(&temperature(20.0), T0 + 26 * HOUR + 1000, &mut counter())
+        .unwrap();
     let device = &devices.list()[0].device;
     assert_eq!(device.status, DeviceStatus::Online);
     assert_eq!(device.updated_at, T0 + 26 * HOUR + 1000);
@@ -451,10 +462,13 @@ fn values_changing_for_9_minutes_are_not_written_and_at_10_minutes_one_write_is(
     turn(&mut policy, &mut devices, &store, T0, false); // the pairing: definitions
     assert_eq!(store.saved.borrow().len(), 1);
     for second in 1..=540 {
-        devices.measures(
-            &temperature(20.0 + (second as f64) / 100.0),
-            T0 + second * 1000,
-        );
+        devices
+            .measures(
+                &temperature(20.0 + (second as f64) / 100.0),
+                T0 + second * 1000,
+                &mut counter(),
+            )
+            .unwrap();
         turn(&mut policy, &mut devices, &store, T0 + second * 1000, false);
     }
     assert_eq!(
@@ -462,7 +476,13 @@ fn values_changing_for_9_minutes_are_not_written_and_at_10_minutes_one_write_is(
         1,
         "no value write before 10 minutes"
     );
-    devices.measures(&temperature(30.0), T0 + VALUE_WRITE_INTERVAL_MS);
+    devices
+        .measures(
+            &temperature(30.0),
+            T0 + VALUE_WRITE_INTERVAL_MS,
+            &mut counter(),
+        )
+        .unwrap();
     turn(
         &mut policy,
         &mut devices,
@@ -507,7 +527,9 @@ fn stopping_writes_the_changed_values() {
     let store = MemoryStore::default();
     let mut policy = WritePolicy::new(T0);
     turn(&mut policy, &mut devices, &store, T0, false);
-    devices.measures(&temperature(21.5), T0 + 2000);
+    devices
+        .measures(&temperature(21.5), T0 + 2000, &mut counter())
+        .unwrap();
     turn(&mut policy, &mut devices, &store, T0 + 2000, false);
     assert_eq!(store.saved.borrow().len(), 1);
     turn(&mut policy, &mut devices, &store, T0 + 3000, true);
@@ -574,7 +596,9 @@ fn a_rename_from_another_thread_is_written_by_the_one_writer_and_not_lost() {
                     renamed = snapshot.contains(r#""name":"Garage""#);
                 }
                 // A measure now and then, as the radio loop does.
-                lock(&shared).measures(&temperature(20.0), now);
+                lock(&shared)
+                    .measures(&temperature(20.0), now, &mut counter())
+                    .unwrap();
                 thread::yield_now();
             }
             thread::current().id()
@@ -587,4 +611,215 @@ fn a_rename_from_another_thread_is_written_by_the_one_writer_and_not_lost() {
     assert!(!writers.is_empty());
     assert!(writers.iter().all(|w| *w == writer_id));
     assert_eq!(store.last.lock().unwrap()[0].device.name, "Garage");
+}
+
+// ---- Spec 009: the data of IAS zone devices ----
+
+use mini_sowel_core::radio::measures::{self, from_zone_status};
+use mini_sowel_core::radio::zcl::parse_attribute_report;
+use mini_sowel_core::radio::{Enrollment, EnrollmentOutcome};
+use serde_json::Value as Json;
+
+type Random<'a> = &'a mut dyn FnMut(&mut [u8]) -> Result<(), String>;
+
+/// A sensor with an IAS zone of this type, enrolled, paired through the radio's events.
+fn zone_sensor(devices: &mut Devices, zone_type: Option<u16>, random: Random) {
+    for event in [
+        PairingEvent::Identified {
+            eui64: EUI,
+            manufacturer: Some("eWeLink".into()),
+            model: Some("MS01".into()),
+        },
+        PairingEvent::ReportingConfigured {
+            eui64: EUI,
+            ok: vec![0x0001],
+            failed: vec![],
+            no_descriptor: false,
+            enrollment: Some(Enrollment {
+                zone_type,
+                outcome: EnrollmentOutcome::Enrolled,
+            }),
+        },
+    ] {
+        devices.apply(&event, T0, random).unwrap();
+    }
+}
+
+fn zone_event(status: u16) -> PairingEvent {
+    PairingEvent::Measures(MeasureEvent {
+        sender: Sender::Eui64(EUI),
+        endpoint: 1,
+        measures: from_zone_status(status),
+    })
+}
+
+/// The value of one data of the only device.
+fn value_of(devices: &Devices, key: &str) -> Option<Json> {
+    devices.list()[0]
+        .data
+        .iter()
+        .find(|d| d.key == key)
+        .map(|d| d.value.clone())
+}
+
+#[test]
+fn every_zone_type_gives_its_data_and_an_unknown_one_gives_none() {
+    let table = [
+        (0x000D, Some(("occupancy", "motion"))),
+        (0x0015, Some(("contact", "contact_door"))),
+        (0x002A, Some(("water_leak", "water_leak"))),
+        (0x0028, Some(("smoke", "smoke"))),
+        (0x002D, None),
+    ];
+    for (zone_type, expected) in table {
+        let mut random = counter();
+        let mut devices = Devices::new();
+        zone_sensor(&mut devices, Some(zone_type), &mut random);
+        let device = &devices.list()[0];
+        match expected {
+            Some((key, category)) => {
+                assert_eq!(
+                    keys(device),
+                    vec![key, "battery", "voltage"],
+                    "{zone_type:#06X}"
+                );
+                let data = &device.data[0];
+                assert_eq!(data.value_type, ValueType::Boolean);
+                assert_eq!(&*data.category, category);
+            }
+            None => assert_eq!(keys(device), vec!["battery", "voltage"], "{zone_type:#06X}"),
+        }
+        // The tamper data come with the first notification that sets the bit, not with the zone.
+        assert!(!keys(device).contains(&"tamper"));
+    }
+}
+
+#[test]
+fn an_alarm_then_its_clearing_on_a_motion_zone_is_occupancy_true_then_false() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x000D), &mut random);
+    assert_eq!(value_of(&devices, "occupancy"), Some(Json::Null));
+    devices
+        .apply(&zone_event(0x0001), T0 + 1, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "occupancy"), Some(Json::Bool(true)));
+    devices
+        .apply(&zone_event(0x0000), T0 + 2, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "occupancy"), Some(Json::Bool(false)));
+}
+
+#[test]
+fn an_alarm_on_a_contact_zone_is_contact_false_open_and_closed_again_is_true() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x0015), &mut random);
+    devices
+        .apply(&zone_event(0x0001), T0 + 1, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "contact"), Some(Json::Bool(false)));
+    devices
+        .apply(&zone_event(0x0000), T0 + 2, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "contact"), Some(Json::Bool(true)));
+}
+
+#[test]
+fn the_tamper_and_battery_low_bits_add_their_data_the_first_time_they_are_set() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x000D), &mut random);
+    // Bits clear: nothing added.
+    devices
+        .apply(&zone_event(0x0000), T0 + 1, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "tamper"), None);
+    assert_eq!(value_of(&devices, "battery_low"), None);
+    // Tamper set: added, true, boolean, generic; then cleared: false.
+    devices
+        .apply(&zone_event(0x0004), T0 + 2, &mut random)
+        .unwrap();
+    let tamper = devices.list()[0]
+        .data
+        .iter()
+        .find(|d| d.key == "tamper")
+        .unwrap();
+    assert_eq!(tamper.value, Json::Bool(true));
+    assert_eq!(tamper.value_type, ValueType::Boolean);
+    assert_eq!(&*tamper.category, "generic");
+    devices
+        .apply(&zone_event(0x0000), T0 + 3, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "tamper"), Some(Json::Bool(false)));
+    // Battery low set: added, true.
+    devices
+        .apply(&zone_event(0x0008), T0 + 4, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&devices, "battery_low"), Some(Json::Bool(true)));
+    // Each is added once.
+    assert_eq!(
+        keys(&devices.list()[0])
+            .iter()
+            .filter(|k| **k == "tamper")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_motion_sensor_that_never_sends_the_tamper_bit_has_no_tamper_data() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x000D), &mut random);
+    for (i, status) in [0x0001u16, 0x0000, 0x0001, 0x0000].into_iter().enumerate() {
+        devices
+            .apply(&zone_event(status), T0 + i as u64, &mut random)
+            .unwrap();
+    }
+    assert_eq!(
+        keys(&devices.list()[0]),
+        vec!["occupancy", "battery", "voltage"]
+    );
+}
+
+#[test]
+fn the_zone_status_attribute_in_a_report_is_read_like_a_notification() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x000D), &mut random);
+    // Report Attributes of 0x0002 (bitmap16): alarm and tamper bits set.
+    let report = parse_attribute_report(&[0x18, 0x01, 0x0A, 0x02, 0x00, 0x19, 0x05, 0x00]).unwrap();
+    let event = PairingEvent::Measures(MeasureEvent {
+        sender: Sender::Eui64(EUI),
+        endpoint: 1,
+        measures: measures::from_records(0x0500, &report.records),
+    });
+    devices.apply(&event, T0 + 1, &mut random).unwrap();
+    assert_eq!(value_of(&devices, "occupancy"), Some(Json::Bool(true)));
+    assert_eq!(value_of(&devices, "tamper"), Some(Json::Bool(true)));
+}
+
+#[test]
+fn the_zone_data_are_kept_in_devices_json_and_known_by_a_later_process() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x0015), &mut random);
+    devices
+        .apply(&zone_event(0x0005), T0 + 1, &mut random)
+        .unwrap();
+    let json = devices.to_json().unwrap();
+
+    // Another process: it reads the file, and the next notification finds the data.
+    let mut later = Devices::from_list(parse_list(&json).unwrap());
+    assert_eq!(
+        keys(&later.list()[0]),
+        vec!["contact", "battery", "voltage", "tamper"]
+    );
+    assert_eq!(value_of(&later, "contact"), Some(Json::Bool(false)));
+    later
+        .apply(&zone_event(0x0000), T0 + 2, &mut random)
+        .unwrap();
+    assert_eq!(value_of(&later, "contact"), Some(Json::Bool(true)));
+    assert_eq!(value_of(&later, "tamper"), Some(Json::Bool(false)));
 }

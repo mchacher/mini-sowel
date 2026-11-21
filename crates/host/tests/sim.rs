@@ -209,3 +209,32 @@ fn a_formed_network_in_the_scenario_is_resumed_as_made_by_another_program() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+const GARAGE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/garage.json");
+
+#[test]
+fn pair_on_the_garage_scenario_enrolls_the_motion_sensor_and_says_so() {
+    let dir = data_dir();
+    let output = run(
+        &[
+            "--sim",
+            GARAGE,
+            "--pair",
+            "8",
+            "--speed",
+            "20",
+            "--data",
+            dir.to_str().unwrap(),
+        ],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = lines(&output);
+    assert!(
+        out.contains(&"reporting: 0x00124B0012345679 battery, enrolled (motion)".to_string()),
+        "{out:#?}"
+    );
+    // The sensor's motion reaches the host once it is enrolled.
+    assert!(out.contains(&"0x00124B0012345679 alarm true".to_string()));
+    let _ = std::fs::remove_dir_all(&dir);
+}

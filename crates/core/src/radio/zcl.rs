@@ -15,8 +15,23 @@ pub const ATTRIBUTE_MODEL_IDENTIFIER: u16 = 0x0005;
 
 /// The IAS Zone cluster.
 pub const CLUSTER_IAS_ZONE: u16 = 0x0500;
+/// IAS Zone attribute: zone state (0: not enrolled, 1: enrolled).
+pub const ATTRIBUTE_ZONE_STATE: u16 = 0x0000;
+/// IAS Zone attribute: zone type.
+pub const ATTRIBUTE_ZONE_TYPE: u16 = 0x0001;
+/// IAS Zone attribute: zone status (the alarm bits).
+pub const ATTRIBUTE_ZONE_STATUS: u16 = 0x0002;
+/// IAS Zone attribute: the address of the coordinator the device sends its alarms to (CIE).
+pub const ATTRIBUTE_CIE_ADDRESS: u16 = 0x0010;
+/// The zone id the Zone Enroll Response gives (Zigbee2MQTT's value).
+pub const ZONE_ID: u8 = 23;
 
 const COMMAND_READ_ATTRIBUTES_RESPONSE: u8 = 0x01;
+const COMMAND_WRITE_ATTRIBUTES: u8 = 0x02;
+const COMMAND_WRITE_ATTRIBUTES_RESPONSE: u8 = 0x04;
+const TYPE_EUI64: u8 = 0xF0;
+/// IAS Zone, from the coordinator: Zone Enroll Response.
+const COMMAND_ZONE_ENROLL_RESPONSE: u8 = 0x00;
 const COMMAND_CONFIGURE_REPORTING: u8 = 0x06;
 const COMMAND_CONFIGURE_REPORTING_RESPONSE: u8 = 0x07;
 const COMMAND_REPORT_ATTRIBUTES: u8 = 0x0A;
@@ -67,6 +82,82 @@ pub fn read_attributes_request(tsn: u8, attributes: &[u16]) -> Vec<u8> {
         frame.extend_from_slice(&attribute.to_le_bytes());
     }
     frame
+}
+
+/// A Write Attributes request for the CIE address (attribute 0x0010, type EUI64): global command
+/// 0x02, client to server, default response disabled. `eui64` is most significant byte first, as
+/// the core keeps addresses; the frame carries it little-endian.
+/// `10 <tsn> 02 10 00 F0 <EUI64 LE>`.
+pub fn write_cie_address_request(tsn: u8, eui64: &[u8; 8]) -> Vec<u8> {
+    let mut frame = vec![0x10, tsn, COMMAND_WRITE_ATTRIBUTES];
+    frame.extend_from_slice(&ATTRIBUTE_CIE_ADDRESS.to_le_bytes());
+    frame.push(TYPE_EUI64);
+    frame.extend(eui64.iter().rev());
+    frame
+}
+
+/// A Write Attributes Response: whether every attribute was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteResponse {
+    pub tsn: u8,
+    /// The single status byte 0x00: everything was written. Any other answer is a refusal.
+    pub written: bool,
+}
+
+/// Reads a Write Attributes Response (global command 0x04).
+pub fn parse_write_attributes_response(frame: &[u8]) -> Result<WriteResponse, ZclError> {
+    let (header, payload) = parse_header(frame)?;
+    if header.frame_type != FrameType::Global || header.command != COMMAND_WRITE_ATTRIBUTES_RESPONSE
+    {
+        return Err(ZclError::WrongCommand);
+    }
+    if payload.is_empty() {
+        return Err(ZclError::TooShort);
+    }
+    Ok(WriteResponse {
+        tsn: header.tsn,
+        written: payload == [STATUS_SUCCESS],
+    })
+}
+
+/// A Zone Enroll Response: cluster-specific command 0x00, client to server, default response
+/// disabled; status success, zone id 23. `11 <tsn> 00 00 17`.
+pub fn zone_enroll_response(tsn: u8) -> Vec<u8> {
+    vec![
+        FRAME_TYPE_CLUSTER | DISABLE_DEFAULT_RESPONSE,
+        tsn,
+        COMMAND_ZONE_ENROLL_RESPONSE,
+        STATUS_SUCCESS,
+        ZONE_ID,
+    ]
+}
+
+/// A Zone Enroll Request: a device asking to be enrolled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZoneEnrollRequest {
+    pub tsn: u8,
+    pub zone_type: u16,
+    /// The manufacturer code the device gives in the payload.
+    pub manufacturer_code: u16,
+}
+
+/// Reads a Zone Enroll Request (cluster-specific command 0x01 from the device).
+pub fn parse_zone_enroll_request(frame: &[u8]) -> Result<ZoneEnrollRequest, ZclError> {
+    let (header, payload) = parse_header(frame)?;
+    if header.frame_type != FrameType::Cluster
+        || !header.from_server
+        || header.command != COMMAND_ZONE_ENROLL_REQUEST
+    {
+        return Err(ZclError::WrongCommand);
+    }
+    let [zone_type @ .., c0, c1] = payload.get(..4).ok_or(ZclError::TooShort)? else {
+        return Err(ZclError::TooShort);
+    };
+    Ok(ZoneEnrollRequest {
+        tsn: header.tsn,
+        zone_type: u16::from_le_bytes([zone_type[0], zone_type[1]]),
+        manufacturer_code: u16::from_le_bytes([*c0, *c1]),
+    })
 }
 
 /// A Read Attributes response: its transaction number and, per attribute, the string it holds.

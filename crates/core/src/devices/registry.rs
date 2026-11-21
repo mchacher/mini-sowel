@@ -12,7 +12,7 @@ use super::model::{
     PowerSource, ValueType,
 };
 use crate::radio::measures::Value as MeasureValue;
-use crate::radio::{Activity, MeasureEvent, PairingEvent, Sender};
+use crate::radio::{Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, Sender};
 
 /// Devices kept; one past it is not added.
 pub const MAX_DEVICES: usize = 64;
@@ -279,6 +279,44 @@ impl Devices {
         Ok(notes)
     }
 
+    /// The enrollment of an IAS zone device ended: unless it failed, the device gets the data of
+    /// its zone type (the ones it has are kept). Returns the lines to show.
+    pub fn zone_enrolled(
+        &mut self,
+        eui64: [u8; 8],
+        enrollment: &Enrollment,
+        now: u64,
+        random: Random,
+    ) -> Result<Vec<String>, String> {
+        let mut notes = Vec::new();
+        let Some(zone_type) = enrollment
+            .zone_type
+            .filter(|_| enrollment.outcome != EnrollmentOutcome::Failed)
+        else {
+            return Ok(notes);
+        };
+        let Some(index) = self.ensure(eui64, None, None, now, random, &mut notes)? else {
+            return Ok(notes);
+        };
+        let mut added = false;
+        for spec in catalog::data_for_zone_type(zone_type) {
+            added |= self.add_data(index, spec, random)?;
+        }
+        if added {
+            self.sorted(index, now);
+        }
+        Ok(notes)
+    }
+
+    /// Puts the data of a device in the order of the table of spec 008, with no spare room.
+    fn sorted(&mut self, index: usize, now: u64) {
+        self.items[index]
+            .data
+            .sort_by_key(|d| catalog::data_rank(&d.key));
+        self.items[index].data.shrink_to_fit();
+        self.touch(index, now);
+    }
+
     fn add_data(&mut self, index: usize, spec: &DataSpec, random: Random) -> Result<bool, String> {
         let item = &self.items[index];
         if item.data.iter().any(|d| d.key == spec.key) {
@@ -377,15 +415,46 @@ impl Devices {
     }
 
     /// The measures of a message: the matching data get their value. A measure the device has
-    /// no data for, and a device not in the store, are ignored.
-    pub fn measures(&mut self, event: &MeasureEvent, now: u64) {
+    /// no data for, and a device not in the store, are ignored. The `alarm` of a zone sets the
+    /// zone's data the device has. The first time a zone status bit is set, `tamper` or
+    /// `battery_low` is added (spec 009, R4.5): every path goes through here, so none can miss it.
+    pub fn measures(
+        &mut self,
+        event: &MeasureEvent,
+        now: u64,
+        random: Random,
+    ) -> Result<(), String> {
         let Sender::Eui64(eui64) = event.sender else {
-            return;
+            return Ok(());
         };
         let Some(index) = self.index_of(&eui64) else {
-            return;
+            return Ok(());
         };
+        let mut added = false;
         for measure in &event.measures {
+            if let (Some(spec), MeasureValue::Bool(true)) =
+                (catalog::data_for_zone_flag(measure.kind), measure.value)
+            {
+                added |= self.add_data(index, &spec, random)?;
+            }
+        }
+        if added {
+            self.sorted(index, now);
+        }
+        for measure in &event.measures {
+            if measure.kind == "alarm" {
+                // The zone's data: `contact` is true when closed, the alarm bit clear.
+                let data = self.items[index]
+                    .data
+                    .iter_mut()
+                    .find(|d| catalog::ZONE_KEYS.contains(&&*d.key));
+                if let (Some(data), MeasureValue::Bool(alarm)) = (data, measure.value) {
+                    let on = if data.key == "contact" { !alarm } else { alarm };
+                    data.value = Value::Bool(on);
+                    data.last_updated = Some(now);
+                }
+                continue;
+            }
             let Some(key) = catalog::key_for_measure(measure.kind) else {
                 continue;
             };
@@ -404,6 +473,7 @@ impl Devices {
         }
         self.mark_seen(index, now);
         self.refresh_status(now);
+        Ok(())
     }
 
     /// Applies one event of the radio. Returns the lines to show.
@@ -425,11 +495,20 @@ impl Devices {
                 now,
                 random,
             ),
-            PairingEvent::ReportingConfigured { eui64, ok, .. } => {
-                self.reporting_configured(*eui64, ok, now, random)
+            PairingEvent::ReportingConfigured {
+                eui64,
+                ok,
+                enrollment,
+                ..
+            } => {
+                let mut notes = self.reporting_configured(*eui64, ok, now, random)?;
+                if let Some(enrollment) = enrollment {
+                    notes.extend(self.zone_enrolled(*eui64, enrollment, now, random)?);
+                }
+                Ok(notes)
             }
             PairingEvent::Measures(event) => {
-                self.measures(event, now);
+                self.measures(event, now, random)?;
                 Ok(Vec::new())
             }
             _ => Ok(Vec::new()),

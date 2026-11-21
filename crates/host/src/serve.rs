@@ -162,6 +162,8 @@ fn radio_loop<T: RadioTransport>(
     devices: &Mutex<Devices>,
     saver: &mut Saver,
 ) -> Result<bool, String> {
+    let mut random = crate::random::SystemRandom::open()?;
+    let mut fill = |buffer: &mut [u8]| random.fill(buffer);
     let mut radio = Radio::new(transport, clock());
     let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
     let lines = identity_lines(label, &identity);
@@ -183,7 +185,7 @@ fn radio_loop<T: RadioTransport>(
                 guard.apply_activity(item, now);
             }
             for event in &events {
-                guard.measures(event, now);
+                guard.measures(event, now, &mut fill)?;
             }
             guard.refresh_status(now);
         }

@@ -277,11 +277,19 @@ fn ias_zone_status_change_0001_is_an_alarm_and_0004_a_tamper() {
     };
     assert_eq!(
         kinds(0x0001),
-        vec![("alarm", Value::Bool(true)), ("tamper", Value::Bool(false))]
+        vec![
+            ("alarm", Value::Bool(true)),
+            ("tamper", Value::Bool(false)),
+            ("battery_low", Value::Bool(false))
+        ]
     );
     assert_eq!(
         kinds(0x0004),
-        vec![("alarm", Value::Bool(false)), ("tamper", Value::Bool(true))]
+        vec![
+            ("alarm", Value::Bool(false)),
+            ("tamper", Value::Bool(true)),
+            ("battery_low", Value::Bool(false))
+        ]
     );
     assert_eq!(
         parse_zone_status_change(&report_frame(1, &[])),
@@ -460,4 +468,50 @@ fn a_report_with_default_response_disabled_or_a_broadcast_gets_no_default_respon
         .inject_kind(0x02, SENDER, 0x0104, 0x0402, 1, &asks); // multicast
     poll(&mut h);
     assert!(sent(&h).is_empty());
+}
+
+#[test]
+fn write_attributes_of_the_cie_address_is_the_attribute_then_type_f0_then_the_eui64_little_endian()
+{
+    use mini_sowel_core::radio::zcl::write_cie_address_request;
+    let eui = [0x8C, 0x6F, 0xB9, 0xFF, 0xFE, 0x12, 0x34, 0x56];
+    assert_eq!(
+        write_cie_address_request(0x21, &eui),
+        vec![
+            0x10, 0x21, 0x02, 0x10, 0x00, 0xF0, 0x56, 0x34, 0x12, 0xFE, 0xFF, 0xB9, 0x6F, 0x8C
+        ]
+    );
+}
+
+#[test]
+fn the_zone_enroll_response_is_success_and_zone_23_with_the_default_response_disabled() {
+    use mini_sowel_core::radio::zcl::zone_enroll_response;
+    assert_eq!(
+        zone_enroll_response(0x42),
+        vec![0x11, 0x42, 0x00, 0x00, 0x17]
+    );
+}
+
+#[test]
+fn a_zone_enroll_request_gives_its_zone_type_and_manufacturer_code() {
+    use mini_sowel_core::radio::zcl::{ZoneEnrollRequest, parse_zone_enroll_request};
+    // Cluster-specific, from the server, command 1: zone type 0x000D, manufacturer code 0x1234.
+    let frame = [0x09, 0x33, 0x01, 0x0D, 0x00, 0x34, 0x12];
+    assert_eq!(
+        parse_zone_enroll_request(&frame),
+        Ok(ZoneEnrollRequest {
+            tsn: 0x33,
+            zone_type: 0x000D,
+            manufacturer_code: 0x1234
+        })
+    );
+    // A status change is not a request, and a request cut short is an error.
+    assert_eq!(
+        parse_zone_enroll_request(&[0x09, 0x33, 0x00, 0x01, 0x00]),
+        Err(ZclError::WrongCommand)
+    );
+    assert_eq!(
+        parse_zone_enroll_request(&[0x09, 0x33, 0x01, 0x0D, 0x00]),
+        Err(ZclError::TooShort)
+    );
 }

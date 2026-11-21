@@ -43,6 +43,10 @@ pub struct DeviceMemory {
     relay_on: bool,
     cie_written: bool,
     enrolled: bool,
+    /// 16 hexadecimal digits, as on the wire: the CIE address written to the IAS zone; absent
+    /// (zeros) in a file written before it was kept.
+    #[serde(default)]
+    cie: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -83,6 +87,7 @@ impl DeviceMemory {
         device.relay_on = self.relay_on;
         device.cie_written = self.cie_written;
         device.enrolled = self.enrolled;
+        device.cie = unhex(&self.cie).unwrap_or([0; 8]);
     }
 }
 
@@ -115,6 +120,7 @@ impl Memory {
                     relay_on: d.relay_on,
                     cie_written: d.cie_written,
                     enrolled: d.enrolled,
+                    cie: hex(&d.cie),
                 })
                 .collect(),
         }

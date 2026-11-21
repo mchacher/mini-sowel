@@ -78,6 +78,11 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
   does not answer, `device: <address> not identified (radio busy)` when the radio stays busy;
   beyond 32 devices in one session, `pairing: too many devices, <address> ignored`; a device
   already in the network that announces itself again is shown again;
+- an alarm device (IAS zone) is enrolled right after its identification, while it is awake: the
+  host reads its zone, writes its own address into it and answers its enrollment, as Zigbee2MQTT
+  does (`, enrolled (motion)`, `, enrollment unconfirmed (motion)` or `, enrollment failed` ends
+  its `reporting:` line); a failed or unconfirmed enrollment is tried once more when the device
+  next speaks; enrollment requests are answered in every mode;
 - after identification, the host sets up the device's reporting: it binds each standard cluster
   the device has (temperature, humidity, pressure, illuminance, occupancy, on/off, level, power)
   to itself and asks for reports (`reporting: <address> temperature, humidity, battery`, or
@@ -85,8 +90,9 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
   `reporting: <address> none` when the device has none of them); a failed setup is tried once more when the device
   next speaks, except when the device gave no description of its clusters (`reporting: <address>
   failed: no descriptor`: pair it again); then the measures it sends are shown;
-- pairing closes at the end of the time (identifications and reporting setups in progress finish
-  first, at most 70 s), or on Ctrl-C (exit 130).
+- pairing closes at the end of the time (identifications, enrollments and reporting setups in
+  progress finish first, at most 70 s; a setup still running then shows `reporting: <address> cut
+  short`), or on Ctrl-C (exit 130).
 
 With `--pair`, the identification's `network: <state>` line is replaced by the `network:` line
 below; `network: resumed (made by another program), ...` for a network the host has no backup
@@ -146,7 +152,10 @@ Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugi
 (motion), `state` (light_state), `brightness` (0 to 254), `battery` (%), `voltage` (mV); each with
 its last `value` and `lastUpdated`. Its orders (`DeviceOrder`): `state` (light_toggle, `ON` /
 `OFF`) for an on/off device, `brightness` (set_brightness, 0 to 254) for a dimmable one. A device
-paired again keeps its id and name. Alarm devices (IAS zone) get only their battery and voltage data.
+paired again keeps its id and name. Alarm devices (IAS zone: motion, contact, water leak, smoke sensors) also get the data of their
+zone: `occupancy` (motion), `contact` (contact_door, true when closed), `water_leak`, `smoke`, and
+`tamper` and `battery_low` (generic) once the device first reports them. Alarm devices paired
+before this was possible keep only their battery data until paired again.
 
 The host keeps them in `devices.json` in its data folder (owner-only): a device paired, renamed
 or deleted is written at once, the latest values every 10 minutes and when the host stops, so a
@@ -187,7 +196,7 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | Kind | Identity sent | Sends |
 | ---- | ------------- | ----- |
 | `temperature-humidity` | eWeLink TH01 (Sonoff SNZB-02) | temperature, humidity, battery; asleep except 10 s after joining or reporting |
-| `motion` | eWeLink MS01 (Sonoff SNZB-03) | nothing until enrolled as an alarm device; then `alarm true`, and `alarm false` 60 s later |
+| `motion` | eWeLink MS01 (Sonoff SNZB-03) | enrolled at pairing; then `alarm true` on motion, and `alarm false` 60 s of scenario time later |
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
 
 The simulated radio keeps its network and its devices in `mini-sowel-data/sim/` (or `--data`),
@@ -232,3 +241,4 @@ its network, pair devices and receive their measures.
 | 006 | The host sets up reporting and shows the measures of the standard clusters (`--listen`) |
 | 007 | A simulated radio and devices play scenario files (`--sim`) |
 | 008 | Devices kept in Sowel's format and served by Sowel's device API (`--serve`) |
+| 009 | Alarm sensors enrolled; their motion, contact, leak or smoke becomes device data |

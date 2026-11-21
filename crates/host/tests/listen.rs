@@ -208,3 +208,120 @@ fn listen_with_pair_or_without_a_radio_prints_the_usage_and_exits_2() {
         assert!(text(&output.stderr).contains("--listen"), "{args:?}");
     }
 }
+
+#[test]
+fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() {
+    use mini_sowel_sim::{Kind, zone_status_notification};
+    let dir = data_dir();
+    let dir_text = dir.to_str().unwrap();
+    let mut device = SimDevice::of_kind(
+        Kind::Motion,
+        [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
+        None,
+        None,
+    );
+    device.nwk = 0x5C3D;
+    device.auto_join = true;
+    device.sleepy_ms = None;
+    device.reports_on_resume = true;
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![device];
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let first = run(&["--radio", &url, "--pair", "3", "--data", dir_text]);
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr));
+    let mut ncp = handle.join().unwrap();
+    // The tamper bit (and the alarm) arrive when the network is resumed by `--serve`.
+    ncp.devices[0].reports = vec![(0x0500, zone_status_notification(0x61, 0x0005))];
+
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        .args([
+            "--radio",
+            &url,
+            "--serve",
+            &port.to_string(),
+            "--data",
+            dir_text,
+        ])
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("the host program starts");
+    let start = Instant::now();
+    let tamper = loop {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            write!(
+                stream,
+                "GET /api/v1/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut body = String::new();
+            let _ = stream.read_to_string(&mut body);
+            if let Some((_, json)) = body.split_once("\r\n\r\n")
+                && let Ok(devices) = serde_json::from_str::<serde_json::Value>(json)
+                && let Some(data) = devices[0]["data"]
+                    .as_array()
+                    .and_then(|d| d.iter().find(|d| d["key"] == "tamper"))
+                && data["value"] == true
+            {
+                break data.clone();
+            }
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            panic!("no tamper data in the API");
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(tamper["category"], "generic");
+    assert_eq!(tamper["type"], "boolean");
+    let _ = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status();
+    child.wait().unwrap();
+    let _ = handle.join();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_setup_still_going_when_the_time_cap_ends_is_reported_cut_short_before_pairing_closed() {
+    let dir = data_dir();
+    let mut device = SimDevice::sensor();
+    // Every answer takes 1.5 s: the identification is over after about 3 s, the setup needs
+    // far longer than the cap of 6 s (1 s of pairing, 5 s of grace).
+    device.answer_delay_ms = 1500;
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![device];
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        .args([
+            "--radio",
+            &url,
+            "--pair",
+            "1",
+            "--data",
+            dir.to_str().unwrap(),
+        ])
+        .env("MINI_SOWEL_CLOSE_GRACE_SECONDS", "5")
+        .output()
+        .expect("the host program starts");
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = lines(&output);
+    let cut = out
+        .iter()
+        .position(|l| l == &format!("reporting: {EUI} cut short"))
+        .unwrap_or_else(|| panic!("{out:#?}"));
+    assert_eq!(out[cut + 1], "pairing: closed");
+    assert!(
+        !out.iter()
+            .any(|l| l.starts_with(&format!("reporting: {EUI} t")))
+    );
+    let _ = handle.join();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
