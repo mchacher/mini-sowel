@@ -30,7 +30,7 @@
 # for example its roadmap's increment ids: '[A-C][0-9]+' for milestones A to C ("available in B3").
 # Only the milestones' letters: decisions are D1, D2..., and a steel grade or a screw size must pass.
 # Empty: the common words only.
-PROJECT_FUTURE='[ABCEFGHI][0-9]+'
+PROJECT_FUTURE='[ABCEFGHIJ][0-9]+'
 
 if [ "$1" = "commit-msg" ]; then
   msg="$2"

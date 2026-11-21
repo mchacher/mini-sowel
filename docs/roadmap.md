@@ -7,6 +7,44 @@ milestone. A new need, at any time: one line in the inbox.
 
 ## Current milestone
 
+**E. Solite in the box**. The user can then: see the garage of milestone B run inside the
+Dongle Max itself, Mac switched off: the sensors report, the motion switches the relay, the
+interface is served by the box.
+Why now: the real unknowns are on the target (the ESP32's memory, the serial link to the radio,
+Ethernet, storage in flash), and an autonomous box is the true north; the user asked to reach the
+target quickly. Done when: the flashed Dongle Max runs the garage with the real devices for a
+day, its original firmware saved and restorable.
+
+Hardware: the Dongle Max (being delivered); the SNZB-02, a Sonoff motion sensor and the ZBMINIR2.
+Flashing needs the user's explicit yes, once the original firmware is saved (decision D6).
+
+| # | Increment | Done when | Status |
+| - | --------- | --------- | ------ |
+| E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, Wi-Fi off beside Ethernet, one TLS session at a time) (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | |
+| E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | |
+| E3 | Solite in the box: original firmware saved, then flashed with the user's yes; the radio over the serial link, Ethernet, data in flash, the API and the interface served by the box (precompressed); configured by `scripts/demo-garage.sh` | The garage runs in the box for a day, Mac off | |
+
+## Next milestone
+
+**J. The autonomous box**. The user can then: set Solite up from the browser only, on the box:
+add a device, make the rooms and equipments, set the recipes, protect it with their own
+password, and update it from afar.
+Why next: a box that only `curl` can configure is not autonomous. Done when: the box runs a month
+in a real annex without intervention (the true north's test).
+
+| # | Increment | Done when | Status |
+| - | --------- | --------- | ------ |
+| J1 | Add a device from the interface: pairing while serving, the device appears live, named and placed in a room | The ZBMINIR2 is added without a terminal | |
+| J2 | Rooms and equipments from the interface (Sowel's screens ported) | The garage and its equipments made with the mouse | |
+| J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | |
+| J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | |
+| J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
+| J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | |
+
+## Built, waiting for the real hardware
+
+Milestones A and B are built and shown on the simulator; their demos on the real devices are E2.
+
 **A. The radio speaks Rust**. The user can then: from the Mac, `solite-host` forms its own
 Zigbee network through the Dongle Max, a real sensor (Sonoff SNZB-02) joins it, and its
 temperature arrives live, still after a restart, without pairing again. The firmware boots in an
@@ -28,8 +66,6 @@ on the Sowel side.
 | A3 | Talk to the radio: ASH and EZSP in Rust, in the core, tested against Silicon Labs' reference frames; the host connects to the Dongle Max over TCP and shows the EmberZNet version and the network state | The version shows, with the real Dongle Max | built (spec 004), demo pending |
 | A4 | Form a network and let the SNZB-02 join: network key and channel kept in a file; the host shows the joining device's address, manufacturer and model | The SNZB-02 shows with its name after a press on its button | built (spec 005), demo pending |
 | A5 | Read its temperature and survive a restart: temperature, humidity and battery shown at each report, through a generic reading of the standard clusters; after a restart of the host the network resumes and the sensor keeps reporting | Readings scroll, then come back after a restart | built (spec 006), demo pending |
-
-## Next milestone
 
 **B. The engine on the Mac**. The user can then: on the Mac, with the Dongle Max, pair sensors
 and a relay, put them in rooms, and see a motion sensor switch the light on (`motion-light`, as in
@@ -56,22 +92,23 @@ possible without hardware.
 
 ## Later milestones
 
-One line each, planned when their turn comes. The letter D is skipped: decisions are D1, D2...
+One line each, planned when their turn comes, in this order. The letter D is skipped: decisions
+are D1, D2...
 
 - **C. Recipe proposals**: pair a sensor, pick the room, accept the proposal; Sowel's modes
   (depends on a prototype in the current Sowel).
 - **I. Device recognition beyond the standard clusters**: Zigbee2MQTT definitions export (Tuya
   datapoint interpreter included), Philips' brand library, hand-written definitions for the
-  common Legrand, Sonoff and Aqara devices (the A1 report: the generic reading already covers
-  71 % of the library).
-- **E. On the box**: firmware with the real adapters, the interface built in, OTA with rollback,
-  commissioning password; first exercised in QEMU (emulated Ethernet serving the interface, OTA
-  rollback, the emulated UART bridged to the Dongle Max's TCP radio).
+  common Legrand, Sonoff and Aqara devices, Philips' functions counted per brand first; equipment
+  types beyond D3's six, zone orders, window contacts; alarm devices beyond motion, contact, leak
+  and smoke (sirens, keypads, CO, vibration).
+- **H. Daily use**: 24 h history (bounded by constants), MQTT export, mini PWA, languages beyond
+  French and English, radio firmware update, recipe logs and state kept across a restart.
 - **F. WebAssembly recipes**: signed `.wasm` recipes run in `wasmi`, signed files updated without
-  restart.
-- **G. Link with Sowel**: the box's equipments in Sowel (depends on `sowel-plugin-mini`).
-- **H. Daily use**: 24 h history, MQTT export, mini PWA, languages beyond French and English, radio firmware
-  update.
+  restart; a recipe's memory bounded first (about 78 KB each in `wasmi` against 7 KB native).
+- **G. Link with Sowel**: the box's equipments in Sowel (depends on `sowel-plugin-solite`, which
+  first publishes the box's devices, then its equipments and zones once Sowel lets a plugin
+  publish them: Sowel issue, draft ready).
 - Beyond the true north, not planned: Matter bridge; product track (decision D5).
 
 ## Inbox
@@ -81,25 +118,19 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-| 2026-11-21 | Interface: recipes, devices and pairing screens; editing zones and equipments | Spec 014 |
-| 2026-11-21 | The box serves the interface precompressed (`.gz`) | Spec 014 |
-| 2026-11-21 | Pairing while serving (`--pair` and `--serve` together), with `device.discovered` on the WebSocket | Spec 013 |
-| 2026-11-21 | Sun times: sunrise and sunset from a location, so `isDaylight` and motion-light's "inactive during day" work | Spec 012 |
-| 2026-11-21 | Keep recipe logs and state across a restart, if the box's flash allows it | Spec 012 |
-| 2026-11-21 | Sowel issue: motion-light enters override when a zone event arrives between its ON and the light's echo (stale state read) | Spec 012 |
-| 2026-11-21 | Sowel issue: motion-light's failsafe leaves override mode set; the button's ON arms no off timer | Spec 012 |
-| 2026-11-21 | Sowel issue: motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
-| 2026-11-21 | Sowel issue: `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
-| 2026-11-21 | G: `sowel-plugin-mini` first publishes the box's devices only (Sowel plugins can publish nothing else today); then its equipments and zones, once Sowel lets a plugin publish the equipments and zones it owns (Sowel issue to open, draft ready) | Conversation on the link with Sowel |
-| 2026-11-21 | Memory: a test with every bound at its maximum (64 devices, 31 zones, 64 equipments, 16 instances, 4 live clients; estimated 400 KB on the Mac), with its own ceiling | Memory estimate, 2026-11-21 |
-| 2026-11-21 | Memory: allocations of 16 KB or less go to the internal SRAM first (`SPIRAM_MALLOC_ALWAYSINTERNAL=16384`): lower it (about 512) so the engine lives in PSRAM; Wi-Fi enabled beside Ethernet; mbedTLS forced internal (about 40 KB a session): one TLS session at a time | Memory estimate, 2026-11-21 |
-| 2026-11-21 | Memory: a WebAssembly recipe takes about 78 KB (a 64 KB page and stacks) against about 7 KB native: fewer instances or a smaller memory before F; history bounded by constants before H | Memory estimate, 2026-11-21 |
-| 2026-11-21 | Memory optimisations to keep in view: recipe logs stored compactly (message templates), fewer log lines, smaller per-client WebSocket buffers, the model's 32-bit size measured on the box | Memory estimate, 2026-11-21 |
-| 2026-11-21 | A memory budget of the box per item (engine, HTTP, WebSocket clients, WebAssembly recipes, TLS, OTA buffers, history), written in `docs/` and checked by tests, before milestone E | Spec 010, discussion with the user |
-| 2026-11-21 | Equipment types beyond D3's six, zone orders (all lights off), zone reorder, window contacts (a contact device as `contact_window`) | Spec 010 review |
-| 2026-11-21 | Alarm devices beyond motion, contact, leak and smoke: sirens and keypads (IAS WD, ACE), CO and vibration zones, IAS on a second endpoint | Spec 009 review |
-| 2026-11-20 | Count the distinct brand functions per brand (Philips' 584 lights rely on one brand library: porting it once may cover them) | Spec 002 report |
-| 2026-11-20 | The first CI run after the push proves QEMU starts on the Ubuntu runner with its five system libraries (not run locally) | Spec 003 review |
+
+Empty: every need was placed on 2026-11-21 (see the log).
+
+## Sowel issues to open
+
+Needs on the Sowel side, for the user to open as Sowel issues (never changed from here).
+
+| Date | Issue | Came from |
+| ---- | ----- | --------- |
+| 2026-11-21 | motion-light enters override when a zone event arrives between its ON and the light's echo (stale state read) | Spec 012 |
+| 2026-11-21 | motion-light's failsafe leaves override mode set; the button's ON arms no off timer | Spec 012 |
+| 2026-11-21 | motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
+| 2026-11-21 | `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
 
 ## Done
 
@@ -143,3 +174,8 @@ Every change to this roadmap: date, what changed, why.
   (milestone reached, inbox of 18 items, the memory ceiling reached) before milestone C or E.
 - 2026-11-21: the engine's memory ceiling raised from 200 KB to 300 KB with the user (decision D20), after
   an estimate of the whole box; its optimisations added to the inbox.
+- 2026-11-21: full review with the user after milestone B: the user wants Solite on the target quickly.
+  Current milestone E (Solite in the box: E1 prepare the target, E2 the real hardware from the
+  Mac, E3 flashed), next J (the autonomous box: configuration screens, password, updates, home
+  settings; done when a month in an annex), then C, I, H, F, G. A and B wait for their hardware
+  demos (E2). Every inbox item placed; the Sowel issues moved to their own list.
