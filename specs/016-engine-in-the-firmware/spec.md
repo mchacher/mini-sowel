@@ -33,18 +33,25 @@ built in an autonomous run.
    saving of `store.rs` (`Saver`, its write policy and retries) move to the core, module
    `engine`, generic over the radio transport and over a new adapter trait for storage.
 2. The storage trait reads and writes the engine's named files (`devices.json`, `zones.json`,
-   `equipments.json`, `recipes.json`), a file written chunk by chunk as today (D15). The clock
-   (wall and monotonic milliseconds) and the random source reach the engine through the core's
-   existing closures, or a small trait when a closure does not fit.
-3. The host implements the trait with its files as today (permissions, folder), and keeps its
-   HTTP, WebSocket and command-line code. Every existing test passes unchanged, except imports;
-   the host's output lines are unchanged.
+   `equipments.json`, `recipes.json`), a file written chunk by chunk as today (D15). The wall
+   clock, the monotonic clock and the random source are closures given to the engine; what the
+   loop shows (the measures' lines with `--verbose`, a write failure) goes to a sink closure, never
+   to `println!` in the core.
+3. What stays in the host: the radio's identification and its printed lines, the network backup
+   check (`backup::matches`), the `network:` and `serving:` lines, HTTP, WebSocket and the command
+   line. The host implements the trait with its files as today (permissions, folder). Every
+   existing test passes unchanged, except imports, and the host's output lines are unchanged.
+4. The loop runs until a stop flag is set; the caller sets it (Ctrl-C on the Mac, the end of the
+   scenario in the firmware, R3.4).
 
 ### R2: The simulated radio on the ESP32
 
-1. `crates/sim` builds for the ESP32: its Unix-only parts (file permissions) are behind
-   `cfg(unix)`; its memory file keeps working through `std::fs` on the data partition.
-2. Decision D26 replaces spec 007's "never built for the ESP32" (R1 of that spec): the simulator
+1. `crates/sim` builds for the ESP32: its Unix-only parts (file mode 0600) are behind
+   `cfg(unix)`; elsewhere the file is created with the default mode (FAT has no permissions). Its
+   memory file keeps working through `std::fs` on the data partition.
+2. The simulated transport tells when its scenario has played its last event
+   (`finished()`), so a caller can stop the loop.
+3. Decision D26 replaces spec 007's "never built for the ESP32" (R1 of that spec): the simulator
    is built into the firmware for QEMU only (R3.4).
 
 ### R3: The firmware
@@ -52,46 +59,61 @@ built in an autonomous run.
 1. At boot, after the banner and the memory line, the firmware mounts the `storage` partition
    (FAT, wear levelling) at `/data`. A partition that cannot be mounted is formatted, with a log
    line `storage: formatted (<reason>)`, and the engine starts empty; mounted, it logs
-   `storage: /data, <used> KB used of <size> KB`.
+   `storage: /data, <used> KB used of <size> KB`. In QEMU the partition is blank at every run
+   (the image holds bootloader, table and application only), so every QEMU run formats it.
 2. It reads `/data/network.json` with `core::network::parse` and logs the choice with no cable
-   detected: `network: wifi (setting auto), not started`, or the fallback reason of spec 015 R5.1.
+   detected: `network: wifi (setting auto), no link started`, or the fallback reason of spec 015
+   R5.1.
 3. Without the `sim` feature (the image for the box), it starts no radio and logs
    `radio: none`; the engine is not started.
 4. With the cargo feature `sim` (the image QEMU runs), the firmware seeds `/data` from the
    realistic home embedded in the image when `/data` holds no `devices.json`, then runs the engine
    with the simulated radio playing the embedded scenario, as `--sim <scenario> --serve` does on
-   the Mac but without HTTP. At the end of the scenario it logs the engine's memory and stops the
-   loop.
+   the Mac but without HTTP. The engine runs in its own thread with an explicit stack of 32 KB
+   (`std::thread::Builder::stack_size`); the main task's stack setting of spec 003 is unchanged.
+   When the transport reports its scenario finished, the firmware stops the loop, lets the saver
+   write, and logs the engine's memory.
 5. The engine's memory line:
    `engine: <devices> devices, <zones> zones, <equipments> equipments, <recipes> recipes; heap
    <used> KB (peak <peak> KB); internal <free> KB free (min <min> KB); psram <free> KB free
-   (min <min> KB)`, where *used* is the heap taken since just before the engine started and
-   *peak* the largest of it (from the heap's minimum free figures, internal and PSRAM together).
+   (min <min> KB)`. *used* is the heap free (internal and PSRAM together) just before the engine
+   thread starts, minus the heap free after the scenario; *peak* is the heap free before the
+   engine minus the lowest free seen while it runs, read with ESP-IDF's local-minimum monitor
+   (`heap_caps_monitor_local_minimum_free_size_start`/`_stop`) when the pinned ESP-IDF (v5.5.5) has
+   it, otherwise by sampling `heap_caps_get_free_size` after every turn of the loop. The storage
+   mount happens before, so FAT and wear-levelling buffers are not counted. The simulator's own
+   memory is counted: the figure is an upper bound of the engine's, labelled "QEMU, with
+   simulator".
 
 ### R4: The realistic home and its check
 
 1. The realistic home is D20's: 50 devices (6 data, 1 order each), 10 zones, 50 equipments of 6
    bindings, 3 `motion-light` instances. Its files (`devices.json`, `zones.json`,
    `equipments.json`, `recipes.json`) and a scenario that makes its devices report (at least one
-   measure per device, motion and orders for the recipes) live in `firmware/fixtures/`, synthetic.
+   measure per device, motion and orders for the recipes, 120 s of scenario time at most, played
+   at speed 10) live in `firmware/fixtures/`, synthetic.
 2. A core test builds the same home as `memory_ceiling.rs` and checks the fixture files are its
    output; with `UPDATE_FIXTURES=1` it writes them. The fixtures cannot drift from the test.
-3. `scripts/qemu.sh` boots the `sim` image, waits for the `engine:` line (timeout raised as
-   needed, printed), and fails, with the last lines of the log, when the peak is above 300 KB
-   (D20), when the internal minimum free is below 16 KB, on a panic or reboot, or without the
-   line. It prints the `engine:` line.
-4. `sh scripts/validate.sh` builds both images (with and without `sim`) and runs the QEMU check.
+3. A host test plays the same scenario with the same home through `--sim` and checks the run ends
+   with every device reported: one scenario serves the Mac and the box.
+4. `scripts/qemu.sh` boots the `sim` image, waits for the `engine:` line within 240 s (formatting
+   the blank partition, then 12 s of scenario on a slow emulator), and fails, with the last lines
+   of the log, when the peak is above 300 KB (D20), when the internal minimum free is below 64 KB
+   (spec 015's internal reserve, kept for the network stack that QEMU does not start), on a panic
+   or reboot, or without the line. It also checks the `storage:` and `network:` lines. It prints
+   the `engine:` line.
+5. `sh scripts/validate.sh` builds both images (with and without `sim`) and runs the QEMU check.
 
 ## Living spec delta
 
 ### docs/living-spec/README.md
 
 - Changed, "Starts and shows its name", ESP32: after the memory line, the firmware mounts its data
-  partition (formats it when it cannot), reads its network setting and logs its choice (no link
-  started), and, in the image for the box, logs `radio: none`.
+  partition (formats it when it cannot), reads its network setting and logs its choice, starts no
+  link, and, in the image for the box, logs `radio: none`.
 - Changed, "On the Mac, in an emulated ESP32": `sh scripts/qemu.sh` runs the engine in the
   emulated ESP32 with the simulated radio and a realistic home, prints the `engine:` line, and
-  fails above 300 KB of heap or below 16 KB of internal RAM free.
+  fails above 300 KB of heap or below 64 KB of internal RAM free.
 - Changed, "Runs without the dongle": the simulated radio runs on the Mac and in the emulated
   ESP32.
 - History: row 016.
@@ -104,6 +126,11 @@ built in an autonomous run.
 - `specs/007-simulated-radio/spec.md` R1: left as history; D26 records the change.
 - `docs/memory-budget.md`: the ESP32 rows marked "estimated" that the QEMU line measures → the
   measured figure, with "QEMU".
+- `README.md` and the comments of `scripts/validate.sh` and `scripts/qemu.sh`, where they say
+  what the QEMU run shows → the `engine:` line.
+- `CLAUDE.md` commands: `sh scripts/qemu.sh` comment, if it says "the firmware, booted" only.
+- `docs/decisions.md` D20 ("read again on the box") and D25: history, not edited; D26 added.
+- Step, not living spec: `docs/roadmap.md` E1 set to built when specs 015 and 016 are.
 - Searched: "Mac only", "never built", "radio_loop", "Saver", "FileStore", "qemu", "engine".
 
 ## Acceptance criteria
@@ -136,8 +163,13 @@ None new: the files are the ones the host already writes in Sowel's format.
   type it uses, and has no OS dependency once storage is a trait.
 - One firmware crate with a `sim` feature, rather than two firmwares.
 - No HTTP in the firmware yet: the API's memory is in the Mac test; the box's server is E3.
-- Internal RAM minimum of 16 KB as the QEMU floor: below it ESP-IDF's tasks and Wi-Fi fail to
-  allocate; spec 015's budget keeps 64 KB in reserve on top.
+- Internal RAM minimum of 64 KB as the QEMU floor: spec 015's reserve, which the network stack
+  needs on the box and QEMU does not use.
+- The spec review's questions, answered with its recommendations: the QEMU figure with the
+  simulator inside is an acceptable gate for D20, labelled as such and measured again on the box
+  in E3; one fixture scenario serves the firmware and a host test.
+- No second-boot check: every QEMU run starts from a blank partition; the reuse of `/data` is the
+  Mac's tested behaviour and E3's run on the box.
 
 ## How the user will check it
 

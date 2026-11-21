@@ -24,12 +24,18 @@
 | core::engine | Empty storage (no files) | The home starts empty |
 | core::engine | A file unreadable | Loading fails with the file named (as the host does today) |
 | host | Existing tests (serve, store, sim, demo) | Unchanged and green |
-| sim | Builds without `cfg(unix)` parts | `cargo check` for the ESP32 target through the firmware's `sim` build |
+| core::engine | The sink gets the verbose lines and the write failures | Lines as the host prints them today |
+| core::engine | Stop flag set | The loop returns, the saver writes what is due |
+| sim | `finished()` before, at and after the last event | false, true, true |
+| sim | Memory file written then read back (no unix mode) | Same network and keys |
+| host | The fixture scenario with the fixture home through `--sim` | Ends, every device reported |
 | fixtures | Fixture files equal the realistic home's builder | Equal; `UPDATE_FIXTURES=1` rewrites them |
 | fixtures | A fixture edited by hand | The test fails |
-| firmware (QEMU, sim) | Realistic home, scenario played | `engine:` line, peak ≤ 300 KB, internal min ≥ 16 KB |
-| firmware (QEMU, sim) | Second boot on the same image | Data mounted, not seeded again (checked once by hand, noted in the demo) |
-| firmware (QEMU, box image) | Boot | `storage:`, `network: wifi (setting auto), not started`, `radio: none` |
+| firmware (QEMU, sim) | Blank partition | `storage: formatted (...)` then `storage: /data, ...`, grepped by `qemu.sh` |
+| firmware (QEMU, sim) | No `network.json` | `network: wifi (setting auto), no link started`, grepped by `qemu.sh` |
+| firmware (QEMU, sim) | Realistic home, scenario played | `engine:` line, peak ≤ 300 KB, internal min ≥ 64 KB |
+| firmware (QEMU, box image) | Boot | `storage:`, `network:`, `radio: none` (the build is checked by validate; the boot by hand once, noted in the demo) |
+| firmware | Invalid `network.json`, full partition | Covered by the core's tests (spec 015 R5, the engine's write-failure tests); no QEMU run |
 
 ## Validation
 
