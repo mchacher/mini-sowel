@@ -155,6 +155,17 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("shows the mark and the wordmark in the sidebar, the top bar and the drawer", async () => {
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    await screen.findByRole("heading", { level: 1, name: "House" });
+    expect(within(nav().closest("aside")!).getByRole("img", { name: "Solite" })).toBeTruthy();
+    const bar = screen.getByRole("button", { name: "Menu" }).closest("header")!;
+    expect(within(bar).getByRole("img", { name: "Solite" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    const drawer = screen.getByRole("dialog");
+    expect(within(drawer).getByRole("img", { name: "Solite" })).toBeTruthy();
+  });
+
   it("closes the drawer when a zone is picked in it", async () => {
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     await screen.findByRole("heading", { level: 1, name: "House" });

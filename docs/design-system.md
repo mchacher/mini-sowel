@@ -14,10 +14,16 @@ The Sowel repository (`github.com/mchacher/sowel`, usually cloned as `../sowel`)
 | `design-system/tokens.css` (tokens v1.0, themes Hybrid and Dark) | `ui/src/styles/tokens.css` | unchanged |
 | `ui/src/index.css`, its `@theme` and `@theme static` blocks | `ui/src/styles/theme.css` | unchanged, a header added |
 | `ui/eslint/design-classes.js` (type scale, sentence case, radius scale) | `ui/eslint/design-classes.js` | unchanged |
-| `ui/src/components/layout/SowelLogo.tsx` | `ui/src/components/layout/SowelLogo.tsx` | unchanged |
-| `ui/src/components/layout/SowelLogo.tsx` | `ui/src/components/layout/SoliteLogo.tsx` | derived: the same house, face and wink, plus three short rays above the roof for Solite's "light" |
+| `ui/src/lib/logo.ts` (commit `5da84dc1`, Sowel spec 210: the revised mark, a master and a small weight) | `ui/src/lib/logo.ts` | derived: the house, eyes, wink and smile number for number; plus Solite's antenna (a mast from the ridge, a ball, one wave per side) in each weight |
+| `ui/src/components/layout/SowelLogo.tsx` (commit `5da84dc1`) | `ui/src/components/layout/SoliteLogo.tsx` | derived: renders `logo.ts`, the weight chosen by size (small below 32 px), the same wink; the wordmark is an option |
+| Nunito Bold (700), SIL Open Font License | `ui/src/lib/wordmark.ts` | the word "solite", lowercase, outlined into one SVG path; licence in `ui/src/lib/NUNITO-OFL.txt` |
+| `ui/public/favicon.svg` (commit `5da84dc1`) | `ui/src/assets/favicon.svg` | derived: the small weight with the antenna; Vite publishes it as `/assets/favicon-<hash>.svg`, which the host serves; `logo-sync.test.ts` checks it against `logo.ts` |
 
-The Solite logo is the one the sidebar and the mobile top bar show; `SowelLogo.tsx` stays as ported.
+The Solite mark (Sowel's smiling house with an antenna and a radio wave on each side of the roof)
+is the one the sidebar, the mobile top bar, the drawer and the browser tab show. The house is the
+ink (`--color-primary`), the face, the ball and the waves the mid-blue (`--color-primary-mid`);
+the favicon, an image, holds the same two values as hex. The wordmark is a path, not text: no web
+font is loaded.
 
 The interface's components, stores and helpers are ported from Sowel's `ui/src` at commit
 `5da84dc1` (UI 1.87.0), read on 2026-11-21 (spec 014); each ported file starts with a header
@@ -76,7 +82,7 @@ runs.
 | React 19 | Preact, with `preact/compat`: Sowel's React components work unchanged | About 4 KB instead of about 45 KB gzip |
 | Lucide icons by name, one rule against the whole set | The same rule; icons by name only | Every icon counts in the budget |
 | First load under 1.4 MB raw | First load under **170 KB gzip**, checked by `npm run check:bundle` in the validate command | The framing note: 100 to 170 KB gzip, served from flash |
-| Sidebar: logo and "SOWEL" in Nunito | Logo and "SOLITE" in the system font | No web font |
+| Sidebar: logo and "sowel" in Nunito (web font) | Mark and "solite" in Nunito Bold, lowercase, outlined into an SVG path | No web font: the outlined word costs about 3 KB |
 | i18next with its locale files | A `t()` with Sowel's keys, French and English, `react-i18next` aliased to it | About 21 KB of library and 67 KB of locales |
 | React Router | The room in the address's hash (`#/zone/<id>`) | About 28 KB, one page |
 | `useWebSocket`, eleven stores | `useLive`: zones and equipments, Sowel's reconnection | The tool has no modes, energy or activity |
@@ -87,8 +93,8 @@ Everything else (colours, roles, scales, radii, shadows, motion, components) is 
 
 ## Layout
 
-Sowel's application layout: a sidebar on the left (260 px, `bg-surface`, right border), the logo
-and the tool's name in a 49 px header, the rooms' tree below; the room on the right on the
+Sowel's application layout: a sidebar on the left (260 px, `bg-surface`, right border), the mark
+and the wordmark in a 49 px header, the rooms' tree below; the room on the right on the
 `bg-background` tint: its name as the title, Sowel's lights line and pills beneath it, then its
 equipments by family. Below `md` the sidebar gives way to a top bar with a menu button that
 opens it as a drawer (Sowel's pattern; Sowel switches at `lg`). Code: `ui/src/components/layout/{Sidebar,ZoneTree,Banner}.tsx`,

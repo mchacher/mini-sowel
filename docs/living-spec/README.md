@@ -290,7 +290,7 @@ prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm 
 it on `http://localhost:5173` with the API of a host running on port 8080.
 
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
-  picked; Sowel's logo and the rooms as a tree; the room shown is kept in the address
+  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree; the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor

@@ -7,14 +7,7 @@ import { ZoneTree } from "./ZoneTree";
 type Zones = { zones: FlatZone[]; activeId: string | null };
 
 function Brand() {
-  return (
-    <>
-      <SoliteLogo size={40} className="flex-shrink-0" />
-      <span className="font-extrabold text-title tracking-[0.18em] text-primary ml-2.5 mt-1 whitespace-nowrap">
-        SOLITE
-      </span>
-    </>
-  );
+  return <SoliteLogo size={36} showWordmark className="min-w-0" />;
 }
 
 function Nav({ zones, activeId, onPick }: Zones & { onPick?: () => void }) {
@@ -27,7 +20,7 @@ function Nav({ zones, activeId, onPick }: Zones & { onPick?: () => void }) {
 }
 
 /**
- * The navigation column, in the look of Sowel's sidebar: the logo, the tool's name, the zones.
+ * The navigation column, in the look of Sowel's sidebar: the mark with the wordmark, the zones.
  * Hidden below `md`, where the top bar's menu button opens the same column as a drawer (Sowel
  * hides its sidebar below `lg` and opens a drawer the same way).
  */

@@ -314,3 +314,15 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (the site goes under Sowel's); trademarks named SOLITE exist in the United States in other
   classes (luggage, building materials; lighting abandoned or cancelled): a search in TMview and
   WIPO, classes 9 and 42, comes before a public release. Chosen by the user.
+
+## D22: Solite's logo is Sowel's revised house with an antenna
+
+- **Date**: 2026-11-21
+- **Choice**: the logo is Sowel's revised mark (Sowel spec 210, commit `5da84dc1`: the house, the
+  face and the wink, in its two weights) with an antenna on the roof, a ball and one radio wave on
+  each side, and the lowercase wordmark "solite" in Nunito 700, outlined as paths. It replaces
+  D21's "three short rays above the roof".
+- **Why**: chosen by the user among five concepts: the antenna says what the box is (a small
+  radio box) while the house and its smile stay Sowel's; outlined glyphs keep web fonts off the
+  box. Nunito is under the SIL Open Font License (`ui/src/lib/NUNITO-OFL.txt`); the glyphs are
+  outlined again from Google Fonts' file before a public release.

@@ -1,14 +1,28 @@
-// Derived from Sowel's SowelLogo.tsx, commit 88727672: the same house, face and wink,
-// plus three short rays above the roof for Solite's "light".
+// Derived from Sowel's SowelLogo.tsx, commit 5da84dc1 (Sowel spec 210): one drawing in two
+// weights chosen by size, the same wink; plus Solite's antenna and the outlined wordmark.
+import {
+  HOUSE,
+  MARK_RATIO,
+  MASTER,
+  SMALL,
+  SMALL_BELOW_PX,
+  VIEW_BOX,
+  type LogoWeight,
+} from "../../lib/logo";
+import { WORDMARK_PATH, WORDMARK_RATIO, WORDMARK_VIEW_BOX } from "../../lib/wordmark";
 
 interface SoliteLogoProps {
+  /** The mark's width in px; its height follows. */
   size?: number;
   className?: string;
+  /** Show the wordmark "solite" to the right of the mark */
+  showWordmark?: boolean;
   /** Animate the face (wink) */
   animated?: boolean;
 }
 
-const MONO = "var(--color-primary)";
+const INK = "var(--color-primary)";
+const FACE = "var(--color-primary-mid)";
 
 /** SVG native wink animation on a single eye */
 function WinkAnimation() {
@@ -25,48 +39,94 @@ function WinkAnimation() {
   );
 }
 
-export function SoliteLogo({ size = 32, className = "", animated = false }: SoliteLogoProps) {
+/** One drawing; the weight only changes the strokes and the placement of the face and antenna. */
+function Mark({ weight, animated }: { weight: LogoWeight; animated: boolean }) {
+  const { mast, ball, waves } = weight.antenna;
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="25 0 150 170"
-      width={size}
-      height={(size * 170) / 150}
-      fill="none"
-      className={className}
-    >
+    <>
+      <path d={mast.path} fill="none" stroke={INK} strokeWidth={mast.width} strokeLinecap="round" />
+      <circle cx={ball.cx} cy={ball.cy} r={ball.r} fill={FACE} />
+      {waves.paths.map((d) => (
+        <path
+          key={d}
+          d={d}
+          fill="none"
+          stroke={FACE}
+          strokeWidth={waves.width}
+          strokeLinecap="round"
+        />
+      ))}
       <path
-        d="M100 30 L160 90 Q165 95 160 100 L160 150 Q160 158 152 158 L48 158 Q40 158 40 150 L40 100 Q35 95 40 90 Z"
+        d={HOUSE}
         fill="none"
-        stroke={MONO}
-        strokeWidth="12"
+        stroke={INK}
+        strokeWidth={weight.house}
         strokeLinejoin="round"
         strokeLinecap="round"
       />
       <path
-        d="M75 115 Q100 140 125 115"
+        d={weight.leftEye}
         fill="none"
-        stroke={MONO}
-        strokeWidth="9"
+        stroke={FACE}
+        strokeWidth={weight.eye}
         strokeLinecap="round"
       />
-      {/* Left eye — static */}
-      <path
-        d="M78 95 Q83 87 88 95"
-        fill="none"
-        stroke={MONO}
-        strokeWidth="8"
-        strokeLinecap="round"
-      />
-      {/* Right eye — winks */}
-      <g transform="translate(117, 91)">
+      <g transform={`translate(${weight.wink.origin})`}>
         {animated && <WinkAnimation />}
-        <path d="M-5 4 Q0 -4 5 4" fill="none" stroke={MONO} strokeWidth="8" strokeLinecap="round" />
+        <path
+          d={weight.wink.path}
+          fill="none"
+          stroke={FACE}
+          strokeWidth={weight.eye}
+          strokeLinecap="round"
+        />
       </g>
-      {/* Three rays above the roof: Solite's light */}
-      <path d="M100 7 L100 17" fill="none" stroke={MONO} strokeWidth="8" strokeLinecap="round" />
-      <path d="M79 14 L86 22" fill="none" stroke={MONO} strokeWidth="8" strokeLinecap="round" />
-      <path d="M121 14 L114 22" fill="none" stroke={MONO} strokeWidth="8" strokeLinecap="round" />
-    </svg>
+      <path
+        d={weight.smilePath}
+        fill="none"
+        stroke={FACE}
+        strokeWidth={weight.smile}
+        strokeLinecap="round"
+      />
+    </>
+  );
+}
+
+export function SoliteLogo({
+  size = 32,
+  className = "",
+  showWordmark = false,
+  animated = false,
+}: SoliteLogoProps) {
+  // The wordmark is 0.4 of the mark's width tall: 14.4 px at 36 px, the height of an "l" in the
+  // 20 px title text.
+  const wordmarkHeight = size * 0.4;
+  return (
+    <span role="img" aria-label="Solite" className={`inline-flex items-center ${className}`}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox={VIEW_BOX}
+        width={size}
+        height={size / MARK_RATIO}
+        fill="none"
+        className="flex-shrink-0"
+        aria-hidden="true"
+      >
+        <Mark weight={size < SMALL_BELOW_PX ? SMALL : MASTER} animated={animated} />
+      </svg>
+      {showWordmark && (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox={WORDMARK_VIEW_BOX}
+          width={wordmarkHeight * WORDMARK_RATIO}
+          height={wordmarkHeight}
+          fill={INK}
+          className="ml-2.5 mt-1 flex-shrink-0"
+          aria-hidden="true"
+        >
+          <path d={WORDMARK_PATH} />
+        </svg>
+      )}
+    </span>
   );
 }
