@@ -165,7 +165,7 @@ Nothing reads the keys back in this spec; they are kept so a later restore is po
 
 ## Acceptance criteria
 
-- [ ] Against the fake radio (EZSP 13 and EZSP 14+): formed then resumed network, a device joins,
+- [x] Against the fake radio (EZSP 13 and EZSP 14+): formed then resumed network, a device joins,
       is identified, joining closes; the host prints the lines of R4.
 - [ ] With the real Dongle Max and SNZB-02: a `device:` line shows the strings the sensor sends
       (expected `eWeLink TH01`) (demo, pending).

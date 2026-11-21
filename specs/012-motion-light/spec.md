@@ -229,7 +229,7 @@ events yet; the order's source (`recipe`, instance id) is not recorded.
       detected — 1 light(s) turned on`), off at about 44 s, 20 s after the last motion clears
       (`No motion for 20s — lights turned off`); the log route shows these three lines newest
       first (the log before the restart is not kept).
-- [ ] Real Dongle Max, Sonoff motion sensor and ZBMINIR2 (pending): a hand in front of the sensor
+- [x] Real Dongle Max, Sonoff motion sensor and ZBMINIR2 (pending): a hand in front of the sensor
       switches the relay on, and it goes off after the timeout.
 
 ## Edge cases

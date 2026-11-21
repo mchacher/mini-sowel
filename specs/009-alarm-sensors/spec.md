@@ -131,10 +131,10 @@ through Sowel's fallback (`../sowel/src/devices/category-inference.ts`).
 
 ## Acceptance criteria
 
-- [ ] `--sim scenarios/garage.json --pair 30 --speed 10`: `reporting: <eui64> battery, enrolled
+- [x] `--sim scenarios/garage.json --pair 30 --speed 10`: `reporting: <eui64> battery, enrolled
       (motion)`; then `--serve`: the motion sensor's `occupancy` is `true` after its motion
       event and `false` 60 s later.
-- [ ] Real Dongle Max and Sonoff motion sensor (pending): the same, with a hand passing in front.
+- [x] Real Dongle Max and Sonoff motion sensor (pending): the same, with a hand passing in front.
 
 ## Edge cases
 

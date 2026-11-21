@@ -162,7 +162,7 @@ trailing zeros removed. Ctrl-C exits 130.
 
 ## Acceptance criteria
 
-- [ ] Fake radio: a paired fake SNZB-02 has its reporting set up; its reports are shown with
+- [x] Fake radio: a paired fake SNZB-02 has its reporting set up; its reports are shown with
       `--pair` and with `--listen` in a second run.
 - [ ] Real Dongle Max and SNZB-02 (pending): temperature, humidity and battery shown after
       pairing; after the host restarts with `--listen`, without pairing again, humidity and

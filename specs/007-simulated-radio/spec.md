@@ -162,10 +162,10 @@ without `--sim`, `--speed` outside 1..100 or not a whole number. The usage text 
 
 ## Acceptance criteria
 
-- [ ] `--sim scenarios/snzb02.json --pair 10 --speed 10` shows the SNZB-02 joining, its
+- [x] `--sim scenarios/snzb02.json --pair 10 --speed 10` shows the SNZB-02 joining, its
       reporting set up and its measures; `--listen` on the same scenario then resumes the network
       and shows measures.
-- [ ] The tests of specs 004 to 006 pass on the crate with the same assertions (see plan).
+- [x] The tests of specs 004 to 006 pass on the crate with the same assertions (see plan).
 
 ## Edge cases
 

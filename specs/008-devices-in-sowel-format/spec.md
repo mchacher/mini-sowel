@@ -166,13 +166,13 @@ is tested for behaviour, not for memory.
 
 ## Acceptance criteria
 
-- [ ] `--sim scenarios/garage.json --pair 30 --speed 10`, then `--sim scenarios/garage.json
+- [x] `--sim scenarios/garage.json --pair 30 --speed 10`, then `--sim scenarios/garage.json
       --serve --speed 10`: `GET /api/v1/devices` lists three devices in Sowel's JSON (the relay
       `mains` with its `state` data and order, the motion sensor with `battery` and `voltage`);
       the SNZB-02's temperature changes between two calls.
-- [ ] A test compares the JSON of a device with an example written from Sowel's `types.ts`
+- [x] A test compares the JSON of a device with an example written from Sowel's `types.ts`
       (field names, casing, enum values).
-- [ ] The memory ceiling test passes.
+- [x] The memory ceiling test passes.
 - [ ] Real Dongle Max and SNZB-02 (pending): the same JSON with the real sensor.
 
 ## Edge cases
