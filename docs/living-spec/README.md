@@ -167,7 +167,7 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, resumes the network, listens, keeps
 the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only, without authentication (a browser page
-from another site is refused by a `Host` check):
+from another site is refused by a `Host` check, and by an `Origin` check on `/ws`):
 
 | Route | Answer |
 | ----- | ------ |
@@ -176,14 +176,36 @@ from another site is refused by a `Host` check):
 | `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
+| `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
-Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415; 502 for an order no device took; 503 `Busy` beyond 4 requests at
-once, or beyond 2 orders from the API at once). A request with a body is refused with 415 unless it is sent as
+Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415, 426; 502 for an order no device took; 503 `Busy` beyond 4 requests at
+once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
 `application/json`, so a web page cannot send one from the browser. The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
 the same file. Ctrl-C writes the store and exits 130.
+
+#### Live events
+
+`GET /ws` is Sowel's WebSocket: a `bearer.` subprotocol is echoed back (its token is not
+checked); the first message is `{"type":"connected","message":"Connected to Sowel engine",
+"version":"0.1.0"}`. A client sends `{"type":"subscribe","topics":[...]}`, which replaces its
+topics (`system` always included; unknown names ignored), and then receives, every 200 ms when
+there is something, one JSON array of Sowel's events in the order they happened, keeping only
+the last event of a device data, an equipment binding, a status or a zone within the 200 ms.
+Fed topics: `devices` (data updated, status changed, removed), `zones` (created, updated,
+removed, aggregate changed), `equipments` (created, updated, removed, data changed, status
+changed, order executed or failed, with the recipe as source when a recipe sent it), `recipes`
+(instance created, removed, started, stopped, state changed, error). At most 4 clients; a client
+whose queue passes 256 events or 8 KB is closed (1013) and reconnects; one silent for 60 s, or
+that cannot be written to for 5 s, is dropped; a message over 1 KB closes it (1009); an `Origin`
+other than the API's own address or the interface's development server closes it (4003).
+`GET /ws` without an upgrade answers 426 `Upgrade Required`, a WebSocket version other than 13
+400 `Unsupported WebSocket version`, another method 405; an upgrade on any other path 400; Ctrl-C
+closes each client with 1001. The host accepts at most 64 connections at once (a 65th is closed
+without an answer); a request must arrive within 10 s of opening its connection, and each answer closes its
+connection (`Connection: close`).
 
 ### Organises the home in zones and equipments
 
@@ -304,7 +326,7 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
-equipment and recipe API (above), executes equipment orders, runs the recipe instances,
+equipment and recipe API and its live events (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
 measures.
 
@@ -324,3 +346,4 @@ measures.
 | 010 | Zones, equipments and zone aggregation, with Sowel's routes |
 | 011 | Equipment orders sent to the Zigbee devices (`POST .../orders/:alias`) |
 | 012 | The `motion-light` recipe, with Sowel's recipe routes |
+| 013 | Live events on Sowel's WebSocket (`/ws`) |

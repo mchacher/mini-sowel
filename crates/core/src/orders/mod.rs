@@ -14,8 +14,29 @@ pub use queue::{
 pub use resolve::{commands_for, prepare};
 pub use runner::OrderRunner;
 
+use serde::Serialize;
+use serde_json::Value;
+
 use crate::devices::Id;
 use crate::radio::zcl;
+
+/// Who gave an order (Sowel's `OrderSource`, `src/shared/types.ts` T:1550-1560): only a recipe
+/// of the core gives orders itself, so only that kind exists here. An order of the API has none
+/// (Sowel's `manual`, `button`, `external`... need an authenticated user or a channel).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum OrderSource {
+    Recipe {
+        instance_id: Id,
+        /// The recipe's `RecipeInfo.name`.
+        recipe_name: &'static str,
+        recipe_id: &'static str,
+    },
+}
 
 /// One command for one device of an order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,5 +56,10 @@ pub struct DeviceCommand {
 pub struct OrderRequest {
     pub equipment: Id,
     pub alias: String,
+    /// The value as it was given (the API's raw value, a recipe's `"ON"` or `"OFF"`): what the
+    /// order's outcome event says.
+    pub value: Value,
+    /// Who gave it: `None` for an order of the API.
+    pub source: Option<OrderSource>,
     pub commands: Vec<DeviceCommand>,
 }

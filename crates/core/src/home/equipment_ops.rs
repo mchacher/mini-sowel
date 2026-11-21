@@ -8,6 +8,7 @@ use crate::equipments::{
     StoredEquipment,
 };
 use crate::failure::{Failure, Outcome};
+use crate::live::{EngineEvent, Topic};
 
 /// What `POST /equipments` gives. `kind` and `zone_id` are as written.
 #[derive(Debug, Default)]
@@ -41,6 +42,16 @@ fn not_found() -> Failure {
 }
 
 impl Home {
+    /// `equipment.updated`, after a binding was added or removed.
+    fn announce_equipment_updated(&self, id: &str) {
+        if let Some(item) = self.equipments.get(id) {
+            self.live
+                .emit(Topic::Equipments, || EngineEvent::EquipmentUpdated {
+                    equipment: item.equipment.clone(),
+                });
+        }
+    }
+
     /// Creates an equipment; with `device_ids`, binds every data and every order of each device
     /// with the key as alias (`createWithAutoBindings`). A device that does not exist is
     /// skipped (logged); so is a binding whose alias is taken or past `MAX_BINDINGS`.
@@ -124,6 +135,10 @@ impl Home {
         self.equipments.list_mut().push(item.clone());
         self.equipments.list_mut().shrink_to_fit();
         self.equipments_changed = true;
+        self.live
+            .emit(Topic::Equipments, || EngineEvent::EquipmentCreated {
+                equipment: item.equipment.clone(),
+            });
         Ok(item)
     }
 
@@ -174,6 +189,10 @@ impl Home {
         equipment.updated_at = now;
         let updated = equipment.clone();
         self.equipments_changed = true;
+        self.live
+            .emit(Topic::Equipments, || EngineEvent::EquipmentUpdated {
+                equipment: updated.clone(),
+            });
         Ok(updated)
     }
 
@@ -185,8 +204,15 @@ impl Home {
         let Some(index) = list.iter().position(|e| e.equipment.id == parsed) else {
             return Err(not_found());
         };
-        list.remove(index);
+        let removed = list.remove(index).equipment;
         self.equipments_changed = true;
+        self.tracker.forget(&removed.id);
+        self.live
+            .emit(Topic::Equipments, || EngineEvent::EquipmentRemoved {
+                equipment_id: removed.id,
+                equipment_name: removed.name.to_string(),
+                zone_id: removed.zone_id,
+            });
         Ok(())
     }
 
@@ -225,6 +251,7 @@ impl Home {
             item.data_bindings.shrink_to_fit();
         }
         self.equipments_changed = true;
+        self.announce_equipment_updated(equipment);
         Ok(binding)
     }
 
@@ -239,6 +266,7 @@ impl Home {
         };
         item.data_bindings.remove(index);
         self.equipments_changed = true;
+        self.announce_equipment_updated(equipment);
         Ok(())
     }
 
@@ -277,6 +305,7 @@ impl Home {
             item.order_bindings.shrink_to_fit();
         }
         self.equipments_changed = true;
+        self.announce_equipment_updated(equipment);
         Ok(binding)
     }
 
@@ -291,6 +320,7 @@ impl Home {
         };
         item.order_bindings.remove(index);
         self.equipments_changed = true;
+        self.announce_equipment_updated(equipment);
         Ok(())
     }
 }

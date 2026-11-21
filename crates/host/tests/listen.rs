@@ -11,6 +11,29 @@ use std::time::{Duration, Instant};
 
 use mini_sowel_sim::{Ncp, SimDevice};
 
+/// A host program that is killed and reaped when the test ends, however it ends.
+struct Reaped(std::process::Child);
+
+impl std::ops::Deref for Reaped {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Reaped {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Serves one connection with the fake radio and gives the radio back when it closes.
 fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Ncp>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -127,11 +150,13 @@ fn a_second_run_with_listen_resumes_the_network_and_shows_the_reports_until_ctrl
 
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
-        .args(["--radio", &url, "--listen", "--data", dir_text])
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("the host program starts");
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+            .args(["--radio", &url, "--listen", "--data", dir_text])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
     // The lines are read on another thread, so that a host that stays silent fails the test
     // after a few seconds instead of blocking it.
     let stdout = BufReader::new(child.stdout.take().unwrap());
@@ -240,18 +265,20 @@ fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() 
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap().port()
     };
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
-        .args([
-            "--radio",
-            &url,
-            "--serve",
-            &port.to_string(),
-            "--data",
-            dir_text,
-        ])
-        .stdout(Stdio::null())
-        .spawn()
-        .expect("the host program starts");
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+            .args([
+                "--radio",
+                &url,
+                "--serve",
+                &port.to_string(),
+                "--data",
+                dir_text,
+            ])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("the host program starts"),
+    );
     let start = Instant::now();
     let tamper = loop {
         if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {

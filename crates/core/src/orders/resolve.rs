@@ -158,6 +158,8 @@ pub fn prepare(
     Ok(OrderRequest {
         equipment: item.equipment.id,
         alias: alias.to_string(),
+        value: value.clone(),
+        source: None,
         commands,
     })
 }

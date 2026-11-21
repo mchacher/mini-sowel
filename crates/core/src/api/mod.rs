@@ -95,7 +95,7 @@ pub(crate) fn method_not_allowed() -> Response {
 
 /// True for `127.0.0.1:<port>` and `localhost:<port>`: a page of another origin cannot reach the
 /// API through a DNS name that points here.
-fn host_allowed(host: Option<&str>, port: u16) -> bool {
+pub fn host_allowed(host: Option<&str>, port: u16) -> bool {
     let Some(host) = host else {
         return false;
     };

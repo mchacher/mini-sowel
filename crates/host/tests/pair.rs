@@ -11,6 +11,29 @@ use std::time::{Duration, Instant};
 
 use mini_sowel_sim::{Ncp, SimDevice, StoredNetwork};
 
+/// A host program that is killed and reaped when the test ends, however it ends.
+struct Reaped(std::process::Child);
+
+impl std::ops::Deref for Reaped {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Reaped {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Serves one connection with the fake radio and gives the radio back when it closes, so a second
 /// run can find what the first one left in it.
 fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Ncp>) {
@@ -234,11 +257,13 @@ fn ctrl_c_during_pairing_closes_joining_and_exits_130() {
     let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let dir = data_dir();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
-        .args(pair_args(&url, "30", dir.to_str().unwrap()))
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("the host program starts");
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+            .args(pair_args(&url, "30", dir.to_str().unwrap()))
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     loop {
@@ -398,11 +423,13 @@ fn ctrl_c_during_the_start_exits_130_without_opening_joining() {
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
     let dir = data_dir();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
-        .args(pair_args(&url, "30", dir.to_str().unwrap()))
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("the host program starts");
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+            .args(pair_args(&url, "30", dir.to_str().unwrap()))
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
     let mut line = String::new();
     loop {

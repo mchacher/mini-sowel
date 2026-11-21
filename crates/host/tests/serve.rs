@@ -116,6 +116,13 @@ fn serve_scenario(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Se
     }
 }
 
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 impl Serving {
     /// Sends a request and returns (status, body); a chunked body is decoded.
     fn request(&self, method: &str, path: &str, host: &str, body: &str) -> (u16, String) {

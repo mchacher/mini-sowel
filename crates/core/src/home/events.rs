@@ -77,7 +77,7 @@ pub enum Event {
 }
 
 impl Event {
-    /// The type Sowel (and the WebSocket, later) gives it.
+    /// The type Sowel gives it.
     pub fn name(&self) -> &'static str {
         match self {
             Event::Zone { .. } => "zone.data.changed",

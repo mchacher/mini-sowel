@@ -5,11 +5,19 @@
 
 use std::collections::VecDeque;
 
-use super::{DeviceCommand, OrderQueue, OrderReply, OrderResult};
+use serde_json::Value;
+
+use super::{DeviceCommand, OrderQueue, OrderReply, OrderRequest, OrderResult, OrderSource};
+use crate::devices::Id;
 use crate::radio::{CommandHandle, CommandTarget, MAX_COMMANDS, Radio, RadioTransport};
 
 /// The order being sent.
 struct Active {
+    /// What the outcome event says of the order.
+    equipment: Id,
+    alias: String,
+    value: Value,
+    source: Option<OrderSource>,
     reply: Option<OrderReply>,
     /// On the queue's monotonic clock, in milliseconds.
     deadline: u64,
@@ -70,8 +78,18 @@ impl OrderRunner {
         if self.active.is_none()
             && let Some(queued) = queue.take(now)
         {
-            let commands = queued.request.commands;
+            let OrderRequest {
+                equipment,
+                alias,
+                value,
+                source,
+                commands,
+            } = queued.request;
             self.active = Some(Active {
+                equipment,
+                alias,
+                value,
+                source,
                 reply: queued.reply,
                 deadline: queued.deadline,
                 outcomes: vec![None; commands.len()],
@@ -110,6 +128,13 @@ impl OrderRunner {
             }
             if active.finished() {
                 let result = active.result();
+                queue.report(
+                    active.equipment,
+                    &active.alias,
+                    &active.value,
+                    &active.source,
+                    &result,
+                );
                 if let Some(reply) = active.reply.take() {
                     reply.send(result);
                 }

@@ -250,3 +250,27 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the user is Sowel's author, so a quirk is fixed in Sowel first; the bounds keep the box's memory
   known; a person waiting at the API goes before an automation.
 
+## D18: Live events, and their divergences from Sowel
+
+- **Date**: 2026-11-21
+- **Choice**: `GET /ws` follows Sowel's WebSocket (spec 013): the `bearer.` subprotocol echoed,
+  subscribe by topics, arrays every 200 ms, Sowel's dedup and event fields. It replaces two
+  points of D17: `recipe.instance.*` events are sent, and an order carries its source (the
+  recipe) to its `equipment.order.executed` or `equipment.order.failed` event (D16's outcome
+  events beyond these two stay unsent). Divergences: at most 4 clients (503); incoming messages
+  of at most 1 KB (1009); a client's queue bounded (256 events, 8 KB), closed 1013 past it;
+  pings every 30 s, a client silent for 60 s or unwritable for 5 s dropped; the token not
+  checked (D13); the interface's development server accepted as an origin; not sent:
+  `device.discovered` (no pairing while serving), `device.heartbeat`,
+  `equipment.order.outcome|unconfirmed`, `equipment.timed_action.*`, `system.*`, `mode.*`,
+  `activity.*`, and the optional `sourceTimestamp` and `startedAt`; deleting a device sends no
+  `equipment.updated` for the bindings it drops; the aggregate is also recomputed every 60 s
+  without a change (staleness), which can give the recipes a zone event too. Three small crates join the
+  host (D12): `tungstenite` for the frames, `socket2` for the socket's buffer, `httparse` for a
+  front door that keeps `/ws` on sockets the host owns (with their timeouts) and passes every
+  other request to `tiny_http` on a loopback port: `tiny_http` cannot give an upgraded socket a
+  timeout, and a listener timeout stops its accept loop on Linux. The box will use its own server
+  (E), so this stays on the Mac.
+- **Why**: Sowel's interface works unchanged against it; the bounds keep the box's memory known
+  and a sleeping laptop from holding a slot for good; the host has no async runtime.
+

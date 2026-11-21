@@ -4,6 +4,7 @@
 //! interface and the zone aggregation read equipments, never devices. No I/O: the caller writes.
 
 mod status;
+mod status_tracker;
 mod view;
 
 use std::ops::Deref;
@@ -14,6 +15,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::devices::{Id, iso};
 
 pub use status::{EquipmentStatus, StatusReason, is_stale, stale_window_ms};
+pub use status_tracker::{StatusTracker, Transition};
 pub use view::status_of;
 pub use view::{Details, details};
 pub(crate) use view::{Index, status_with};

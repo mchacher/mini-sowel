@@ -18,6 +18,7 @@ use crate::devices::{Id, iso, iso_option};
 use crate::failure::{Failure, Outcome};
 use crate::home::Home;
 use crate::home::events::{Event, Interest, cut};
+use crate::live::{EngineEvent, LiveHandle, Topic};
 
 /// Instances kept; one more is refused (400).
 pub const MAX_INSTANCES: usize = 16;
@@ -105,6 +106,8 @@ pub struct StateKeys {
 /// written), and the lines to log.
 pub struct Cx<'a> {
     pub home: &'a Home,
+    /// The instance the call is for.
+    pub instance: Id,
     pub now: u64,
     pub wall: u64,
     pub lines: Vec<(Level, String)>,
@@ -135,6 +138,15 @@ struct Slot {
 pub struct RecipeEngine {
     slots: Vec<Slot>,
     next_log_id: u64,
+    /// Where `recipe.instance.*` events go (spec 013), when the host listens.
+    live: Option<LiveHandle>,
+}
+
+/// Builds and sends a `recipes` event, only if a client listens to that topic.
+fn announce(live: &Option<LiveHandle>, build: impl FnOnce() -> EngineEvent) {
+    if let Some(live) = live {
+        live.emit(Topic::Recipes, build);
+    }
 }
 
 impl std::fmt::Debug for RecipeEngine {
@@ -196,6 +208,11 @@ fn validate(recipe: &str, params: &Value, home: &Home) -> Result<(), String> {
 impl RecipeEngine {
     pub fn new() -> Self {
         RecipeEngine::default()
+    }
+
+    /// Where the engine sends its `recipe.instance.*` events.
+    pub fn set_live(&mut self, live: LiveHandle) {
+        self.live = Some(live);
     }
 
     // ---- Reading ----
@@ -288,13 +305,23 @@ impl RecipeEngine {
 
     /// Starts the instance at `index` (it is stopped): validates, builds the runner, runs its
     /// start. A failure is the instance's log line `<failed>: <error>`, and the instance stays
-    /// stopped.
-    fn start_slot(&mut self, index: usize, home: &Home, mono: u64, wall: u64, failed: &str) {
+    /// stopped; with `tell_error` it is also a `recipe.instance.error` event (only the start right
+    /// after a create does, as Sowel's `createInstance`).
+    fn start_slot(
+        &mut self,
+        index: usize,
+        home: &Home,
+        mono: u64,
+        wall: u64,
+        failed: &str,
+        tell_error: bool,
+    ) -> Result<(), String> {
         let Some(slot) = self.slots.get_mut(index) else {
-            return;
+            return Ok(());
         };
         let mut cx = Cx {
             home,
+            instance: slot.instance.id,
             now: mono,
             wall,
             lines: Vec::new(),
@@ -327,13 +354,55 @@ impl RecipeEngine {
         let lines = std::mem::take(&mut cx.lines);
         RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
         match result {
-            Ok(runner) => slot.runner = Some(runner),
+            Ok(runner) => {
+                let state = runner.state();
+                slot.runner = Some(runner);
+                let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+                announce(&self.live, || EngineEvent::RecipeInstanceStarted {
+                    instance_id: id,
+                    recipe_id: recipe.clone(),
+                });
+                // A start that wrote state keys is a write of them.
+                if state != StateKeys::default() {
+                    announce(&self.live, || EngineEvent::RecipeInstanceStateChanged {
+                        instance_id: id,
+                        recipe_id: recipe.clone(),
+                    });
+                }
+                Ok(())
+            }
             Err(error) => {
                 slot.runner = None;
                 let message = format!("{failed}: {error}");
                 RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+                if tell_error {
+                    let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+                    announce(&self.live, || EngineEvent::RecipeInstanceError {
+                        instance_id: id,
+                        recipe_id: recipe.clone(),
+                        error: error.clone(),
+                    });
+                }
+                Err(error)
             }
         }
+    }
+
+    /// Tells a client that the instance at `index` stopped (it was running).
+    fn announce_stopped(live: &Option<LiveHandle>, slot: &Slot) {
+        let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+        announce(live, || EngineEvent::RecipeInstanceStopped {
+            instance_id: id,
+            recipe_id: recipe.clone(),
+        });
+    }
+
+    fn announce_state_changed(live: &Option<LiveHandle>, slot: &Slot) {
+        let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+        announce(live, || EngineEvent::RecipeInstanceStateChanged {
+            instance_id: id,
+            recipe_id: recipe.clone(),
+        });
     }
 
     // ---- Changes ----
@@ -384,7 +453,12 @@ impl RecipeEngine {
         );
         self.slots.push(slot);
         let index = self.slots.len() - 1;
-        self.start_slot(index, home, mono, wall, "Failed to start");
+        announce(&self.live, || EngineEvent::RecipeInstanceCreated {
+            instance_id: id,
+            recipe_id: recipe_id.to_string(),
+        });
+        // A failure to start is only logged and told: the instance is created.
+        let _ = self.start_slot(index, home, mono, wall, "Failed to start", true);
         Ok(instance)
     }
 
@@ -409,12 +483,15 @@ impl RecipeEngine {
             .map_err(|e| Failure::new(400, format!("Invalid params: {e}")))?;
         drop(params);
         let slot = &mut self.slots[index];
-        slot.runner = None;
+        if slot.runner.take().is_some() {
+            RecipeEngine::announce_stopped(&self.live, slot);
+        }
         slot.instance.params = text;
         let enabled = slot.instance.enabled;
         let instance = slot.instance.clone();
         if enabled {
-            self.start_slot(index, home, mono, wall, "Failed to restart");
+            // A restart that fails is only logged (Sowel emits no error event here).
+            let _ = self.start_slot(index, home, mono, wall, "Failed to restart", false);
         }
         Ok(instance)
     }
@@ -422,7 +499,15 @@ impl RecipeEngine {
     /// Stops an instance, forgets it and its log.
     pub fn delete(&mut self, id: &str) -> Outcome<()> {
         let index = self.index_of(id).ok_or_else(not_found)?;
-        self.slots.remove(index);
+        let slot = self.slots.remove(index);
+        if slot.runner.is_some() {
+            RecipeEngine::announce_stopped(&self.live, &slot);
+        }
+        let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+        announce(&self.live, || EngineEvent::RecipeInstanceRemoved {
+            instance_id: id,
+            recipe_id: recipe.clone(),
+        });
         Ok(())
     }
 
@@ -444,9 +529,17 @@ impl RecipeEngine {
         }
         slot.instance.enabled = enabled;
         if enabled {
-            self.start_slot(index, home, mono, wall, "Failed to start");
+            // `started` came with the start; one that failed is told as a state change.
+            if self
+                .start_slot(index, home, mono, wall, "Failed to start", false)
+                .is_err()
+            {
+                RecipeEngine::announce_state_changed(&self.live, &self.slots[index]);
+            }
+        } else if slot.runner.take().is_some() {
+            RecipeEngine::announce_stopped(&self.live, slot);
         } else {
-            slot.runner = None;
+            RecipeEngine::announce_state_changed(&self.live, slot);
         }
         Ok(true)
     }
@@ -513,7 +606,8 @@ impl RecipeEngine {
                 );
                 continue;
             }
-            self.start_slot(index, home, mono, wall, "Failed to restore");
+            // A restore that fails is only logged: no `error` event (Sowel's `init`).
+            let _ = self.start_slot(index, home, mono, wall, "Failed to restore", false);
         }
     }
 
@@ -532,11 +626,21 @@ impl RecipeEngine {
             };
             let mut cx = Cx {
                 home,
+                instance: slot.instance.id,
                 now: mono,
                 wall,
                 lines: Vec::new(),
             };
+            let before = runner.state();
             let result = call(runner.as_mut(), &mut cx);
+            // A write of a state key is `recipe.instance.state.changed`.
+            if runner.state() != before {
+                let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+                announce(&self.live, || EngineEvent::RecipeInstanceStateChanged {
+                    instance_id: id,
+                    recipe_id: recipe.clone(),
+                });
+            }
             let lines = std::mem::take(&mut cx.lines);
             RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
             // A handler that fails never stops the others, nor the loop.
@@ -632,5 +736,37 @@ mod tests {
         assert_eq!(engine.log(&failing, 50)[0].level, Level::Error);
         assert_eq!(engine.log(&failing, 50)[0].message.as_ref(), "Error: boom");
         assert!(engine.log(&healthy, 50).is_empty());
+    }
+
+    #[test]
+    fn a_start_that_fails_tells_an_error_event_only_when_asked_to_and_a_restore_never_does() {
+        let home = Home::new(1);
+        let hub = crate::live::LiveHub::handle();
+        let client = hub.connect().unwrap();
+        assert!(hub.subscribe(client, r#"{"type":"subscribe","topics":["recipes"]}"#));
+        let mut engine = RecipeEngine::new();
+        engine.set_live(hub.clone());
+        // Params that no recipe takes: the start fails whatever the way it is asked for.
+        let mut stopped = slot(1, Box::new(Counting(Default::default())));
+        stopped.runner = None;
+        engine.slots.push(stopped);
+        // The start right after a create: log line and event.
+        assert!(
+            engine
+                .start_slot(0, &home, 1, 1, "Failed to start", true)
+                .is_err()
+        );
+        let batch: Vec<Value> = serde_json::from_str(&hub.take_batch(client).unwrap()).unwrap();
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0]["type"], "recipe.instance.error");
+        assert_eq!(batch[0]["recipeId"], "motion-light");
+        assert!(batch[0]["error"].as_str().unwrap().len() > 3);
+        // A restore (or a restart, or an enable) that fails: the log line only.
+        for failed in ["Failed to restore", "Failed to restart"] {
+            assert!(engine.start_slot(0, &home, 1, 1, failed, false).is_err());
+        }
+        assert_eq!(hub.take_batch(client), None);
+        let id = engine.slots[0].instance.id.to_string();
+        assert_eq!(engine.log(&id, 50).len(), 3);
     }
 }

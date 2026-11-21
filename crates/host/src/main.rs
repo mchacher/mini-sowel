@@ -1,11 +1,13 @@
 //! mini-Sowel on the Mac.
 
 mod backup;
+mod front;
 mod logger;
 mod radio_tcp;
 mod random;
 mod serve;
 mod store;
+mod ws;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

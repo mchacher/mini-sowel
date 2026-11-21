@@ -51,7 +51,8 @@ possible without hardware.
 | B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | built (spec 010) |
 | B5 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | built (spec 011), real ZBMINIR2 pending |
 | B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | built (spec 012), real Dongle Max pending |
-| B7 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
+| B7 | Live events: WebSocket in Sowel's format (`/ws`, topics, 200 ms batches) | A client sees the temperature, the motion and the light change as they happen | |
+| B8 | Interface: served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
 
 ## Later milestones
 
@@ -80,6 +81,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-21 | Pairing while serving (`--pair` and `--serve` together), with `device.discovered` on the WebSocket | Spec 013 |
 | 2026-11-21 | Sun times: sunrise and sunset from a location, so `isDaylight` and motion-light's "inactive during day" work | Spec 012 |
 | 2026-11-21 | Keep recipe logs and state across a restart, if the box's flash allows it | Spec 012 |
 | 2026-11-21 | Sowel issue: motion-light enters override when a zone event arrives between its ON and the light's echo (stale state read) | Spec 012 |
@@ -126,3 +128,7 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-21: B3 inserted (alarm sensors' enrollment, split out of B2 by the user); the next
   increments renumbered B4 to B7. A1 to A5 and B1 built in an autonomous run (A3 to A5 waiting for
   their hardware demos).
+- 2026-11-21: B7 split into the live events (B7, spec 013) and the interface (B8), decided in
+  the autonomous run: each is a demo of its own. B5 and B6 built (specs 011, 012). The memory
+  ceiling test of the realistic home reaches 198 KB of 200 KB in the worst case with B7: the inbox item
+  "memory budget of the box" is due before more features land in the engine.

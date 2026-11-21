@@ -6,12 +6,13 @@
 
 use serde_json::Value;
 
+use super::info::{ID, NAME};
 use super::params::Params;
 use super::sources::{MotionSource, is_motion_active, resolve_motion_sources};
 use crate::devices::Id;
 use crate::home::Home;
 use crate::home::events::{Event, EventValue, Interest};
-use crate::orders::{OrderRequest, commands_for};
+use crate::orders::{OrderRequest, OrderSource, commands_for};
 use crate::recipes::duration::{format_duration, js_number};
 use crate::recipes::{Cx, Level, Runner, StateKeys};
 
@@ -95,7 +96,7 @@ fn any_light_on(home: &Home, lights: &[Id]) -> bool {
 /// `light_toggle` or `toggle_power`, else the alias `state`). Fire and forget: the errors are
 /// only the lights with no such binding, as the engine's `turnOnLights`. A disabled light gets
 /// nothing and says nothing; an order the queue refuses (its bound is full) is dropped.
-fn send(home: &Home, lights: &[Id], on: bool, now: u64) -> Vec<String> {
+fn send(home: &Home, instance: Id, lights: &[Id], on: bool, now: u64) -> Vec<String> {
     let value = Value::String(if on { "ON" } else { "OFF" }.into());
     let mut errors = Vec::new();
     for light in lights {
@@ -136,6 +137,12 @@ fn send(home: &Home, lights: &[Id], on: bool, now: u64) -> Vec<String> {
         let request = OrderRequest {
             equipment: item.equipment.id,
             alias: binding.alias.to_string(),
+            value: value.clone(),
+            source: Some(OrderSource::Recipe {
+                instance_id: instance,
+                recipe_name: NAME,
+                recipe_id: ID,
+            }),
             commands,
         };
         if home.orders().push_unattended(request, now).is_err() {
@@ -271,7 +278,7 @@ impl MotionLight {
     fn turn_on(&mut self, cx: &mut Cx<'_>) {
         self.lights_on_by_recipe = true;
         self.last_known_light_on = true;
-        let errors = send(cx.home, &self.p.lights, true, cx.now);
+        let errors = send(cx.home, cx.instance, &self.p.lights, true, cx.now);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -294,7 +301,7 @@ impl MotionLight {
         self.lights_on_by_recipe = false;
         self.last_known_light_on = false;
         self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-        let errors = send(cx.home, &self.p.lights, false, cx.now);
+        let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -312,7 +319,7 @@ impl MotionLight {
         self.lights_on_by_recipe = false;
         self.last_known_light_on = false;
         self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-        let errors = send(cx.home, &self.p.lights, false, cx.now);
+        let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -494,7 +501,7 @@ impl MotionLight {
             self.lights_on_by_recipe = false;
             self.last_known_light_on = false;
             self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-            let errors = send(cx.home, &self.p.lights, false, cx.now);
+            let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
             if !errors.is_empty() {
                 self.log(
                     cx,
@@ -537,7 +544,7 @@ impl MotionLight {
                     self.last_known_light_on = false;
                     self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
                     // The error list is ignored on this path.
-                    let _ = send(cx.home, &self.p.lights, false, cx.now);
+                    let _ = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
                 }
                 self.clear_override_mode();
                 self.cancel_failsafe();

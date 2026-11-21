@@ -8,7 +8,11 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::Duration;
 
-use super::OrderRequest;
+use serde_json::Value;
+
+use super::{OrderRequest, OrderSource};
+use crate::devices::Id;
+use crate::live::{EngineEvent, LiveHandle, Topic};
 
 /// Orders of the API in the system at once (waiting in the queue, plus the one being sent if it
 /// is one of them); one more is refused. With 4 HTTP workers, at least 2 stay free for reads.
@@ -20,6 +24,35 @@ pub const MAX_UNATTENDED: usize = 32;
 pub const DEADLINE_MS: u64 = 12_000;
 /// What an order that was not sent in time is answered with.
 const NOT_SENT: &str = "device did not answer";
+
+/// Builds and sends the outcome event of an order, if a client listens to `equipments`.
+fn report(
+    live: &Option<LiveHandle>,
+    equipment: Id,
+    alias: &str,
+    value: &Value,
+    source: &Option<OrderSource>,
+    result: &OrderResult,
+) {
+    let Some(live) = live else {
+        return;
+    };
+    live.emit(Topic::Equipments, || match result {
+        Ok(()) => EngineEvent::EquipmentOrderExecuted {
+            equipment_id: equipment,
+            order_alias: alias.to_string(),
+            value: value.clone(),
+            source: source.clone(),
+        },
+        Err(error) => EngineEvent::EquipmentOrderFailed {
+            equipment_id: equipment,
+            order_alias: alias.to_string(),
+            value: value.clone(),
+            error: error.clone(),
+            source: source.clone(),
+        },
+    });
+}
 
 /// The queue is full: `MAX_ORDERS` orders of the API (or `MAX_UNATTENDED` of the core) are in the
 /// system.
@@ -116,6 +149,8 @@ struct Inner {
     active: bool,
     /// The order taken is one of the API's.
     active_http: bool,
+    /// Where `equipment.order.executed|failed` go (spec 013), when the host listens.
+    live: Option<LiveHandle>,
 }
 
 /// The queue: a handle that is cloned to wherever orders are given or taken.
@@ -137,6 +172,25 @@ impl OrderQueue {
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Gives the queue the hub the outcomes of orders are told to.
+    pub fn set_live(&self, live: LiveHandle) {
+        self.inner().live = Some(live);
+    }
+
+    /// Tells the clients how an order ended: `equipment.order.executed`, or `failed` with the
+    /// reason (Sowel's events of the same names, with the order's source when it has one).
+    pub fn report(
+        &self,
+        equipment: Id,
+        alias: &str,
+        value: &Value,
+        source: &Option<OrderSource>,
+        result: &OrderResult,
+    ) {
+        let live = self.inner().live.clone();
+        report(&live, equipment, alias, value, source, result);
     }
 
     /// Gives the queue the monotonic clock (milliseconds) its deadlines are counted on: the
@@ -216,6 +270,16 @@ impl OrderQueue {
                 };
                 let gone = queued.reply.as_ref().is_some_and(OrderReply::waiter_gone);
                 if now >= queued.deadline || gone {
+                    // Dropped without being sent: the device did not answer.
+                    let request = &queued.request;
+                    report(
+                        &inner.live,
+                        request.equipment,
+                        &request.alias,
+                        &request.value,
+                        &request.source,
+                        &Err(NOT_SENT.to_string()),
+                    );
                     continue;
                 }
                 inner.active = true;

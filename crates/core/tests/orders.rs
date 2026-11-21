@@ -282,6 +282,8 @@ fn request(commands: Vec<DeviceCommand>) -> OrderRequest {
     OrderRequest {
         equipment: mini_sowel_core::devices::Id::ROOT_ZONE,
         alias: "state".to_string(),
+        value: serde_json::Value::Null,
+        source: None,
         commands,
     }
 }
@@ -761,6 +763,8 @@ fn tagged(tag: &str) -> OrderRequest {
     OrderRequest {
         equipment: mini_sowel_core::devices::Id::ROOT_ZONE,
         alias: tag.to_string(),
+        value: serde_json::Value::Null,
+        source: None,
         commands: Vec::new(),
     }
 }
@@ -888,5 +892,128 @@ fn an_order_of_the_api_that_waits_behind_a_core_order_past_its_deadline_is_a_dev
             .count(),
         0,
         "never sent"
+    );
+}
+
+// ---- Spec 013: the end of an order is an event ----
+
+/// A client of the home's hub, listening to `equipments`.
+fn listening(home: &Home) -> (mini_sowel_core::live::LiveHandle, u64) {
+    let hub = home.live();
+    let id = hub.connect().unwrap();
+    assert!(hub.subscribe(id, r#"{"type":"subscribe","topics":["equipments"]}"#));
+    (hub, id)
+}
+
+fn events_of(hub: &mini_sowel_core::live::LiveHandle, id: u64) -> Vec<Value> {
+    hub.take_batch(id)
+        .map(|text| serde_json::from_str::<Vec<Value>>(&text).unwrap())
+        .unwrap_or_default()
+}
+
+/// POSTs an order of the API; the wait for its answer.
+fn api_order(rig: &mut Rig, equipment: &str, body: &str) -> mini_sowel_core::orders::OrderWait {
+    let path = format!("/api/v1/equipments/{equipment}/orders/state");
+    let reply = handle_stream(
+        &mut rig.home,
+        &Request {
+            method: "POST",
+            path: &path,
+            host: Some(HOST),
+            port: PORT,
+            content_type: Some("application/json"),
+            body: body.as_bytes(),
+        },
+        rig.now,
+        &mut *rig.random,
+    );
+    match reply {
+        Reply::Order(wait) => wait,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn an_order_of_the_api_acknowledged_is_an_executed_event_without_a_source() {
+    let (mut rig, light) = light();
+    let mut h = paired(vec![relay(0x7A, 0x2001)]);
+    let (hub, client) = listening(&rig.home);
+    let queue = rig.home.orders().clone();
+    let wait = api_order(&mut rig, &light, r#"{"value":true}"#);
+    let mut runner = OrderRunner::new();
+    run_until(&mut h, &mut runner, &queue, 3_000, |_| false);
+    assert_eq!(wait.wait(std::time::Duration::from_millis(1)), Ok(()));
+    let events = events_of(&hub, client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["type"], "equipment.order.executed");
+    assert_eq!(events[0]["equipmentId"], light.as_str());
+    assert_eq!(events[0]["orderAlias"], "state");
+    assert_eq!(events[0]["value"], true);
+    assert!(events[0].get("source").is_none(), "{events:?}");
+}
+
+#[test]
+fn an_order_that_fails_is_a_failed_event_with_the_error_of_the_502() {
+    let (mut rig, light) = light();
+    let mut h = paired(vec![relay(0x7A, 0x2001)]);
+    let (hub, client) = listening(&rig.home);
+    let queue = rig.home.orders().clone();
+    let wait = api_order(&mut rig, &light, r#"{"value":"off"}"#);
+    h.ncp.borrow_mut().mode = mini_sowel_sim::Mode::DeafToCommands;
+    let mut runner = OrderRunner::new();
+    run_until(&mut h, &mut runner, &queue, 3_000, |_| false);
+    let Err(reason) = wait.wait(std::time::Duration::from_millis(1)) else {
+        panic!("the order cannot succeed");
+    };
+    let events = events_of(&hub, client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["type"], "equipment.order.failed");
+    assert_eq!(events[0]["equipmentId"], light.as_str());
+    assert_eq!(events[0]["orderAlias"], "state");
+    assert_eq!(events[0]["value"], "off", "the value as it was given");
+    assert_eq!(events[0]["error"], reason.as_str());
+    assert!(events[0].get("source").is_none());
+}
+
+#[test]
+fn an_order_of_a_recipe_carries_its_source_and_the_value_on_or_off() {
+    let mut rig = Rig::new();
+    let garage = rig.garage();
+    let mut h = paired(vec![relay(0x7A, 0x2001)]);
+    let (hub, client) = listening(&rig.home);
+    let instance = rig.garage_instance(&garage, json!({}));
+    let queue = rig.home.orders().clone();
+    let mut runner = OrderRunner::new();
+    run_until(&mut h, &mut runner, &queue, 3_000, |_| false);
+    let events = events_of(&hub, client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert_eq!(event["type"], "equipment.order.executed");
+    assert_eq!(event["equipmentId"], garage.light.as_str());
+    assert_eq!(event["orderAlias"], "state");
+    assert_eq!(event["value"], "OFF", "the recipe's sync at its start");
+    assert_eq!(
+        event["source"],
+        json!({"kind": "recipe", "instanceId": instance,
+               "recipeName": "Motion Light", "recipeId": "motion-light"})
+    );
+}
+
+#[test]
+fn an_order_dropped_at_its_deadline_is_a_failed_event_device_did_not_answer() {
+    let (mut rig, light) = light();
+    let (hub, client) = listening(&rig.home);
+    let queue = rig.home.orders().clone();
+    let wait = api_order(&mut rig, &light, r#"{"value":true}"#);
+    // Nobody takes it before its deadline.
+    assert!(queue.take(rig.now + DEADLINE_MS + 1).is_none());
+    let events = events_of(&hub, client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["type"], "equipment.order.failed");
+    assert_eq!(events[0]["error"], "device did not answer");
+    assert_eq!(events[0]["equipmentId"], light.as_str());
+    assert_eq!(
+        wait.wait(std::time::Duration::from_millis(1)),
+        Err("device did not answer".to_string())
     );
 }

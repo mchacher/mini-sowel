@@ -16,3 +16,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 010 | equipments-and-zones | Zones (tree under Sowel's root), equipments bound to device data and orders by alias, and Sowel's zone aggregation, with Sowel's routes | 2026-11-21 | in progress |
 | 011 | orders | Equipment orders (on, off, toggle, brightness) sent to the Zigbee devices through the radio loop, with Sowel's route, texts and value rules | 2026-11-21 | in progress |
 | 012 | motion-light | Sowel's `motion-light` recipe in native Rust, with Sowel's recipe routes, its log and `recipes.json` | 2026-11-21 | in progress |
+| 013 | live-events | Sowel's WebSocket (`/ws`): topics, 200 ms batches, dedup, the events of devices, zones, equipments, orders and recipes | 2026-11-21 | in progress |

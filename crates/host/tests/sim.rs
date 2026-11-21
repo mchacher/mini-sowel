@@ -7,6 +7,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
+/// A host program that is killed and reaped when the test ends, however it ends.
+struct Reaped(std::process::Child);
+
+impl std::ops::Deref for Reaped {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Reaped {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 const SNZB02: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/snzb02.json");
 const EUI: &str = "0x00124B0012345678";
 
@@ -80,13 +103,15 @@ fn pair_on_the_snzb02_scenario_shows_the_device_its_reporting_and_its_measures()
     assert!(dir.join("network.json").is_file());
 
     // `--listen` on the same scenario and data resumes the network and shows measures.
-    let mut child = host()
-        .args([
-            "--sim", SNZB02, "--listen", "--speed", "100", "--data", dir_text,
-        ])
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("the host program starts");
+    let mut child = Reaped(
+        host()
+            .args([
+                "--sim", SNZB02, "--listen", "--speed", "100", "--data", dir_text,
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
     let stdout = BufReader::new(child.stdout.take().unwrap());
     let (sender, receiver) = std::sync::mpsc::channel();
     thread::spawn(move || {

@@ -201,6 +201,51 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
         home.measures(&press, now, &mut random).unwrap();
     }
     assert_eq!(home.events().len(), 128);
+    // Spec 013: one client of the WebSocket, listening to everything, with its queue full (at
+    // the bound, a report from a new device away from overflowing) and a batch being written:
+    // an event taken from the queue and held, while the queue fills up again. The client stays
+    // through the answers and the save path below, the heaviest moments.
+    let hub = home.live();
+    let client = hub.connect().expect("a free slot");
+    assert!(hub.subscribe(
+        client,
+        r#"{"type":"subscribe","topics":["devices","equipments","zones","recipes"]}"#
+    ));
+    let fill_queue = |home: &mut Home, now: u64, from: u8| {
+        let mut device = from;
+        while hub.queued(client).1 + 750 <= mini_sowel_core::live::MAX_QUEUED_BYTES {
+            let report = MeasureEvent {
+                sender: Sender::Eui64([0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, device]),
+                endpoint: 1,
+                measures: vec![Measure {
+                    kind: "voltage",
+                    value: MeasureValue::Number(2900.0 + f64::from(device)),
+                    unit: "mV",
+                    device_value: None,
+                }],
+            };
+            home.measures(&report, now, &mut |b: &mut [u8]| {
+                b.fill(0x33);
+                Ok(())
+            })
+            .unwrap();
+            device += 1;
+            assert!(device < 50, "the queue never filled");
+        }
+    };
+    fill_queue(&mut home, now, 1);
+    assert_eq!(hub.close_request(client), None, "not overflowed");
+    let (queued_events, queued_bytes) = hub.queued(client);
+    assert!(
+        queued_bytes + 750 > mini_sowel_core::live::MAX_QUEUED_BYTES,
+        "the queue is full: {queued_bytes} bytes"
+    );
+    assert_eq!(hub.begin_batch(client), queued_events);
+    let in_flight = hub.pop(client).expect("an event to write");
+    fill_queue(&mut home, now, 30);
+    assert_eq!(hub.close_request(client), None, "not overflowed");
+    let (queued_events, queued_bytes) = hub.queued(client);
+
     // The logs: 50 entries each, about half of them 200 bytes. The worst case (every entry 200
     // bytes) is added to the peak to show that it fits too.
     let mut log_bytes = 0usize;
@@ -263,8 +308,12 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
     }
     let peak = ALLOCATOR.peak_usage().saturating_sub(base);
     let worst = peak + worst_log_bytes.saturating_sub(log_bytes);
+    // The client's last batch is taken after the measure, with the queue still full.
+    assert!(in_flight.len() > 50);
+    assert_eq!(hub.close_request(client), None);
     println!(
-        "memory ceiling: peak {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), logs {log_bytes} bytes, GET /recipe-instances {recipes_listed} bytes, recipes.json {recipes_saved} bytes, GET /equipments {body_len} bytes (streamed), GET /devices {} bytes (streamed), devices.json {saved_devices} bytes, zones.json {saved_zones} bytes, equipments.json {saved_equipments} bytes, ceiling {CEILING_BYTES}",
+        "memory ceiling: WebSocket client queue {queued_events} events, {queued_bytes} bytes, one event of {} bytes in flight; peak {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), logs {log_bytes} bytes, GET /recipe-instances {recipes_listed} bytes, recipes.json {recipes_saved} bytes, GET /equipments {body_len} bytes (streamed), GET /devices {} bytes (streamed), devices.json {saved_devices} bytes, zones.json {saved_zones} bytes, equipments.json {saved_equipments} bytes, ceiling {CEILING_BYTES}",
+        in_flight.len(),
         peak / 1024,
         worst / 1024,
         sizes[1],

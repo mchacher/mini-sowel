@@ -11,6 +11,7 @@ use super::model::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Id, PowerSource, Route,
     ValueType,
 };
+use crate::live::{EngineEvent, LiveHandle, Topic};
 use crate::radio::measures::Value as MeasureValue;
 use crate::radio::{
     Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, RouteUpdate, Sender,
@@ -77,11 +78,18 @@ pub struct Devices {
     announces: Vec<([u8; 8], u8)>,
     /// At most `MAX_REFUSED`.
     refused: Vec<[u8; 8]>,
+    /// Where `device.status_changed` goes (spec 013), when the host listens.
+    live: Option<LiveHandle>,
 }
 
 impl Devices {
     pub fn new() -> Self {
         Devices::default()
+    }
+
+    /// Where the devices tell their status changes.
+    pub fn set_live(&mut self, live: LiveHandle) {
+        self.live = Some(live);
     }
 
     /// The devices read from storage, at most `MAX_DEVICES` (and `MAX_DATA` data and
@@ -516,17 +524,18 @@ impl Devices {
         now: u64,
         random: Random,
     ) -> Result<(), String> {
-        self.measures_with(event, now, random, &mut |_, _| {})
+        self.measures_with(event, now, random, &mut |_, _, _| {})
     }
 
-    /// `measures`, telling `updated` each data that got a value (changed or not): the id of its
-    /// device and the data as it is now. The home turns these into the events recipes listen to.
+    /// `measures`, telling `updated` each data that got a value (changed or not): its device,
+    /// the data as it is now, and the value it had. The home turns these into the events
+    /// recipes and clients listen to.
     pub fn measures_with(
         &mut self,
         event: &MeasureEvent,
         now: u64,
         random: Random,
-        updated: &mut dyn FnMut(Id, &DeviceData),
+        updated: &mut dyn FnMut(&Device, &DeviceData, &Value),
     ) -> Result<(), String> {
         let Sender::Eui64(eui64) = event.sender else {
             return Ok(());
@@ -545,25 +554,24 @@ impl Devices {
         if added {
             self.sorted(index, now);
         }
-        let device_id = self.items[index].device.id;
         for measure in &event.measures {
+            let DeviceWithDetails { device, data, .. } = &mut self.items[index];
             if measure.kind == "alarm" {
                 // The zone's data: `contact` is true when closed, the alarm bit clear.
-                let data = self.items[index]
-                    .data
+                let data = data
                     .iter_mut()
                     .find(|d| catalog::ZONE_KEYS.contains(&&*d.key));
                 if let (Some(data), MeasureValue::Bool(alarm)) = (data, measure.value) {
                     let on = if data.key == "contact" { !alarm } else { alarm };
-                    set_value(data, Value::Bool(on), now);
-                    updated(device_id, data);
+                    let previous = set_value(data, Value::Bool(on), now);
+                    updated(device, data, &previous);
                 }
                 continue;
             }
             let Some(key) = catalog::key_for_measure(measure.kind) else {
                 continue;
             };
-            let Some(data) = self.items[index].data.iter_mut().find(|d| d.key == key) else {
+            let Some(data) = data.iter_mut().find(|d| d.key == key) else {
                 continue;
             };
             let value = match (measure.value, data.value_type) {
@@ -573,8 +581,8 @@ impl Devices {
                 (MeasureValue::Bool(on), ValueType::Boolean) => Value::Bool(on),
                 _ => continue,
             };
-            set_value(data, value, now);
-            updated(device_id, data);
+            let previous = set_value(data, value, now);
+            updated(device, data, &previous);
         }
         self.mark_seen(index, now);
         self.refresh_status(now);
@@ -655,6 +663,14 @@ impl Devices {
                 self.items[index].device.updated_at = now;
                 self.values = true;
                 changed = true;
+                if let Some(live) = &self.live {
+                    let device = &self.items[index].device;
+                    live.emit(Topic::Devices, || EngineEvent::DeviceStatusChanged {
+                        device_id: device.id,
+                        device_name: device.name.to_string(),
+                        status,
+                    });
+                }
             }
         }
         changed
@@ -686,12 +702,14 @@ impl Devices {
 
 /// A value was received: `lastUpdated` is now, `lastChanged` only when the value differs from
 /// the previous one.
-fn set_value(data: &mut DeviceData, value: Value, now: u64) {
+fn set_value(data: &mut DeviceData, value: Value, now: u64) -> Value {
+    let previous = data.value.clone();
     if data.value != value {
         data.last_changed = Some(now);
         data.value = value;
     }
     data.last_updated = Some(now);
+    previous
 }
 
 fn power_of(capability: u8) -> PowerSource {

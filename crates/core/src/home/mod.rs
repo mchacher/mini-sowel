@@ -15,9 +15,10 @@ use std::io::{self, Write};
 
 use serde::{Serialize, Serializer};
 
-use crate::devices::{Device, Devices, Id, Random};
-use crate::equipments::{Alias, Equipments, StoredEquipment};
+use crate::devices::{Device, Devices, Id, Random, format_iso};
+use crate::equipments::{Alias, Equipments, StatusTracker, StoredEquipment};
 use crate::failure::{Failure, Outcome};
+use crate::live::{EngineEvent, LiveHandle, LiveHub, Topic};
 use crate::orders::OrderQueue;
 use crate::radio::MeasureEvent;
 use crate::recipes::RecipeEngine;
@@ -95,7 +96,17 @@ pub struct Home {
     /// (at most `MAX_EVENTS`).
     interest: Interest,
     events: EventQueue,
+    /// The clients of the WebSocket (spec 013): events are built for them only when one listens.
+    live: LiveHandle,
+    /// The last status of each equipment, for `equipment.status.changed`.
+    tracker: StatusTracker,
+    /// When the zones and statuses were last recomputed, for the periodic check (`tick`).
+    recomputed_at: u64,
 }
+
+/// The statuses are looked at again after this long with no recompute (a reading goes stale
+/// with time alone), in milliseconds: Sowel's tracker ticks every minute.
+pub const STATUS_CHECK_MS: u64 = 60_000;
 
 impl Home {
     /// A first start: no device, no equipment, the root zone (to be written).
@@ -159,6 +170,12 @@ impl Home {
             });
             repaired |= bindings != item.data_bindings.len() + item.order_bindings.len();
         }
+        let live = LiveHub::handle();
+        devices.set_live(LiveHandle::clone(&live));
+        let orders = OrderQueue::new();
+        orders.set_live(LiveHandle::clone(&live));
+        let mut recipes = RecipeEngine::new();
+        recipes.set_live(LiveHandle::clone(&live));
         Home {
             devices,
             zones,
@@ -166,12 +183,20 @@ impl Home {
             motion: Vec::new(),
             zones_changed: zones_repaired,
             equipments_changed: repaired,
-            orders: OrderQueue::new(),
-            recipes: RecipeEngine::new(),
+            orders,
+            recipes,
             recipes_changed: false,
             interest: Interest::new(),
             events: EventQueue::default(),
+            live,
+            tracker: StatusTracker::new(),
+            recomputed_at: now,
         }
+    }
+
+    /// The hub the WebSocket's clients are connected to.
+    pub fn live(&self) -> LiveHandle {
+        LiveHandle::clone(&self.live)
     }
 
     pub fn zones(&self) -> &Zones {
@@ -255,7 +280,8 @@ impl Home {
         for (zone, data) in &mut all {
             let previous = self.motion.iter().find(|m| m.zone == *zone);
             let print = fingerprint(data);
-            if previous.is_none_or(|p| p.fingerprint != print) && self.interest.wants_zone(zone) {
+            let changed = previous.is_none_or(|p| p.fingerprint != print);
+            if changed && self.interest.wants_zone(zone) {
                 self.events.push(Event::Zone {
                     zone: *zone,
                     motion: data.motion,
@@ -271,6 +297,13 @@ impl Home {
                 }
             };
             data.motion_since = since;
+            if changed {
+                self.live
+                    .emit(Topic::Zones, || EngineEvent::ZoneDataChanged {
+                        zone_id: *zone,
+                        aggregated_data: Box::new(data.clone()),
+                    });
+            }
             next.push(Motion {
                 zone: *zone,
                 motion: data.motion,
@@ -287,6 +320,31 @@ impl Home {
     /// statuses were refreshed, and after each change made through the API.
     pub fn recompute(&mut self, now: u64) {
         let _ = self.aggregate(now);
+        self.check_statuses(now);
+        self.recomputed_at = now;
+    }
+
+    /// The periodic check: recomputes when `STATUS_CHECK_MS` passed since the last recompute, so
+    /// that what goes stale with time alone is seen. The radio loop calls it on each turn.
+    pub fn tick(&mut self, now: u64) {
+        if now.saturating_sub(self.recomputed_at) >= STATUS_CHECK_MS {
+            self.recompute(now);
+        }
+    }
+
+    /// Compares the equipments' statuses with the last seen: each change is an
+    /// `equipment.status.changed` event (an equipment seen for the first time is only noted).
+    fn check_statuses(&mut self, now: u64) {
+        let changes = self.tracker.check(&self.devices, &self.equipments, now);
+        for change in changes {
+            self.live
+                .emit(Topic::Equipments, || EngineEvent::EquipmentStatusChanged {
+                    equipment_id: change.equipment,
+                    equipment_name: change.name,
+                    old_status: change.old,
+                    new_status: change.new,
+                });
+        }
     }
 
     /// The aggregate of one zone computed now, without remembering it.
@@ -322,16 +380,42 @@ impl Home {
             equipments,
             interest,
             events,
+            live,
             ..
         } = self;
-        devices.measures_with(event, now, random, &mut |device, data| {
+        devices.measures_with(event, now, random, &mut |device, data, previous| {
+            // The events of the clients (spec 013): built only when one listens.
+            live.emit(Topic::Devices, || EngineEvent::DeviceDataUpdated {
+                device_id: device.id,
+                device_name: device.name.to_string(),
+                data_id: data.id,
+                key: data.key.to_string(),
+                value: data.value.clone(),
+                previous: previous.clone(),
+                timestamp: format_iso(now),
+            });
+            if live.wants(Topic::Equipments) {
+                for item in equipments.list() {
+                    for binding in &item.data_bindings {
+                        if binding.device_data_id == data.id {
+                            live.emit(Topic::Equipments, || EngineEvent::EquipmentDataChanged {
+                                equipment_id: item.equipment.id,
+                                alias: binding.alias.to_string(),
+                                value: data.value.clone(),
+                                previous: previous.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            // The events of the running recipes.
             if !interest.wants_data() {
                 return;
             }
             let value = EventValue::from_json(&data.value);
-            if interest.wants_device(&device, &data.key) {
+            if interest.wants_device(&device.id, &data.key) {
                 events.push(Event::Device {
-                    device,
+                    device: device.id,
                     key: data.key.clone(),
                     value: value.clone(),
                 });
@@ -358,21 +442,34 @@ impl Home {
         let id = new_id(random)?;
         let zone = self.zones.create(input, now, id)?;
         self.zones_changed = true;
+        self.live.emit(Topic::Zones, || EngineEvent::ZoneCreated {
+            zone: zone.clone(),
+        });
         Ok(zone)
     }
 
     pub fn update_zone(&mut self, id: &str, input: ZoneUpdate, now: u64) -> Outcome<Zone> {
         let zone = self.zones.update(id, input, now)?;
         self.zones_changed = true;
+        self.live.emit(Topic::Zones, || EngineEvent::ZoneUpdated {
+            zone: zone.clone(),
+        });
         Ok(zone)
     }
 
     /// Deletes a zone nothing is in but devices, which go to none.
     pub fn delete_zone(&mut self, id: &str, now: u64) -> Outcome<()> {
         let equipments = &self.equipments;
+        let gone = self.zones.find(id).map(|z| (z.id, z.name.clone()));
         self.zones
             .delete(id, |zone| equipments.count_in_zone(zone))?;
         self.zones_changed = true;
+        if let Some((zone_id, zone_name)) = gone {
+            self.live.emit(Topic::Zones, || EngineEvent::ZoneRemoved {
+                zone_id,
+                zone_name,
+            });
+        }
         if let Some(id) = Id::parse(id) {
             self.devices.clear_zone(&id.to_string(), now);
         }
@@ -408,9 +505,15 @@ impl Home {
         };
         let data: Vec<Id> = item.data.iter().map(|d| d.id).collect();
         let orders: Vec<Id> = item.orders.iter().map(|o| o.id).collect();
+        let gone = (item.device.id, item.device.name.to_string());
         if !self.devices.remove(id) {
             return false;
         }
+        self.live
+            .emit(Topic::Devices, || EngineEvent::DeviceRemoved {
+                device_id: gone.0,
+                device_name: gone.1,
+            });
         for item in self.equipments.list_mut() {
             let before = item.data_bindings.len() + item.order_bindings.len();
             item.data_bindings

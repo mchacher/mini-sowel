@@ -6,11 +6,13 @@ use serde_json::{Value, json};
 
 /// The id of the recipe.
 pub const ID: &str = "motion-light";
+/// Its `RecipeInfo.name`, what an order's source names.
+pub const NAME: &str = "Motion Light";
 
 pub fn info() -> Value {
     json!({
         "id": ID,
-        "name": "Motion Light",
+        "name": NAME,
         "description": "Turns on lights when motion is detected, turns off after a timeout with no motion. Supports lux threshold, failsafe max-on duration, and button override.",
         "slots": [
             { "id": "zone", "name": "Zone", "description": "Zone to monitor", "type": "zone", "required": true },
