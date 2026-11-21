@@ -10,7 +10,7 @@ use esp_idf_svc::sys::{
     WL_INVALID_HANDLE, esp_err_to_name, esp_vfs_fat_info, esp_vfs_fat_mount_config_t,
     esp_vfs_fat_spiflash_mount_rw_wl, wl_handle_t,
 };
-use solite_core::engine::{Storage, recover_interrupted_save, temporary_name};
+use solite_core::engine::{Storage, complete_name, recover_interrupted_save, temporary_name};
 
 /// Where the data partition is mounted.
 pub const BASE: &str = "/data";
@@ -108,6 +108,12 @@ fn what(name: &str) -> &str {
     name.trim_end_matches(".json")
 }
 
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn put(
     path: &Path,
     temporary: &Path,
@@ -119,26 +125,31 @@ fn put(
     }
     file.sync_all()?;
     drop(file);
-    // FAT keeps no permissions; a rename onto an existing file may be refused: then the old
-    // file goes first (the new one is complete and on the partition by now). A power cut between
-    // the two leaves only the temporary file: `read` recovers it.
-    if fs::rename(temporary, path).is_err() {
-        let _ = fs::remove_file(path);
-        fs::rename(temporary, path)?;
-    }
+    // The content is complete and on the partition: it takes the name `.new`, which only a
+    // complete file bears. FAT refuses a rename onto an existing file, so the old file goes
+    // first. A power cut between the delete and the last rename leaves only `.new`: `read`
+    // recovers it. A `.tmp` left by a cut write is never recovered.
+    let complete = path.with_file_name(complete_name(&file_name(path)));
+    let _ = fs::remove_file(&complete);
+    fs::rename(temporary, &complete)?;
+    let _ = fs::remove_file(path);
+    fs::rename(&complete, path)?;
     Ok(())
 }
 
 impl Storage for FatStorage {
     fn read(&self, name: &str) -> Result<Option<String>, String> {
         let path = self.dir.join(name);
-        // A power cut between the delete and the rename of a save leaves only `<name>.tmp`.
+        // A power cut between the delete and the rename of a save leaves only `<name>.new`.
+        let complete = self.dir.join(complete_name(name));
         let temporary = self.dir.join(temporary_name(name));
         recover_interrupted_save(
             path.as_path(),
+            complete.as_path(),
             temporary.as_path(),
             Path::exists,
             |from, to| fs::rename(from, to),
+            |file| fs::remove_file(file),
         )
         .map_err(|e| format!("{}: {}: cannot recover: {e}", what(name), path.display()))?;
         match fs::read_to_string(&path) {

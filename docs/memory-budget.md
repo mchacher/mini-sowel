@@ -15,7 +15,7 @@ Wi-Fi or Ethernet driver loaded, so its internal RAM is an upper estimate too.
 | Figure | Value | Where it comes from |
 | ------ | ----- | ------------------- |
 | Engine, worst case (every bound at its maximum) | peak 925 KB, 987 KB with every recipe log entry at 200 bytes | M, Mac: `cargo test -p solite-core --test memory_worst_case -- --nocapture` |
-| Engine, realistic home | peak 187 KB, 198 KB with every log entry at 200 bytes | M, Mac: `cargo test -p solite-core --test memory_ceiling -- --nocapture` |
+| Engine, realistic home | peak 182 KB, 194 KB with every log entry at 200 bytes | M, Mac: `cargo test -p solite-core --test memory_ceiling -- --nocapture` |
 | Share of small allocations in the worst case at its peak | 673 KB in allocations of 4 KB or less, 267 KB above, 940 KB in all: the live bytes of the whole test process at the moment of its peak, which is the 925 KB measured plus the 14 KB the process holds before the test starts | M, Mac, a counting allocator split by size at the peak, run once and not kept |
 | Free memory at boot, in QEMU | `memory: internal 359 KB free (largest block 160 KB), psram 2045 KB free of 2048 KB` | M, `sh scripts/qemu.sh` |
 | Engine, realistic home, on the 32-bit target (QEMU, with the simulator inside) | `engine: 50 devices (50 reported), 10 zones, 50 equipments, 3 recipes; heap 170 KB (peak 312 KB); internal 221 KB free (min 107 KB); psram 1985 KB free (min 1916 KB)`: 312 KB at the highest, 170 KB held at the end, the internal RAM never below 107 KB free | M, `sh scripts/qemu.sh` (spec 016, decision D26) |
@@ -30,7 +30,7 @@ MAX_*` of the core and how it is reached; a test fails when one is missing.
 
 | Item | Bound | Worst case | Where | M / E |
 | ---- | ----- | ---------- | ----- | ----- |
-| The engine: devices, zones, equipments, recipes, events, live queues, orders, largest answer, save path | the core's `MAX_*` (`devices::MAX_DEVICES` 64, `zones::MAX_ZONES` 32, `equipments::MAX_EQUIPMENTS` 64, `recipes::MAX_INSTANCES` 16, ...) | 1024 KB (ceiling; measured 987 KB). Realistic home: 300 KB (ceiling; measured 198 KB), shown beside, not added | Large allocations in PSRAM; small ones first in internal RAM, see below | M |
+| The engine: devices, zones, equipments, recipes, events, live queues, orders, largest answer, save path | the core's `MAX_*` (`devices::MAX_DEVICES` 64, `zones::MAX_ZONES` 32, `equipments::MAX_EQUIPMENTS` 64, `recipes::MAX_INSTANCES` 16, ...) | 1024 KB (ceiling; measured 987 KB). Realistic home: 300 KB (ceiling; measured 194 KB), shown beside, not added | Large allocations in PSRAM; small ones first in internal RAM, see below | M |
 | Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
 | Update buffers: the download's chunk buffer and the flash write buffer | 1 update at a time | 32 KB | PSRAM | E |
@@ -109,8 +109,9 @@ the `engine:` line above. Reading it:
   knob moves bytes between the two memories; the way to lower the total is to stream the
   loading of the home.
 - **The emulator's flash is slow, and the run does not wait for it.** The engine saves
-  `equipments.json` (71 KB) after the measures that change it, about 20 s each in the emulator
-  (far less on the box). The saves of the scenario's 49 turns are walked to their end and their
+  `devices.json` (94 KB) once per device when its route is learned (the fixtures carry no route, so
+  each device sets one at its first message), about 20 s each in the emulator (far less on the
+  box). The 49 saves of the scenario are walked to their end and their
   text dropped (`scenario: 49 saves run without the emulator's flash` in the log); the last save,
   on stop, goes to the flash for real. The simulated radio's own memory stays in RAM once read.
 - **The scenario plays at its own pace.** The scenario is held until the radio is identified and
@@ -119,10 +120,12 @@ the `engine:` line above. Reading it:
   The radio drops no callback while it plays (`scripts/qemu.sh` fails if one is logged after
   `scenario: started`), and the `engine:` line counts the devices that got at least one measure
   into the engine (`50 devices (50 reported)`; the script fails when fewer than all did).
-  `MAX_QUEUED_CALLBACKS` (16) is a real bound of the radio, but this run does not reach it.
+  `MAX_QUEUED_CALLBACKS` (16) is a real bound of the radio, but this run does not reach it. The
+  engine writes its due files inside the radio loop; on the box a 94 KB write stalls the radio, which
+  the emulator no longer shows (measured in E3).
 - **Orders at the start**: 3 `motion-light` instances of 16 lights each queue 48 orders at start
   against `orders::queue::MAX_UNATTENDED` (32); the 16 beyond it are logged `recipe order ...
-  dropped: the queue of recipe orders is full` and not sent. The bound holds, and the warning is
+  dropped: the queue of recipe orders is full` and not sent, again when the alarms arrive. The bound holds, and the warning is
   seen at every start of the realistic home (also on the Mac).
 - **Orders on the target**: motion sensors 10, 20 and 30 of the realistic home report an alarm
   at 60 s of scenario time; `motion-light` switches the lights, and the orders go through the

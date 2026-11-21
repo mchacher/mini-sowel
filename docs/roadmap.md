@@ -121,7 +121,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-21 | Stream the loading of the home (its files are read whole and parsed: the largest transient of the engine's peak, 312 KB in QEMU); measure the peak again on the box | Spec 016 |
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
-| 2026-11-21 | The engine saves `equipments.json` (71 KB) after every measure that changes it: on the box this is a flash write per measure; space the saves out | Spec 016 review |
+| 2026-11-21 | The engine saves `devices.json` (94 KB) once per device when its route changes (at the first contact, then rarely); the write is synchronous in the radio loop: measure the stall it causes on the box (E3) | Spec 016 review |
 
 ## Sowel issues to open
 
@@ -202,3 +202,7 @@ Every change to this roadmap: date, what changed, why.
   simulated radio. Peak 312 KB (ceiling 350 KB, D27; upper bound with the simulator inside), internal RAM
   never below 107 KB free; E1 is built. One inbox line: stream the loading of the home (its files are read
   whole: the largest transient of the peak); the figure is measured again on the box in E3.
+- 2026-11-21 (review of spec 016): the ceiling of the QEMU run is 350 KB (D27; the Mac test stays at
+  300 KB). Inbox: the 94 KB `devices.json` save is synchronous in the radio loop, its stall is measured on
+  the box (E3); the 16 dropped start orders of the motion-light instances are a line of their own. A
+  save writes `<name>.tmp`, renames it to `<name>.new` once complete, and only `.new` is recovered.

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub use saver::{RETRY_MS, Saver};
 pub use storage::{
-    DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, Storage, ZONES_FILE, load_devices,
+    DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, Storage, ZONES_FILE, complete_name, load_devices,
     load_equipments, load_home, load_recipes, load_zones, recover_interrupted_save, temporary_name,
 };
 

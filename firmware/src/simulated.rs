@@ -70,9 +70,10 @@ impl Clock for WaitedClock {
 
 /// The engine's files while the scenario plays: reads go to the flash; a save is run to its end
 /// (the home is walked chunk by chunk, as for the flash) and its text dropped, until `to_flash`
-/// is set. The emulator writes the flash about 20 s for the 71 KB of `equipments.json`, and the
-/// engine saves it after each measure that changes it; written for real, 88 measures would take
-/// half an hour. The last save, on stop, goes to the flash, so that its path is run for real.
+/// is set. The emulator writes the flash about 20 s for the 94 KB of `devices.json`, and the
+/// engine saves it once per device when its route is learned (the fixtures carry no route, so
+/// each of the 50 devices sets one at its first message); written for real, 49 saves would take
+/// a quarter of an hour. The last save, on stop, goes to the flash, so that its path is run for real.
 struct RunStorage {
     inner: FatStorage,
     to_flash: Arc<AtomicBool>,

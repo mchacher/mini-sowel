@@ -52,7 +52,7 @@ Each of the three programs starts and says which tool it is, with its version:
   application in the first slot, at the offset the built table gives. Allocations above 4 KB go
   to PSRAM; 64 KB of internal RAM are kept for the network and DMA, and the TLS library takes its
   buffers from PSRAM.
-  The box's files are saved through a temporary file (`<name>.tmp`): FatFS refuses a rename onto an existing file, so a save deletes the old one then renames; a read that finds `<name>` missing and `<name>.tmp` present recovers it and logs a line.
+  The box's files are saved through a temporary file (`<name>.tmp`), synced then renamed to `<name>.new`: FatFS refuses a rename onto an existing file, so a save deletes the old one then renames `.new`; a read that finds `<name>` missing and `<name>.new` present recovers it and logs a line, and deletes any `.tmp` (a write that did not end, never promoted).
 - **In the browser**: the home screen (see "Shows the home in the browser"), in Sowel's Hybrid or
   Dark theme as the system asks.
 
@@ -378,9 +378,12 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 ### Stays within a memory budget
 
-The engine stays under 300 KB on the Mac, and under 350 KB in the emulated ESP32 (the simulator inside), for a realistic home (50 devices, 10 zones, 50 equipments, 3
-recipe instances with full logs, a live client with a full queue, the largest answer in flight),
-and under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
+The engine stays under 300 KB on the Mac for a realistic home (50 devices, 10 zones, 50 equipments, 3
+recipe instances with full logs, a live client with a full queue, the largest answer in flight).
+In the emulated ESP32 it stays under 350 KB for the realistic home with the fixture scenario
+playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
+fills them). It stays
+under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
 equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being

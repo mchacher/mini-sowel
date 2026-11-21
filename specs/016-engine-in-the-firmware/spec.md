@@ -16,7 +16,7 @@ built in an autonomous run.
 1. One engine loop, shared by the Mac and the ESP32; the Mac's behaviour unchanged.
 2. The firmware mounts its data partition, reads its network setting and runs the engine.
 3. In QEMU, the realistic home runs with the simulated radio, and its memory is measured and
-   checked against D20's 300 KB.
+   checked against D27's 350 KB (D20's 300 KB before the review).
 
 ## Out of scope
 

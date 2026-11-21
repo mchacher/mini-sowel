@@ -354,12 +354,14 @@ mod interrupted_save {
     use std::cell::RefCell;
     use std::collections::BTreeSet;
 
-    use solite_core::engine::{recover_interrupted_save, temporary_name};
+    use solite_core::engine::{complete_name, recover_interrupted_save, temporary_name};
 
     fn recover(files: &RefCell<BTreeSet<String>>) -> bool {
+        let complete = complete_name("devices.json");
         let temporary = temporary_name("devices.json");
         recover_interrupted_save(
             "devices.json",
+            complete.as_str(),
             temporary.as_str(),
             |name| files.borrow().contains(name),
             |from, to| {
@@ -368,29 +370,45 @@ mod interrupted_save {
                 files.insert(to.to_string());
                 Ok(())
             },
+            |name| {
+                files.borrow_mut().remove(name);
+                Ok(())
+            },
         )
         .unwrap()
     }
 
-    #[test]
-    fn only_the_temporary_file_is_renamed_to_the_missing_one() {
-        let files = RefCell::new(BTreeSet::from(["devices.json.tmp".to_string()]));
-        assert!(recover(&files));
-        assert_eq!(
-            *files.borrow(),
-            BTreeSet::from(["devices.json".to_string()])
-        );
+    fn files(names: &[&str]) -> RefCell<BTreeSet<String>> {
+        RefCell::new(names.iter().map(|n| n.to_string()).collect())
     }
 
     #[test]
-    fn an_existing_file_or_no_temporary_file_changes_nothing() {
-        let both = RefCell::new(BTreeSet::from([
-            "devices.json".to_string(),
-            "devices.json.tmp".to_string(),
-        ]));
-        assert!(!recover(&both));
-        assert_eq!(both.borrow().len(), 2);
-        let none = RefCell::new(BTreeSet::new());
+    fn only_the_complete_file_is_renamed_to_the_missing_one() {
+        let set = files(&["devices.json.new"]);
+        assert!(recover(&set));
+        assert_eq!(*set.borrow(), BTreeSet::from(["devices.json".to_string()]));
+    }
+
+    #[test]
+    fn a_truncated_temporary_file_with_no_file_is_deleted_not_promoted() {
+        let set = files(&["devices.json.tmp"]);
+        assert!(!recover(&set));
+        assert!(set.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_temporary_file_beside_a_good_file_is_ignored_and_removed() {
+        let set = files(&["devices.json", "devices.json.tmp"]);
+        assert!(!recover(&set));
+        assert_eq!(*set.borrow(), BTreeSet::from(["devices.json".to_string()]));
+    }
+
+    #[test]
+    fn a_complete_file_beside_an_existing_one_changes_nothing_but_is_removed() {
+        let set = files(&["devices.json", "devices.json.new"]);
+        assert!(!recover(&set));
+        assert_eq!(*set.borrow(), BTreeSet::from(["devices.json".to_string()]));
+        let none = files(&[]);
         assert!(!recover(&none));
         assert!(none.borrow().is_empty());
     }

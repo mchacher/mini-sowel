@@ -417,4 +417,6 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   simulator's build) is the largest at 312 KB, the load of the home 258 KB, the run 197 KB, the
   identification 186 KB. Both readings of the monitor (whole run, per phase) are upper bounds, the
   per-phase one the tighter, and the figure holds for what the run exercised. Internal RAM stays
-  at 107 KB free at the lowest, above the 64 KB floor.
+  at 107 KB free at the lowest, above the 64 KB floor. The measured run differs from the box: its
+  saves are dropped (the last one written to flash), the simulator's memory is kept in RAM, and the
+  scenario is clocked by its waits, so no File buffer or wear-levelling write is in the figure.
