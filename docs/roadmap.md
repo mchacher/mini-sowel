@@ -134,3 +134,6 @@ Every change to this roadmap: date, what changed, why.
   the autonomous run: each is a demo of its own. B5 and B6 built (specs 011, 012). The memory
   ceiling test of the realistic home reaches 198 KB of 200 KB in the worst case with B7: the inbox item
   "memory budget of the box" is due before more features land in the engine.
+- 2026-11-21: B8 built (spec 014): milestone B is built on the simulator, its demos on the real
+  Dongle Max, motion sensor and ZBMINIR2 pending. A full review with `/mini-sowel-roadmap` is due
+  (milestone reached, inbox of 18 items, the memory ceiling reached) before milestone C or E.
