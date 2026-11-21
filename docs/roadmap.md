@@ -20,9 +20,9 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
-| E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, Wi-Fi off beside Ethernet, one TLS session at a time) (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | |
-| E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21; defects to fix, merge pending |
-| E3 | Solite in the box: original firmware saved, then flashed with the user's yes; the radio over the serial link, Ethernet, data in flash, the API and the interface served by the box (precompressed); configured by `scripts/demo-garage.sh` | The garage runs in the box for a day, Mac off | |
+| E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the Wi-Fi antenna, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, one TLS session at a time), the network settled: one image holds Wi-Fi and Ethernet, only one is active (setting `auto | wifi | ethernet`, `auto` by default: a cable at boot means Ethernet, else Wi-Fi; no switching while running), Wi-Fi built first, the memory budget set by the larger of the two (Wi-Fi), not their sum (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | |
+| E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21, merged (pull requests 1 and 2); `setValue` defect open |
+| E3 | Solite in the box: original firmware saved, then flashed with the user's yes; the radio over the serial link, the network (Wi-Fi first, then Ethernet, as E1 settled), data in flash, the API and the interface served by the box (precompressed); configured by `scripts/demo-garage.sh`; with no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings can also be written to flash when flashing); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes | The garage runs in the box for a day, Mac off | |
 
 ## Next milestone
 
@@ -118,7 +118,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-| 2026-11-21 | Wi-Fi as well as Ethernet, on the box itself and for the tests from the Mac: the annex may have no Ethernet socket. Changes E1 (Wi-Fi in the memory budget, not "Wi-Fi off") and E3 (Wi-Fi and Ethernet both working, a way to give the box the network's name and password without a screen) | The user |
 
 ## Sowel issues to open
 
@@ -169,7 +168,7 @@ Every change to this roadmap: date, what changed, why.
   ceiling test of the realistic home reaches 198 KB of 200 KB in the worst case with B7: the inbox item
   "memory budget of the box" is due before more features land in the engine.
 - 2026-11-21: B8 built (spec 014): milestone B is built on the simulator, its demos on the real
-  Dongle Max, motion sensor and ZBMINIR2 pending. A full review with `/mini-sowel-roadmap` is due
+  Dongle Max, motion sensor and ZBMINIR2 pending. A full review with `/solite-roadmap` is due
   (milestone reached, inbox of 18 items, the memory ceiling reached) before milestone C or E.
 - 2026-11-21: the engine's memory ceiling raised from 200 KB to 300 KB with the user (decision D20), after
   an estimate of the whole box; its optimisations added to the inbox.
@@ -185,3 +184,6 @@ Every change to this roadmap: date, what changed, why.
   (EmberStatus 0x70, one of the two set while forming the network; the start-up one is accepted;
   settle it at the next network forming), `scripts/demo-garage.sh` and the IPv4/IPv6 port clash
   fixed (branch fix/e2-defects). Merge pending.
+- 2026-11-21: Wi-Fi decided with the user and placed (inbox line removed): one image with Wi-Fi and
+  Ethernet, exclusive, chosen at boot (`auto | wifi | ethernet`), Wi-Fi first; access point
+  `Solite-XXXX` to give the network without a screen. E1 and E3 changed; E2's branches merged.
