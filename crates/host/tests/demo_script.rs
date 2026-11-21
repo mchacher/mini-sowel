@@ -202,3 +202,81 @@ fn a_refused_call_shows_the_http_error_and_the_command_that_undoes_the_zone() {
         "{err}"
     );
 }
+
+/// A host that answers like the real one with the real garage's devices (no climate sensor):
+/// every `POST` it receives is kept, as "path body". Returns its port and the list.
+fn host_with_real_devices() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let posts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&posts);
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut stream = stream;
+            let mut buffer = [0u8; 4096];
+            // Read until the whole body has arrived: curl may send head and body apart.
+            let mut raw = Vec::new();
+            loop {
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                raw.extend_from_slice(&buffer[..n]);
+                let text = String::from_utf8_lossy(&raw).into_owned();
+                let Some((head, body)) = text.split_once("\r\n\r\n") else {
+                    if n == 0 {
+                        break;
+                    }
+                    continue;
+                };
+                let length = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                if body.len() >= length || n == 0 {
+                    break;
+                }
+            }
+            let head = String::from_utf8_lossy(&raw).into_owned();
+            let line = head.lines().next().unwrap_or("").to_string();
+            let body = if line.starts_with("GET /api/v1/zones") {
+                "[]".to_string()
+            } else if line.starts_with("GET /api/v1/devices") {
+                let devices: Vec<String> = ["SNZB-03PR2", "ZBMINIR2"]
+                    .iter()
+                    .map(|m| format!(r#"{{"id":"d-{m}","model":"{m}"}}"#))
+                    .collect();
+                format!("[{}]", devices.join(","))
+            } else if line.starts_with("POST ") {
+                kept.lock().unwrap().push(format!(
+                    "{} {}",
+                    line,
+                    head.split("\r\n\r\n").nth(1).unwrap_or("")
+                ));
+                r#"{"id":"id-123"}"#.to_string()
+            } else {
+                "{}".to_string()
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, posts)
+}
+
+#[test]
+fn the_script_sets_the_garage_up_with_the_real_devices() {
+    let (port, posts) = host_with_real_devices();
+    let (ok, _, err) = run_script(port);
+    assert!(ok, "{err}");
+    let posts = posts.lock().unwrap().join("\n");
+    assert!(posts.contains("Garage motion"), "{posts}");
+    assert!(posts.contains("Garage light"), "{posts}");
+    assert!(!posts.contains("Garage climate"), "{posts}");
+    assert!(posts.contains("recipe-instances"), "{posts}");
+}

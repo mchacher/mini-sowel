@@ -1,7 +1,8 @@
 #!/bin/sh
 # Sets up the garage of the demos (specs 010 to 014) through the API of a running host
-# (`--sim scenarios/garage.json --serve`, after `--pair`): the zone "Garage", the three simulated
-# devices placed in it, their equipments (climate and motion sensors, the light), and the
+# (`--sim scenarios/garage.json --serve`, after `--pair`): the zone "Garage", the paired
+# devices placed in it (simulated TH01, MS01, or the real SNZB-02 (optional), SNZB-03PR2, ZBMINIR2),
+# their equipments (climate and motion sensors, the light), and the
 # motion-light recipe (spec 012) with a timeout of 20 s. Prints the ids.
 # usage: sh scripts/demo-garage.sh [port]      (port 8080 by default)
 set -eu
@@ -50,35 +51,44 @@ sys.exit(0 if "Garage" in names(json.load(sys.stdin)) else 1)'; then
 fi
 
 DEVICES=$(curl -sS -f "$API/devices")
+# The id of the first paired device whose model is one of the arguments (empty when none is).
 device_id() {
   echo "$DEVICES" | python3 -c "
 import sys, json
-ids = [d['id'] for d in json.load(sys.stdin) if d.get('model') == '$1']
-print(ids[0] if ids else '')"
+models = sys.argv[1:]
+ids = [d['id'] for d in json.load(sys.stdin) if d.get('model') in models]
+print(ids[0] if ids else '')" "$@"
 }
-for MODEL in TH01 MS01 ZBMINIR2; do
-  if [ -z "$(device_id $MODEL)" ]; then
-    echo "demo-garage: the device $MODEL is missing: pair first (--sim scenarios/garage.json --pair 30)" >&2
-    exit 1
-  fi
-done
+# The simulated models and the real ones: the climate sensor (TH01, SNZB-02) is optional, the
+# motion sensor (MS01, SNZB-03, SNZB-03PR2) and the light (ZBMINIR2) are needed by the recipe.
+CLIMATE_DEVICE=$(device_id TH01 SNZB-02)
+MOTION_DEVICE=$(device_id MS01 SNZB-03 SNZB-03PR2)
+LIGHT_DEVICE=$(device_id ZBMINIR2)
+if [ -z "$MOTION_DEVICE" ]; then
+  echo "demo-garage: no motion sensor is paired (MS01, SNZB-03 or SNZB-03PR2): pair first" >&2
+  exit 1
+fi
+if [ -z "$LIGHT_DEVICE" ]; then
+  echo "demo-garage: the device ZBMINIR2 is missing: pair first" >&2
+  exit 1
+fi
 
 CREATED=$(curl -sS -f -X POST "$API/zones" -H "$JSON" -d '{"name":"Garage"}')
 ZONE=$(echo "$CREATED" | id_of)
 echo "zone      $ZONE"
-for MODEL in TH01 MS01 ZBMINIR2; do
-  DEVICE=$(device_id $MODEL)
+# Places a device in the garage and binds an equipment to it; prints the equipment's id and
+# leaves it in EQUIPMENT (no subshell: the line must reach the standard output).
+equip() {
+  DEVICE=$1; NAME=$2; TYPE=$3
   curl -sS -f -X PUT "$API/devices/$DEVICE" -H "$JSON" -d "{\"zoneId\":\"$ZONE\"}" > /dev/null
-  case $MODEL in
-    TH01) NAME="Garage climate"; TYPE=sensor ;;
-    MS01) NAME="Garage motion"; TYPE=sensor ;;
-    *) NAME="Garage light"; TYPE=light_onoff ;;
-  esac
   EQUIPMENT=$(curl -sS -f -X POST "$API/equipments" -H "$JSON" \
     -d "{\"name\":\"$NAME\",\"type\":\"$TYPE\",\"zoneId\":\"$ZONE\",\"deviceIds\":[\"$DEVICE\"]}" | id_of)
   echo "equipment $EQUIPMENT  $NAME"
-  if [ "$MODEL" = ZBMINIR2 ]; then LIGHT=$EQUIPMENT; fi
-done
+}
+if [ -n "$CLIMATE_DEVICE" ]; then equip "$CLIMATE_DEVICE" "Garage climate" sensor; fi
+equip "$MOTION_DEVICE" "Garage motion" sensor
+equip "$LIGHT_DEVICE" "Garage light" light_onoff
+LIGHT=$EQUIPMENT
 INSTANCE=$(curl -sS -f -X POST "$API/recipe-instances" -H "$JSON" \
   -d "{\"recipeId\":\"motion-light\",\"params\":{\"zone\":\"$ZONE\",\"lights\":[\"$LIGHT\"],\"timeout\":\"20s\"}}" | id_of)
 echo "instance  $INSTANCE  motion-light, timeout 20s"
