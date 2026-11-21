@@ -20,3 +20,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 014 | interface | The interface served by the host: rooms, their state and equipments, live, with a light's switch; Sowel's components ported | 2026-11-21 | in progress |
 | 015 | target-sheet-and-budget | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot | 2026-11-21 | in progress |
 | 016 | engine-in-the-firmware | The engine loop moved to the core and run in the ESP32 firmware under QEMU, with the simulated radio, a realistic home and its memory checked | 2026-11-21 | in progress |
+| 017 | add-device-from-interface | Pairing opened while serving, from the API and the interface; new devices announced live, named and placed in a room from a devices page | 2026-11-22 | in progress |
