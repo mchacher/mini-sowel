@@ -142,7 +142,7 @@ every 30 s and at least every hour; its battery every few hours.
 A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (UUID), `name`
 (`TH01 5678` by default: the model and the end of the address; `Zigbee 5678` without a model),
 `manufacturer` and `model` as sent, `ieeeAddress` and `sourceDeviceId` (`0x` + 16 lowercase hex
-digits), `source` and `integrationId` `mini-sowel`, `zoneId` `null`, `powerSource` (`mains`,
+digits), `source` and `integrationId` `mini-sowel`, `zoneId` (its zone, `null` until placed), `powerSource` (`mains`,
 `battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
 minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
 `lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds).
@@ -173,13 +173,44 @@ from another site is refused by a `Host` check):
 | ----- | ------ |
 | `GET /api/v1/devices` | the devices with their data and orders, in pairing order |
 | `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
-| `PUT /api/v1/devices/:id` `{"name": ...}` | renames it (1 to 64 characters); `zoneId` only `null` |
+| `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 
 Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413; 503 `Busy` beyond 4 requests at
-once). It prints `serving:
+once). The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
+their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
 the same file. Ctrl-C writes the store and exits 130.
+
+### Organises the home in zones and equipments
+
+As in Sowel, nothing acts on a device directly: a **zone** holds **equipments**, and an equipment
+binds device data and orders under **aliases**.
+
+- **Zones**: a tree under the root zone `Maison` (id `00000000-0000-0000-0000-000000000001`,
+  always present). `GET/POST /api/v1/zones`, `GET/PUT/DELETE /api/v1/zones/:id` with Sowel's
+  rules and messages: the root cannot be deleted, nor a zone with child zones or equipments; a
+  zone cannot move under itself or a descendant. Deleting a zone returns its devices to no zone.
+  At most 32 zones (the root included). A device is placed with `PUT /api/v1/devices/:id
+  {"zoneId": ...}`.
+- **Equipments**: types `light_onoff`, `light_dimmable`, `shutter`, `sensor`, `switch`,
+  `thermostat`, `button`. `POST /api/v1/equipments {name, type, zoneId, deviceIds}` binds every
+  data and order of the given devices under their key as alias (`temperature`, `state`...);
+  bindings are added or removed one by one under `.../data-bindings` and `.../order-bindings`.
+  Each equipment shows its bindings with their values, `lastChanged`, `stale` (a temperature,
+  humidity, pressure or luminosity silent for 65 minutes), and its `status`: `online`,
+  `degraded` (a device offline among several, or a binding stale) or `offline` (all its devices
+  offline, or no binding), with the reason. At most 64 equipments, 16 bindings of each kind.
+- **Zone aggregation** (`GET /api/v1/zones/aggregation`), as Sowel computes it, over each zone and
+  its sub-zones: average `temperature` (1 decimal), `humidity`, `luminosity`; `motion`, the
+  number of motion sensors and `motionSince`; open doors and windows; water leak, smoke; lights
+  on and in total; shutters; equipments unavailable by category. It is recomputed after every
+  measure, status change and edit.
+
+Zones and equipments are kept in `zones.json` and `equipments.json` beside `devices.json`, written
+at once when they change; on load, references to things that no longer exist are dropped or moved
+under the root. A `zones.json` or `equipments.json` that cannot be read stops the host, like
+`devices.json`.
 
 ### Runs without the dongle
 
@@ -225,9 +256,9 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
-No equipment, zone, mode or recipe exists in the tool; the host keeps the devices and the
-network backup, serves Sowel's device API (above), and talks to the radio to identify it, start
-its network, pair devices and receive their measures.
+No mode or recipe exists in the tool; the host keeps the devices, zones, equipments and the
+network backup, serves Sowel's device, zone and equipment API (above), and talks to the radio to
+identify it, start its network, pair devices and receive their measures.
 
 ## History
 
@@ -242,3 +273,4 @@ its network, pair devices and receive their measures.
 | 007 | A simulated radio and devices play scenario files (`--sim`) |
 | 008 | Devices kept in Sowel's format and served by Sowel's device API (`--serve`) |
 | 009 | Alarm sensors enrolled; their motion, contact, leak or smoke becomes device data |
+| 010 | Zones, equipments and zone aggregation, with Sowel's routes |

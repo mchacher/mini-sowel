@@ -2,6 +2,7 @@
 
 use mini_sowel_core::api::{MAX_BODY_BYTES, Request, Response, handle};
 use mini_sowel_core::devices::Devices;
+use mini_sowel_core::home::Home;
 
 const T0: u64 = 1_795_252_323_120;
 const PORT: u16 = 8080;
@@ -17,7 +18,7 @@ fn counter() -> impl FnMut(&mut [u8]) -> Result<(), String> {
 }
 
 /// Two devices, the second added a second later: a SNZB-02 and a relay.
-fn two_devices() -> (Devices, String, String) {
+fn two_devices() -> (Home, String, String) {
     let mut devices = Devices::new();
     let mut random = counter();
     let th = [0, 0x12, 0x4B, 0, 0x12, 0x34, 0x56, 0x78];
@@ -45,18 +46,16 @@ fn two_devices() -> (Devices, String, String) {
         .iter()
         .map(|d| d.device.id.to_string())
         .collect::<Vec<_>>();
-    (devices, ids[0].clone(), ids[1].clone())
+    (
+        Home::from_devices(devices, T0),
+        ids[0].clone(),
+        ids[1].clone(),
+    )
 }
 
-fn call(
-    devices: &mut Devices,
-    method: &str,
-    path: &str,
-    host: Option<&str>,
-    body: &[u8],
-) -> Response {
+fn call(home: &mut Home, method: &str, path: &str, host: Option<&str>, body: &[u8]) -> Response {
     handle(
-        devices,
+        home,
         &Request {
             method,
             path,
@@ -65,10 +64,11 @@ fn call(
             body,
         },
         T0 + 2000,
+        &mut counter(),
     )
 }
 
-fn local(devices: &mut Devices, method: &str, path: &str, body: &str) -> Response {
+fn local(devices: &mut Home, method: &str, path: &str, body: &str) -> Response {
     call(devices, method, path, Some(HOST), body.as_bytes())
 }
 
@@ -87,9 +87,9 @@ fn error(response: &Response) -> (u16, String) {
 fn get_list_is_sorted_by_created_at_with_the_data_in_table_order() {
     let (devices, th, relay) = two_devices();
     // Stored the other way round: the answer is sorted by createdAt anyway.
-    let mut list = devices.snapshot();
+    let mut list = devices.devices.snapshot();
     list.reverse();
-    let mut devices = Devices::from_list(list);
+    let mut devices = Home::from_devices(Devices::from_list(list), T0);
     let response = local(&mut devices, "GET", "/api/v1/devices", "");
     assert_eq!(response.status, 200);
     let body = json(&response);
@@ -128,7 +128,7 @@ fn get_by_id_answers_the_device_and_an_unknown_id_is_404() {
 fn put_checks_the_body_then_renames() {
     let (mut devices, th, _) = two_devices();
     let path = format!("/api/v1/devices/{th}");
-    let put = |devices: &mut Devices, body: &str| local(devices, "PUT", &path, body);
+    let put = |devices: &mut Home, body: &str| local(devices, "PUT", &path, body);
     let ok = put(&mut devices, r#"{"name":"Garage"}"#);
     assert_eq!(ok.status, 200);
     let body = json(&ok);
@@ -138,9 +138,12 @@ fn put_checks_the_body_then_renames() {
         "PUT answers a Device, not its details"
     );
     assert_eq!(body["updatedAt"], "2026-11-21T09:12:05.120Z");
-    assert_eq!(devices.get(&th).unwrap().device.name, "Garage");
+    assert_eq!(
+        devices.devices.get(&th).unwrap().device.name.as_ref(),
+        "Garage"
+    );
 
-    let bad = |devices: &mut Devices, body: &str| error(&put(devices, body));
+    let bad = |devices: &mut Home, body: &str| error(&put(devices, body));
     assert_eq!(bad(&mut devices, "{}"), (400, "Nothing to update".into()));
     assert_eq!(
         bad(&mut devices, r#"{"name":""}"#),
@@ -154,11 +157,18 @@ fn put_checks_the_body_then_renames() {
     );
     assert_eq!(
         bad(&mut devices, r#"{"zoneId":"x"}"#),
-        (400, "zoneId must be null".into())
+        (404, "Zone not found".into())
+    );
+    assert_eq!(
+        bad(&mut devices, r#"{"zoneId":5}"#),
+        (400, "Invalid field: zoneId".into())
     );
     assert_eq!(bad(&mut devices, "not json"), (400, "Invalid JSON".into()));
     // Nothing changed by the refused ones.
-    assert_eq!(devices.get(&th).unwrap().device.name, "Garage");
+    assert_eq!(
+        devices.devices.get(&th).unwrap().device.name.as_ref(),
+        "Garage"
+    );
 
     let zone = put(&mut devices, r#"{"zoneId":null}"#);
     assert_eq!(zone.status, 200);
@@ -183,8 +193,8 @@ fn delete_answers_204_without_a_body_and_an_unknown_id_is_404() {
             body: None
         }
     );
-    assert_eq!(devices.list().len(), 1);
-    assert_eq!(devices.list()[0].device.id.to_string(), relay);
+    assert_eq!(devices.devices.list().len(), 1);
+    assert_eq!(devices.devices.list()[0].device.id.to_string(), relay);
     let again = local(&mut devices, "DELETE", &format!("/api/v1/devices/{th}"), "");
     assert_eq!(error(&again), (404, "Device not found".into()));
 }
@@ -193,7 +203,7 @@ fn delete_answers_204_without_a_body_and_an_unknown_id_is_404() {
 fn other_paths_wrong_methods_big_bodies_and_foreign_hosts_are_refused() {
     let (mut devices, th, _) = two_devices();
     assert_eq!(
-        error(&local(&mut devices, "GET", "/api/v1/zones", "")),
+        error(&local(&mut devices, "GET", "/api/v1/modes", "")),
         (404, "Not found".into())
     );
     assert_eq!(

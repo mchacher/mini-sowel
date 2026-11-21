@@ -12,10 +12,14 @@ use super::time::{format_iso, parse_iso};
 
 /// A UUID v4, kept as 16 bytes (a device and its data hold several): written and read as the
 /// 36-character lowercase string Sowel uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Id([u8; 16]);
 
 impl Id {
+    /// The fixed id of the root zone, `00000000-0000-0000-0000-000000000001`
+    /// (`ROOT_ZONE_ID` in Sowel's `src/shared/constants.ts`).
+    pub const ROOT_ZONE: Id = Id([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
     /// A UUID v4 from 16 random bytes (the version and variant bits are set).
     pub fn from_random(mut bytes: [u8; 16]) -> Id {
         bytes[6] = (bytes[6] & 0x0F) | 0x40;
@@ -76,7 +80,7 @@ impl<'de> Deserialize<'de> for Id {
 
 /// Dates are kept as milliseconds since 1970 (UTC) and written as ISO 8601 with milliseconds,
 /// as Sowel does.
-mod iso {
+pub(crate) mod iso {
     use super::*;
 
     pub fn serialize<S: Serializer>(ms: &u64, serializer: S) -> Result<S::Ok, S::Error> {
@@ -90,7 +94,7 @@ mod iso {
 }
 
 /// The same for a date that may be `null`.
-mod iso_option {
+pub(crate) mod iso_option {
     use super::*;
 
     pub fn serialize<S: Serializer>(ms: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
@@ -141,41 +145,120 @@ pub enum ValueType {
     Number,
 }
 
-/// Sowel's `Device`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Sowel's `Device`. Memory: strings are exact-size `Box<str>`; what is the same for every device
+/// (`integrationId`, `source`) or equal to another field (`ieeeAddress` is the `sourceDeviceId`)
+/// is not stored but written when the device is serialised.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Device {
     pub id: Id,
-    pub integration_id: Cow<'static, str>,
     /// The EUI64 as `0x` and 16 lowercase hexadecimal digits (Zigbee2MQTT's form).
-    pub source_device_id: String,
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ieee_address: Option<String>,
-    /// `null` until zones exist.
-    pub zone_id: Option<String>,
-    pub source: Cow<'static, str>,
+    pub source_device_id: Box<str>,
+    pub name: Box<str>,
+    pub manufacturer: Option<Box<str>>,
+    pub model: Option<Box<str>>,
+    /// The zone the device is in, `None` when it is in none (`zoneId: null`).
+    pub zone_id: Option<Id>,
     pub status: DeviceStatus,
     pub power_source: PowerSource,
     /// Milliseconds since 1970; written as an ISO 8601 date.
-    #[serde(with = "iso_option")]
     pub last_seen: Option<u64>,
-    #[serde(with = "iso")]
     pub created_at: u64,
-    #[serde(with = "iso")]
     pub updated_at: u64,
 }
 
-/// Sowel's `DeviceData`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceOut<'a> {
+    id: Id,
+    integration_id: &'static str,
+    source_device_id: &'a str,
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manufacturer: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<&'a str>,
+    ieee_address: &'a str,
+    zone_id: Option<Id>,
+    source: &'static str,
+    status: DeviceStatus,
+    power_source: PowerSource,
+    #[serde(with = "iso_option")]
+    last_seen: Option<u64>,
+    #[serde(with = "iso")]
+    created_at: u64,
+    #[serde(with = "iso")]
+    updated_at: u64,
+}
+
+impl Serialize for Device {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        DeviceOut {
+            id: self.id,
+            integration_id: INTEGRATION_ID,
+            source_device_id: &self.source_device_id,
+            name: &self.name,
+            manufacturer: self.manufacturer.as_deref(),
+            model: self.model.as_deref(),
+            ieee_address: &self.source_device_id,
+            zone_id: self.zone_id,
+            source: INTEGRATION_ID,
+            status: self.status,
+            power_source: self.power_source,
+            last_seen: self.last_seen,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+        .serialize(serializer)
+    }
+}
+
+/// What is read of a device: `integrationId`, `source` and `ieeeAddress` are ignored.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceIn {
+    id: Id,
+    source_device_id: Box<str>,
+    name: Box<str>,
+    #[serde(default)]
+    manufacturer: Option<Box<str>>,
+    #[serde(default)]
+    model: Option<Box<str>>,
+    zone_id: Option<Id>,
+    status: DeviceStatus,
+    power_source: PowerSource,
+    #[serde(with = "iso_option")]
+    last_seen: Option<u64>,
+    #[serde(with = "iso")]
+    created_at: u64,
+    #[serde(with = "iso")]
+    updated_at: u64,
+}
+
+impl<'de> Deserialize<'de> for Device {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Device, D::Error> {
+        let d = DeviceIn::deserialize(deserializer)?;
+        Ok(Device {
+            id: d.id,
+            source_device_id: d.source_device_id,
+            name: d.name,
+            manufacturer: d.manufacturer,
+            model: d.model,
+            zone_id: d.zone_id,
+            status: d.status,
+            power_source: d.power_source,
+            last_seen: d.last_seen,
+            created_at: d.created_at,
+            updated_at: d.updated_at,
+        })
+    }
+}
+
+/// Sowel's `DeviceData`, without its `deviceId`: the device that holds it knows it, and writes it
+/// (`DataOut`) when it is serialised.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceData {
     pub id: Id,
-    pub device_id: Id,
     pub key: Cow<'static, str>,
     #[serde(rename = "type")]
     pub value_type: ValueType,
@@ -186,14 +269,18 @@ pub struct DeviceData {
     pub unit: Option<Cow<'static, str>>,
     #[serde(with = "iso_option")]
     pub last_updated: Option<u64>,
+    /// The last time the value changed, not just was received (the equipment's
+    /// `lastChanged`). Kept in `devices.json`, left out of the device API: Sowel's `DeviceData`
+    /// has no such field.
+    #[serde(skip)]
+    pub last_changed: Option<u64>,
 }
 
-/// Sowel's `DeviceOrder`.
+/// Sowel's `DeviceOrder`, without its `deviceId` (see `DeviceData`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceOrder {
     pub id: Id,
-    pub device_id: Id,
     pub key: Cow<'static, str>,
     #[serde(rename = "type")]
     pub value_type: ValueType,
@@ -209,12 +296,91 @@ pub struct DeviceOrder {
     pub value_off: Option<Cow<'static, str>>,
 }
 
-/// Sowel's `DeviceWithDetails`: a device with its data and orders.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A data with the `deviceId` of its device, as Sowel writes it.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeviceWithDetails {
+pub(crate) struct DataOut<'a> {
+    pub device_id: Id,
     #[serde(flatten)]
+    pub data: &'a DeviceData,
+}
+
+/// An order with the `deviceId` of its device.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OrderOut<'a> {
+    pub device_id: Id,
+    #[serde(flatten)]
+    pub order: &'a DeviceOrder,
+}
+
+/// The data of a device, each with the `deviceId`.
+struct DataList<'a>(Id, &'a [DeviceData]);
+
+impl Serialize for DataList<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.1.iter().map(|data| DataOut {
+            device_id: self.0,
+            data,
+        }))
+    }
+}
+
+/// The orders of a device, each with the `deviceId`.
+pub(crate) struct OrderList<'a>(pub Id, pub &'a [DeviceOrder]);
+
+impl Serialize for OrderList<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.1.iter().map(|order| OrderOut {
+            device_id: self.0,
+            order,
+        }))
+    }
+}
+
+/// Sowel's `DeviceWithDetails`: a device with its data and orders.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceWithDetails {
     pub device: Device,
     pub data: Vec<DeviceData>,
     pub orders: Vec<DeviceOrder>,
+}
+
+#[derive(Serialize)]
+struct DetailsOut<'a> {
+    #[serde(flatten)]
+    device: &'a Device,
+    data: DataList<'a>,
+    orders: OrderList<'a>,
+}
+
+impl Serialize for DeviceWithDetails {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let id = self.device.id;
+        DetailsOut {
+            device: &self.device,
+            data: DataList(id, &self.data),
+            orders: OrderList(id, &self.orders),
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Deserialize)]
+struct DetailsIn {
+    #[serde(flatten)]
+    device: Device,
+    data: Vec<DeviceData>,
+    orders: Vec<DeviceOrder>,
+}
+
+impl<'de> Deserialize<'de> for DeviceWithDetails {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let d = DetailsIn::deserialize(deserializer)?;
+        Ok(DeviceWithDetails {
+            device: d.device,
+            data: d.data,
+            orders: d.orders,
+        })
+    }
 }

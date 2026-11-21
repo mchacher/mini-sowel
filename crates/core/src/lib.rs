@@ -19,3 +19,7 @@ pub mod radio;
 
 pub mod api;
 pub mod devices;
+pub mod equipments;
+pub mod failure;
+pub mod home;
+pub mod zones;

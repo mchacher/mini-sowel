@@ -4,8 +4,11 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use super::model::DeviceWithDetails;
+use serde::{Deserialize, Serialize, Serializer};
+
+use super::model::{Device, DeviceData, DeviceOrder, DeviceWithDetails, Id, OrderList, iso_option};
 use super::registry::Devices;
+use crate::home::{Home, ListCursor};
 
 /// Values and `lastSeen` are written at most this often, in milliseconds (6 writes an hour).
 pub const VALUE_WRITE_INTERVAL_MS: u64 = 10 * 60 * 1000;
@@ -19,10 +22,10 @@ pub trait DeviceStore {
     fn save(&self, json: &str) -> Result<(), String>;
 }
 
-/// Locks the devices; a lock poisoned by a thread that panicked is recovered, not unwrapped
-/// (the devices are plain data, a half-done change cannot break them).
-pub fn lock(devices: &Mutex<Devices>) -> MutexGuard<'_, Devices> {
-    devices.lock().unwrap_or_else(PoisonError::into_inner)
+/// Locks the devices (or the home that holds them); a lock poisoned by a thread that panicked
+/// is recovered, not unwrapped (they are plain data, a half-done change cannot break them).
+pub fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Decides when to write. The caller takes the JSON under the lock, releases the lock, then
@@ -36,6 +39,26 @@ impl WritePolicy {
     /// `now` is the start time in milliseconds: the first value write is 10 minutes later.
     pub fn new(now: u64) -> Self {
         WritePolicy { last_write: now }
+    }
+
+    /// True when a write is due now: a change of definitions at once, changed values after the
+    /// interval since the last write, or when `stopping`.
+    fn is_due(&self, devices: &Devices, now: u64, stopping: bool) -> bool {
+        let (definitions, values) = devices.changes();
+        let values_due =
+            values && (stopping || now.saturating_sub(self.last_write) >= VALUE_WRITE_INTERVAL_MS);
+        definitions || values_due
+    }
+
+    /// Like `due`, but the file is written chunk by chunk from a cursor (nothing is ever built
+    /// whole), the flags being cleared at once: a change made while it is written is due again.
+    pub fn due_stream(&mut self, home: &mut Home, now: u64, stopping: bool) -> Option<ListCursor> {
+        if !self.is_due(&home.devices, now, stopping) {
+            return None;
+        }
+        home.devices.clear_changes();
+        self.last_write = now;
+        Some(ListCursor::saved_devices(home))
     }
 
     /// The snapshot to write now, or `None`. A change of definitions is due at once; changed
@@ -58,6 +81,15 @@ impl WritePolicy {
     pub fn failed(&mut self, devices: &mut Devices, now: u64) {
         devices.mark_values_changed();
         self.last_write = now;
+    }
+}
+
+/// One device as `devices.json` keeps it (with the `lastChanged` of its data).
+pub fn stored_item(item: &DeviceWithDetails) -> impl Serialize + '_ {
+    StoredOut {
+        device: &item.device,
+        data: StoredDataList(item.device.id, &item.data),
+        orders: OrderList(item.device.id, &item.orders),
     }
 }
 
@@ -85,7 +117,85 @@ pub fn to_json<T: serde::Serialize + ?Sized>(value: &T) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
+/// The devices as they are written to `devices.json`: Sowel's `DeviceWithDetails`, and for each
+/// data its `lastChanged` (kept between runs, but not part of Sowel's `DeviceData`, so not in the
+/// device API).
+pub(crate) struct Stored<'a>(pub &'a [DeviceWithDetails]);
+
+impl Serialize for Stored<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|item| StoredOut {
+            device: &item.device,
+            data: StoredDataList(item.device.id, &item.data),
+            orders: OrderList(item.device.id, &item.orders),
+        }))
+    }
+}
+
+#[derive(Serialize)]
+struct StoredOut<'a> {
+    #[serde(flatten)]
+    device: &'a Device,
+    data: StoredDataList<'a>,
+    orders: OrderList<'a>,
+}
+
+struct StoredDataList<'a>(Id, &'a [DeviceData]);
+
+impl Serialize for StoredDataList<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.1.iter().map(|data| StoredDataOut {
+            device_id: self.0,
+            data,
+            last_changed: data.last_changed,
+        }))
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDataOut<'a> {
+    device_id: Id,
+    #[serde(flatten)]
+    data: &'a DeviceData,
+    #[serde(with = "iso_option")]
+    last_changed: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct StoredIn {
+    #[serde(flatten)]
+    device: Device,
+    data: Vec<StoredDataIn>,
+    orders: Vec<DeviceOrder>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDataIn {
+    #[serde(flatten)]
+    data: DeviceData,
+    /// Missing in a file written before spec 010: `null`.
+    #[serde(default, with = "iso_option")]
+    last_changed: Option<u64>,
+}
+
 /// The devices read back from the JSON `Devices::to_json` wrote.
 pub fn parse_list(json: &str) -> Result<Vec<DeviceWithDetails>, String> {
-    serde_json::from_str(json).map_err(|e| e.to_string())
+    let list: Vec<StoredIn> = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    Ok(list
+        .into_iter()
+        .map(|item| DeviceWithDetails {
+            device: item.device,
+            data: item
+                .data
+                .into_iter()
+                .map(|d| DeviceData {
+                    last_changed: d.last_changed,
+                    ..d.data
+                })
+                .collect(),
+            orders: item.orders,
+        })
+        .collect())
 }

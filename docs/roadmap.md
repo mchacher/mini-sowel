@@ -48,7 +48,7 @@ possible without hardware.
 | B1 | Simulated radio: the host replays a scenario (a sensor joins, temperatures, motion) without the dongle (first: makes everything after it testable without hardware, in CI) | `--sim <scenario>` shows the same lines as the real radio | done (spec 007), on the branch of A3 to A5 |
 | B2 | Devices in Sowel's format: a paired device becomes a Sowel `Device` with its data read generically (temperature, humidity, battery, motion, on/off, level), stored on disk, read with `GET /api/v1/devices`; memory ceilings tested from here (second: Sowel's contract, D3, is the base of the rest) | The JSON matches Sowel's, for the real SNZB-02 | built (spec 008), real SNZB-02 pending |
 | B3 | Alarm sensors: IAS zone devices (the Sonoff motion sensor) are enrolled; their motion, contact, leak or smoke becomes device data | The motion sensor's `occupancy` turns true in the API | built (spec 009), real sensor pending |
-| B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | |
+| B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | built (spec 010) |
 | B5 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | |
 | B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
 | B7 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
@@ -80,6 +80,9 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-21 | G: `sowel-plugin-mini` first publishes the box's devices only (Sowel plugins can publish nothing else today); then its equipments and zones, once Sowel lets a plugin publish the equipments and zones it owns (Sowel issue to open, draft ready) | Conversation on the link with Sowel |
+| 2026-11-21 | A memory budget of the box per item (engine, HTTP, WebSocket clients, WebAssembly recipes, TLS, OTA buffers, history), written in `docs/` and checked by tests, before milestone E | Spec 010, discussion with the user |
+| 2026-11-21 | Equipment types beyond D3's six, zone orders (all lights off), zone reorder, window contacts (a contact device as `contact_window`) | Spec 010 review |
 | 2026-11-21 | Alarm devices beyond motion, contact, leak and smoke: sirens and keypads (IAS WD, ACE), CO and vibration zones, IAS on a second endpoint | Spec 009 review |
 | 2026-11-20 | Count the distinct brand functions per brand (Philips' 584 lights rely on one brand library: porting it once may cover them) | Spec 002 report |
 | 2026-11-20 | The first CI run after the push proves QEMU starts on the Ubuntu runner with its five system libraries (not run locally) | Spec 003 review |

@@ -8,8 +8,7 @@ use serde_json::{Number, Value};
 
 use super::catalog::{self, DataSpec, OrderSpec};
 use super::model::{
-    Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, INTEGRATION_ID, Id,
-    PowerSource, ValueType,
+    Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Id, PowerSource, ValueType,
 };
 use crate::radio::measures::Value as MeasureValue;
 use crate::radio::{Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, Sender};
@@ -53,7 +52,7 @@ fn new_id(random: Random) -> Result<Id, String> {
 }
 
 /// A number as JSON: a whole number without a decimal point (`100`, not `100.0`).
-fn json_number(value: f64) -> Value {
+pub(crate) fn json_number(value: f64) -> Value {
     if value.fract() == 0.0 && value.abs() < 1e15 {
         // Nothing is lost: the value is whole and below 1e15.
         return Value::from(value as i64);
@@ -89,7 +88,11 @@ impl Devices {
         for item in &mut list {
             item.data.truncate(MAX_DATA);
             item.orders.truncate(MAX_ORDERS);
+            // Memory: what was read has no spare room.
+            item.data.shrink_to_fit();
+            item.orders.shrink_to_fit();
         }
+        list.shrink_to_fit();
         Devices {
             items: list,
             ..Devices::default()
@@ -105,6 +108,72 @@ impl Devices {
         self.items.iter().find(|d| d.device.id == id)
     }
 
+    pub fn get_by_id(&self, id: &Id) -> Option<&DeviceWithDetails> {
+        self.items.iter().find(|d| d.device.id == *id)
+    }
+
+    /// The device and the data with this id.
+    pub fn data_of(&self, data_id: &Id) -> Option<(&Device, &DeviceData)> {
+        self.items.iter().find_map(|item| {
+            item.data
+                .iter()
+                .find(|d| d.id == *data_id)
+                .map(|d| (&item.device, d))
+        })
+    }
+
+    /// The device and the order with this id.
+    pub fn order_of(&self, order_id: &Id) -> Option<(&Device, &DeviceOrder)> {
+        self.items.iter().find_map(|item| {
+            item.orders
+                .iter()
+                .find(|o| o.id == *order_id)
+                .map(|o| (&item.device, o))
+        })
+    }
+
+    /// Puts a device in a zone (`None`: in none). The caller checked that the zone exists.
+    /// `None` when there is no such device.
+    pub fn set_zone(&mut self, id: &str, zone: Option<Id>, now: u64) -> Option<Device> {
+        let id = Id::parse(id)?;
+        let index = self.items.iter().position(|d| d.device.id == id)?;
+        if self.items[index].device.zone_id != zone {
+            self.items[index].device.zone_id = zone;
+            self.touch(index, now);
+        }
+        Some(self.items[index].device.clone())
+    }
+
+    /// Every device in a zone `known` does not accept goes in none (a file edited by hand, a
+    /// crash between two files). True when one changed.
+    pub fn fix_zones(&mut self, known: &dyn Fn(&str) -> bool) -> bool {
+        let mut changed = false;
+        for item in &mut self.items {
+            if item.device.zone_id.is_some_and(|z| !known(&z.to_string())) {
+                item.device.zone_id = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.definitions = true;
+        }
+        changed
+    }
+
+    /// The devices of a zone that is gone are in none.
+    pub fn clear_zone(&mut self, zone: &str, now: u64) {
+        for index in 0..self.items.len() {
+            if self.items[index]
+                .device
+                .zone_id
+                .is_some_and(|z| z.to_string() == zone)
+            {
+                self.items[index].device.zone_id = None;
+                self.touch(index, now);
+            }
+        }
+    }
+
     /// A copy of the devices (tests and tools; the save path does not copy).
     pub fn snapshot(&self) -> Vec<DeviceWithDetails> {
         self.items.clone()
@@ -112,7 +181,8 @@ impl Devices {
 
     /// The devices as the JSON list that is saved, compact, in a buffer of the exact size.
     pub fn to_json(&self) -> Result<String, String> {
-        super::persist::to_json(&self.items).ok_or_else(|| "cannot serialise the devices".into())
+        super::persist::to_json(&super::persist::Stored(&self.items))
+            .ok_or_else(|| "cannot serialise the devices".into())
     }
 
     /// (definitions changed, values changed) since they were last cleared.
@@ -133,7 +203,7 @@ impl Devices {
         let text = eui_string(eui64);
         self.items
             .iter()
-            .position(|d| d.device.source_device_id == text)
+            .position(|d| *d.device.source_device_id == *text)
     }
 
     fn touch(&mut self, index: usize, now: u64) {
@@ -180,14 +250,11 @@ impl Devices {
         };
         let device = Device {
             id: new_id(random)?,
-            integration_id: Cow::Borrowed(INTEGRATION_ID),
-            source_device_id: text.clone(),
-            name,
-            manufacturer: manufacturer.map(str::to_string),
-            model: model.map(str::to_string),
-            ieee_address: Some(text),
+            source_device_id: text.into_boxed_str(),
+            name: name.into_boxed_str(),
+            manufacturer: manufacturer.map(Box::from),
+            model: model.map(Box::from),
             zone_id: None,
-            source: Cow::Borrowed(INTEGRATION_ID),
             status: DeviceStatus::Unknown,
             power_source,
             last_seen: Some(now),
@@ -223,11 +290,11 @@ impl Devices {
             let device = &mut self.items[index].device;
             let mut changed = false;
             if manufacturer.is_some() && device.manufacturer.as_deref() != manufacturer {
-                device.manufacturer = manufacturer.map(str::to_string);
+                device.manufacturer = manufacturer.map(Box::from);
                 changed = true;
             }
             if model.is_some() && device.model.as_deref() != model {
-                device.model = model.map(str::to_string);
+                device.model = model.map(Box::from);
                 changed = true;
             }
             if changed {
@@ -332,13 +399,13 @@ impl Devices {
         }
         let data = DeviceData {
             id: new_id(random)?,
-            device_id: item.device.id,
             key: Cow::Borrowed(spec.key),
             value_type: spec.value_type,
             category: Cow::Borrowed(spec.category),
             value: Value::Null,
             unit: spec.unit.map(Cow::Borrowed),
             last_updated: None,
+            last_changed: None,
         };
         self.items[index].data.push(data);
         Ok(true)
@@ -364,7 +431,6 @@ impl Devices {
         }
         let order = DeviceOrder {
             id: new_id(random)?,
-            device_id: item.device.id,
             key: Cow::Borrowed(spec.key),
             value_type: spec.value_type,
             category: Some(Cow::Borrowed(spec.category)),
@@ -450,8 +516,7 @@ impl Devices {
                     .find(|d| catalog::ZONE_KEYS.contains(&&*d.key));
                 if let (Some(data), MeasureValue::Bool(alarm)) = (data, measure.value) {
                     let on = if data.key == "contact" { !alarm } else { alarm };
-                    data.value = Value::Bool(on);
-                    data.last_updated = Some(now);
+                    set_value(data, Value::Bool(on), now);
                 }
                 continue;
             }
@@ -468,8 +533,7 @@ impl Devices {
                 (MeasureValue::Bool(on), ValueType::Boolean) => Value::Bool(on),
                 _ => continue,
             };
-            data.value = value;
-            data.last_updated = Some(now);
+            set_value(data, value, now);
         }
         self.mark_seen(index, now);
         self.refresh_status(now);
@@ -526,7 +590,9 @@ impl Devices {
     /// Brings each status up to date with the time: online within 10 minutes of the last
     /// message for a mains device, 25 hours for a battery device or one of unknown power,
     /// offline past it, unknown before any message. A change of status changes `updatedAt`.
-    pub fn refresh_status(&mut self, now: u64) {
+    /// True when a status changed.
+    pub fn refresh_status(&mut self, now: u64) -> bool {
+        let mut changed = false;
         for index in 0..self.items.len() {
             let device = &self.items[index].device;
             let status = match device.last_seen {
@@ -547,16 +613,18 @@ impl Devices {
                 self.items[index].device.status = status;
                 self.items[index].device.updated_at = now;
                 self.values = true;
+                changed = true;
             }
         }
+        changed
     }
 
     /// Renames a device. `None` when there is no such device.
     pub fn rename(&mut self, id: &str, name: &str, now: u64) -> Option<Device> {
         let id = Id::parse(id)?;
         let index = self.items.iter().position(|d| d.device.id == id)?;
-        if self.items[index].device.name != name {
-            self.items[index].device.name = name.to_string();
+        if *self.items[index].device.name != *name {
+            self.items[index].device.name = name.into();
             self.touch(index, now);
         }
         Some(self.items[index].device.clone())
@@ -573,6 +641,16 @@ impl Devices {
         self.definitions = true;
         true
     }
+}
+
+/// A value was received: `lastUpdated` is now, `lastChanged` only when the value differs from
+/// the previous one.
+fn set_value(data: &mut DeviceData, value: Value, now: u64) {
+    if data.value != value {
+        data.last_changed = Some(now);
+        data.value = value;
+    }
+    data.last_updated = Some(now);
 }
 
 fn power_of(capability: u8) -> PowerSource {

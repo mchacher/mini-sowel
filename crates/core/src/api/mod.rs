@@ -1,10 +1,20 @@
-//! Sowel's device routes (`src/api/routes/devices.ts` of the Sowel repository), as a pure
-//! function: a request in, a status and a JSON body out. The host (or the box) only moves bytes.
-//! The time comes from the caller.
+//! Sowel's routes for devices, zones and equipments (`src/api/routes/{devices,zones,
+//! equipments}.ts` of the Sowel repository), as a pure function: a request in, a status and a
+//! JSON body out. The host (or the box) only moves bytes. The time and the random bytes come from
+//! the caller.
+
+mod devices;
+mod equipments;
+mod input;
+mod zones;
+
+pub use crate::home::{CHUNK_ITEMS, ListCursor};
 
 use serde_json::{Map, Value};
 
-use crate::devices::{Devices, MAX_NAME_CHARS, to_json};
+use crate::devices::{Random, to_json};
+use crate::failure::Failure;
+use crate::home::Home;
 
 /// Request bodies over this many bytes are refused (413).
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -15,7 +25,7 @@ const PREFIX: &str = "/api/v1";
 #[derive(Debug)]
 pub struct Request<'a> {
     pub method: &'a str,
-    /// The path, with its query string if any (the query is ignored).
+    /// The path, with its query string if any (`GET /equipments` reads `type`).
     pub path: &'a str,
     /// The `Host` header, if any.
     pub host: Option<&'a str>,
@@ -23,6 +33,14 @@ pub struct Request<'a> {
     pub port: u16,
     /// At most `MAX_BODY_BYTES + 1` bytes are needed to see that it is too long.
     pub body: &'a [u8],
+}
+
+/// What a request is answered with: a whole response, or a list streamed from a cursor (status
+/// 200, `application/json; charset=utf-8`).
+#[derive(Debug)]
+pub enum Reply {
+    Whole(Response),
+    List(ListCursor),
 }
 
 /// The answer: a status, and a JSON body (`None` for 204). The content type is
@@ -33,14 +51,18 @@ pub struct Response {
     pub body: Option<String>,
 }
 
-fn error(status: u16, message: &str) -> Response {
+pub(crate) fn error(status: u16, message: &str) -> Response {
     Response {
         status,
         body: Some(Value::Object(Map::from_iter([("error".into(), message.into())])).to_string()),
     }
 }
 
-fn json<T: serde::Serialize>(status: u16, value: &T) -> Response {
+pub(crate) fn failure(failure: &Failure) -> Response {
+    error(failure.status, &failure.message)
+}
+
+pub(crate) fn json<T: serde::Serialize>(status: u16, value: &T) -> Response {
     match to_json(value) {
         Some(body) => Response {
             status,
@@ -48,6 +70,17 @@ fn json<T: serde::Serialize>(status: u16, value: &T) -> Response {
         },
         None => error(500, "Internal error"),
     }
+}
+
+pub(crate) fn no_content() -> Response {
+    Response {
+        status: 204,
+        body: None,
+    }
+}
+
+pub(crate) fn method_not_allowed() -> Response {
+    error(405, "Method not allowed")
 }
 
 /// True for `127.0.0.1:<port>` and `localhost:<port>`: a page of another origin cannot reach the
@@ -60,97 +93,76 @@ fn host_allowed(host: Option<&str>, port: u16) -> bool {
     host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
 }
 
-/// Answers a request. `now` is the time in milliseconds since 1970 (UTC).
-pub fn handle(devices: &mut Devices, request: &Request, now: u64) -> Response {
+/// Answers a request; the long lists are drained into one body (tests, tools). The host streams
+/// them with `handle_stream`.
+pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> Response {
+    match handle_stream(home, request, now, random) {
+        Reply::Whole(response) => response,
+        Reply::List(mut cursor) => {
+            let mut body = String::new();
+            loop {
+                match cursor.next_chunk(home) {
+                    Ok(Some(chunk)) => body.push_str(&chunk),
+                    Ok(None) => break,
+                    Err(_) => return error(500, "Internal error"),
+                }
+            }
+            Response {
+                status: 200,
+                body: Some(body),
+            }
+        }
+    }
+}
+
+/// Answers a request. `now` is the time in milliseconds since 1970 (UTC); `random` gives the
+/// bytes of the ids of what is created. After a change, the zone aggregation is brought up to
+/// date. `GET /devices` and `GET /equipments` answer a cursor: the caller serves its chunks,
+/// taking the home for each one and never holding it while writing.
+pub fn handle_stream(home: &mut Home, request: &Request, now: u64, random: Random) -> Reply {
     if !host_allowed(request.host, request.port) {
-        return error(403, "Forbidden host");
+        return Reply::Whole(error(403, "Forbidden host"));
     }
     if request.body.len() > MAX_BODY_BYTES {
-        return error(413, "Body too large");
+        return Reply::Whole(error(413, "Body too large"));
     }
-    let path = request.path.split(['?', '#']).next().unwrap_or("");
+    let (path, query) = match request.path.split_once('?') {
+        Some((path, query)) => (path, query),
+        None => (request.path, ""),
+    };
+    let path = path.split('#').next().unwrap_or("");
     let Some(rest) = path
         .strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_prefix('/'))
     else {
-        return error(404, "Not found");
+        return Reply::Whole(error(404, "Not found"));
     };
     let segments: Vec<&str> = rest.split('/').collect();
-    devices.refresh_status(now);
-    match (segments.as_slice(), request.method) {
-        (["devices"], "GET") => list(devices),
-        (["devices"], _) => error(405, "Method not allowed"),
-        (["devices", id], "GET") => get(devices, id),
-        (["devices", id], "PUT") => update(devices, id, request.body, now),
-        (["devices", id], "DELETE") => delete(devices, id),
-        (["devices", _], _) => error(405, "Method not allowed"),
-        _ => error(404, "Not found"),
+    // Silence alone can turn a device offline: the aggregation follows.
+    if home.devices.refresh_status(now) {
+        home.recompute(now);
     }
-}
-
-fn not_found() -> Response {
-    error(404, "Device not found")
-}
-
-fn list(devices: &Devices) -> Response {
-    let mut items: Vec<_> = devices.list().iter().collect();
-    // Stable: devices created at the same millisecond keep the order they were added in.
-    items.sort_by_key(|d| d.device.created_at);
-    json(200, &items)
-}
-
-fn get(devices: &Devices, id: &str) -> Response {
-    devices
-        .get(id)
-        .map_or_else(not_found, |device| json(200, device))
-}
-
-fn delete(devices: &mut Devices, id: &str) -> Response {
-    if devices.remove(id) {
-        Response {
-            status: 204,
-            body: None,
-        }
-    } else {
-        not_found()
-    }
-}
-
-/// `PUT`: `name` (1 to `MAX_NAME_CHARS` characters) and `zoneId` (only `null` until zones
-/// exist). The whole body is checked before anything changes.
-fn update(devices: &mut Devices, id: &str, body: &[u8], now: u64) -> Response {
-    let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(body) else {
-        return error(400, "Invalid JSON");
-    };
-    if let Some(unknown) = fields.keys().find(|k| *k != "name" && *k != "zoneId") {
-        return error(400, &format!("Unknown field: {unknown}"));
-    }
-    if fields.is_empty() {
-        return error(400, "Nothing to update");
-    }
-    let name = match fields.get("name") {
-        None => None,
-        Some(Value::String(name)) => {
-            let name = name.trim();
-            if name.is_empty() || name.chars().count() > MAX_NAME_CHARS {
-                return error(400, "Invalid name");
+    if request.method == "GET" {
+        match segments.as_slice() {
+            ["devices"] => return Reply::List(ListCursor::devices(home, now)),
+            ["equipments"] => {
+                return Reply::List(ListCursor::equipments(
+                    home,
+                    equipments::type_filter(query),
+                    now,
+                ));
             }
-            Some(name.to_string())
+            _ => {}
         }
-        Some(_) => return error(400, "Invalid name"),
+    }
+    let response = match segments.first().copied() {
+        Some("devices") => devices::route(home, &segments, request, now),
+        Some("zones") => zones::route(home, &segments, request, now, random),
+        Some("equipments") => equipments::route(home, &segments, request, now, random),
+        _ => error(404, "Not found"),
     };
-    if fields.get("zoneId").is_some_and(|zone| !zone.is_null()) {
-        return error(400, "zoneId must be null");
+    if request.method != "GET" && response.status < 300 {
+        home.recompute(now);
     }
-    if devices.get(id).is_none() {
-        return not_found();
-    }
-    if let Some(name) = name {
-        return devices
-            .rename(id, &name, now)
-            .map_or_else(not_found, |device| json(200, &device));
-    }
-    devices
-        .get(id)
-        .map_or_else(not_found, |item| json(200, &item.device))
+    Reply::Whole(response)
 }

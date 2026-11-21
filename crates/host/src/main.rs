@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use std::sync::Mutex;
 
-use mini_sowel_core::devices::{DeviceStore, Devices};
 use mini_sowel_core::radio::{
     NetworkSettings, Radio, RadioError, RadioTransport, identity_lines, network_line,
 };
@@ -199,8 +198,10 @@ fn pair<T: RadioTransport>(
     let mut random = SystemRandom::open()?;
     let mut fill = |buffer: &mut [u8]| random.fill(buffer);
     let store = FileStore::new(data);
-    let devices = Mutex::new(Devices::from_list(store.load()?));
-    let mut saver = Saver::new(store, serve::now_ms());
+    // The whole home is read (a device's zone must not be lost), but `--pair` writes the devices
+    // only.
+    let home = Mutex::new(store.load_home(serve::now_ms())?);
+    let mut saver = Saver::devices_only(store, serve::now_ms());
     let mut radio = Radio::new(transport, clock());
     let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
     let lines = identity_lines(label, &identity);
@@ -262,19 +263,19 @@ fn pair<T: RadioTransport>(
             let activity = radio.take_activity();
             let now = serve::now_ms();
             {
-                let mut guard = mini_sowel_core::devices::lock(&devices);
+                let mut guard = mini_sowel_core::devices::lock(&home);
                 // The announces first: a device's power source is known when it is added.
                 for item in &activity {
-                    guard.apply_activity(item, now);
+                    guard.devices.apply_activity(item, now);
                 }
                 for event in &events {
                     println!("{}", event.line());
-                    for note in guard.apply(event, now, &mut fill)? {
+                    for note in guard.devices.apply(event, now, &mut fill)? {
                         println!("{note}");
                     }
                 }
             }
-            saver.tick(&devices, now, false)?;
+            saver.tick(&home, now, false)?;
         }
     })();
     // Joining is never left open: closed on Ctrl-C and on an error too (best effort).
@@ -282,7 +283,7 @@ fn pair<T: RadioTransport>(
         let _ = radio.close_joining();
     }
     println!("pairing: closed");
-    let saved = saver.tick(&devices, serve::now_ms(), true);
+    let saved = saver.tick(&home, serve::now_ms(), true);
     result.and_then(|stopped| saved.map(|()| stopped))
 }
 
@@ -387,10 +388,10 @@ fn main() -> ExitCode {
         eprintln!("{message}");
         return ExitCode::from(1);
     }
-    // The devices must be readable before the radio is touched: a `devices.json` that does not
-    // parse stops the host, and is never overwritten.
+    // The home must be readable before the radio is touched: a `devices.json`, `zones.json` or
+    // `equipments.json` that does not parse stops the host, and is never overwritten.
     if matches!(task, Task::Pair(_) | Task::Serve { .. })
-        && let Err(message) = FileStore::new(&args.data).load()
+        && let Err(message) = FileStore::new(&args.data).load_home(serve::now_ms())
     {
         eprintln!("{message}");
         return ExitCode::from(1);

@@ -262,8 +262,14 @@ fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() 
             .unwrap();
             let mut body = String::new();
             let _ = stream.read_to_string(&mut body);
-            if let Some((_, json)) = body.split_once("\r\n\r\n")
-                && let Ok(devices) = serde_json::from_str::<serde_json::Value>(json)
+            if let Some((head, json)) = body.split_once("\r\n\r\n")
+                // The device list is sent chunked (spec 010): the chunks are put together.
+                && let json = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+                    dechunk(json)
+                } else {
+                    json.to_string()
+                }
+                && let Ok(devices) = serde_json::from_str::<serde_json::Value>(&json)
                 && let Some(data) = devices[0]["data"]
                     .as_array()
                     .and_then(|d| d.iter().find(|d| d["key"] == "tamper"))
@@ -324,4 +330,20 @@ fn a_setup_still_going_when_the_time_cap_ends_is_reported_cut_short_before_pairi
     );
     let _ = handle.join();
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The body of a chunked answer: `<hex size>\r\n<data>\r\n` repeated, ending with a size 0.
+fn dechunk(mut rest: &str) -> String {
+    let mut out = String::new();
+    while let Some((size, after)) = rest.split_once("\r\n") {
+        let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
+            break;
+        };
+        if size == 0 || after.len() < size + 2 {
+            break;
+        }
+        out.push_str(&after[..size]);
+        rest = &after[size + 2..];
+    }
+    out
 }

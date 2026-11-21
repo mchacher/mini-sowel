@@ -1,6 +1,8 @@
 //! The device registry: data and orders per cluster, pairing, measures, status, bounds, and
 //! when the devices are written.
 
+mod support;
+
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -164,16 +166,18 @@ fn pairing_a_snzb02_gives_temperature_humidity_battery_and_voltage() {
     let mut devices = Devices::new();
     snzb02(&mut devices, &mut counter());
     let item = &devices.list()[0];
-    assert_eq!(item.device.name, "TH01 5678");
+    assert_eq!(&*item.device.name, "TH01 5678");
     assert_eq!(
         keys(item),
         ["temperature", "humidity", "battery", "voltage"]
     );
     assert!(item.orders.is_empty());
-    assert_eq!(
-        item.device.ieee_address.as_deref(),
-        Some("0x00124b0012345678")
-    );
+    assert_eq!(&*item.device.source_device_id, "0x00124b0012345678");
+    // `ieeeAddress`, `integrationId` and `source` are not stored but written.
+    let json = serde_json::to_value(item).unwrap();
+    assert_eq!(json["ieeeAddress"], "0x00124b0012345678");
+    assert_eq!(json["integrationId"], "mini-sowel");
+    assert_eq!(json["source"], "mini-sowel");
 }
 
 #[test]
@@ -199,7 +203,7 @@ fn pairing_the_same_address_again_keeps_the_ids_and_completes_the_data() {
     assert_eq!(devices.list().len(), 1);
     let after = &devices.list()[0];
     assert_eq!(after.device.id, before.device.id);
-    assert_eq!(after.device.name, "Garage");
+    assert_eq!(&*after.device.name, "Garage");
     assert_eq!(after.data[0].id, before.data[0].id);
     assert_eq!(keys(after), ["temperature", "humidity"]);
     assert_eq!(after.device.updated_at, T0 + 5000);
@@ -517,7 +521,7 @@ fn a_rename_is_written_at_once() {
     devices.rename(&id, "Garage", T0 + 1000).unwrap();
     turn(&mut policy, &mut devices, &store, T0 + 1000, false);
     assert_eq!(store.saved.borrow().len(), 2);
-    assert_eq!(store.saved.borrow()[1][0].device.name, "Garage");
+    assert_eq!(store.saved.borrow()[1][0].device.name.as_ref(), "Garage");
 }
 
 #[test]
@@ -610,7 +614,7 @@ fn a_rename_from_another_thread_is_written_by_the_one_writer_and_not_lost() {
     let writers = store.writers.lock().unwrap();
     assert!(!writers.is_empty());
     assert!(writers.iter().all(|w| *w == writer_id));
-    assert_eq!(store.last.lock().unwrap()[0].device.name, "Garage");
+    assert_eq!(store.last.lock().unwrap()[0].device.name.as_ref(), "Garage");
 }
 
 // ---- Spec 009: the data of IAS zone devices ----
@@ -822,4 +826,158 @@ fn the_zone_data_are_kept_in_devices_json_and_known_by_a_later_process() {
         .unwrap();
     assert_eq!(value_of(&later, "contact"), Some(Json::Bool(true)));
     assert_eq!(value_of(&later, "tamper"), Some(Json::Bool(false)));
+}
+
+// ---- Spec 010: lastChanged ----
+
+fn data_of<'a>(devices: &'a Devices, key: &str) -> &'a mini_sowel_core::devices::DeviceData {
+    devices.list()[0]
+        .data
+        .iter()
+        .find(|d| d.key == key)
+        .unwrap()
+}
+
+#[test]
+fn last_changed_is_set_only_when_the_value_differs_from_the_previous_one() {
+    let mut devices = Devices::new();
+    snzb02(&mut devices, &mut counter());
+    let data = data_of(&devices, "temperature");
+    assert_eq!((data.last_updated, data.last_changed), (None, None));
+    let apply = |devices: &mut Devices, value: f64, at: u64| {
+        devices
+            .measures(&temperature(value), at, &mut counter())
+            .unwrap();
+        let data = data_of(devices, "temperature");
+        (data.last_updated, data.last_changed)
+    };
+    // The first value is a change (from nothing).
+    assert_eq!(
+        apply(&mut devices, 20.0, T0 + 1000),
+        (Some(T0 + 1000), Some(T0 + 1000))
+    );
+    // The same value again: received (lastUpdated moves), not changed.
+    assert_eq!(
+        apply(&mut devices, 20.0, T0 + 2000),
+        (Some(T0 + 2000), Some(T0 + 1000))
+    );
+    assert_eq!(
+        apply(&mut devices, 20.0, T0 + 3000),
+        (Some(T0 + 3000), Some(T0 + 1000))
+    );
+    // A different value.
+    assert_eq!(
+        apply(&mut devices, 20.5, T0 + 4000),
+        (Some(T0 + 4000), Some(T0 + 4000))
+    );
+    // Back to the first one: it differs from the previous one.
+    assert_eq!(
+        apply(&mut devices, 20.0, T0 + 5000),
+        (Some(T0 + 5000), Some(T0 + 5000))
+    );
+    // Other data of the device are untouched.
+    assert_eq!(data_of(&devices, "humidity").last_changed, None);
+}
+
+#[test]
+fn last_changed_follows_the_zone_alarm_data_too() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    zone_sensor(&mut devices, Some(0x0015), &mut random);
+    // The contact is closed (alarm clear), then the same, then open.
+    devices
+        .apply(&zone_event(0x0000), T0 + 1000, &mut random)
+        .unwrap();
+    let changed = |devices: &Devices| data_of(devices, "contact").last_changed;
+    assert_eq!(changed(&devices), Some(T0 + 1000));
+    devices
+        .apply(&zone_event(0x0000), T0 + 2000, &mut random)
+        .unwrap();
+    assert_eq!(changed(&devices), Some(T0 + 1000), "same state");
+    devices
+        .apply(&zone_event(0x0001), T0 + 3000, &mut random)
+        .unwrap();
+    assert_eq!(changed(&devices), Some(T0 + 3000));
+}
+
+#[test]
+fn last_changed_is_kept_in_devices_json_and_read_back() {
+    let mut devices = Devices::new();
+    snzb02(&mut devices, &mut counter());
+    devices
+        .measures(&temperature(20.0), T0 + 1000, &mut counter())
+        .unwrap();
+    devices
+        .measures(&temperature(20.0), T0 + 2000, &mut counter())
+        .unwrap();
+    let json = devices.to_json().unwrap();
+    let file: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let temperature_data = &file[0]["data"][0];
+    assert_eq!(temperature_data["lastUpdated"], "2026-11-21T09:12:05.120Z");
+    assert_eq!(temperature_data["lastChanged"], "2026-11-21T09:12:04.120Z");
+    assert_eq!(file[0]["data"][1]["lastChanged"], serde_json::Value::Null);
+    // Read back: equal, lastChanged included.
+    let later = Devices::from_list(parse_list(&json).unwrap());
+    assert_eq!(later.list(), devices.list());
+    assert_eq!(data_of(&later, "temperature").last_changed, Some(T0 + 1000));
+    // The same value after a restart is not a change; a different one is.
+    let mut later = later;
+    later
+        .measures(&temperature(20.0), T0 + 9000, &mut counter())
+        .unwrap();
+    assert_eq!(data_of(&later, "temperature").last_changed, Some(T0 + 1000));
+    later
+        .measures(&temperature(21.0), T0 + 10_000, &mut counter())
+        .unwrap();
+    assert_eq!(
+        data_of(&later, "temperature").last_changed,
+        Some(T0 + 10_000)
+    );
+}
+
+#[test]
+fn a_devices_file_written_before_spec_010_loads_with_a_null_last_changed() {
+    let mut devices = Devices::new();
+    snzb02(&mut devices, &mut counter());
+    devices
+        .measures(&temperature(20.0), T0 + 1000, &mut counter())
+        .unwrap();
+    let mut file: serde_json::Value = serde_json::from_str(&devices.to_json().unwrap()).unwrap();
+    for item in file.as_array_mut().unwrap() {
+        for data in item["data"].as_array_mut().unwrap() {
+            data.as_object_mut().unwrap().remove("lastChanged");
+        }
+    }
+    let loaded = Devices::from_list(parse_list(&file.to_string()).unwrap());
+    assert!(
+        loaded.list()[0]
+            .data
+            .iter()
+            .all(|d| d.last_changed.is_none())
+    );
+    assert_eq!(data_of(&loaded, "temperature").value, serde_json::json!(20));
+}
+
+#[test]
+fn last_changed_is_not_in_the_device_api_json() {
+    let mut devices = Devices::new();
+    snzb02(&mut devices, &mut counter());
+    devices
+        .measures(&temperature(20.0), T0 + 1000, &mut counter())
+        .unwrap();
+    // Neither the serialisation of the list (the API's) ...
+    let api = serde_json::to_string(devices.list()).unwrap();
+    assert!(!api.contains("lastChanged"), "{api}");
+    // ... nor the answer of GET /devices and GET /devices/:id.
+    let mut rig = support::Rig::with(devices);
+    let list = rig.raw("GET", "/api/v1/devices", "").body.unwrap();
+    assert!(!list.contains("lastChanged"), "{list}");
+    let id = rig.home.devices.list()[0].device.id.to_string();
+    let one = rig
+        .raw("GET", &format!("/api/v1/devices/{id}"), "")
+        .body
+        .unwrap();
+    assert!(!one.contains("lastChanged"), "{one}");
+    // The file has it.
+    assert!(rig.home.devices.to_json().unwrap().contains("lastChanged"));
 }

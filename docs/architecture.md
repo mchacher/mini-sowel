@@ -31,6 +31,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 | ----- | ---- | ----------------- |
 | Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, enrolling alarm devices, listening to its measures), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
 | Devices and API | In the core: `devices/` (Sowel's `Device`, `DeviceData`, `DeviceOrder`; the catalog from clusters to data and orders; the registry with its bounds; the `DeviceStore` trait) and `api/` (Sowel's device routes as a pure function from request to response, reused by the box); in the host: `store.rs` (`devices.json`) and `serve.rs` (`tiny_http` on 127.0.0.1) | `crates/core/src/{devices,api}/`, `crates/host/src/{store,serve}.rs` |
+| Zones and equipments | In the core: `zones/` (the tree, Sowel's rules, the aggregation) and `equipments/` (bindings by alias, status and stale as Sowel); the API serves them; the host stores `zones.json` and `equipments.json` | `crates/core/src/{zones,equipments}/` |
 | Simulator | A simulated EmberZNet radio and simulated devices (temperature-humidity, motion, relay) playing scenario files (`scenarios/`); it implements the core's `RadioTransport`, so the host and the tests run the real protocol code against it; Mac only | `crates/sim/` |
 | Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
@@ -58,7 +59,8 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 ## Data
 
-The box stores no data. On the Mac, the host keeps `devices.json` (Sowel's devices with their
+The box stores no data. On the Mac, the host keeps `zones.json` and `equipments.json` (written
+at once when they change), `devices.json` (Sowel's devices with their
 data and orders; definitions written at once, values every 10 minutes and on stop) and writes
 `network.json` (the network's identifiers
 and keys, mode 0600) to its data folder after forming a network; the radio keeps the network

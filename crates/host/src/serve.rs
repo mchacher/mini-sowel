@@ -1,19 +1,22 @@
 //! `--serve`: resume the network, keep the devices up to date from what they send, and serve
-//! Sowel's device API on 127.0.0.1. The radio loop runs in the calling thread and is the only
-//! writer of `devices.json`; one thread answers HTTP, with the devices behind a lock that is never
-//! held during radio I/O or a file write.
+//! Sowel's device, zone and equipment API on 127.0.0.1. The radio loop runs in the calling thread
+//! and is the only writer of the files; HTTP workers answer requests, with the home behind a lock
+//! that is never held during radio I/O or a file write. The random source is shared and always
+//! taken after the home lock.
 
-use std::io::Read;
+use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use mini_sowel_core::api::{MAX_BODY_BYTES, Request, handle};
-use mini_sowel_core::devices::{DeviceStore, Devices, lock};
+use mini_sowel_core::api::{ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream};
+use mini_sowel_core::devices::lock;
+use mini_sowel_core::home::Home;
 use mini_sowel_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use tiny_http::{Header, Response, Server};
 
+use crate::random::SystemRandom;
 use crate::store::{FileStore, Saver};
 use crate::{backup, clock};
 
@@ -45,11 +48,42 @@ fn bind(port: u16) -> Result<Arc<Server>, String> {
 /// Requests answered at the same time; one more is told to come back (503).
 const MAX_WORKERS: usize = 4;
 
+/// A streamed list as a `Read`: each time the buffer is empty it takes the home, writes the next
+/// chunk of the list into the buffer, and lets go of the home. The home is never held while the
+/// socket is written (the server drains the reader between two chunks).
+struct ChunkReader<'a> {
+    home: &'a Mutex<Home>,
+    cursor: ListCursor,
+    buffer: Vec<u8>,
+    position: usize,
+}
+
+impl Read for ChunkReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        while self.position >= self.buffer.len() {
+            // An error aborts the answer: the client sees a broken stream, not a short list.
+            let chunk = self.cursor.next_chunk(&lock(self.home))?;
+            match chunk {
+                Some(chunk) => {
+                    self.buffer = chunk.into_bytes();
+                    self.position = 0;
+                }
+                None => return Ok(0),
+            }
+        }
+        let count = out.len().min(self.buffer.len() - self.position);
+        out[..count].copy_from_slice(&self.buffer[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
 /// Reads one request, asks the core, answers. Runs in a worker thread: a client that stalls
 /// while sending its body holds this thread only.
 fn answer(
     mut request: tiny_http::Request,
-    devices: &Mutex<Devices>,
+    home: &Mutex<Home>,
+    random: &Mutex<SystemRandom>,
     port: u16,
     content_type: &Header,
 ) {
@@ -66,9 +100,10 @@ fn answer(
         .as_reader()
         .take(MAX_BODY_BYTES as u64 + 1)
         .read_to_end(&mut body);
-    let response = {
-        let mut guard = lock(devices);
-        handle(
+    let reply = {
+        let mut guard = lock(home);
+        let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
+        handle_stream(
             &mut guard,
             &Request {
                 method: &method,
@@ -78,22 +113,44 @@ fn answer(
                 body: &body,
             },
             now_ms(),
+            &mut fill,
         )
     };
     // The client may have gone: nothing to do about it.
-    let _ = match response.body {
-        Some(text) => request.respond(
-            Response::from_string(text)
-                .with_status_code(response.status)
-                .with_header(content_type.clone()),
-        ),
-        None => request.respond(Response::empty(response.status)),
+    let _ = match reply {
+        // Unknown length: sent chunked, one chunk of the list at a time.
+        Reply::List(cursor) => request.respond(tiny_http::Response::new(
+            tiny_http::StatusCode(200),
+            vec![content_type.clone()],
+            ChunkReader {
+                home,
+                cursor,
+                buffer: Vec::new(),
+                position: 0,
+            },
+            None,
+            None,
+        )),
+        Reply::Whole(response) => match response.body {
+            Some(text) => request.respond(
+                Response::from_string(text)
+                    .with_status_code(response.status)
+                    .with_header(content_type.clone()),
+            ),
+            None => request.respond(Response::empty(response.status)),
+        },
     };
 }
 
 /// Accepts requests and hands each to a worker thread (at most `MAX_WORKERS` at once), so that
 /// a stalled client never blocks the others or the exit.
-fn http_loop(server: &Server, devices: &Arc<Mutex<Devices>>, port: u16, content_type: &Header) {
+fn http_loop(
+    server: &Server,
+    home: &Arc<Mutex<Home>>,
+    random: &Arc<Mutex<SystemRandom>>,
+    port: u16,
+    content_type: &Header,
+) {
     let busy = Arc::new(AtomicUsize::new(0));
     for request in server.incoming_requests() {
         if busy.fetch_add(1, Ordering::SeqCst) >= MAX_WORKERS {
@@ -105,10 +162,14 @@ fn http_loop(server: &Server, devices: &Arc<Mutex<Devices>>, port: u16, content_
             );
             continue;
         }
-        let (devices, worker_busy, content_type) =
-            (Arc::clone(devices), Arc::clone(&busy), content_type.clone());
+        let (home, random, worker_busy, content_type) = (
+            Arc::clone(home),
+            Arc::clone(random),
+            Arc::clone(&busy),
+            content_type.clone(),
+        );
         let spawned = thread::Builder::new().spawn(move || {
-            answer(request, &devices, port, &content_type);
+            answer(request, &home, &random, port, &content_type);
             worker_busy.fetch_sub(1, Ordering::SeqCst);
         });
         if spawned.is_err() {
@@ -127,14 +188,15 @@ pub fn serve<T: RadioTransport>(
     stop: &AtomicBool,
 ) -> Result<bool, String> {
     let store = FileStore::new(data);
-    let devices = Arc::new(Mutex::new(Devices::from_list(store.load()?)));
+    let home = Arc::new(Mutex::new(store.load_home(now_ms())?));
+    let random = Arc::new(Mutex::new(SystemRandom::open()?));
     let server = bind(port)?;
     let _ = SERVER.set(Arc::clone(&server));
     let content_type = Header::from_bytes("Content-Type", "application/json; charset=utf-8")
         .map_err(|()| "serve: cannot build the Content-Type header".to_string())?;
     {
-        let (server, devices) = (Arc::clone(&server), Arc::clone(&devices));
-        thread::spawn(move || http_loop(&server, &devices, port, &content_type));
+        let (server, home, random) = (Arc::clone(&server), Arc::clone(&home), Arc::clone(&random));
+        thread::spawn(move || http_loop(&server, &home, &random, port, &content_type));
     }
     // Ctrl-C before the server existed: nobody unblocked it.
     if stop.load(Ordering::SeqCst) {
@@ -142,12 +204,12 @@ pub fn serve<T: RadioTransport>(
     }
     let mut saver = Saver::new(store, now_ms());
     let result = radio_loop(
-        transport, label, port, verbose, data, stop, &devices, &mut saver,
+        transport, label, port, verbose, data, stop, &home, &random, &mut saver,
     );
     // The store is written first, and the HTTP threads are never waited for: a client that
     // stalls cannot keep the host from saving and exiting.
     server.unblock();
-    let saved = saver.tick(&devices, now_ms(), true);
+    let saved = saver.tick(&home, now_ms(), true);
     result.and_then(|stopped| saved.map(|()| stopped))
 }
 
@@ -159,11 +221,11 @@ fn radio_loop<T: RadioTransport>(
     verbose: bool,
     data: &std::path::Path,
     stop: &AtomicBool,
-    devices: &Mutex<Devices>,
+    home: &Mutex<Home>,
+    random: &Mutex<SystemRandom>,
     saver: &mut Saver,
 ) -> Result<bool, String> {
-    let mut random = crate::random::SystemRandom::open()?;
-    let mut fill = |buffer: &mut [u8]| random.fill(buffer);
+    let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
     let mut radio = Radio::new(transport, clock());
     let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
     let lines = identity_lines(label, &identity);
@@ -180,14 +242,19 @@ fn radio_loop<T: RadioTransport>(
         let activity = radio.take_activity();
         let now = now_ms();
         {
-            let mut guard = lock(devices);
+            let mut guard = lock(home);
             for item in &activity {
-                guard.apply_activity(item, now);
+                guard.devices.apply_activity(item, now);
             }
             for event in &events {
-                guard.measures(event, now, &mut fill)?;
+                guard.devices.measures(event, now, &mut fill)?;
             }
-            guard.refresh_status(now);
+            let status_changed = guard.devices.refresh_status(now);
+            // The zone aggregation (and the motion times) after each batch of measures, and
+            // when silence alone turned a device offline.
+            if status_changed || !events.is_empty() || !activity.is_empty() {
+                guard.recompute(now);
+            }
         }
         if verbose {
             for event in &events {
@@ -196,7 +263,7 @@ fn radio_loop<T: RadioTransport>(
                 }
             }
         }
-        saver.tick(devices, now, false)?;
+        saver.tick(home, now, false)?;
     }
     Ok(true)
 }

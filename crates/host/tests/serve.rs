@@ -107,8 +107,20 @@ fn serve(dir: &Path, speed: &str, extra: &[&str]) -> Serving {
 }
 
 impl Serving {
-    /// Sends a request and returns (status, body).
+    /// Sends a request and returns (status, body); a chunked body is decoded.
     fn request(&self, method: &str, path: &str, host: &str, body: &str) -> (u16, String) {
+        let (status, _, body) = self.request_full(method, path, host, body);
+        (status, body)
+    }
+
+    /// Sends a request and returns (status, head, body; a chunked body decoded).
+    fn request_full(
+        &self,
+        method: &str,
+        path: &str,
+        host: &str,
+        body: &str,
+    ) -> (u16, String, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
@@ -123,7 +135,15 @@ impl Serving {
         stream.read_to_string(&mut text).unwrap();
         let (head, body) = text.split_once("\r\n\r\n").expect("an HTTP answer");
         let status = head.split(' ').nth(1).unwrap().parse().unwrap();
-        (status, body.to_string())
+        let body = if head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
+            dechunk(body)
+        } else {
+            body.to_string()
+        };
+        (status, head.to_string(), body)
     }
 
     fn get(&self, path: &str) -> (u16, String) {
@@ -158,6 +178,20 @@ impl Serving {
             }
             thread::sleep(Duration::from_millis(20));
         }
+    }
+}
+
+/// The body of a chunked answer: `<hex size>\r\n<data>\r\n` repeated, ending with a size 0.
+fn dechunk(mut rest: &str) -> String {
+    let mut out = String::new();
+    loop {
+        let (size, after) = rest.split_once("\r\n").expect("a chunk size");
+        let size = usize::from_str_radix(size.trim(), 16).expect("a hex size");
+        if size == 0 {
+            return out;
+        }
+        out.push_str(&after[..size]);
+        rest = &after[size + 2..];
     }
 }
 
@@ -443,5 +477,388 @@ fn the_motion_sensor_enrolled_at_pairing_sets_occupancy_true_on_motion_and_false
     let devices = serving.devices();
     assert_eq!(data(find(&devices, "MS01"), "occupancy")["value"], true);
     wait_for_occupancy(&serving, false);
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+// ---- Spec 010: zones, equipments, aggregation ----
+
+impl Serving {
+    fn send(&self, method: &str, path: &str, body: &Value) -> (u16, Value) {
+        let (status, text) = self.request(
+            method,
+            path,
+            &format!("127.0.0.1:{}", self.port),
+            &body.to_string(),
+        );
+        let json = if text.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap()
+        };
+        (status, json)
+    }
+
+    /// `GET /api/v1/zones/aggregation`.
+    fn aggregation(&self) -> Value {
+        let (status, body) = self.get("/api/v1/zones/aggregation");
+        assert_eq!(status, 200);
+        serde_json::from_str(&body).unwrap()
+    }
+}
+
+/// A zone "Garage", the three devices in it and the three equipments of the demo; the zone id.
+fn set_up_the_garage(serving: &Serving) -> String {
+    let (status, zone) = serving.send(
+        "POST",
+        "/api/v1/zones",
+        &serde_json::json!({"name": "Garage"}),
+    );
+    assert_eq!(status, 201, "{zone}");
+    let zone = zone["id"].as_str().unwrap().to_string();
+    let devices = serving.devices();
+    for model in ["TH01", "MS01", "ZBMINIR2"] {
+        let id = find(&devices, model)["id"].as_str().unwrap();
+        let (status, body) = serving.send(
+            "PUT",
+            &format!("/api/v1/devices/{id}"),
+            &serde_json::json!({ "zoneId": zone }),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["zoneId"], zone.as_str());
+    }
+    for (name, kind, model) in [
+        ("Garage climate", "sensor", "TH01"),
+        ("Garage motion", "sensor", "MS01"),
+        ("Garage light", "light_onoff", "ZBMINIR2"),
+    ] {
+        let id = find(&devices, model)["id"].as_str().unwrap();
+        let (status, body) = serving.send(
+            "POST",
+            "/api/v1/equipments",
+            &serde_json::json!({"name": name, "type": kind, "zoneId": zone, "deviceIds": [id]}),
+        );
+        assert_eq!(status, 201, "{body}");
+        assert!(!body["dataBindings"].as_array().unwrap().is_empty());
+    }
+    zone
+}
+
+/// Waits until the zone has a temperature and motion; its aggregated data.
+fn wait_for_motion(serving: &Serving, zone: &str) -> Value {
+    let start = Instant::now();
+    loop {
+        let aggregation = serving.aggregation();
+        let data = &aggregation[zone];
+        if data["motion"] == true && !data["temperature"].is_null() {
+            return aggregation;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(40),
+            "no motion with a temperature: {data}"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_garage_zone_three_equipments_and_the_aggregation_of_the_garage_and_the_root() {
+    let dir = data_dir();
+    pair(&dir);
+    assert!(
+        !dir.join("zones.json").exists(),
+        "--pair writes the devices only"
+    );
+    let serving = serve(&dir, "10", &[]);
+    // The root zone exists from the first --serve, and is on disk at once.
+    let (status, tree) = serving.send("GET", "/api/v1/zones", &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(tree[0]["name"], "Maison");
+    assert_eq!(tree[0]["id"], "00000000-0000-0000-0000-000000000001");
+    let start = Instant::now();
+    while !dir.join("zones.json").exists() {
+        assert!(start.elapsed() < Duration::from_secs(10), "no zones.json");
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    let zone = set_up_the_garage(&serving);
+    let aggregation = wait_for_motion(&serving, &zone);
+    for id in [zone.as_str(), "00000000-0000-0000-0000-000000000001"] {
+        let data = &aggregation[id];
+        let temperature = data["temperature"].as_f64().unwrap();
+        assert!((12.0..=14.7).contains(&temperature), "{id}: {temperature}");
+        // One decimal.
+        assert_eq!((temperature * 10.0).round() / 10.0, temperature);
+        assert_eq!(data["motion"], true);
+        assert_eq!(data["motionSensors"], 1);
+        assert!(data["motionSince"].is_string(), "{id}");
+        assert_eq!(data["lightsTotal"], 1);
+        assert_eq!(data["lightsOn"], 0);
+        assert!(data["humidity"].as_f64().is_some());
+    }
+    // The equipments, with the status of a device that talked recently.
+    let (_, equipments) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    let names: Vec<&str> = equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Garage climate", "Garage light", "Garage motion"]);
+    let climate = &equipments[0];
+    assert_eq!(climate["status"], "online");
+    let temperature = climate["dataBindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["alias"] == "temperature")
+        .unwrap();
+    assert!(temperature["value"].is_number());
+    assert!(temperature["lastChanged"].is_string());
+    assert_eq!(temperature["stale"], false);
+    assert_eq!(serving.interrupt(), Some(130));
+
+    // The files are on disk, readable by the owner only.
+    let zones = std::fs::read_to_string(dir.join("zones.json")).unwrap();
+    assert!(zones.contains("Garage") && zones.contains("Maison"));
+    let equipments = std::fs::read_to_string(dir.join("equipments.json")).unwrap();
+    assert!(equipments.contains("Garage light") && equipments.contains("light_onoff"));
+    use std::os::unix::fs::PermissionsExt;
+    for name in ["zones.json", "equipments.json", "devices.json"] {
+        let mode = std::fs::metadata(dir.join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{name}");
+    }
+}
+
+#[test]
+fn restarting_serve_keeps_the_zones_the_equipments_and_the_devices_in_their_zones() {
+    let dir = data_dir();
+    pair(&dir);
+    let first = serve(&dir, "100", &[]);
+    let zone = set_up_the_garage(&first);
+    let (_, before) = first.send("GET", "/api/v1/equipments", &Value::Null);
+    assert_eq!(first.interrupt(), Some(130));
+
+    // Speed 1: nothing new within the test, so what is served is what was kept.
+    let second = serve(&dir, "1", &[]);
+    let (_, tree) = second.send("GET", "/api/v1/zones", &Value::Null);
+    assert_eq!(tree[0]["children"][0]["id"], zone.as_str());
+    assert_eq!(tree[0]["children"][0]["name"], "Garage");
+    let (_, after) = second.send("GET", "/api/v1/equipments", &Value::Null);
+    let strip = |list: &Value| -> Vec<Value> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                // The ids of the equipments and the bindings, and their zone.
+                serde_json::json!({
+                    "id": e["id"], "name": e["name"], "zoneId": e["zoneId"], "type": e["type"],
+                    "bindings": e["dataBindings"].as_array().unwrap().iter()
+                        .map(|b| b["id"].clone()).collect::<Vec<_>>(),
+                })
+            })
+            .collect()
+    };
+    assert_eq!(strip(&before), strip(&after));
+    for device in second.devices() {
+        assert_eq!(device["zoneId"], zone.as_str());
+    }
+    assert!(second.aggregation()[zone.as_str()]["lightsTotal"] == 1);
+    assert_eq!(second.interrupt(), Some(130));
+}
+
+#[test]
+fn a_zones_or_equipments_file_that_does_not_parse_stops_serve_and_pair_and_is_left_alone() {
+    for name in ["zones.json", "equipments.json"] {
+        for mode in [vec!["--serve", "18998"], vec!["--pair", "5"]] {
+            let dir = data_dir();
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join(name);
+            std::fs::write(&file, "[ broken").unwrap();
+            let output = host()
+                .args(["--sim", GARAGE])
+                .args(&mode)
+                .arg("--data")
+                .arg(&dir)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(1), "{name} {mode:?}");
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(
+                stderr.starts_with(&format!(
+                    "{}: {}: cannot read: ",
+                    name.trim_end_matches(".json"),
+                    file.display()
+                )),
+                "{stderr}"
+            );
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "[ broken");
+            assert!(
+                !dir.join("network.json").exists(),
+                "the radio was not touched"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_new_routes_refuse_a_foreign_host_and_answer_json_errors_over_http() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "100", &[]);
+    for path in [
+        "/api/v1/zones",
+        "/api/v1/equipments",
+        "/api/v1/zones/aggregation",
+    ] {
+        let (status, body) = serving.request("GET", path, "evil.example", "");
+        assert_eq!(
+            (status, body.as_str()),
+            (403, r#"{"error":"Forbidden host"}"#),
+            "{path}"
+        );
+    }
+    let (status, body) = serving.send("POST", "/api/v1/zones", &serde_json::json!({"color": 1}));
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (400, Some("Unknown field: color"))
+    );
+    let (status, body) = serving.send("GET", "/api/v1/equipments/nope", &Value::Null);
+    assert_eq!(
+        (status, body["error"].as_str()),
+        (404, Some("Equipment not found"))
+    );
+    // Concurrent creations from several clients: every id is distinct (the shared random source).
+    let handles: Vec<_> = (0..6)
+        .map(|i| {
+            let port = serving.port;
+            thread::spawn(move || {
+                let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                let body = format!(r#"{{"name":"Zone {i}"}}"#);
+                write!(
+                    stream,
+                    "POST /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+                let mut text = String::new();
+                stream.read_to_string(&mut text).unwrap();
+                text.contains(" 201 ")
+            })
+        })
+        .collect();
+    let created = handles
+        .into_iter()
+        .map(|h| h.join().unwrap())
+        .filter(|ok| *ok)
+        .count();
+    assert!(created >= 1, "some creations were answered");
+    let (_, tree) = serving.send("GET", "/api/v1/zones", &Value::Null);
+    let mut ids: Vec<String> = tree[0]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|z| z["id"].as_str().unwrap().to_string())
+        .collect();
+    let count = ids.len();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), count, "no id twice");
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn motion_since_is_the_time_the_radio_loop_saw_the_change_not_the_time_somebody_asked() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "10", &[]);
+    let zone = set_up_the_garage(&serving);
+    // Nobody asks for the aggregation: the device API is read until the motion is there.
+    wait_for_occupancy(&serving, true);
+    thread::sleep(Duration::from_millis(700));
+    let (_, equipments) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    let aggregation = serving.aggregation();
+    let motion = equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Garage motion")
+        .unwrap();
+    let binding = &motion["dataBindings"][0];
+    assert_eq!(binding["category"], "motion");
+    assert_eq!(
+        aggregation[zone.as_str()]["motion"],
+        true,
+        "still within its minute"
+    );
+    // The change was seen by the radio loop at one instant: the binding's `lastChanged` and the
+    // zone's `motionSince` are that instant, however long after it is read.
+    assert_eq!(
+        aggregation[zone.as_str()]["motionSince"],
+        binding["lastChanged"]
+    );
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn the_long_lists_come_chunked_and_are_the_same_json_with_filter_sorting_and_empty_lists() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "1", &[]);
+    let zone = set_up_the_garage(&serving);
+    let host = format!("127.0.0.1:{}", serving.port);
+    // Chunked, without a length, as JSON.
+    for path in ["/api/v1/devices", "/api/v1/equipments"] {
+        let (status, head, body) = serving.request_full("GET", path, &host, "");
+        assert_eq!(status, 200);
+        let head = head.to_ascii_lowercase();
+        assert!(head.contains("transfer-encoding: chunked"), "{head}");
+        assert!(!head.contains("content-length"), "{head}");
+        assert!(
+            head.contains("content-type: application/json; charset=utf-8"),
+            "{head}"
+        );
+        assert!(serde_json::from_str::<Value>(&body).unwrap().is_array());
+    }
+    // The devices, as they were; the equipments by name.
+    assert_eq!(serving.devices().len(), 3);
+    let (_, equipments) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    let names: Vec<&str> = equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Garage climate", "Garage light", "Garage motion"]);
+    // The filter, and a type that does not exist.
+    let (_, sensors) = serving.send("GET", "/api/v1/equipments?type=sensor", &Value::Null);
+    assert_eq!(sensors.as_array().unwrap().len(), 2);
+    let (status, none) = serving.send("GET", "/api/v1/equipments?type=nothing", &Value::Null);
+    assert_eq!((status, none), (200, serde_json::json!([])));
+    let (status, text) = serving.request("GET", "/api/v1/equipments?type=nothing", &host, "");
+    assert_eq!((status, text.as_str()), (200, "[]"));
+    // More than one chunk: 3 + 12 equipments, still sorted and whole.
+    for i in 0..12 {
+        let (status, _) = serving.send(
+            "POST",
+            "/api/v1/equipments",
+            &serde_json::json!({"name": format!("Extra {i:02}"), "type": "switch", "zoneId": zone}),
+        );
+        assert_eq!(status, 201);
+    }
+    let (_, all) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    let all = all.as_array().unwrap();
+    assert_eq!(all.len(), 15);
+    let names: Vec<&str> = all.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert!(
+        all.iter()
+            .all(|e| e["status"].is_string() && e["dataBindings"].is_array())
+    );
     assert_eq!(serving.interrupt(), Some(130));
 }

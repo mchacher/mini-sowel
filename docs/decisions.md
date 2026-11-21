@@ -186,3 +186,35 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   commissioning flow would be a fake guard. The box's flash must last: writing every measure
   would wear it out within months. The divergences do not change what a Sowel client reads (the
   same fields, types and values).
+
+## D14: Zones and equipments, and their divergences from Sowel (replaces D13's "zoneId null")
+
+- **Date**: 2026-11-21
+- **Choice**: zones, equipments, bindings and the zone aggregation follow Sowel's types, routes,
+  messages and rules, read from Sowel's code (spec 010). Devices now take a zone, so D13's "`zoneId`
+  `null` until zones exist" no longer holds. Divergences kept on purpose: only the six equipment
+  kinds of D3; no computed data, timed actions, energy flags, zone orders or reorder; bounds (32
+  zones, 64 equipments, 16 bindings) and lengths (names 64 characters, Sowel 100); `PUT /devices`
+  checks the zone (404) and deleting a zone returns its devices to no zone (Sowel does neither);
+  `POST /equipments` always returns the details; validation errors as `{"error"}` texts; unknown
+  fields refused on zone and binding routes, ignored on equipment routes (Sowel's clients send
+  extra flags).
+- **Why**: the box has bounded memory, and a Sowel client must read the same fields, values and
+  rules; the stricter checks only refuse what would leave dangling references.
+
+## D15: Long lists and files streamed in chunks
+
+- **Date**: 2026-11-21
+- **Choice**: the long API lists (`GET /devices`, `GET /equipments`) and the store's files are
+  produced by a cursor in the core, a few items at a time (at most 4), each chunk under the lock
+  and written out with the lock released (HTTP chunked transfer on the host; the box's HTTP server
+  sends chunks the same way). The memory ceiling stays 200 KB for a realistic home (50 devices,
+  10 zones, 50 equipments), model and largest response in flight included; measured 269 KB with
+  whole responses, 150 KB with chunks, 124 KB once the model stopped storing what it can derive
+  (parent ids, constant fields, shared aliases): the model itself went from 132 KB to 103 KB;
+  128 KB with chunks of 4 items and the aggregation's index, so four slow clients holding a chunk
+  each add about 48 KB.
+- **Why**: building a whole response held the model plus a 143 KB string, and up to four requests
+  run at once, so the peak grew with the home and with the clients; on the box's 2 MB of PSRAM,
+  shared with WebSocket clients, recipes, TLS and OTA, that growth would end in a restart, against
+  the true north (a month without intervention). Discussed with the user, who chose it.
