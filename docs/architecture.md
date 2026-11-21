@@ -30,7 +30,7 @@ app, built by Vite into `ui/dist`, which the host's `--serve` serves; the box do
 
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
-| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, enrolling alarm devices, listening to its measures, sending commands and waiting for their acknowledgement in `commands.rs`), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
+| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, enrolling alarm devices, listening to its measures, sending commands and waiting for their acknowledgement in `commands.rs`), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements; `network.rs`: the network setting (`auto`, `wifi`, `ethernet`) read from its JSON and the link chosen at boot from it and the cable (decision D24) | `crates/core/` |
 | Devices and API | In the core: `devices/` (Sowel's `Device`, `DeviceData`, `DeviceOrder`; the catalog from clusters to data and orders; the registry with its bounds; the `DeviceStore` trait) and `api/` (Sowel's routes as a function from request to response, reused by the box; an order comes back as an order request, which the host's radio loop executes through the queue in `orders/`: at most 2 orders from the API at once (one being sent, one waiting), sent before the recipes' orders, which have their own bound of 32); in the host: `store.rs` (`devices.json`) and `serve.rs` (`tiny_http` on a loopback port of its own, behind the host's front door, `front.rs`, which owns the public port on 127.0.0.1; locks are always taken in the order home, orders' queue, live hub, and the WebSocket threads take only the hub) | `crates/core/src/{devices,api,orders}/`, `crates/host/src/{store,serve}.rs` |
 | Zones and equipments | In the core: `zones/` (the tree, Sowel's rules, the aggregation) and `equipments/` (bindings by alias, status and stale as Sowel); the API serves them; the host stores `zones.json` and `equipments.json` | `crates/core/src/{zones,equipments}/` |
 | Recipes | In the core: `recipes/` (the engine: instances, their state and log, timers checked on each loop turn; `motion_light/`, Sowel's recipe in Rust: settings, validation, state machine) and `home/events.rs` (the compact events recipes listen to, filtered and bounded); a recipe's orders go through the order queue after the API's; the API serves Sowel's recipe routes; the host runs the engine in its radio loop and stores `recipes.json` | `crates/core/src/{recipes,home}/`, `crates/host/src/{serve,store}.rs` |
@@ -49,10 +49,17 @@ app, built by Vite into `ui/dist`, which the host's `--serve` serves; the box do
 - **Firmware** (`firmware/Cargo.toml`): built with the Xtensa toolchain from `espup`, target
   `xtensa-esp32-espidf`, ESP-IDF version pinned in `firmware/.cargo/config.toml`; the build
   downloads ESP-IDF into `firmware/.embuild/` (ignored by git). Settings of ESP-IDF:
-  `firmware/sdkconfig.defaults` (16 MB flash, PSRAM in the heap, chip revision 3 and later).
-  `sh scripts/qemu.sh` assembles a flash image with ESP-IDF's `esptool` and boots it in
-  Espressif's QEMU (`qemu-system-xtensa`, installed into `firmware/.embuild/` by ESP-IDF's tool
-  installer), with 2 MB of PSRAM; it fails on a panic, a reboot or a missing memory line.
+  `firmware/sdkconfig.defaults` (16 MB flash, PSRAM in the heap with allocations above 4 KB
+  placed there and 64 KB of internal RAM kept for the network and DMA, mbedTLS buffers in PSRAM,
+  chip revision 3 and later). The partition table is `firmware/partitions.csv` (settings, two
+  application slots of 4 MB, a data partition; decision D25), given to the box at flashing, not
+  through `sdkconfig.defaults`. `sh scripts/qemu.sh` builds that table, assembles a flash image
+  with ESP-IDF's `esptool` with the application at the offset of the first slot, as the table
+  gives it, and boots it in Espressif's QEMU (`qemu-system-xtensa`, installed into
+  `firmware/.embuild/` by ESP-IDF's tool installer), with 2 MB of PSRAM; it fails on a panic, a
+  reboot or a missing memory line. The wiring, the risks and the backup procedure of the box are
+  in [hardware.md](hardware.md); the memory shared out item by item is in
+  [memory-budget.md](memory-budget.md).
 - **Unsafe code**: the core and the host forbid it; the firmware denies it, except in the small
   functions that call ESP-IDF's C functions, each with a `SAFETY` comment (decision D11).
 - **Tools** (`tools/<name>/`): TypeScript run directly by Node 24, no build step; type-checked by

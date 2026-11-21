@@ -23,6 +23,7 @@ pub mod equipments;
 pub mod failure;
 pub mod home;
 pub mod live;
+pub mod network;
 pub mod orders;
 pub mod recipes;
 pub mod zones;

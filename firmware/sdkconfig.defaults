@@ -14,3 +14,15 @@ CONFIG_SPIRAM_IGNORE_NOTFOUND=y
 # The Dongle Max's ESP32-D0WDR2-V3 is revision 3. Below it, ESP-IDF needs a PSRAM cache
 # workaround that only the C compiler applies, which Rust code would not get.
 CONFIG_ESP32_REV_MIN_3=y
+
+# Memory placement (spec 015, decision D23). Allocations of up to 4 KB stay in internal RAM,
+# larger ones go to PSRAM; 64 KB of internal RAM are kept for DMA and the network stack; mbedTLS
+# takes its buffers from PSRAM.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Partition table (decision D25): `partitions.csv` next to this file. esp-idf-sys does not read a
+# custom table from here (its README says to leave CONFIG_PARTITION_TABLE_* out), so the table
+# reaches the box through `espflash --partition-table partitions.csv`, and QEMU through
+# `scripts/qemu.sh`, which builds its image from the same file.
