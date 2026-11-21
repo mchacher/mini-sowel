@@ -14,7 +14,8 @@ use peak_alloc::PeakAlloc;
 #[global_allocator]
 static ALLOCATOR: PeakAlloc = PeakAlloc;
 
-const CEILING_BYTES: usize = 200 * 1024;
+/// The engine's budget for a realistic home, decision D20.
+const CEILING_BYTES: usize = 300 * 1024;
 const T0: u64 = 1_795_252_323_120;
 
 fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {

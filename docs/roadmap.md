@@ -91,6 +91,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-21 | Sowel issue: motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
 | 2026-11-21 | Sowel issue: `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
 | 2026-11-21 | G: `sowel-plugin-mini` first publishes the box's devices only (Sowel plugins can publish nothing else today); then its equipments and zones, once Sowel lets a plugin publish the equipments and zones it owns (Sowel issue to open, draft ready) | Conversation on the link with Sowel |
+| 2026-11-21 | Memory: a test with every bound at its maximum (64 devices, 31 zones, 64 equipments, 16 instances, 4 live clients; estimated 400 KB on the Mac), with its own ceiling | Memory estimate, 2026-11-21 |
+| 2026-11-21 | Memory: allocations of 16 KB or less go to the internal SRAM first (`SPIRAM_MALLOC_ALWAYSINTERNAL=16384`): lower it (about 512) so the engine lives in PSRAM; Wi-Fi enabled beside Ethernet; mbedTLS forced internal (about 40 KB a session): one TLS session at a time | Memory estimate, 2026-11-21 |
+| 2026-11-21 | Memory: a WebAssembly recipe takes about 78 KB (a 64 KB page and stacks) against about 7 KB native: fewer instances or a smaller memory before F; history bounded by constants before H | Memory estimate, 2026-11-21 |
+| 2026-11-21 | Memory optimisations to keep in view: recipe logs stored compactly (message templates), fewer log lines, smaller per-client WebSocket buffers, the model's 32-bit size measured on the box | Memory estimate, 2026-11-21 |
 | 2026-11-21 | A memory budget of the box per item (engine, HTTP, WebSocket clients, WebAssembly recipes, TLS, OTA buffers, history), written in `docs/` and checked by tests, before milestone E | Spec 010, discussion with the user |
 | 2026-11-21 | Equipment types beyond D3's six, zone orders (all lights off), zone reorder, window contacts (a contact device as `contact_window`) | Spec 010 review |
 | 2026-11-21 | Alarm devices beyond motion, contact, leak and smoke: sirens and keypads (IAS WD, ACE), CO and vibration zones, IAS on a second endpoint | Spec 009 review |
@@ -137,3 +141,5 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-21: B8 built (spec 014): milestone B is built on the simulator, its demos on the real
   Dongle Max, motion sensor and ZBMINIR2 pending. A full review with `/mini-sowel-roadmap` is due
   (milestone reached, inbox of 18 items, the memory ceiling reached) before milestone C or E.
+- 2026-11-21: the engine's memory ceiling raised from 200 KB to 300 KB with the user (decision D20), after
+  an estimate of the whole box; its optimisations added to the inbox.

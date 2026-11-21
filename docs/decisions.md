@@ -287,3 +287,15 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   locales and a router, over the 170 KB budget; redrawing would break "ported, not redrawn" (D4);
   the box will embed the files (E).
 
+## D20: The engine's memory ceiling is 300 KB for a realistic home
+
+- **Date**: 2026-11-21
+- **Choice**: the ceiling test of a realistic home (50 devices, 10 zones, 50 equipments, 3 recipe
+  instances with full logs, a live client with a full queue, the largest answer in flight) allows
+  300 KB, measured on the Mac; it replaces D15's 200 KB. Every optimisation found stays in the
+  roadmap's inbox, and the figure is read again on the box (QEMU, then the Dongle Max).
+- **Why**: milestone B brought the engine to 187 KB (198 KB in the worst case), with no room for
+  the next feature. An estimate of the whole box (2026-11-21) leaves about 1.4 MB of PSRAM free in
+  the likely case: the engine can take 300 KB, while the risks lie in the internal SRAM, the
+  WebAssembly recipes and bounds no test checks together. Approved by the user.
+

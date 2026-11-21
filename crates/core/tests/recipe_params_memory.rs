@@ -15,7 +15,7 @@ const T0: u64 = 1_795_252_323_120;
 /// 16 instances x about 2.5 KB of params, plus their start-up log line and runner: well under
 /// 16 x 4 KB. A parsed value would hold about 1.8 MB.
 const KEPT_BOUND: usize = 16 * 4 * 1024;
-const PEAK_BOUND: usize = 200 * 1024;
+const PEAK_BOUND: usize = 300 * 1024;
 
 fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
     Request {
