@@ -229,3 +229,5 @@ device sends them (Sowel's `Device` carries `manufacturer` and `model`, `../sowe
 Run `cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair`, press the SNZB-02's
 button for 5 seconds until its light blinks, and read the `joined` and `device` lines. Run it a
 second time: `network: resumed`.
+
+Run on the real hardware (2026-11-21): `--pair 240` formed the network (channel 15, a PAN id) and opened pairing; a Sonoff ZBMINIR2 relay and a Sonoff SNZB-03PR2 motion sensor both joined and were named `SONOFF ZBMINIR2` and `SONOFF SNZB-03PR2`. The SNZB-02 was not used. A warning at start: `the radio refused setValue (status 0x10070), its own value is used` (open defect, to investigate).

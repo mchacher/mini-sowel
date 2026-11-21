@@ -21,7 +21,7 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
 | E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, Wi-Fi off beside Ethernet, one TLS session at a time) (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | |
-| E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | |
+| E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21; defects to fix, merge pending |
 | E3 | Solite in the box: original firmware saved, then flashed with the user's yes; the radio over the serial link, Ethernet, data in flash, the API and the interface served by the box (precompressed); configured by `scripts/demo-garage.sh` | The garage runs in the box for a day, Mac off | |
 
 ## Next milestone
@@ -118,8 +118,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-
-Empty: every need was placed on 2026-11-21 (see the log).
+| 2026-11-21 | Wi-Fi as well as Ethernet, on the box itself and for the tests from the Mac: the annex may have no Ethernet socket. Changes E1 (Wi-Fi in the memory budget, not "Wi-Fi off") and E3 (Wi-Fi and Ethernet both working, a way to give the box the network's name and password without a screen) | The user |
 
 ## Sowel issues to open
 
@@ -179,3 +178,10 @@ Every change to this roadmap: date, what changed, why.
   Mac, E3 flashed), next J (the autonomous box: configuration screens, password, updates, home
   settings; done when a month in an annex), then C, I, H, F, G. A and B wait for their hardware
   demos (E2). Every inbox item placed; the Sowel issues moved to their own list.
+- 2026-11-21: E2 demos run on the real Dongle Max (USB relayed by `socat`), a SNZB-03PR2 and a
+  ZBMINIR2: radio, pairing, resume, readings, API, orders, motion-light and interface worked
+  (specs 004 to 014 updated). Four defects: battery shown 0 % (not reproduced since: the sensor reports 200, 100 %,
+  so the 0 was probably a first report after joining; watch), `setValue` refused by the radio
+  (EmberStatus 0x70, one of the two set while forming the network; the start-up one is accepted;
+  settle it at the next network forming), `scripts/demo-garage.sh` and the IPv4/IPv6 port clash
+  fixed (branch fix/e2-defects). Merge pending.

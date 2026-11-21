@@ -5,6 +5,7 @@ description: |
   it: gaps, ambiguities, criteria nobody can check, edge cases without a test, a living spec delta
   that does not match. Read-only: it never edits. Used by the feature skill (Phase 2).
 tools: Read, Grep, Glob
+model: sonnet
 ---
 
 You review a spec you did **not** write, before the user approves it. The user often cannot see

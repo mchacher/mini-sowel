@@ -207,3 +207,5 @@ None yet: B2 maps these measures to Sowel's device data (`../sowel/src/shared/ty
 Pair the SNZB-02 (`--pair`), watch its first measures, stop the host, run `--listen`, breathe on
 the sensor: the humidity and temperature rise within a minute (the sensor reports at most every
 30 s; battery only every few hours).
+
+Run on the real hardware (2026-11-21): Reporting was configured on pairing (relay: light_state; sensor: luminosity, motion, battery) and the readings showed live: motion true/false, luminosity 132 lx then 35 lx. After a restart of the host the network resumed without pairing again and the readings kept coming. Open defect: the battery shows 0 % while the sensor works. Temperature and humidity were not tested (no SNZB-02).

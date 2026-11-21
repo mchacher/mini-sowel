@@ -165,3 +165,5 @@ through Sowel's fallback (`../sowel/src/devices/category-inference.ts`).
 
 `--sim scenarios/garage.json --pair 30 --speed 10`, then `--serve --speed 10`, and read the motion
 sensor's `occupancy` in `http://127.0.0.1:8080/api/v1/devices`.
+
+Run on the real hardware (2026-11-21): The SNZB-03PR2's motion arrives as `occupancy` (cluster 0x0406), not through IAS zone enrollment; motion true/false was seen in the device data. IAS enrollment itself was not exercised by this sensor.

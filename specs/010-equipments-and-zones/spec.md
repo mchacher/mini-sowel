@@ -265,3 +265,5 @@ First `--sim scenarios/garage.json --pair 30 --speed 10`, then with `--sim scena
 /api/v1/equipments` with `deviceIds` for each, then `GET /api/v1/zones/aggregation`: Garage with
 temperature (one decimal), motion true for about 6 s after the motion event at speed 10,
 `lightsTotal` 1, and Maison the same.
+
+Run on the real hardware (2026-11-21): The zone "Garage" was created under the root, the devices placed in it, and the equipments "Garage motion" (sensor) and "Garage light" (light_onoff) created through the API.

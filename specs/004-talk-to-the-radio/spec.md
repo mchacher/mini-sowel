@@ -194,3 +194,5 @@ web page), run `cargo run -p mini-sowel-host -- --radio tcp://<address>:6638`, a
 lines. Nothing else may be connected to the dongle at the same time: stop Zigbee2MQTT or Home Assistant
 if they use it. The command resets the radio (harmless: its network settings stay in its own
 memory).
+
+Run on the real hardware (2026-11-21): The Dongle Max (original firmware) was connected by USB to the Mac (CP210x serial port) and relayed to `tcp://127.0.0.1:6638` with `socat` at 115200 baud. The host printed `ezsp: protocol 13, stack type 2, EmberZNet 7.4.5.0`, the radio address and `network: no network`. First try over USB, no Solite defect.

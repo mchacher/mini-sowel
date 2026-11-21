@@ -204,3 +204,5 @@ None (the simulator is internal); report keys are Sowel's `DataCategory` names.
 Run `cargo run -p mini-sowel-host -- --sim scenarios/garage.json --pair 30 --speed 10` and watch
 three devices join, the sensor's measures arrive, the motion sensor stay silent (not enrolled
 before B2).
+
+Run on the real hardware (2026-11-21): Not concerned by the real hardware (simulated radio). The real radio's lines matched the simulated ones in format (joined / device / reporting / measures).

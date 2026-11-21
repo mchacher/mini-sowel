@@ -257,3 +257,5 @@ cargo run -p mini-sowel-host -- --sim scenarios/garage.json --serve --speed 10  
 
 `http://127.0.0.1:8080/`: the garage; motions at about 6 s and 18 s, the light on at about 6 s,
 off at about 44 s, without reloading; press the light's button.
+
+Run on the real hardware (2026-11-21): The interface served by the host (port 8090, 8080 being taken) showed the Garage, its motion and its light live; the switch in the interface drove the relay (confirmed by the user). Another program listening on the same port in IPv6 captured `localhost`; the interface was reached at 127.0.0.1 (open defect: the host binds IPv4 only and does not notice the clash).

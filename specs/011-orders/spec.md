@@ -216,3 +216,5 @@ read back after the order instead of an optimistic value.
 After spec 010's demo steps: `curl -X POST http://127.0.0.1:8080/api/v1/equipments/<light>/orders/state
 -H 'Content-Type: application/json' -d '{"value":true}'`, then `GET /api/v1/zones/aggregation`:
 `lightsOn` 1.
+
+Run on the real hardware (2026-11-21): `POST /api/v1/equipments/:id/orders/state {"value":"ON"}` answered success; the ZBMINIR2 clicked and reported `light_state on`.

@@ -255,3 +255,5 @@ w.onmessage=e=>console.log(e.data)"
 ```
 
 The events scroll as the scenario plays.
+
+Run on the real hardware (2026-11-21): Live events were seen in the interface (confirmed by the user).

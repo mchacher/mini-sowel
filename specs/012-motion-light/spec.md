@@ -310,3 +310,5 @@ curl -X POST http://127.0.0.1:8080/api/v1/recipe-instances -H 'Content-Type: app
 Then stop the host (Ctrl-C), start it again with the same command, and read
 `GET /api/v1/equipments/<light>` (`state`) at 10 s and at 50 s, then
 `GET /api/v1/recipe-instances/<id>/log`.
+
+Run on the real hardware (2026-11-21): The motion-light recipe (timeout 20 s) switched the relay off about 20 s after `motion false`, and back on at the next `motion true`; manual switching from the interface was also seen.

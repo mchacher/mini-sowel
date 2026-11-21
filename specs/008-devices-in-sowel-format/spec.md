@@ -230,3 +230,5 @@ Measured memory peak (R5), 2026-11-21 on the Mac (64-bit): 168 707 bytes (164 KB
 200 KB. A first version measured 384 KB: the model keeps ids as 16 bytes and dates as
 milliseconds in memory, written as UUID strings and ISO dates in the JSON, and the API sizes the
 JSON buffer exactly.
+
+Run on the real hardware (2026-11-21): `GET /api/v1/devices` listed both devices in Sowel's format, `online`, with the data keys illuminance, occupancy, battery, voltage (sensor) and state (relay). Right after a restart the values are empty until the next report (values are not kept across a restart: milestone H).

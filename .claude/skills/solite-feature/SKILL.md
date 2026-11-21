@@ -48,6 +48,12 @@ whatever the permission mode, Auto included. Do NOT combine phases.
 
 If the user put documents about this feature in `inputs/`, read them too, all of them.
 
+**To save tokens**, do not read the table yourself: launch one `Explore` agent with
+`model: "sonnet"`, give it the idea and this table, and ask for a brief of at most about 80
+lines: what exists today that the idea touches, the past specs and decisions that bear on it,
+the roadmap item, the Sowel types and fields to mirror (with their file), and the code to reuse
+(`file:line`). Read yourself only the few files the brief points to as decisive.
+
 ### 1.2 Clarify until nothing is assumed
 
 First restate the idea in two sentences: what changes for the user, and why. Then go through these

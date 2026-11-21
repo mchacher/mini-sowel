@@ -6,6 +6,7 @@ description: |
   severity, each with file:line and a concrete failure scenario. Read-only: it never edits.
   Used by the feature skill (Phase 5) and the fix skill (Phase 4).
 tools: Read, Grep, Glob, Bash
+model: opus
 ---
 
 You review a change you did **not** write. The user does not read code: your review is what
