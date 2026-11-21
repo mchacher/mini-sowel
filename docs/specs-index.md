@@ -19,3 +19,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 013 | live-events | Sowel's WebSocket (`/ws`): topics, 200 ms batches, dedup, the events of devices, zones, equipments, orders and recipes | 2026-11-21 | in progress |
 | 014 | interface | The interface served by the host: rooms, their state and equipments, live, with a light's switch; Sowel's components ported | 2026-11-21 | in progress |
 | 015 | target-sheet-and-budget | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot | 2026-11-21 | in progress |
+| 016 | engine-in-the-firmware | The engine loop moved to the core and run in the ESP32 firmware under QEMU, with the simulated radio, a realistic home and its memory checked | 2026-11-21 | in progress |
