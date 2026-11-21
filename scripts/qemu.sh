@@ -9,8 +9,10 @@
 # application; the data partition stays blank, so every run formats it), starts QEMU (machine
 # esp32, 2 MB of PSRAM, chip revision 3), and waits for the banner, the memory line, the `storage:`
 # and `network:` lines and, for the sim image, the `engine:` line, which it prints. Exit 0 when they
-# show and the engine's heap peak is at most 300 KB (decision D20) and its internal RAM minimum
-# free at least 64 KB (spec 015's reserve); exit 1 and the last 40 lines of the serial output when
+# show and the engine's heap peak is at most 350 KB (decision D27, which replaced D20's 300 KB) and its internal RAM minimum
+# free at least 64 KB (spec 015's reserve), every device of the home got a measure into the engine
+# (`N devices (N reported)`), and the radio dropped no callback once the scenario started (`scenario:
+# started`, logged when its clock starts after the first loop turn); exit 1 and the last 40 lines of the serial output when
 # a limit is crossed, the firmware panics, reboots, or a line is missing within the time allowed.
 # QEMU is always stopped, also on Ctrl-C.
 # Installs QEMU into firmware/.embuild/ at the first run (a download, like ESP-IDF's).
@@ -34,8 +36,8 @@ VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Ca
 
 TARGET_DIR=firmware/target/xtensa-esp32-espidf/release
 ESPRESSIF=$ROOT/firmware/.embuild/espressif
-# The engine's limits, in KB (spec 016 R4.4): heap peak (D20) and internal RAM minimum free.
-PEAK_LIMIT_KB=300
+# The engine's limits, in KB (spec 016 R4.4): heap peak (D27) and internal RAM minimum free.
+PEAK_LIMIT_KB=350
 INTERNAL_MIN_KB=64
 
 MODE=sim
@@ -178,7 +180,14 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     PEAK=$(echo "$ENGINE" | sed -n 's/.*(peak \([0-9]*\) KB).*/\1/p')
     INTERNAL_MIN=$(echo "$ENGINE" | sed -n 's/.*internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
     [ -n "$PEAK" ] && [ -n "$INTERNAL_MIN" ] || show_failure "cannot read the peak and the internal minimum from the engine line."
-    [ "$PEAK" -le "$PEAK_LIMIT_KB" ] || show_failure "the engine's heap peak is $PEAK KB, above the $PEAK_LIMIT_KB KB of decision D20."
+    [ "$PEAK" -le "$PEAK_LIMIT_KB" ] || show_failure "the engine's heap peak is $PEAK KB, above the $PEAK_LIMIT_KB KB of decision D27."
+    DEVICES=$(echo "$ENGINE" | sed -n 's/^.*engine: \([0-9]*\) devices (\([0-9]*\) reported).*/\1/p')
+    REPORTED=$(echo "$ENGINE" | sed -n 's/^.*engine: \([0-9]*\) devices (\([0-9]*\) reported).*/\2/p')
+    [ -n "$DEVICES" ] && [ -n "$REPORTED" ] || show_failure "cannot read the reported devices from the engine line."
+    [ "$REPORTED" -eq "$DEVICES" ] || show_failure "only $REPORTED of the $DEVICES devices got a measure into the engine."
+    grep -aq 'scenario: started' "$LOG" || show_failure "the scenario never started."
+    DROPPED=$(sed -n '/scenario: started/,$p' "$LOG" | grep -ac 'callback queue full' || true)
+    [ "$DROPPED" -eq 0 ] || show_failure "the radio dropped $DROPPED callbacks while the scenario played."
     [ "$INTERNAL_MIN" -ge "$INTERNAL_MIN_KB" ] || show_failure "the internal RAM minimum free is $INTERNAL_MIN KB, below the $INTERNAL_MIN_KB KB kept for the network."
     exit 0
   fi

@@ -33,7 +33,7 @@
 | fixtures | A fixture edited by hand | The test fails |
 | firmware (QEMU, sim) | Blank partition | `storage: formatted (...)` then `storage: /data, ...`, grepped by `qemu.sh` |
 | firmware (QEMU, sim) | No `network.json` | `network: wifi (setting auto), no link started`, grepped by `qemu.sh` |
-| firmware (QEMU, sim) | Realistic home, scenario played | `engine:` line, peak ≤ 300 KB, internal min ≥ 64 KB |
+| firmware (QEMU, sim) | Realistic home, scenario played | `engine:` line, peak ≤ 350 KB (D27), internal min ≥ 64 KB |
 | firmware (QEMU, box image) | Boot | `storage:`, `network:`, `radio: none` (the build is checked by validate; the boot by hand once, noted in the demo) |
 | firmware | Invalid `network.json`, full partition | Covered by the core's tests (spec 015 R5, the engine's write-failure tests); no QEMU run |
 

@@ -1,6 +1,7 @@
 //! The realistic home of decision D20, built once for the tests that need it: 50 devices with 6
 //! data and 1 order each, 10 zones, 50 equipments of 6 bindings (16 of them lights of the first
-//! zone), and 3 instances of `motion-light`. `memory_ceiling.rs` measures it, `fixtures.rs`
+//! zone), and 3 instances of `motion-light`. Devices 10, 20 and 30 are the motion sensors of the
+//! first zone (occupancy instead of pressure: still 6 data). `memory_ceiling.rs` measures it, `fixtures.rs`
 //! writes it to `firmware/fixtures/`.
 #![allow(dead_code)]
 
@@ -9,6 +10,11 @@ use solite_core::devices::Devices;
 use solite_core::home::Home;
 
 pub const T0: u64 = 1_795_252_323_120;
+
+/// The motion sensors of the first zone, which the `motion-light` instances listen to.
+pub fn is_motion(i: u8) -> bool {
+    matches!(i, 10 | 20 | 30)
+}
 
 pub fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
     Request {
@@ -48,10 +54,11 @@ pub fn build(random: &mut impl FnMut(&mut [u8]) -> Result<(), String>) -> Realis
         devices
             .identified(eui, Some("Manufacturer"), Some("Model"), T0, random)
             .unwrap();
-        // Temperature, humidity, pressure, battery and voltage (5), and the on/off state (1)
-        // with its order: 6 data and 1 order.
+        // Temperature, humidity, pressure (occupancy for a motion sensor), battery and voltage (5),
+        // and the on/off state (1) with its order: 6 data and 1 order.
+        let third = if is_motion(i) { 0x0406 } else { 0x0403 };
         devices
-            .reporting_configured(eui, &[0x0402, 0x0405, 0x0403, 0x0001, 0x0006], T0, random)
+            .reporting_configured(eui, &[0x0402, 0x0405, third, 0x0001, 0x0006], T0, random)
             .unwrap();
         assert_eq!(devices.list()[usize::from(i)].data.len(), 6);
         assert_eq!(devices.list()[usize::from(i)].orders.len(), 1);

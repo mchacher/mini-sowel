@@ -44,13 +44,16 @@ fn is_light(i: u8) -> bool {
     i >= 34
 }
 
-/// 120 s of scenario time at most: every sensor reports its measures, then its battery, and
-/// every light is switched on, the first four off again.
+/// 120 s of scenario time at most: every sensor reports its measures (a motion sensor its
+/// alarm, which makes `motion-light` switch the lights), then its battery, and every light is
+/// switched on, the first four off again.
 fn scenario() -> String {
     let devices: Vec<_> = (0..50u8)
         .map(|i| {
             if is_light(i) {
                 json!({"id": format!("light{i}"), "kind": "relay", "eui64": eui(i)})
+            } else if realistic::is_motion(i) {
+                json!({"id": format!("motion{i}"), "kind": "motion", "eui64": eui(i)})
             } else {
                 json!({"id": format!("sensor{i}"), "kind": "temperature-humidity", "eui64": eui(i)})
             }
@@ -58,11 +61,18 @@ fn scenario() -> String {
         .collect();
     let mut events = Vec::new();
     for i in 0..34u8 {
-        let id = format!("sensor{i}");
-        events.push(
-            json!({"at": format!("{}s", 5 + u32::from(i)), "device": id, "do": "report",
-            "temperature": 18.0 + f64::from(i) / 4.0, "humidity": 40.0 + f64::from(i)}),
-        );
+        let motion = realistic::is_motion(i);
+        let id = format!("{}{i}", if motion { "motion" } else { "sensor" });
+        let at = format!("{}s", 5 + u32::from(i));
+        events.push(if motion {
+            // After the start's orders have gone out (the queue of orders is full at the start),
+            // before the lights' own reports: the order the recipe sends is the first `on`.
+            let late = format!("{}s", 60 + u32::from(i) / 10);
+            json!({"at": late, "device": id, "do": "report", "motion": true})
+        } else {
+            json!({"at": at, "device": id, "do": "report",
+            "temperature": 18.0 + f64::from(i) / 4.0, "humidity": 40.0 + f64::from(i)})
+        });
         events.push(
             json!({"at": format!("{}s", 50 + u32::from(i)), "device": id, "do": "report",
             "battery": 100 - i}),
@@ -93,8 +103,11 @@ fn scenario() -> String {
 fn sim_memory() -> String {
     let devices: Vec<_> = (0..50u8)
         .map(|i| {
+            let motion = realistic::is_motion(i);
             let (configured, attributes) = if is_light(i) {
                 (json!([6]), json!([[6, 0]]))
+            } else if realistic::is_motion(i) {
+                (json!([1]), json!([[1, 0x21], [1, 0x20]]))
             } else {
                 (
                     json!([0x0402, 0x0405, 0x0001]),
@@ -103,8 +116,8 @@ fn sim_memory() -> String {
             };
             json!({"eui64Wire": wire(i), "nwk": 0x2000 + u32::from(i), "joined": true,
                 "bound": true, "configured": configured, "configuredAttributes": attributes,
-                "reportsSent": true, "relayOn": false, "cieWritten": false, "enrolled": false,
-                "cie": "0000000000000000", "level": 0, "silent": false, "lookupUnknown": false})
+                "reportsSent": true, "relayOn": false, "cieWritten": motion, "enrolled": motion,
+                "cie": if motion { "563412FEFFB96F8C" } else { "0000000000000000" }, "level": 0, "silent": false, "lookupUnknown": false})
         })
         .collect();
     let memory = json!({

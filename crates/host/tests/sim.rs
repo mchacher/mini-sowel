@@ -313,20 +313,30 @@ fn the_firmwares_scenario_with_its_home_ends_with_every_device_reported() {
         }
     });
     // 120 s of scenario time at speed 100: about 1.2 s. Every device (0x00124B00123456<NN>, NN
-    // from 00 to 31 hexadecimal) must show a measure.
+    // from 00 to 31 hexadecimal) must show a measure, and a light order must have been sent: the
+    // motion sensors' alarms make `motion-light` switch the lights on, and the scenario reports
+    // each light `on` once, so a light that shows `on` twice was switched by an order (the
+    // simulated light answers an order with its state).
     let mut waiting: Vec<String> = (0..50)
         .map(|i| format!("0x00124B00123456{i:02X} "))
         .collect();
     let mut shown = Vec::new();
-    while !waiting.is_empty() {
+    let mut ordered = false;
+    while !waiting.is_empty() || !ordered {
         match receiver.recv_timeout(Duration::from_secs(60)) {
             Ok(line) => {
                 waiting.retain(|eui| !line.starts_with(eui.as_str()));
+                if line.ends_with(" light_state on") {
+                    let on = shown.iter().filter(|l| **l == line).count();
+                    ordered |= on >= 1;
+                }
                 shown.push(line);
             }
             Err(_) => {
                 let _ = child.kill();
-                panic!("silent, still waiting for {waiting:?}; shown: {shown:?}");
+                panic!(
+                    "silent, still waiting for {waiting:?} (a light order seen: {ordered}); shown: {shown:?}"
+                );
             }
         }
     }

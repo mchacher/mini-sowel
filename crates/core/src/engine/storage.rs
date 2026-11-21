@@ -37,6 +37,32 @@ pub trait Storage {
     fn locate(&self, name: &str) -> String;
 }
 
+/// The name a file is written under before it replaces `name`: `name` and `.tmp`.
+pub fn temporary_name(name: &str) -> String {
+    format!("{name}.tmp")
+}
+
+/// Finishes a save that a power cut interrupted. FatFS refuses a rename onto an existing file, so
+/// a save deletes the old file, then renames the complete temporary one; a cut between the two
+/// leaves only the temporary file. When `path` is missing and `temporary` exists, `temporary` is
+/// renamed to `path` and a line is logged; `Ok(true)` then. Anything else changes nothing
+/// (`Ok(false)`): a temporary file next to an existing one is a write that did not end, and the
+/// existing file is the good one. `P` is a path (`std::path::Path`) or any name the caller's
+/// `exists` and `rename` understand.
+pub fn recover_interrupted_save<P: ?Sized + std::fmt::Debug>(
+    path: &P,
+    temporary: &P,
+    exists: impl Fn(&P) -> bool,
+    rename: impl Fn(&P, &P) -> io::Result<()>,
+) -> io::Result<bool> {
+    if exists(path) || !exists(temporary) {
+        return Ok(false);
+    }
+    rename(temporary, path)?;
+    log::warn!("{path:?} was missing: recovered from {temporary:?} (a save was interrupted)");
+    Ok(true)
+}
+
 fn cannot_read(
     storage: &dyn Storage,
     what: &str,

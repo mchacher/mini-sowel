@@ -95,10 +95,14 @@ built in an autonomous run.
 2. A core test builds the same home as `memory_ceiling.rs` and checks the fixture files are its
    output; with `UPDATE_FIXTURES=1` it writes them. The fixtures cannot drift from the test.
 3. A host test plays the same scenario with the same home through `--sim` and checks the run ends
-   with every device reported: one scenario serves the Mac and the box.
+   with every device reported and a light order sent (the motion sensors' alarms make `motion-light`
+   switch the lights): one scenario serves the Mac and the box.
 4. `scripts/qemu.sh` boots the `sim` image, waits for the `engine:` line within 240 s (formatting
-   the blank partition, then 12 s of scenario on a slow emulator), and fails, with the last lines
-   of the log, when the peak is above 300 KB (D20), when the internal minimum free is below 64 KB
+   the blank partition, then 12 s of scenario on a slow emulator; the scenario is held until the
+   radio is identified and listening and the loop has turned once, then plays at its own pace),
+   and fails, with the last lines of the log, when the peak is above 350 KB (D27, after D20's
+   300 KB), when a device of the home got no measure into the engine (the `engine:` line reads
+   `50 devices (50 reported)`), when the radio logs `callback queue full` after `scenario: started`, when the internal minimum free is below 64 KB
    (spec 015's internal reserve, kept for the network stack that QEMU does not start), on a panic
    or reboot, or without the line. It also checks the `storage:` and `network:` lines. It prints
    the `engine:` line.
@@ -113,7 +117,8 @@ built in an autonomous run.
   link, and, in the image for the box, logs `radio: none`.
 - Changed, "On the Mac, in an emulated ESP32": `sh scripts/qemu.sh` runs the engine in the
   emulated ESP32 with the simulated radio and a realistic home, prints the `engine:` line, and
-  fails above 300 KB of heap or below 64 KB of internal RAM free.
+  fails above 350 KB of heap, when a device did not report, when a callback was dropped, or below
+  64 KB of internal RAM free.
 - Changed, "Runs without the dongle": the simulated radio runs on the Mac and in the emulated
   ESP32.
 - History: row 016.
@@ -136,7 +141,7 @@ built in an autonomous run.
 ## Acceptance criteria
 
 - [ ] `cargo test --workspace` passes; the host's lines and files are unchanged.
-- [ ] `sh scripts/qemu.sh` shows the `engine:` line for the realistic home, under 300 KB.
+- [ ] `sh scripts/qemu.sh` shows the `engine:` line for the realistic home, under 350 KB (D27), with every device reported and no callback dropped.
 - [ ] The box's image (without `sim`) builds and boots in QEMU, logs storage, network and
       `radio: none`.
 - [ ] `docs/memory-budget.md` holds the QEMU figures.
@@ -148,7 +153,7 @@ built in an autonomous run.
   (the `sim` image seeds it).
 - The data partition is full: a write fails, is logged and retried, as on the Mac (`Saver`).
 - No `network.json`: `auto`, reason missing.
-- The engine's peak above 300 KB, or internal RAM exhausted: `scripts/qemu.sh` fails with the
+- The engine's peak above 350 KB, or internal RAM exhausted: `scripts/qemu.sh` fails with the
   figures; the fix is a setting of spec 015 R4 (`SPIRAM_MALLOC_ALWAYSINTERNAL`), recorded, or an
   engine optimisation, never a raised ceiling without a decision.
 - A fixture edited by hand: the fixture test fails.
@@ -166,13 +171,14 @@ None new: the files are the ones the host already writes in Sowel's format.
 - Internal RAM minimum of 64 KB as the QEMU floor: spec 015's reserve, which the network stack
   needs on the box and QEMU does not use.
 - The spec review's questions, answered with its recommendations: the QEMU figure with the
-  simulator inside is an acceptable gate for D20, labelled as such and measured again on the box
+  simulator inside is an acceptable gate for D20 (D27 after the review), labelled as such and measured again on the box
   in E3; one fixture scenario serves the firmware and a host test.
+- After the review: the scenario's clock starts after the first loop turn; the simulator's clock counts only the time it waits (the emulator's slow flash would otherwise play the scenario in one burst); the saves of the run are walked and dropped, the last one goes to the flash; the radio's own memory stays in RAM; motion sensors 10, 20 and 30 of the realistic home report an alarm at 60 s; a save cut by a power loss is recovered at the next read (`<name>.tmp`); the QEMU ceiling is 350 KB (D27).
 - No second-boot check: every QEMU run starts from a blank partition; the reuse of `/data` is the
   Mac's tested behaviour and E3's run on the box.
 
 ## How the user will check it
 
 `sh scripts/qemu.sh`: the banner, the memory line, `storage:`, `network:`, then the `engine:` line
-of the realistic home, under 300 KB; `cargo run -p solite-host -- --sim scenarios/garage.json
+of the realistic home, under 350 KB; `cargo run -p solite-host -- --sim scenarios/garage.json
 --serve --speed 10` and `sh scripts/demo-garage.sh` behave as before.

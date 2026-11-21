@@ -1,10 +1,13 @@
 //! The engine on the simulated radio, for the image QEMU runs (feature `sim`, spec 016): the
 //! realistic home of `fixtures/` is written to `/data` when it holds no `devices.json` (`seed`),
 //! then the engine plays the fixture scenario, in its own thread, as `--sim --serve` does on the Mac but
-//! without HTTP. When the scenario has played its last event, the loop stops, the saver writes,
-//! and the memory of the run is measured.
+//! without HTTP. The scenario waits, held, until the radio is identified and listening and the
+//! loop has turned once; its events then play at their own pace, with loop turns between them.
+//! When the scenario has played its last event, the loop stops, the saver writes, and the memory
+//! of the run is measured.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -13,7 +16,7 @@ use solite_core::EngineStats;
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEVICES_FILE, Saver, Storage, load_home};
 use solite_core::radio::{Radio, RadioTransport, TransportError};
-use solite_sim::{RealClock, Scenario, SimTransport};
+use solite_sim::{Clock, Scenario, SimTransport};
 
 use crate::measure::{self, Lows};
 use crate::memory;
@@ -42,14 +45,85 @@ const SPEED: u32 = 10;
 /// The engine's thread stack, in bytes (spec 016 R3.4).
 pub const STACK_BYTES: usize = 32 * 1024;
 
-/// The simulated radio, which sets `stop` once its scenario has played its last event.
+/// The simulator's clock: it counts the time the simulator really waits (a sleep), nothing
+/// else. The emulator writes the flash far slower than the box does (a save of the home takes
+/// seconds), and wall time spent there would play the scenario's events in one burst; the
+/// events come at their own pace, one loop turn after the other.
+struct WaitedClock {
+    waited_ms: Cell<u64>,
+}
+
+impl Clock for WaitedClock {
+    fn now_ms(&self) -> u64 {
+        self.waited_ms.get()
+    }
+
+    fn wait_ms(&self, ms: u64) {
+        // The time that really passed: the RTOS rounds a short sleep up to its tick (10 ms).
+        let begin = Instant::now();
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+        let passed = u64::try_from(begin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.waited_ms
+            .set(self.waited_ms.get().saturating_add(passed.max(ms)));
+    }
+}
+
+/// The engine's files while the scenario plays: reads go to the flash; a save is run to its end
+/// (the home is walked chunk by chunk, as for the flash) and its text dropped, until `to_flash`
+/// is set. The emulator writes the flash about 20 s for the 71 KB of `equipments.json`, and the
+/// engine saves it after each measure that changes it; written for real, 88 measures would take
+/// half an hour. The last save, on stop, goes to the flash, so that its path is run for real.
+struct RunStorage {
+    inner: FatStorage,
+    to_flash: Arc<AtomicBool>,
+    dropped: Arc<AtomicUsize>,
+}
+
+impl Storage for RunStorage {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        self.inner.read(name)
+    }
+
+    fn write(
+        &self,
+        name: &str,
+        next: &mut dyn FnMut() -> std::io::Result<Option<String>>,
+    ) -> Result<(), String> {
+        if self.to_flash.load(Ordering::SeqCst) {
+            return self.inner.write(name, next);
+        }
+        while next()
+            .map_err(|e| format!("{name}: cannot write: {e}"))?
+            .is_some()
+        {}
+        self.dropped.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn locate(&self, name: &str) -> String {
+        self.inner.locate(name)
+    }
+}
+
+/// The most devices whose first measure is counted: the home's bound is far below.
+const MAX_REPORTERS: usize = 128;
+
+/// The simulated radio, which starts its scenario when `go` is set (at the loop's first turn) and
+/// sets `stop` once the scenario has played its last event.
 struct Watched {
-    inner: SimTransport<RealClock>,
+    inner: SimTransport<WaitedClock>,
+    go: Arc<AtomicBool>,
+    started: bool,
     stop: Arc<AtomicBool>,
 }
 
 impl RadioTransport for Watched {
     fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
+        if !self.started && self.go.load(Ordering::SeqCst) {
+            self.started = true;
+            self.inner.release();
+            log::info!("scenario: started");
+        }
         let n = self.inner.read(buf, timeout_ms)?;
         if self.inner.finished() {
             self.stop.store(true, Ordering::SeqCst);
@@ -107,13 +181,23 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     let scenario = Scenario::parse(SCENARIO, SCENARIO_NAME)?;
     let memory_file = format!("{BASE}/{MEMORY_NAME}");
     let stop = Arc::new(AtomicBool::new(false));
+    let mut inner = SimTransport::for_scenario(
+        &scenario,
+        Some(std::path::Path::new(&memory_file)),
+        SPEED,
+        WaitedClock {
+            waited_ms: Cell::new(0),
+        },
+    )?;
+    // The simulated radio's own memory stays in RAM once read: the emulator writes the flash far
+    // slower than the box, and the radio's flash is not what this image measures.
+    inner.keep_memory_in_ram();
+    inner.hold();
+    let go = Arc::new(AtomicBool::new(false));
     let transport = Watched {
-        inner: SimTransport::for_scenario(
-            &scenario,
-            Some(std::path::Path::new(&memory_file)),
-            SPEED,
-            RealClock::new(),
-        )?,
+        inner,
+        go: Arc::clone(&go),
+        started: false,
         stop: Arc::clone(&stop),
     };
     let mut radio = Radio::new(transport, move || {
@@ -123,17 +207,42 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     radio.identify().map_err(|e| format!("radio: {e}"))?;
     radio.listen().map_err(|e| format!("radio: {e}"))?;
     lows.mark();
-    let mut saver = Saver::new(FatStorage::new(), wall_ms());
+    let to_flash = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let mut saver = Saver::new(
+        RunStorage {
+            inner: FatStorage::new(),
+            to_flash: Arc::clone(&to_flash),
+            dropped: Arc::clone(&dropped),
+        },
+        wall_ms(),
+    );
+    // The devices that got a measure into the engine: each measure line starts with the device's
+    // address (`0x00124B0012345600 temperature 18.0`). At most `MAX_REPORTERS` kept.
+    let mut reporters: Vec<u64> = Vec::new();
+    let mut count = |line: &str| {
+        let address = line
+            .split(' ')
+            .next()
+            .and_then(|a| a.strip_prefix("0x"))
+            .and_then(|a| u64::from_str_radix(a, 16).ok());
+        if let Some(address) = address
+            && reporters.len() < MAX_REPORTERS
+            && !reporters.contains(&address)
+        {
+            reporters.push(address);
+            log::info!("scenario: {} devices reported", reporters.len());
+        }
+    };
+    go.store(true, Ordering::SeqCst);
     engine::run(
-        &mut radio,
-        &home,
-        &mut saver,
-        &clocks,
-        &stop,
-        &mut fill,
-        false,
-        &mut |line| log::info!("{line}"),
+        &mut radio, &home, &mut saver, &clocks, &stop, &mut fill, true, &mut count,
     )?;
+    log::info!(
+        "scenario: {} saves run without the emulator's flash",
+        dropped.load(Ordering::SeqCst)
+    );
+    to_flash.store(true, Ordering::SeqCst);
     saver.tick(&home, wall_ms(), true)?;
     // The memory, with the home and the radio still alive.
     let after = measure::free_total();
@@ -142,6 +251,7 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     let guard = lock(&home);
     Ok(EngineStats {
         devices: guard.devices.list().len(),
+        reported: reporters.len(),
         zones: guard.zones().list().len().saturating_sub(1),
         equipments: guard.equipments().list().len(),
         recipes: guard.recipes().len(),

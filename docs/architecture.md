@@ -62,7 +62,7 @@ app, built by Vite into `ui/dist`, which the host's `--serve` serves; the box do
   gives it, and boots it in Espressif's QEMU (`qemu-system-xtensa`, installed into
   `firmware/.embuild/` by ESP-IDF's tool installer), with 2 MB of PSRAM, the data partition blank
   at every run; it fails on a panic, a reboot, a missing line, a heap peak of the engine above
-  300 KB or an internal RAM minimum free below 64 KB (`--box` boots the box's image instead). The wiring, the risks and the backup procedure of the box are
+  350 KB, a device of the home with no measure, a dropped radio callback or an internal RAM minimum free below 64 KB (`--box` boots the box's image instead). The wiring, the risks and the backup procedure of the box are
   in [hardware.md](hardware.md); the memory shared out item by item is in
   [memory-budget.md](memory-budget.md).
 - **Unsafe code**: the core and the host forbid it; the firmware denies it, except in the small

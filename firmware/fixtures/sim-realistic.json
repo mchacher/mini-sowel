@@ -372,22 +372,12 @@
     },
     {
       "bound": true,
-      "cie": "0000000000000000",
-      "cieWritten": false,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
       "configured": [
-        1026,
-        1029,
         1
       ],
       "configuredAttributes": [
-        [
-          1026,
-          0
-        ],
-        [
-          1029,
-          0
-        ],
         [
           1,
           33
@@ -397,7 +387,7 @@
           32
         ]
       ],
-      "enrolled": false,
+      "enrolled": true,
       "eui64Wire": "0A563412004B1200",
       "joined": true,
       "level": 0,
@@ -742,22 +732,12 @@
     },
     {
       "bound": true,
-      "cie": "0000000000000000",
-      "cieWritten": false,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
       "configured": [
-        1026,
-        1029,
         1
       ],
       "configuredAttributes": [
-        [
-          1026,
-          0
-        ],
-        [
-          1029,
-          0
-        ],
         [
           1,
           33
@@ -767,7 +747,7 @@
           32
         ]
       ],
-      "enrolled": false,
+      "enrolled": true,
       "eui64Wire": "14563412004B1200",
       "joined": true,
       "level": 0,
@@ -1112,22 +1092,12 @@
     },
     {
       "bound": true,
-      "cie": "0000000000000000",
-      "cieWritten": false,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
       "configured": [
-        1026,
-        1029,
         1
       ],
       "configuredAttributes": [
-        [
-          1026,
-          0
-        ],
-        [
-          1029,
-          0
-        ],
         [
           1,
           33
@@ -1137,7 +1107,7 @@
           32
         ]
       ],
-      "enrolled": false,
+      "enrolled": true,
       "eui64Wire": "1E563412004B1200",
       "joined": true,
       "level": 0,

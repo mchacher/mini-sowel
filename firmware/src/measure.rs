@@ -56,6 +56,7 @@ pub struct Lows {
     pub total: usize,
     pub internal: usize,
     pub psram: usize,
+    phases: usize,
 }
 
 impl Lows {
@@ -64,12 +65,19 @@ impl Lows {
             total: usize::MAX,
             internal: usize::MAX,
             psram: usize::MAX,
+            phases: 0,
         }
     }
 
     /// Ends a phase: folds its minimums in, and starts the monitor again for the next one.
     pub fn mark(&mut self) {
         let (internal, psram) = local_minimums();
+        self.phases += 1;
+        log::info!(
+            "memory phase {}: lowest free {} KB",
+            self.phases,
+            (internal + psram) / 1024
+        );
         self.total = self.total.min(internal + psram);
         self.internal = self.internal.min(internal);
         self.psram = self.psram.min(psram);

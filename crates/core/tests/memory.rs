@@ -62,6 +62,7 @@ fn zeros_do_not_panic() {
 fn the_engine_line_shows_counts_and_sizes_in_kib_rounded_down() {
     let stats = EngineStats {
         devices: 50,
+        reported: 48,
         zones: 10,
         equipments: 50,
         recipes: 3,
@@ -74,6 +75,6 @@ fn the_engine_line_shows_counts_and_sizes_in_kib_rounded_down() {
     };
     assert_eq!(
         engine_line(&stats),
-        "engine: 50 devices, 10 zones, 50 equipments, 3 recipes; heap 160 KB (peak 190 KB); internal 120 KB free (min 90 KB); psram 1700 KB free (min 1650 KB)"
+        "engine: 50 devices (48 reported), 10 zones, 50 equipments, 3 recipes; heap 160 KB (peak 190 KB); internal 120 KB free (min 90 KB); psram 1700 KB free (min 1650 KB)"
     );
 }

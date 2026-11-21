@@ -349,3 +349,49 @@ fn a_file_that_cannot_be_read_or_parsed_stops_the_loading_and_names_the_file() {
         "left as it is"
     );
 }
+
+mod interrupted_save {
+    use std::cell::RefCell;
+    use std::collections::BTreeSet;
+
+    use solite_core::engine::{recover_interrupted_save, temporary_name};
+
+    fn recover(files: &RefCell<BTreeSet<String>>) -> bool {
+        let temporary = temporary_name("devices.json");
+        recover_interrupted_save(
+            "devices.json",
+            temporary.as_str(),
+            |name| files.borrow().contains(name),
+            |from, to| {
+                let mut files = files.borrow_mut();
+                files.remove(from);
+                files.insert(to.to_string());
+                Ok(())
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn only_the_temporary_file_is_renamed_to_the_missing_one() {
+        let files = RefCell::new(BTreeSet::from(["devices.json.tmp".to_string()]));
+        assert!(recover(&files));
+        assert_eq!(
+            *files.borrow(),
+            BTreeSet::from(["devices.json".to_string()])
+        );
+    }
+
+    #[test]
+    fn an_existing_file_or_no_temporary_file_changes_nothing() {
+        let both = RefCell::new(BTreeSet::from([
+            "devices.json".to_string(),
+            "devices.json.tmp".to_string(),
+        ]));
+        assert!(!recover(&both));
+        assert_eq!(both.borrow().len(), 2);
+        let none = RefCell::new(BTreeSet::new());
+        assert!(!recover(&none));
+        assert!(none.borrow().is_empty());
+    }
+}

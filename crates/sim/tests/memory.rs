@@ -125,3 +125,25 @@ fn a_memory_file_that_does_not_parse_or_cannot_be_written_is_an_error_naming_it(
     assert!(error.contains(&file.display().to_string()), "{error}");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_save_cut_between_the_delete_and_the_rename_is_recovered_at_the_next_read() {
+    let dir = scratch();
+    let file = dir.join("sim-cut.json");
+    let mut first = sim(ONE_SENSOR, Some(&file), 1);
+    first.start().unwrap();
+    assert_eq!(joined(&first.pair(10)).len(), 1);
+    drop(first);
+    // The power went out after the old file was deleted and before the rename: only `.tmp`.
+    let temporary = dir.join("sim-cut.json.tmp");
+    fs::rename(&file, &temporary).unwrap();
+    assert!(!file.exists());
+
+    let mut second = sim(ONE_SENSOR, Some(&file), 1);
+    let resumed = second.listen().unwrap();
+    assert!(
+        !resumed.formed,
+        "the network of the recovered file is resumed"
+    );
+    assert!(file.exists() && !temporary.exists());
+}

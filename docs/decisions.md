@@ -386,18 +386,35 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   simulator is never built for the ESP32": it is built for the image QEMU runs, not for the box.
   The engine's heap peak and the internal RAM minimum are read by the firmware with ESP-IDF's
   local-minimum monitor of the free heap, phase by phase (load the home, build the simulator,
-  run), and `scripts/qemu.sh` fails above 300 KB (D20) or below 64 KB of internal RAM free
+  run), and `scripts/qemu.sh` fails above 350 KB (D27, first 300 KB of D20) or below 64 KB of internal RAM free
   (spec 015's reserve).
 - **Why**: the loop had to run on the box before the box is flashed, and moving it keeps one loop
   for both programs (the host's tests are its safety net). D20 said the 300 KB is "read again on
   the box (QEMU, then the Dongle Max)": the QEMU figure is an upper bound, with the simulator
   inside, and the box measures it again in E3. The monitor's figures are the sum of the low
   watermarks of the internal RAM and the PSRAM, which may have been reached at different
-  moments: over the whole run the sum gave 329 KB for the same run, phase by phase 287 KB
-  (heap 175 KB at the end), so the gate uses the phases. `SPIRAM_MALLOC_ALWAYSINTERNAL` was
+  moments: over the whole run the sum gave 329 KB for the first run, phase by phase 287 KB; both
+  readings are upper bounds of the true peak, the per-phase one the tighter and never below it,
+  so the gate uses the phases. A bound holds for what the run exercised: the realistic home,
+  the scenario of `firmware/fixtures/` (motion, light orders), no network. Final run: 312 KB
+  by phases, heap 170 KB at the end. `SPIRAM_MALLOC_ALWAYSINTERNAL` was
   tried at 512 as the first remedy (D23's knob): the total heap does not shrink when allocations
   move between the two memories, and the peak read 359 KB (whole-run sum), so it stays at 4096.
   What the peak holds: the 32 KB stack, the home loaded from its files (text and parsed data,
   about 260 KB at the highest), then the simulator; the loading is the largest transient and
   is the first optimisation to make if the ceiling is crossed.
 
+## D27: The engine's ceiling is 350 KB in QEMU, replacing D20's 300 KB as the gate
+
+- **Date**: 2026-11-21
+- **Choice**: the heap peak of the engine in QEMU (`scripts/qemu.sh`) may reach 350 KB; D20's
+  300 KB was the gate until then. Approved by the user on 2026-11-21, pending optimisation: the
+  inbox of `docs/roadmap.md` has the line to bring the engine back under 300 KB, loading the
+  home by streaming first. The Mac test (`memory_ceiling.rs`: 182 KB, 194 KB with every log full)
+  stays at 300 KB, and D23's 1 MB for the worst case is unchanged.
+- **Why**: once the scenario plays at its own pace, with motion and light orders (spec 016
+  review), the QEMU run reads 312 KB by phases: the second phase (the recipes' start and the
+  simulator's build) is the largest at 312 KB, the load of the home 258 KB, the run 197 KB, the
+  identification 186 KB. Both readings of the monitor (whole run, per phase) are upper bounds, the
+  per-phase one the tighter, and the figure holds for what the run exercised. Internal RAM stays
+  at 107 KB free at the lowest, above the 64 KB floor.

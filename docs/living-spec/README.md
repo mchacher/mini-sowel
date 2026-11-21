@@ -43,7 +43,8 @@ Each of the three programs starts and says which tool it is, with its version:
   home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
   `firmware/fixtures/`); it prints the banner, the memory line, the `storage:` and `network:`
   lines, then the `engine:` line (counts, heap used and peak, internal RAM and PSRAM free, with
-  their minimum), and fails, with the last lines of the log, when the heap peak is above 300 KB,
+  their minimum), and fails, with the last lines of the log, when the heap peak is above 350 KB, when a device of the home got no measure into the engine
+  (`50 devices (50 reported)`), when the radio dropped a callback while the scenario played,
   when the internal RAM minimum free is below 64 KB, when the firmware panics or reboots, or when
   the `engine:` line does not show within 240 seconds. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
@@ -51,6 +52,7 @@ Each of the three programs starts and says which tool it is, with its version:
   application in the first slot, at the offset the built table gives. Allocations above 4 KB go
   to PSRAM; 64 KB of internal RAM are kept for the network and DMA, and the TLS library takes its
   buffers from PSRAM.
+  The box's files are saved through a temporary file (`<name>.tmp`): FatFS refuses a rename onto an existing file, so a save deletes the old one then renames; a read that finds `<name>` missing and `<name>.tmp` present recovers it and logs a line.
 - **In the browser**: the home screen (see "Shows the home in the browser"), in Sowel's Hybrid or
   Dark theme as the system asks.
 
@@ -376,7 +378,7 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 ### Stays within a memory budget
 
-The engine stays under 300 KB for a realistic home (50 devices, 10 zones, 50 equipments, 3
+The engine stays under 300 KB on the Mac, and under 350 KB in the emulated ESP32 (the simulator inside), for a realistic home (50 devices, 10 zones, 50 equipments, 3
 recipe instances with full logs, a live client with a full queue, the largest answer in flight),
 and under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
 equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with

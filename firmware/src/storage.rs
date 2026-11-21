@@ -10,7 +10,7 @@ use esp_idf_svc::sys::{
     WL_INVALID_HANDLE, esp_err_to_name, esp_vfs_fat_info, esp_vfs_fat_mount_config_t,
     esp_vfs_fat_spiflash_mount_rw_wl, wl_handle_t,
 };
-use solite_core::engine::Storage;
+use solite_core::engine::{Storage, recover_interrupted_save, temporary_name};
 
 /// Where the data partition is mounted.
 pub const BASE: &str = "/data";
@@ -108,19 +108,23 @@ fn what(name: &str) -> &str {
     name.trim_end_matches(".json")
 }
 
-fn put(path: &Path, next: &mut dyn FnMut() -> io::Result<Option<String>>) -> io::Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    let mut file = File::create(&temporary)?;
+fn put(
+    path: &Path,
+    temporary: &Path,
+    next: &mut dyn FnMut() -> io::Result<Option<String>>,
+) -> io::Result<()> {
+    let mut file = File::create(temporary)?;
     while let Some(chunk) = next()? {
         file.write_all(chunk.as_bytes())?;
     }
     file.sync_all()?;
     drop(file);
     // FAT keeps no permissions; a rename onto an existing file may be refused: then the old
-    // file goes first (the new one is complete and on the partition by now).
-    if fs::rename(&temporary, path).is_err() {
+    // file goes first (the new one is complete and on the partition by now). A power cut between
+    // the two leaves only the temporary file: `read` recovers it.
+    if fs::rename(temporary, path).is_err() {
         let _ = fs::remove_file(path);
-        fs::rename(&temporary, path)?;
+        fs::rename(temporary, path)?;
     }
     Ok(())
 }
@@ -128,6 +132,15 @@ fn put(path: &Path, next: &mut dyn FnMut() -> io::Result<Option<String>>) -> io:
 impl Storage for FatStorage {
     fn read(&self, name: &str) -> Result<Option<String>, String> {
         let path = self.dir.join(name);
+        // A power cut between the delete and the rename of a save leaves only `<name>.tmp`.
+        let temporary = self.dir.join(temporary_name(name));
+        recover_interrupted_save(
+            path.as_path(),
+            temporary.as_path(),
+            Path::exists,
+            |from, to| fs::rename(from, to),
+        )
+        .map_err(|e| format!("{}: {}: cannot recover: {e}", what(name), path.display()))?;
         match fs::read_to_string(&path) {
             Ok(text) => Ok(Some(text)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -145,7 +158,8 @@ impl Storage for FatStorage {
         next: &mut dyn FnMut() -> io::Result<Option<String>>,
     ) -> Result<(), String> {
         let path = self.dir.join(name);
-        put(&path, next)
+        let temporary = self.dir.join(temporary_name(name));
+        put(&path, &temporary, next)
             .map_err(|e| format!("{}: {}: cannot write: {e}", what(name), path.display()))
     }
 

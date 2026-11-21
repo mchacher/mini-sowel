@@ -43,6 +43,8 @@ pub fn memory_line(stats: &MemoryStats) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EngineStats {
     pub devices: usize,
+    /// The devices that got at least one measure into the engine while the scenario played.
+    pub reported: usize,
     /// The zones made by the user (the root zone is not counted).
     pub zones: usize,
     pub equipments: usize,
@@ -59,13 +61,14 @@ pub struct EngineStats {
     pub psram_min: usize,
 }
 
-/// The line logged after the scenario: `engine: 50 devices, 10 zones, 50 equipments, 3 recipes;
+/// The line logged after the scenario: `engine: 50 devices (50 reported), 10 zones, 50 equipments, 3 recipes;
 /// heap 160 KB (peak 190 KB); internal 120 KB free (min 90 KB); psram 1700 KB free (min 1650
 /// KB)`. Sizes in KiB, rounded down.
 pub fn engine_line(stats: &EngineStats) -> String {
     format!(
-        "engine: {} devices, {} zones, {} equipments, {} recipes; heap {} KB (peak {} KB); internal {} KB free (min {} KB); psram {} KB free (min {} KB)",
+        "engine: {} devices ({} reported), {} zones, {} equipments, {} recipes; heap {} KB (peak {} KB); internal {} KB free (min {} KB); psram {} KB free (min {} KB)",
         stats.devices,
+        stats.reported,
         stats.zones,
         stats.equipments,
         stats.recipes,

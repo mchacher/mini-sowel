@@ -52,8 +52,8 @@
     },
     {
       "eui64": "00124B001234560A",
-      "id": "sensor10",
-      "kind": "temperature-humidity"
+      "id": "motion10",
+      "kind": "motion"
     },
     {
       "eui64": "00124B001234560B",
@@ -102,8 +102,8 @@
     },
     {
       "eui64": "00124B0012345614",
-      "id": "sensor20",
-      "kind": "temperature-humidity"
+      "id": "motion20",
+      "kind": "motion"
     },
     {
       "eui64": "00124B0012345615",
@@ -152,8 +152,8 @@
     },
     {
       "eui64": "00124B001234561E",
-      "id": "sensor30",
-      "kind": "temperature-humidity"
+      "id": "motion30",
+      "kind": "motion"
     },
     {
       "eui64": "00124B001234561F",
@@ -383,16 +383,15 @@
       "do": "report"
     },
     {
-      "at": "15s",
-      "device": "sensor10",
+      "at": "61s",
+      "device": "motion10",
       "do": "report",
-      "humidity": 50.0,
-      "temperature": 20.5
+      "motion": true
     },
     {
       "at": "60s",
       "battery": 90,
-      "device": "sensor10",
+      "device": "motion10",
       "do": "report"
     },
     {
@@ -513,16 +512,15 @@
       "do": "report"
     },
     {
-      "at": "25s",
-      "device": "sensor20",
+      "at": "62s",
+      "device": "motion20",
       "do": "report",
-      "humidity": 60.0,
-      "temperature": 23.0
+      "motion": true
     },
     {
       "at": "70s",
       "battery": 80,
-      "device": "sensor20",
+      "device": "motion20",
       "do": "report"
     },
     {
@@ -643,16 +641,15 @@
       "do": "report"
     },
     {
-      "at": "35s",
-      "device": "sensor30",
+      "at": "63s",
+      "device": "motion30",
       "do": "report",
-      "humidity": 70.0,
-      "temperature": 25.5
+      "motion": true
     },
     {
       "at": "80s",
       "battery": 70,
-      "device": "sensor30",
+      "device": "motion30",
       "do": "report"
     },
     {
