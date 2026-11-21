@@ -1,5 +1,6 @@
-# The verdict of CLAUDE.md, on every pull request and on main: sh scripts/validate.sh
-# (docs, Rust, interface, ESP32 firmware build and boot in QEMU).
+# The verdict of CLAUDE.md, on every pull request and on main: sh scripts/validate.sh, cut into
+# three jobs that run side by side (`--only rust`, `--only ui`, `--only firmware`): together they
+# are exactly the full run, and the slowest one sets the time.
 name: CI
 
 on:
@@ -15,7 +16,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
+  rust:
+    name: validate (rust)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust, at the version pinned in rust-toolchain.toml
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Validate
+        run: sh scripts/validate.sh --only rust
+
+  ui:
+    name: validate (ui)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            ui/package-lock.json
+            tools/z2m-coverage/package-lock.json
+
+      - name: Interface packages
+        working-directory: ui
+        run: npm ci
+
+      - name: Tools packages
+        working-directory: tools/z2m-coverage
+        run: npm ci
+
+      - name: Validate
+        run: sh scripts/validate.sh --only ui
+
+  firmware:
+    name: validate (firmware)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -29,21 +75,12 @@ jobs:
       - name: System libraries for QEMU
         run: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            ui/package-lock.json
-            tools/z2m-coverage/package-lock.json
-
       - name: Rust, at the version pinned in rust-toolchain.toml
         run: rustup toolchain install
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            . -> target
             firmware -> target
 
       - name: ESP32 toolchain (espup, ldproxy)
@@ -71,13 +108,5 @@ jobs:
           path: firmware/.embuild/espressif/tools/qemu-xtensa
           key: qemu-xtensa-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
 
-      - name: Interface packages
-        working-directory: ui
-        run: npm ci
-
-      - name: Tools packages
-        working-directory: tools/z2m-coverage
-        run: npm ci
-
       - name: Validate
-        run: sh scripts/validate.sh
+        run: sh scripts/validate.sh --only firmware

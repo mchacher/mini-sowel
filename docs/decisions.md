@@ -126,7 +126,8 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 
 - **Date**: 2026-11-20
 - **Choice**: remote `origin` on GitHub, `https://github.com/mchacher/solite.git` (renamed from mini-sowel on 2026-11-21), beside
-  Sowel. CI: GitHub Actions, `.github/workflows/ci.yml`, runs `sh scripts/validate.sh` on every
+  Sowel. CI: GitHub Actions, `.github/workflows/ci.yml`, runs `sh scripts/validate.sh` (cut on 2026-11-21 into three parallel jobs, `--only rust`,
+  `--only ui`, `--only firmware`, so the slowest sets the time) on every
   pull request and on every push to `main`, with the Rust version of `rust-toolchain.toml`, Node
   24, and the ESP32 toolchain (espup v0.19.0, ldproxy); ESP-IDF's download is cached. Pull
   requests are made with `gh pr create`; merges stay squash merges after the user's yes.

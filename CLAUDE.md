@@ -68,6 +68,7 @@ sh scripts/qemu.sh                               # the firmware, booted in Espre
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release   # ESP32 firmware (macOS, Linux)
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
+sh scripts/validate.sh --only rust|ui|firmware   # one third of the verdict (the CI's three jobs)
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, ESP32
