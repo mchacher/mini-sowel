@@ -79,6 +79,7 @@ bug, not for another one.
 
 ## Phase 3: Fix the Cause
 
+Output (strict rule): tests, builds and the full check run through `sh scripts/quiet.sh <command>`, never bare, and every agent prompt says so (see `CLAUDE.md`).
 Models (table in `CLAUDE.md`): stay on Sonnet; a fix that needs a design decision is Opus's
 (ask the user to `/model opus`), and any agent you launch names its `model:`.
 
