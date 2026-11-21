@@ -79,6 +79,16 @@ APP_OFFSET=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /,
 echo "== Flash image (16 MB)"
 ESPTOOL="$PY -m esptool --chip esp32"
 $ESPTOOL elf2image --flash_mode dio --flash_size 16MB -o "$WORK/app.bin" "$TARGET_DIR/solite-firmware" >/dev/null
+SLOT_SIZE=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /, "", $5); print $5 }')
+APP_SIZE=$(wc -c < "$WORK/app.bin" | tr -d ' ')
+[ -n "$SLOT_SIZE" ] || fail "no size for the ota_0 slot in firmware/partitions.csv."
+# The table prints sizes as 4M, 64K or 0x400000.
+case "$SLOT_SIZE" in
+  *M) SLOT_BYTES=$((${SLOT_SIZE%M} * 1048576)) ;;
+  *K) SLOT_BYTES=$((${SLOT_SIZE%K} * 1024)) ;;
+  *) SLOT_BYTES=$((SLOT_SIZE)) ;;
+esac
+[ "$APP_SIZE" -le "$SLOT_BYTES" ] || fail "app.bin ($APP_SIZE bytes) is larger than the ota_0 slot ($SLOT_BYTES bytes)."
 $ESPTOOL merge_bin --fill-flash-size 16MB -o "$WORK/flash.bin" \
   0x1000 "$BOOTLOADER" 0x8000 "$PARTITIONS" "$APP_OFFSET" "$WORK/app.bin" >/dev/null
 

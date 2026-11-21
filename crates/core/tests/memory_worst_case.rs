@@ -660,7 +660,7 @@ fn every_memory_bound_is_listed_in_the_header() {
             found += 1;
             let name: String = rest
                 .chars()
-                .take_while(|c| c.is_ascii_uppercase() || *c == '_')
+                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
                 .collect();
             let entry = format!("`{relative}::MAX_{name}`");
             if !header.contains(&entry) {

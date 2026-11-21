@@ -16,7 +16,7 @@ Wi-Fi or Ethernet driver loaded, so its internal RAM is an upper estimate too.
 | ------ | ----- | ------------------- |
 | Engine, worst case (every bound at its maximum) | peak 925 KB, 987 KB with every recipe log entry at 200 bytes | M, Mac: `cargo test -p solite-core --test memory_worst_case -- --nocapture` |
 | Engine, realistic home | peak 187 KB, 198 KB with every log entry at 200 bytes | M, Mac: `cargo test -p solite-core --test memory_ceiling -- --nocapture` |
-| Share of small allocations in the worst case at its peak | 672 KB in allocations of 4 KB or less, 267 KB above (of which 112 KB are the test's own stand-ins for the HTTP bodies and the radio) | M, Mac, a counting allocator split by size, run once and not kept |
+| Share of small allocations in the worst case at its peak | 673 KB in allocations of 4 KB or less, 267 KB above, 940 KB in all: the live bytes of the whole test process at the moment of its peak, which is the 925 KB measured plus the 14 KB the process holds before the test starts | M, Mac, a counting allocator split by size at the peak, run once and not kept |
 | Free memory at boot, in QEMU | `memory: internal 362 KB free (largest block 160 KB), psram 2045 KB free of 2048 KB` | M, `sh scripts/qemu.sh` |
 
 The worst case counts, in its peak, the HTTP bodies (4 workers of the host, 16 KB each,
@@ -56,10 +56,10 @@ never taken by an allocation that may go to PSRAM.
 | mbedTLS, its small internal allocations | 8 KB | E |
 | Left for the engine's small allocations and the rest, before the reserve | 362 − 70 − 64 − 8 = 220 KB | |
 | Reserve kept for DMA and the network stack | 64 KB | settings |
-| **Left for the engine's small allocations** | 220 − 64 = **156 KB** | |
+| **Left for the engine's small allocations** | 220 − 64 = **156 KB**, pessimistic by up to 64 KB: Wi-Fi's own internal allocations (the 70 KB above) draw from the reserve, so the reserve and the network line are partly counted twice | |
 
-This is the tight resource. About 70 percent of the worst case's bytes at its peak (672 of 925
-KB) are allocations of 4 KB or less; applied to the realistic home's 187 KB, about 130 KB would
+This is the tight resource. About 70 percent of the worst case's bytes at its peak (673 of 940
+KB live at the peak) are allocations of 4 KB or less; applied to the realistic home's 187 KB, about 130 KB would
 go to the internal RAM first (**E**, by that ratio). It fits the 156 KB, barely, with the
 estimates above; the worst case does not fit, and its small allocations spill into PSRAM (the
 fallback above), which has room. Consequences, to read again when the box measures its own
