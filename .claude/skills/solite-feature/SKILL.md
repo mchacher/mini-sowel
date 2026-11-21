@@ -201,7 +201,7 @@ git branch --show-current                 # must NOT be main
 
 **To save tokens**, steps 2 to 4 go to one agent (Agent tool, `model: "sonnet"`) that follows the
 approved `plan.md` and the rules of 3.2 to 3.4; give it the spec folder, not your conclusions, and
-ask for a short report (what changed, tests run, anything the spec did not cover). Take the work
+ask for a short report (what changed, tests run, anything the spec did not cover). Put this in its prompt, as a strict rule: every test, build, QEMU run or install goes through `sh scripts/quiet.sh <command>` (see `CLAUDE.md`), never bare, and no long output is pasted back; targeted tests while it iterates, the full check once at the end. Take the work
 back on Opus only if it loops on the same failure (see "Models" in `CLAUDE.md`). Then you run
 the checks yourself.
 

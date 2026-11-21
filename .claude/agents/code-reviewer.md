@@ -21,6 +21,8 @@ the bug, and the pages of `docs/living-spec/` the change touches.
 Then read the change: `git diff main` (committed and uncommitted, since the review runs before
 the commit) and `git status --short` for new files, which the diff does not show. Open the changed
 files when the diff is not enough.
+Run every command through `sh scripts/quiet.sh <command>`, never bare: its one-line verdict and
+failing lines are what you need, and a long output only fills your context.
 You may run the tests and the validate command (`sh scripts/validate.sh`) to confirm a
 finding. Never edit a file, never commit.
 

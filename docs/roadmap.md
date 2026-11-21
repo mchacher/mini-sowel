@@ -206,3 +206,7 @@ Every change to this roadmap: date, what changed, why.
   300 KB). Inbox: the 94 KB `devices.json` save is synchronous in the radio loop, its stall is measured on
   the box (E3); the 16 dropped start orders of the motion-light instances are a line of their own. A
   save writes `<name>.tmp`, renames it to `<name>.new` once complete, and only `.new` is recovered.
+- 2026-11-21: `scripts/quiet.sh` added as a strict rule for Claude and every agent (a command's
+  output goes to a log, one verdict line is read), so the agents' context stays small; the same
+  practice was filed as Sowel issue 1291. The commit hook checks the main folder, so one branch at
+  a time is worked on while an agent builds there.
