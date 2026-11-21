@@ -113,7 +113,7 @@ fn pair_with_one_device_shows_the_lines_of_the_spec_writes_a_private_backup_and_
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
 
     let out = lines(&output);
-    assert_eq!(out.len(), 9, "{out:?}");
+    assert_eq!(out.len(), 13, "{out:?}");
     assert_eq!(out[0], mini_sowel_core::banner());
     assert_eq!(out[1], format!("radio: {url}"));
     assert_eq!(out[2], "ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0");
@@ -122,7 +122,14 @@ fn pair_with_one_device_shows_the_lines_of_the_spec_writes_a_private_backup_and_
     assert_eq!(out[5], "pairing: open for 1 s");
     assert_eq!(out[6], "joined: 0x00124B0012345678 (0x5C3D)");
     assert_eq!(out[7], "device: 0x00124B0012345678 eWeLink TH01");
-    assert_eq!(out[8], "pairing: closed");
+    assert_eq!(
+        out[8],
+        "reporting: 0x00124B0012345678 temperature, humidity, battery"
+    );
+    assert_eq!(out[9], "0x00124B0012345678 temperature 19.52 °C");
+    assert_eq!(out[10], "0x00124B0012345678 humidity 54.1 %");
+    assert_eq!(out[11], "0x00124B0012345678 battery 100 %");
+    assert_eq!(out[12], "pairing: closed");
     assert!(elapsed < Duration::from_secs(8), "{elapsed:?}");
 
     // The backup: mode 0600, the network's keys, and none of them on the screen.

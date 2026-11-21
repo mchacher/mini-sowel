@@ -341,6 +341,7 @@ pub const ID_INCOMING_MESSAGE_HANDLER: u16 = 0x0045;
 pub const ID_SET_CONFIGURATION_VALUE: u16 = 0x0053;
 pub const ID_SET_POLICY: u16 = 0x0055;
 pub const ID_SET_SOURCE_ROUTE_DISCOVERY_MODE: u16 = 0x005A;
+pub const ID_LOOKUP_EUI64_BY_NODE_ID: u16 = 0x0061;
 pub const ID_SET_INITIAL_SECURITY_STATE: u16 = 0x0068;
 pub const ID_CLEAR_TRANSIENT_LINK_KEYS: u16 = 0x006B;
 pub const ID_SET_VALUE: u16 = 0x00AB;
@@ -744,7 +745,21 @@ pub struct IncomingMessage {
     pub aps: ApsFrame,
     /// The sender's node address.
     pub sender: u16,
+    /// The sender's 64-bit address, most significant byte first, when the radio gave it (EZSP
+    /// 14+ only; all zeros means unknown).
+    pub sender_eui64: Option<[u8; 8]>,
     pub payload: Vec<u8>,
+}
+
+/// Message kinds of `incomingMessageHandler` that are a unicast.
+pub const INCOMING_UNICAST: u8 = 0x00;
+pub const INCOMING_UNICAST_REPLY: u8 = 0x01;
+
+impl IncomingMessage {
+    /// True for a message sent to this node alone (not a broadcast, nor a multicast).
+    pub fn is_unicast(&self) -> bool {
+        matches!(self.kind, INCOMING_UNICAST | INCOMING_UNICAST_REPLY)
+    }
 }
 
 /// Reads the callback in its EZSP 13 layout (fields one by one) or its 14+ layout (an 18-byte
@@ -753,15 +768,16 @@ pub fn parse_incoming_message(wide: bool, params: &[u8]) -> Result<IncomingMessa
     let mut reader = Reader::new(params);
     let kind = reader.u8()?;
     let aps = ApsFrame::read(&mut reader)?;
-    let sender = if wide {
+    let (sender, sender_eui64) = if wide {
         let sender = reader.u16()?;
-        reader.take(8 + 1 + 1 + 1 + 1 + 4)?; // long id, indexes, lqi, rssi, timestamp
-        sender
+        let eui64 = reader.eui64()?;
+        reader.take(1 + 1 + 1 + 1 + 4)?; // indexes, lqi, rssi, timestamp
+        (sender, (eui64 != [0; 8]).then_some(eui64))
     } else {
         reader.take(2)?; // link quality, signal
         let sender = reader.u16()?;
         reader.take(2)?; // binding and address indexes
-        sender
+        (sender, None)
     };
     let length = usize::from(reader.u8()?);
     let payload = reader.take(length)?.to_vec();
@@ -769,8 +785,25 @@ pub fn parse_incoming_message(wide: bool, params: &[u8]) -> Result<IncomingMessa
         kind,
         aps,
         sender,
+        sender_eui64,
         payload,
     })
+}
+
+/// The parameters of `lookupEui64ByNodeId`.
+pub fn lookup_eui64_by_node_id(node_id: u16) -> Vec<u8> {
+    node_id.to_le_bytes().to_vec()
+}
+
+/// The answer to `lookupEui64ByNodeId`: the address (most significant byte first), or `None`
+/// when the radio's address table does not know the node.
+pub fn parse_lookup_eui64(wide: bool, params: &[u8]) -> Result<Option<[u8; 8]>, EzspError> {
+    let mut reader = Reader::new(params);
+    if reader.status(wide)? != STATUS_OK {
+        return Ok(None);
+    }
+    let eui64 = reader.eui64()?;
+    Ok((eui64 != [0; 8]).then_some(eui64))
 }
 
 /// A `messageSentHandler` callback: what became of a message we sent.

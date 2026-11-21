@@ -5,6 +5,7 @@
 pub mod ash;
 mod coordinator;
 pub mod ezsp;
+pub mod measures;
 pub mod transport;
 pub mod zcl;
 pub mod zdo;
@@ -13,7 +14,9 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use ash::{AshError, AshFailure, Event, Output, Session};
-pub use coordinator::{Network, NetworkKeys, NetworkSettings, PairingEvent, network_line};
+pub use coordinator::{
+    MeasureEvent, Network, NetworkKeys, NetworkSettings, PairingEvent, Sender, network_line,
+};
 use ezsp::{Callback, Ezsp, EzspError, NetworkState, Parsed};
 pub use transport::{RadioTransport, TransportError};
 
@@ -86,6 +89,8 @@ pub enum RadioError {
     NotCoordinator,
     /// The radio was not identified first.
     NotIdentified,
+    /// The radio has no network and none is to be formed (listening only resumes one).
+    NoNetwork,
     /// An argument out of range.
     InvalidArgument(&'static str),
     /// The caller's random source failed.
@@ -108,6 +113,7 @@ impl fmt::Display for RadioError {
             RadioError::NetworkDidNotStart => write!(f, "network did not start"),
             RadioError::NotCoordinator => write!(f, "the radio is not a coordinator"),
             RadioError::NotIdentified => write!(f, "the radio was not identified"),
+            RadioError::NoNetwork => write!(f, "no network, pair a device first"),
             RadioError::InvalidArgument(what) => write!(f, "{what}"),
             RadioError::Random(reason) => write!(f, "no random source: {reason}"),
             RadioError::OnFormed(message) => write!(f, "{message}"),
@@ -292,6 +298,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let network_state = ezsp::parse_network_state(&self.exchange(command)?)?;
         let command = self.ezsp.command(ezsp::ID_GET_EUI64, &[]);
         let eui64 = ezsp::parse_eui64(&self.exchange(command)?)?;
+        self.pairing.set_own_eui64(eui64);
 
         Ok(RadioIdentity {
             protocol: version.protocol,

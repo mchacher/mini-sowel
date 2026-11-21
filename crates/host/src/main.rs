@@ -16,11 +16,14 @@ use mini_sowel_core::radio::{NetworkSettings, Radio, RadioError, identity_lines,
 use radio_tcp::TcpTransport;
 use random::SystemRandom;
 
-const USAGE: &str =
-    "usage: mini-sowel-host [--radio tcp://<address>:<port> [--pair [seconds]] [--data <dir>]]";
+const USAGE: &str = "usage: mini-sowel-host [--radio tcp://<address>:<port> \
+[--pair [seconds] | --listen] [--data <dir>]]";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
 const DEFAULT_DATA_DIR: &str = "mini-sowel-data";
+/// After the pairing time is over, identifications and reporting setups in progress may go on
+/// this long, in seconds.
+const CLOSE_GRACE_SECONDS: u64 = 70;
 /// What a shell reports for a program stopped by Ctrl-C.
 const EXIT_INTERRUPTED: u8 = 130;
 
@@ -30,6 +33,8 @@ struct Args {
     address: Option<String>,
     /// Pairing time in seconds, if `--pair` is given.
     pair: Option<u8>,
+    /// Show the measures of the paired devices, without pairing.
+    listen: bool,
     data: PathBuf,
 }
 
@@ -39,6 +44,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut parsed = Args {
         address: None,
         pair: None,
+        listen: false,
         data: PathBuf::from(DEFAULT_DATA_DIR),
     };
     let mut rest = args.iter().peekable();
@@ -62,11 +68,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                     },
                 });
             }
+            "--listen" => parsed.listen = true,
             "--data" => parsed.data = PathBuf::from(rest.next().ok_or_else(usage)?),
             _ => return Err(usage()),
         }
     }
-    if parsed.pair.is_some() && parsed.address.is_none() {
+    if (parsed.pair.is_some() || parsed.listen) && parsed.address.is_none() {
+        return Err(usage());
+    }
+    if parsed.pair.is_some() && parsed.listen {
         return Err(usage());
     }
     Ok(parsed)
@@ -142,8 +152,12 @@ fn pair(address: &str, seconds: u8, data: &Path, stop: &AtomicBool) -> Result<bo
                 radio.close_joining().map_err(|e| format!("radio: {e}"))?;
                 closed = true;
             }
-            // After the time is over, the identifications in progress finish (at most 35 s).
-            if closed && !radio.pairing_busy() {
+            // After the time is over, the identifications and reporting setups in progress
+            // finish, at most `CLOSE_GRACE_SECONDS` later.
+            if closed
+                && (!radio.pairing_busy()
+                    || Instant::now() >= deadline + Duration::from_secs(CLOSE_GRACE_SECONDS))
+            {
                 return Ok(false);
             }
             for event in radio.poll_pairing().map_err(|e| format!("radio: {e}"))? {
@@ -157,6 +171,30 @@ fn pair(address: &str, seconds: u8, data: &Path, stop: &AtomicBool) -> Result<bo
     }
     println!("pairing: closed");
     result
+}
+
+/// Resumes the radio's network, without forming one, and shows the measures it receives until
+/// Ctrl-C. `Ok(true)` when Ctrl-C stopped it.
+fn listen(address: &str, data: &Path, stop: &AtomicBool) -> Result<bool, String> {
+    let mut radio = Radio::new(connect(address)?, clock());
+    let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
+    let lines = identity_lines(&format!("tcp://{address}"), &identity);
+    // The `network:` line of the identification is left out, as with `--pair`.
+    for line in &lines[..3] {
+        println!("{line}");
+    }
+    let network = radio.listen().map_err(|e| format!("radio: {e}"))?;
+    let foreign = !backup::matches(data, &network);
+    println!("{}", network_line(&network, foreign));
+    println!("listening");
+    while !stop.load(Ordering::SeqCst) {
+        for event in radio.poll().map_err(|e| format!("radio: {e}"))? {
+            for line in event.lines() {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn main() -> ExitCode {
@@ -173,7 +211,7 @@ fn main() -> ExitCode {
     let Some(address) = args.address else {
         return ExitCode::SUCCESS;
     };
-    let Some(seconds) = args.pair else {
+    let Some(seconds) = args.pair.or(args.listen.then_some(0)) else {
         return match identify(&address) {
             Ok(lines) => {
                 for line in lines {
@@ -187,8 +225,10 @@ fn main() -> ExitCode {
             }
         };
     };
-    // Before the radio is touched: the data folder must be writable.
-    if let Err(message) = backup::check_writable(&args.data) {
+    // Before the radio is touched: the data folder must be writable (listening writes nothing).
+    if !args.listen
+        && let Err(message) = backup::check_writable(&args.data)
+    {
         eprintln!("{message}");
         return ExitCode::from(1);
     }
@@ -198,7 +238,12 @@ fn main() -> ExitCode {
         eprintln!("cannot watch for Ctrl-C: {e}");
         return ExitCode::from(1);
     }
-    match pair(&address, seconds, &args.data, &stop) {
+    let result = if args.listen {
+        listen(&address, &args.data, &stop)
+    } else {
+        pair(&address, seconds, &args.data, &stop)
+    };
+    match result {
         Ok(false) => ExitCode::SUCCESS,
         Ok(true) => ExitCode::from(EXIT_INTERRUPTED),
         Err(message) => {

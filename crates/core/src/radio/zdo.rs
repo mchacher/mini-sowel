@@ -12,6 +12,15 @@ pub const CLUSTER_ACTIVE_ENDPOINTS_REQUEST: u16 = 0x0005;
 /// `Active_EP_rsp`.
 pub const CLUSTER_ACTIVE_ENDPOINTS_RESPONSE: u16 = 0x8005;
 
+/// `Simple_Desc_req`.
+pub const CLUSTER_SIMPLE_DESCRIPTOR_REQUEST: u16 = 0x0004;
+/// `Simple_Desc_rsp`.
+pub const CLUSTER_SIMPLE_DESCRIPTOR_RESPONSE: u16 = 0x8004;
+/// `Bind_req`.
+pub const CLUSTER_BIND_REQUEST: u16 = 0x0021;
+/// `Bind_rsp`.
+pub const CLUSTER_BIND_RESPONSE: u16 = 0x8021;
+
 /// Something wrong in a ZDO message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ZdoError {
@@ -86,4 +95,110 @@ pub fn parse_active_endpoints_response(message: &[u8]) -> Result<ActiveEndpoints
         nwk: u16::from_le_bytes([message[2], message[3]]),
         endpoints: endpoints.to_vec(),
     })
+}
+
+/// A `Simple_Desc_req` message: `[tsn][nwk LE][endpoint]`.
+pub fn simple_descriptor_request(tsn: u8, nwk: u16, endpoint: u8) -> Vec<u8> {
+    let n = nwk.to_le_bytes();
+    vec![tsn, n[0], n[1], endpoint]
+}
+
+/// A `Simple_Desc_rsp`: what one endpoint of a device is and which clusters it has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimpleDescriptor {
+    pub tsn: u8,
+    pub nwk: u16,
+    pub endpoint: u8,
+    pub profile: u16,
+    pub device_id: u16,
+    pub input_clusters: Vec<u16>,
+    pub output_clusters: Vec<u16>,
+}
+
+/// Reads a `Simple_Desc_rsp`: transaction, status, node address, descriptor length, then the
+/// descriptor (endpoint, profile, device id, version, input clusters, output clusters). A status
+/// other than success is an error.
+pub fn parse_simple_descriptor_response(message: &[u8]) -> Result<SimpleDescriptor, ZdoError> {
+    if message.len() < 2 {
+        return Err(ZdoError::TooShort);
+    }
+    if message[1] != 0 {
+        return Err(ZdoError::Status(message[1]));
+    }
+    let mut reader = Cursor {
+        bytes: &message[2..],
+    };
+    let nwk = reader.u16()?;
+    let _length = reader.u8()?;
+    let endpoint = reader.u8()?;
+    let profile = reader.u16()?;
+    let device_id = reader.u16()?;
+    let _version = reader.u8()?;
+    let input_clusters = reader.clusters()?;
+    let output_clusters = reader.clusters()?;
+    Ok(SimpleDescriptor {
+        tsn: message[0],
+        nwk,
+        endpoint,
+        profile,
+        device_id,
+        input_clusters,
+        output_clusters,
+    })
+}
+
+/// A cursor over a message: reading past the end is `TooShort`.
+struct Cursor<'a> {
+    bytes: &'a [u8],
+}
+
+impl Cursor<'_> {
+    fn u8(&mut self) -> Result<u8, ZdoError> {
+        let (first, rest) = self.bytes.split_first().ok_or(ZdoError::TooShort)?;
+        self.bytes = rest;
+        Ok(*first)
+    }
+
+    fn u16(&mut self) -> Result<u16, ZdoError> {
+        Ok(u16::from_le_bytes([self.u8()?, self.u8()?]))
+    }
+
+    /// A count, then that many cluster ids (at most 255 of them: the count is one byte).
+    fn clusters(&mut self) -> Result<Vec<u16>, ZdoError> {
+        let count = self.u8()?;
+        (0..count).map(|_| self.u16()).collect()
+    }
+}
+
+/// A `Bind_req` message: `[tsn][source EUI64 LE][source endpoint][cluster LE][destination
+/// address mode 3][destination EUI64 LE][destination endpoint]`. The addresses are given most
+/// significant byte first, as everywhere in the core.
+pub fn bind_request(
+    tsn: u8,
+    source: [u8; 8],
+    source_endpoint: u8,
+    cluster: u16,
+    destination: [u8; 8],
+    destination_endpoint: u8,
+) -> Vec<u8> {
+    let mut message = vec![tsn];
+    message.extend(source.iter().rev());
+    message.push(source_endpoint);
+    message.extend_from_slice(&cluster.to_le_bytes());
+    message.push(0x03); // destination is a 64-bit address and an endpoint
+    message.extend(destination.iter().rev());
+    message.push(destination_endpoint);
+    message
+}
+
+/// Reads a `Bind_rsp` message: transaction, status. Returns the transaction; a status other
+/// than success is an error.
+pub fn parse_bind_response(message: &[u8]) -> Result<u8, ZdoError> {
+    if message.len() < 2 {
+        return Err(ZdoError::TooShort);
+    }
+    if message[1] != 0 {
+        return Err(ZdoError::Status(message[1]));
+    }
+    Ok(message[0])
 }

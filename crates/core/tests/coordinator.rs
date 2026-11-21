@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{Attr, FakeDevice, FakeNcp, Harness, StoredNetwork, harness};
+use common::{Attr, FakeDevice, FakeNcp, Harness, SentMessage, StoredNetwork, harness};
 use mini_sowel_core::radio::{Network, NetworkSettings, PairingEvent, RadioError};
 
 const DEVICE_EUI: [u8; 8] = [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x78];
@@ -82,6 +82,19 @@ fn poll_until_idle(h: &mut Harness) -> Vec<PairingEvent> {
             return events;
         }
     }
+}
+
+/// What the host sent for the identification (endpoints and Basic read), not for the reporting.
+fn identification_sends(h: &Harness) -> Vec<SentMessage> {
+    h.ncp
+        .borrow()
+        .sent
+        .iter()
+        .filter(|m| {
+            (m.profile == 0x0000 && m.cluster == 0x0005) || (m.profile == 0x0104 && m.cluster == 0)
+        })
+        .cloned()
+        .collect()
 }
 
 fn joined_count(events: &[PairingEvent]) -> usize {
@@ -409,8 +422,13 @@ fn a_device_that_announces_and_answers_the_endpoint_request_and_the_basic_read_i
         let mut h = started(with_device_at(protocol, FakeDevice::sensor()));
         h.radio.permit_join(30).unwrap();
         let events = poll_until_idle(&mut h);
+        let without_measures: Vec<PairingEvent> = events
+            .iter()
+            .filter(|e| !matches!(e, PairingEvent::Measures(_)))
+            .cloned()
+            .collect();
         assert_eq!(
-            events,
+            without_measures,
             vec![
                 PairingEvent::Joined {
                     eui64: DEVICE_EUI,
@@ -421,11 +439,17 @@ fn a_device_that_announces_and_answers_the_endpoint_request_and_the_basic_read_i
                     manufacturer: some("eWeLink"),
                     model: some("TH01"),
                 },
+                PairingEvent::ReportingConfigured {
+                    eui64: DEVICE_EUI,
+                    ok: vec![0x0402, 0x0405, 0x0001],
+                    failed: vec![],
+                    no_descriptor: false,
+                },
             ],
             "protocol {protocol}"
         );
         // Endpoint request, then the read on the endpoint the device listed.
-        let sent = h.ncp.borrow().sent.clone();
+        let sent = identification_sends(&h);
         assert_eq!(sent.len(), 2);
         assert_eq!((sent[0].profile, sent[0].cluster), (0x0000, 0x0005));
         assert_eq!((sent[1].profile, sent[1].cluster), (0x0104, 0x0000));
@@ -468,7 +492,7 @@ fn an_answer_from_another_device_or_with_another_tsn_or_a_default_response_is_ig
     let events = poll_until_idle(&mut h);
     assert_eq!(identified(&events), vec![(some("eWeLink"), some("TH01"))]);
     // The read went to endpoint 2, from the right device's list, not endpoint 9.
-    let sent = h.ncp.borrow().sent.clone();
+    let sent = identification_sends(&h);
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[1].destination_endpoint, 2);
 }
@@ -524,7 +548,7 @@ fn a_device_silent_on_the_endpoint_request_is_read_on_endpoint_1_after_15_second
     let opened = h.clock.get();
     let events = poll_until_idle(&mut h);
     assert_eq!(identified(&events), vec![(some("eWeLink"), some("TH01"))]);
-    let sent = h.ncp.borrow().sent.clone();
+    let sent = identification_sends(&h);
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[1].cluster, 0x0000);
     assert_eq!(sent[1].destination_endpoint, 1);
@@ -612,7 +636,7 @@ fn send_unicast_busy_twice_then_ok_identifies_and_busy_three_times_gives_not_ide
     let events = poll_until_idle(&mut h);
     assert_eq!(identified(&events), vec![(some("eWeLink"), some("TH01"))]);
     assert_eq!(
-        h.ncp.borrow().sent.len(),
+        identification_sends(&h).len(),
         4,
         "3 endpoint requests and 1 read"
     );
@@ -803,4 +827,464 @@ fn a_late_response_with_an_older_sequence_number_is_ignored_not_an_error() {
     ncp.stale_response_first = true;
     let mut h = harness(ncp);
     assert!(start(&mut h).unwrap().formed);
+}
+
+// Reporting setup and measures (spec 006).
+
+use common::{ConfigureAnswer, report_frame, temperature_report};
+use mini_sowel_core::radio::measures::{Measure, Value};
+use mini_sowel_core::radio::{MeasureEvent, Sender};
+
+const TEMPERATURE: u16 = 0x0402;
+const HUMIDITY: u16 = 0x0405;
+const POWER: u16 = 0x0001;
+
+/// The `ReportingConfigured` events, as (ok, failed, no_descriptor).
+fn reporting(events: &[PairingEvent]) -> Vec<(Vec<u16>, Vec<u16>, bool)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            PairingEvent::ReportingConfigured {
+                ok,
+                failed,
+                no_descriptor,
+                ..
+            } => Some((ok.clone(), failed.clone(), *no_descriptor)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn measure_events(events: &[PairingEvent]) -> Vec<MeasureEvent> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            PairingEvent::Measures(m) => Some(m.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The ZDO or ZCL requests of one kind the host sent: (profile, cluster) and the messages.
+fn sends_on(h: &Harness, profile: u16, cluster: u16) -> Vec<SentMessage> {
+    h.ncp
+        .borrow()
+        .sent
+        .iter()
+        .filter(|m| m.profile == profile && m.cluster == cluster)
+        .cloned()
+        .collect()
+}
+
+/// The clusters the host bound, in order.
+fn bound_clusters(h: &Harness) -> Vec<u16> {
+    sends_on(h, 0x0000, 0x0021)
+        .iter()
+        .map(|m| u16::from_le_bytes([m.message[10], m.message[11]]))
+        .collect()
+}
+
+/// Pairs the device on a radio and polls until the identification and setup are over.
+fn paired(device: FakeDevice) -> (Harness, Vec<PairingEvent>) {
+    let mut h = started(with_device(device));
+    h.radio.permit_join(180).unwrap();
+    let events = poll_until_idle(&mut h);
+    (h, events)
+}
+
+fn temperature(value: f64) -> Measure {
+    Measure {
+        kind: "temperature",
+        value: Value::Number(value),
+        unit: "°C",
+    }
+}
+
+#[test]
+fn a_paired_fake_sensor_has_bind_and_configure_reporting_done_for_the_three_clusters() {
+    let (h, events) = paired(FakeDevice::sensor());
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![TEMPERATURE, HUMIDITY, POWER], vec![], false)]
+    );
+    assert_eq!(bound_clusters(&h), vec![TEMPERATURE, HUMIDITY, POWER]);
+    for cluster in [POWER, TEMPERATURE, HUMIDITY] {
+        let configures = sends_on(&h, 0x0104, cluster);
+        assert_eq!(configures.len(), 1, "cluster {cluster:#06X}");
+        assert_eq!(configures[0].message[2], 0x06);
+        assert_eq!(configures[0].destination_endpoint, 1);
+    }
+    // The bind names the device, its endpoint, the cluster and the coordinator's own address.
+    let bind = &sends_on(&h, 0x0000, 0x0021)[0].message;
+    assert_eq!(
+        &bind[1..9],
+        &[0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00]
+    );
+    assert_eq!(bind[9], 1);
+    assert_eq!(
+        &bind[13..21],
+        &[0x56, 0x34, 0x12, 0xFE, 0xFF, 0xB9, 0x6F, 0x8C]
+    );
+    assert_eq!(bind[21], 1);
+    assert!(!h.radio.pairing_busy());
+}
+
+#[test]
+fn a_descriptor_unanswered_twice_gives_failed_no_descriptor_after_two_requests() {
+    let mut device = FakeDevice::sensor();
+    device.ignore_descriptors = u32::MAX;
+    let (h, events) = paired(device);
+    assert_eq!(reporting(&events), vec![(vec![], vec![], true)]);
+    assert_eq!(sends_on(&h, 0x0000, 0x0004).len(), 2);
+    assert!(bound_clusters(&h).is_empty());
+    assert_eq!(
+        events.last().unwrap().line(),
+        "reporting: 0x00124B0012345678 failed: no descriptor"
+    );
+}
+
+#[test]
+fn a_bind_refused_for_humidity_fails_that_cluster_and_the_others_go_on() {
+    let mut device = FakeDevice::sensor();
+    device.bind_refused = vec![HUMIDITY];
+    let (h, events) = paired(device);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![TEMPERATURE, POWER], vec![HUMIDITY], false)]
+    );
+    // No Configure Reporting for the refused cluster.
+    assert!(sends_on(&h, 0x0104, HUMIDITY).is_empty());
+    assert_eq!(sends_on(&h, 0x0104, TEMPERATURE).len(), 1);
+    assert_eq!(sends_on(&h, 0x0104, POWER).len(), 1);
+}
+
+#[test]
+fn a_configure_reporting_unanswered_after_its_retry_stops_the_setup_and_fails_the_rest() {
+    let mut device = FakeDevice::sensor();
+    device.configure = ConfigureAnswer::Silent;
+    let (h, events) = paired(device);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![], vec![TEMPERATURE, HUMIDITY, POWER], false)]
+    );
+    // Two Configure Reporting for the first cluster, and nothing for the others.
+    assert_eq!(sends_on(&h, 0x0104, TEMPERATURE).len(), 2);
+    assert_eq!(bound_clusters(&h), vec![TEMPERATURE]);
+    assert!(!h.radio.pairing_busy());
+}
+
+#[test]
+fn failed_clusters_are_tried_again_once_when_the_device_next_sends_a_message() {
+    let mut device = FakeDevice::sensor();
+    device.ignore_configures = 2; // the first request and its retry are not answered
+    let (mut h, events) = paired(device);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![], vec![TEMPERATURE, HUMIDITY, POWER], false)]
+    );
+    let before = bound_clusters(&h).len();
+
+    // Any message from the device: it is awake.
+    h.ncp.borrow_mut().inject(
+        DEVICE_NWK,
+        0x0104,
+        TEMPERATURE,
+        1,
+        &temperature_report(0x50, 2000),
+    );
+    let events = poll_until_idle(&mut h);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![TEMPERATURE, HUMIDITY, POWER], vec![], false)]
+    );
+    assert_eq!(bound_clusters(&h).len(), before + 3);
+
+    // Once only: a later message starts nothing.
+    let sent = h.ncp.borrow().sent.len();
+    h.ncp.borrow_mut().inject(
+        DEVICE_NWK,
+        0x0104,
+        TEMPERATURE,
+        1,
+        &temperature_report(0x51, 2000),
+    );
+    let events = poll_for(&mut h, 500);
+    assert!(reporting(&events).is_empty());
+    assert_eq!(h.ncp.borrow().sent.len(), sent);
+}
+
+#[test]
+fn a_report_between_the_bind_and_the_configure_response_is_shown_and_the_response_still_matched() {
+    let mut device = FakeDevice::sensor();
+    device.reports_during_setup = vec![(TEMPERATURE, temperature_report(0x60, 2100))];
+    device.reports = Vec::new();
+    let (_h, events) = paired(device);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![TEMPERATURE, HUMIDITY, POWER], vec![], false)]
+    );
+    let shown = measure_events(&events);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].measures, vec![temperature(21.0)]);
+    // It arrived while the Configure Reporting was awaited, not after the setup.
+    let at = |f: fn(&PairingEvent) -> bool| events.iter().position(f).unwrap();
+    assert!(
+        at(|e| matches!(e, PairingEvent::Measures(_)))
+            < at(|e| matches!(e, PairingEvent::ReportingConfigured { .. }))
+    );
+}
+
+#[test]
+fn an_eui64_of_all_zeros_in_the_packet_info_that_the_radio_does_not_know_shows_the_nwk() {
+    let mut h = started(ncp_at(19));
+    h.ncp
+        .borrow_mut()
+        .inject(0x1234, 0x0104, TEMPERATURE, 1, &temperature_report(1, 1952));
+    let events = poll_for(&mut h, 500);
+    let shown = measure_events(&events);
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].sender, Sender::Nwk(0x1234));
+    assert_eq!(shown[0].lines(), vec!["0x1234 temperature 19.52 °C"]);
+}
+
+#[test]
+fn a_frame_giving_more_than_16_measures_keeps_16() {
+    let mut h = started(FakeNcp::new());
+    let records: Vec<(u16, u8, Vec<u8>)> = (0..20)
+        .map(|i| (0x0000, 0x29, (1000i16 + i).to_le_bytes().to_vec()))
+        .collect();
+    h.ncp
+        .borrow_mut()
+        .inject(0x1234, 0x0104, TEMPERATURE, 1, &report_frame(1, &records));
+    let shown = measure_events(&poll_for(&mut h, 500));
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].measures.len(), 16);
+    assert_eq!(shown[0].measures[0], temperature(10.0));
+}
+
+#[test]
+fn reports_from_the_paired_device_give_measure_events_with_its_eui64() {
+    let (_h, events) = paired(FakeDevice::sensor());
+    let shown = measure_events(&events);
+    let lines: Vec<String> = shown.iter().flat_map(MeasureEvent::lines).collect();
+    assert_eq!(
+        lines,
+        vec![
+            "0x00124B0012345678 temperature 19.52 °C",
+            "0x00124B0012345678 humidity 54.1 %",
+            "0x00124B0012345678 battery 100 %",
+        ]
+    );
+    assert!(
+        shown
+            .iter()
+            .all(|m| m.sender == Sender::Eui64(DEVICE_EUI) && m.endpoint == 1)
+    );
+}
+
+#[test]
+fn a_report_from_an_unknown_nwk_shows_the_eui64_the_radio_knows_or_the_nwk_when_it_does_not() {
+    for protocol in [13, 19] {
+        let mut ncp = ncp_at(protocol);
+        ncp.known_addresses = vec![(0x1111, [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08])];
+        let mut h = started(ncp);
+        for nwk in [0x1111u16, 0x2222] {
+            h.ncp
+                .borrow_mut()
+                .inject(nwk, 0x0104, TEMPERATURE, 1, &temperature_report(1, 1952));
+        }
+        let shown = measure_events(&poll_for(&mut h, 500));
+        assert_eq!(shown.len(), 2, "protocol {protocol}");
+        assert_eq!(
+            shown[0].sender,
+            Sender::Eui64([0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]),
+            "protocol {protocol}"
+        );
+        assert_eq!(shown[1].sender, Sender::Nwk(0x2222), "protocol {protocol}");
+    }
+    // The sender's address in the packet is used without asking the radio.
+    let mut ncp = ncp_at(19);
+    ncp.packet_eui_wire = Some([0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11]);
+    let mut h = started(ncp);
+    h.ncp
+        .borrow_mut()
+        .inject(0x3333, 0x0104, TEMPERATURE, 1, &temperature_report(1, 1952));
+    let shown = measure_events(&poll_for(&mut h, 500));
+    assert_eq!(
+        shown[0].sender,
+        Sender::Eui64([0x11, 0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A])
+    );
+    assert!(!ids(&h).contains(&0x61));
+}
+
+#[test]
+fn the_address_cache_holds_64_entries_and_drops_the_oldest() {
+    let mut ncp = FakeNcp::new();
+    ncp.known_addresses = (0..65u16)
+        .map(|i| (0x4000 + i, [i as u8 + 1, 0, 0, 0, 0, 0, 0, 0]))
+        .collect();
+    let mut h = started(ncp);
+    let lookups = |h: &Harness| ids(h).iter().filter(|id| **id == 0x61).count();
+    let report = |h: &mut Harness, nwk: u16| {
+        h.ncp
+            .borrow_mut()
+            .inject(nwk, 0x0104, TEMPERATURE, 1, &temperature_report(1, 1952));
+        poll_for(h, 100);
+    };
+    for i in 0..65u16 {
+        report(&mut h, 0x4000 + i);
+    }
+    assert_eq!(lookups(&h), 65);
+    // The newest is remembered: no new lookup. The oldest was dropped: one more.
+    report(&mut h, 0x4000 + 64);
+    assert_eq!(lookups(&h), 65);
+    report(&mut h, 0x4000);
+    assert_eq!(lookups(&h), 66);
+    // The second oldest was dropped by that one.
+    report(&mut h, 0x4001);
+    assert_eq!(lookups(&h), 67);
+}
+
+#[test]
+fn listen_on_a_radio_with_no_network_is_the_error_no_network_and_forms_nothing() {
+    let mut h = harness(FakeNcp::new());
+    h.radio.identify().unwrap();
+    let error = h.radio.listen().unwrap_err();
+    assert_eq!(error, RadioError::NoNetwork);
+    assert_eq!(error.to_string(), "no network, pair a device first");
+    assert!(!ids(&h).contains(&0x1E));
+}
+
+#[test]
+fn listen_resumes_the_network_and_never_forms_one() {
+    let mut ncp = FakeNcp::new();
+    ncp.network = Some(StoredNetwork {
+        extended_pan_wire: [1, 2, 3, 4, 5, 6, 7, 8],
+        pan_id: 0x4321,
+        channel: 20,
+        node_type: 1,
+    });
+    let mut h = harness(ncp);
+    h.radio.identify().unwrap();
+    let network = h.radio.listen().unwrap();
+    assert!(!network.formed);
+    assert_eq!((network.pan_id, network.channel), (0x4321, 20));
+    // No form, no security state, no permit joining.
+    let ids = ids(&h);
+    assert!(!ids.contains(&0x1E) && !ids.contains(&0x68) && !ids.contains(&0x22));
+    assert!(ids.contains(&0x17));
+    // And it reads measures from then on.
+    h.ncp
+        .borrow_mut()
+        .inject(0x1234, 0x0104, TEMPERATURE, 1, &temperature_report(1, 1952));
+    let end = h.clock.get() + 500;
+    let mut shown = Vec::new();
+    while h.clock.get() < end {
+        shown.extend(h.radio.poll().unwrap());
+    }
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].measures, vec![temperature(19.52)]);
+}
+
+#[test]
+fn a_configure_reporting_response_with_another_tsn_is_not_the_awaited_answer() {
+    let mut device = FakeDevice::sensor();
+    device.configure = ConfigureAnswer::Silent;
+    let mut h = started(with_device(device));
+    h.radio.permit_join(180).unwrap();
+    while sends_on(&h, 0x0104, TEMPERATURE).is_empty() {
+        h.radio.poll_pairing().unwrap();
+    }
+    let tsn = sends_on(&h, 0x0104, TEMPERATURE)[0].message[1];
+    h.ncp.borrow_mut().inject(
+        DEVICE_NWK,
+        0x0104,
+        TEMPERATURE,
+        1,
+        &[0x18, tsn ^ 0x55, 0x07, 0x00],
+    );
+    let events = poll_for(&mut h, 500);
+    assert!(reporting(&events).is_empty());
+    assert_eq!(bound_clusters(&h), vec![TEMPERATURE], "the setup went on");
+}
+
+/// Pairs the sensor with the given answer to Configure Reporting for one cluster and returns
+/// the first result of the setup. The device's first reports wake the retry of what failed: it
+/// is tried once more (and fails again, the device answers the same), exactly when a cluster
+/// failed.
+fn configure_answered(cluster: u16, answer: ConfigureAnswer) -> (Vec<u16>, Vec<u16>, bool) {
+    let mut device = FakeDevice::sensor();
+    device.configure_overrides = vec![(cluster, answer)];
+    let (_h, events) = paired(device);
+    let results = reporting(&events);
+    let (ok, failed, no_descriptor) = results[0].clone();
+    if failed.is_empty() {
+        assert_eq!(results.len(), 1, "no retry when nothing failed");
+    } else {
+        assert_eq!(results.len(), 2, "one retry: {results:?}");
+        assert_eq!(results[1], (vec![], failed.clone(), false));
+    }
+    (ok, failed, no_descriptor)
+}
+
+#[test]
+fn a_configure_reporting_answered_by_a_default_response_86_fails_the_cluster_and_arms_the_retry() {
+    let (ok, failed, _) = configure_answered(HUMIDITY, ConfigureAnswer::Default(0x86));
+    assert_eq!((ok, failed), (vec![TEMPERATURE, POWER], vec![HUMIDITY]));
+}
+
+#[test]
+fn a_refusal_record_for_the_only_attribute_fails_the_cluster() {
+    let (ok, failed, _) = configure_answered(TEMPERATURE, ConfigureAnswer::Refuse(0x86));
+    assert_eq!((ok, failed), (vec![HUMIDITY, POWER], vec![TEMPERATURE]));
+}
+
+#[test]
+fn power_with_the_battery_accepted_and_the_voltage_refused_is_set_up() {
+    let answer = ConfigureAnswer::RefuseAttribute(0x0020, 0x86);
+    let (ok, failed, _) = configure_answered(POWER, answer);
+    assert_eq!((ok, failed), (vec![TEMPERATURE, HUMIDITY, POWER], vec![]));
+}
+
+#[test]
+fn power_answered_by_a_single_failure_byte_86_fails() {
+    let (ok, failed, _) = configure_answered(POWER, ConfigureAnswer::SingleStatus(0x86));
+    assert_eq!((ok, failed), (vec![TEMPERATURE, HUMIDITY], vec![POWER]));
+}
+
+#[test]
+fn a_manufacturer_specific_report_on_the_on_off_cluster_gives_no_measure() {
+    let mut h = started(FakeNcp::new());
+    // Global report from the server, manufacturer code 0x1234, on/off attribute 0 = on.
+    let frame = [0x1C, 0x34, 0x12, 0x01, 0x0A, 0x00, 0x00, 0x10, 0x01];
+    h.ncp.borrow_mut().inject(0x1234, 0x0104, 0x0006, 1, &frame);
+    // The same without the code gives a measure: it is the code that matters.
+    let plain = [0x18, 0x02, 0x0A, 0x00, 0x00, 0x10, 0x01];
+    h.ncp.borrow_mut().inject(0x1234, 0x0104, 0x0006, 1, &plain);
+    let shown = measure_events(&poll_for(&mut h, 500));
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].lines(), vec!["0x1234 light_state on"]);
+}
+
+#[test]
+fn a_default_response_for_another_command_is_not_the_answer_to_the_configure_reporting() {
+    let mut device = FakeDevice::sensor();
+    device.configure = ConfigureAnswer::Silent;
+    let mut h = started(with_device(device));
+    h.radio.permit_join(180).unwrap();
+    while sends_on(&h, 0x0104, TEMPERATURE).is_empty() {
+        h.radio.poll_pairing().unwrap();
+    }
+    let tsn = sends_on(&h, 0x0104, TEMPERATURE)[0].message[1];
+    // The right transaction number, but it answers command 0x00 (Read Attributes), not 0x06.
+    h.ncp.borrow_mut().inject(
+        DEVICE_NWK,
+        0x0104,
+        TEMPERATURE,
+        1,
+        &[0x18, tsn, 0x0B, 0x00, 0x86],
+    );
+    let events = poll_for(&mut h, 500);
+    assert!(reporting(&events).is_empty());
+    assert_eq!(bound_clusters(&h), vec![TEMPERATURE], "the setup went on");
 }

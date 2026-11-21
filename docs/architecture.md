@@ -29,7 +29,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
-| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, and the coordinator (start or resume the network, pairing, identifying a device), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
+| Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, listening to its measures), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
 | Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system | `ui/` |

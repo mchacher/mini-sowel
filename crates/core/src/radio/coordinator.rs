@@ -4,8 +4,10 @@
 //! No clock and no random source of its own: the time comes from the `Radio`'s clock, the random
 //! bytes from the caller.
 
+use std::collections::VecDeque;
 use std::fmt;
 
+use super::measures::{self, Measure};
 use super::{Radio, RadioError, RadioTransport};
 use super::{ezsp, zcl, zdo};
 use ezsp::{ApsFrame, Callback, IncomingMessage, NetworkParameters, StackStatus, TrustCenterJoin};
@@ -28,6 +30,16 @@ const MAX_READS: u8 = 2;
 const MAX_DEVICES: usize = 32;
 /// Devices reported as "too many", remembered to report each once; bounded like the devices.
 const MAX_IGNORED: usize = 32;
+/// A request of the reporting setup is sent this many times in all (one retry) before the setup
+/// gives up.
+const MAX_ATTEMPTS: u8 = 2;
+/// The Configure Reporting command of ZCL, to recognise the Default Response it gets.
+const COMMAND_CONFIGURE_REPORTING: u8 = 0x06;
+/// Pairs (sender, transaction number) remembered as already given a Default Response; the oldest
+/// is dropped past this.
+const MAX_ANSWERED: usize = 32;
+/// Node addresses whose 64-bit address is remembered; the oldest is dropped past this.
+const MAX_ADDRESSES: usize = 64;
 /// The host's endpoint, Home Automation profile.
 const HOST_ENDPOINT: u8 = 1;
 /// The Zigbee channels.
@@ -94,7 +106,7 @@ pub fn network_line(network: &Network, foreign: bool) -> String {
 }
 
 /// What happens while pairing is open.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PairingEvent {
     /// A device joined the network (once per device per session).
     Joined { eui64: [u8; 8], nwk: u16 },
@@ -108,10 +120,59 @@ pub enum PairingEvent {
     NotIdentified { eui64: [u8; 8] },
     /// More devices than the session follows: this one is ignored.
     TooManyDevices { eui64: [u8; 8] },
+    /// The reporting of a device's standard clusters was set up (or tried): the clusters set
+    /// up, the clusters that failed, and whether the device never gave its descriptor (nothing
+    /// was tried then).
+    ReportingConfigured {
+        eui64: [u8; 8],
+        ok: Vec<u16>,
+        failed: Vec<u16>,
+        no_descriptor: bool,
+    },
+    /// A device sent measures.
+    Measures(MeasureEvent),
+}
+
+/// Who sent a message: its 64-bit address, or its network address when the radio does not know
+/// the 64-bit one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sender {
+    Eui64([u8; 8]),
+    Nwk(u16),
+}
+
+impl fmt::Display for Sender {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Sender::Eui64(eui64) => write!(f, "0x{}", hex(eui64)),
+            Sender::Nwk(nwk) => write!(f, "0x{nwk:04X}"),
+        }
+    }
+}
+
+/// The measures of one message from a device.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasureEvent {
+    pub sender: Sender,
+    /// The endpoint of the device that sent them.
+    pub endpoint: u8,
+    /// At most `measures::MAX_MEASURES_PER_FRAME`.
+    pub measures: Vec<Measure>,
+}
+
+impl MeasureEvent {
+    /// The lines the host prints: `0x00124B0012345678 temperature 19.52 °C`, one per measure.
+    pub fn lines(&self) -> Vec<String> {
+        self.measures
+            .iter()
+            .map(|m| format!("{} {m}", self.sender))
+            .collect()
+    }
 }
 
 impl PairingEvent {
-    /// The line the host prints for this event.
+    /// The line the host prints for this event (one line per measure for `Measures`, joined by
+    /// newlines).
     pub fn line(&self) -> String {
         match self {
             PairingEvent::Joined { eui64, nwk } => {
@@ -133,6 +194,37 @@ impl PairingEvent {
             PairingEvent::TooManyDevices { eui64 } => {
                 format!("pairing: too many devices, 0x{} ignored", hex(eui64))
             }
+            PairingEvent::ReportingConfigured {
+                eui64,
+                ok,
+                failed,
+                no_descriptor,
+            } => {
+                let names = |clusters: &[u16]| {
+                    clusters
+                        .iter()
+                        .map(|c| measures::cluster_name(*c))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let mut line = format!("reporting: 0x{}", hex(eui64));
+                if *no_descriptor {
+                    line.push_str(" failed: no descriptor");
+                } else if ok.is_empty() && failed.is_empty() {
+                    line.push_str(" none");
+                } else {
+                    if !ok.is_empty() {
+                        line.push(' ');
+                        line.push_str(&names(ok));
+                    }
+                    if !failed.is_empty() {
+                        line.push_str(" failed: ");
+                        line.push_str(&names(failed));
+                    }
+                }
+                line
+            }
+            PairingEvent::Measures(event) => event.lines().join("\n"),
         }
     }
 }
@@ -155,6 +247,100 @@ enum Step {
     Done,
 }
 
+/// Where the reporting setup of a device is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    SendDescriptor,
+    WaitDescriptor {
+        tsn: u8,
+        until: u64,
+    },
+    SendBind,
+    WaitBind {
+        tsn: u8,
+        until: u64,
+    },
+    SendConfigure,
+    WaitConfigure {
+        tsn: u8,
+        until: u64,
+    },
+    /// Nothing left to do: the result is reported.
+    Finish,
+}
+
+/// The reporting setup of one device: a descriptor request, then for each cluster a bind and a
+/// Configure Reporting, one request at a time.
+#[derive(Debug)]
+struct Setup {
+    stage: Stage,
+    due: u64,
+    /// Clusters still to do, the one in progress first; at most the table's size.
+    todo: Vec<u16>,
+    /// At most the table's size, like `todo`.
+    ok: Vec<u16>,
+    failed: Vec<u16>,
+    /// Times the request in progress was sent.
+    attempts: u8,
+    /// Times the radio refused the request in progress.
+    busy: u8,
+    /// The device never gave its descriptor.
+    no_descriptor: bool,
+    /// This run tries again the clusters that failed in the first one.
+    retry: bool,
+}
+
+impl Setup {
+    fn new(now: u64) -> Self {
+        Setup {
+            stage: Stage::SendDescriptor,
+            due: now,
+            todo: Vec::new(),
+            ok: Vec::new(),
+            failed: Vec::new(),
+            attempts: 0,
+            busy: 0,
+            no_descriptor: false,
+            retry: false,
+        }
+    }
+
+    fn retrying(clusters: Vec<u16>, now: u64) -> Self {
+        Setup {
+            stage: Stage::SendBind,
+            todo: clusters,
+            retry: true,
+            ..Setup::new(now)
+        }
+    }
+
+    /// The cluster in progress is done, well or not: on to the next.
+    fn cluster_done(&mut self, now: u64, succeeded: bool) {
+        if !self.todo.is_empty() {
+            let cluster = self.todo.remove(0);
+            if succeeded {
+                self.ok.push(cluster);
+            } else {
+                self.failed.push(cluster);
+            }
+        }
+        self.attempts = 0;
+        self.busy = 0;
+        self.due = now;
+        self.stage = if self.todo.is_empty() {
+            Stage::Finish
+        } else {
+            Stage::SendBind
+        };
+    }
+
+    /// The device does not answer: the clusters not done yet are failed.
+    fn give_up(&mut self) {
+        self.failed.append(&mut self.todo);
+        self.stage = Stage::Finish;
+    }
+}
+
 #[derive(Debug)]
 struct Device {
     eui64: [u8; 8],
@@ -164,9 +350,13 @@ struct Device {
     busy: u8,
     reads: u8,
     endpoint: u8,
+    setup: Option<Setup>,
+    /// Clusters that failed, to try once more at the device's next message; at most the table's
+    /// size.
+    retry: Vec<u16>,
 }
 
-/// What the coordinator follows while pairing.
+/// What the coordinator follows while pairing, and what it remembers of the network.
 #[derive(Debug, Default)]
 pub struct Pairing {
     /// At most `MAX_DEVICES`.
@@ -174,6 +364,45 @@ pub struct Pairing {
     /// At most `MAX_IGNORED`.
     ignored: Vec<[u8; 8]>,
     tsn: u8,
+    /// The radio's own address, read when it was identified.
+    own_eui64: Option<[u8; 8]>,
+    /// (sender, transaction number) given a Default Response; at most `MAX_ANSWERED`.
+    answered: VecDeque<(u16, u8)>,
+    /// Node address to 64-bit address; at most `MAX_ADDRESSES`, the oldest dropped.
+    addresses: VecDeque<(u16, [u8; 8])>,
+    /// The radio only listens: devices are not followed.
+    listening: bool,
+}
+
+impl Pairing {
+    pub(super) fn set_own_eui64(&mut self, eui64: [u8; 8]) {
+        self.own_eui64 = Some(eui64);
+    }
+
+    fn remember_address(&mut self, nwk: u16, eui64: [u8; 8]) {
+        self.forget_address(nwk, eui64);
+        if self.addresses.len() >= MAX_ADDRESSES {
+            self.addresses.pop_front();
+        }
+        self.addresses.push_back((nwk, eui64));
+    }
+
+    /// Drops what is remembered of this node address and of this device: one of the two changed.
+    fn forget_address(&mut self, nwk: u16, eui64: [u8; 8]) {
+        self.addresses.retain(|(n, e)| *n != nwk && *e != eui64);
+    }
+
+    /// True the first time a Default Response is due for this transaction of this sender.
+    fn first_default_response(&mut self, nwk: u16, tsn: u8) -> bool {
+        if self.answered.contains(&(nwk, tsn)) {
+            return false;
+        }
+        if self.answered.len() >= MAX_ANSWERED {
+            self.answered.pop_front();
+        }
+        self.answered.push_back((nwk, tsn));
+        true
+    }
 }
 
 /// Configuration values set before the network starts: (id, value).
@@ -290,6 +519,35 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             }
         };
 
+        self.running_network(wide, keys)
+    }
+
+    /// Resumes the network the radio has, without ever forming one, and returns it. A radio with
+    /// no network is `RadioError::NoNetwork`. Joining stays closed; the devices are not
+    /// followed, only their measures are read (`poll`).
+    pub fn listen(&mut self) -> Result<Network, RadioError> {
+        let wide = self.wide()?;
+        self.configure(wide)?;
+        match self.call_status(ezsp::ID_NETWORK_INIT, &ezsp::network_init(), wide)? {
+            ezsp::STATUS_OK => self.wait_for_network_up()?,
+            ezsp::STATUS_NOT_JOINED => return Err(RadioError::NoNetwork),
+            status => {
+                return Err(RadioError::Refused {
+                    command: "networkInit",
+                    status,
+                });
+            }
+        }
+        self.pairing.listening = true;
+        self.running_network(wide, None)
+    }
+
+    /// The network once it is up: its parameters, checked, and the concentrator set.
+    fn running_network(
+        &mut self,
+        wide: bool,
+        keys: Option<NetworkKeys>,
+    ) -> Result<Network, RadioError> {
         let response = self.call(ezsp::ID_GET_NETWORK_PARAMETERS, &[])?;
         let parameters = ezsp::parse_network_parameters(wide, &response)?;
         if parameters.status != ezsp::STATUS_OK {
@@ -505,7 +763,10 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
 
     /// True while a device that joined is still being identified.
     pub fn pairing_busy(&self) -> bool {
-        self.pairing.devices.iter().any(|d| d.step != Step::Done)
+        self.pairing
+            .devices
+            .iter()
+            .any(|d| d.step != Step::Done || d.setup.is_some())
     }
 
     /// Reads the radio for a moment, follows the devices and returns what happened.
@@ -515,13 +776,30 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         self.drain_payloads();
         let mut events = Vec::new();
         while let Some(callback) = self.callbacks.pop_front() {
-            self.on_callback(wide, callback, &mut events);
+            self.on_callback(wide, callback, &mut events)?;
         }
         self.drive_devices(wide, &mut events)?;
         Ok(events)
     }
 
-    fn on_callback(&mut self, wide: bool, callback: Callback, events: &mut Vec<PairingEvent>) {
+    /// Reads the radio for a moment and returns the measures that arrived (after `listen`).
+    pub fn poll(&mut self) -> Result<Vec<MeasureEvent>, RadioError> {
+        Ok(self
+            .poll_pairing()?
+            .into_iter()
+            .filter_map(|event| match event {
+                PairingEvent::Measures(measures) => Some(measures),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn on_callback(
+        &mut self,
+        wide: bool,
+        callback: Callback,
+        events: &mut Vec<PairingEvent>,
+    ) -> Result<(), RadioError> {
         match callback.id {
             ezsp::ID_STACK_STATUS_HANDLER => {
                 if let Ok(StackStatus::NetworkDown) =
@@ -537,13 +815,14 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             }
             ezsp::ID_INCOMING_MESSAGE_HANDLER => {
                 if let Ok(message) = ezsp::parse_incoming_message(wide, &callback.params) {
-                    self.on_incoming(message, events);
+                    self.on_incoming(wide, message, events)?;
                 }
             }
             // What became of a message is not needed: the answer, or its absence, tells.
             ezsp::ID_MESSAGE_SENT_HANDLER => {}
             _ => {}
         }
+        Ok(())
     }
 
     fn on_trust_center_join(&mut self, join: TrustCenterJoin, events: &mut Vec<PairingEvent>) {
@@ -556,8 +835,14 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         }
     }
 
-    fn on_incoming(&mut self, message: IncomingMessage, events: &mut Vec<PairingEvent>) {
+    fn on_incoming(
+        &mut self,
+        wide: bool,
+        message: IncomingMessage,
+        events: &mut Vec<PairingEvent>,
+    ) -> Result<(), RadioError> {
         let now = (self.now)();
+        self.wake_for_retry(message.sender, now);
         match (message.aps.profile, message.aps.cluster) {
             (zdo::PROFILE, zdo::CLUSTER_DEVICE_ANNOUNCE) => {
                 if let Ok(announce) = zdo::parse_device_announce(&message.payload) {
@@ -565,60 +850,288 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 }
             }
             (zdo::PROFILE, zdo::CLUSTER_ACTIVE_ENDPOINTS_RESPONSE) => {
-                let Some(device) = self
-                    .pairing
-                    .devices
-                    .iter_mut()
-                    .find(|d| d.nwk == message.sender)
-                else {
-                    return;
-                };
-                let Step::WaitEndpoints { tsn, .. } = device.step else {
-                    return;
-                };
-                if message.payload.first() != Some(&tsn) {
-                    return;
-                }
-                // The first endpoint the device lists, or endpoint 1 if it gives none.
-                device.endpoint = zdo::parse_active_endpoints_response(&message.payload)
-                    .ok()
-                    .and_then(|r| r.endpoints.first().copied())
-                    .unwrap_or(1);
-                device.step = Step::SendRead;
-                device.due = now;
+                self.on_active_endpoints(&message, now);
             }
-            (zcl::PROFILE_HOME_AUTOMATION, zcl::CLUSTER_BASIC) => {
-                let Some(device) = self
-                    .pairing
-                    .devices
-                    .iter_mut()
-                    .find(|d| d.nwk == message.sender)
-                else {
-                    return;
-                };
-                let Step::WaitRead { tsn, .. } = device.step else {
-                    return;
-                };
-                // A Default Response, or an answer with another transaction number, is not it.
-                let Ok(response) = zcl::parse_read_attributes_response(&message.payload) else {
-                    return;
-                };
-                if response.tsn != tsn {
-                    return;
-                }
-                device.step = Step::Done;
-                events.push(PairingEvent::Identified {
-                    eui64: device.eui64,
-                    manufacturer: response
-                        .string(zcl::ATTRIBUTE_MANUFACTURER_NAME)
-                        .map(str::to_string),
-                    model: response
-                        .string(zcl::ATTRIBUTE_MODEL_IDENTIFIER)
-                        .map(str::to_string),
-                });
+            (zdo::PROFILE, zdo::CLUSTER_SIMPLE_DESCRIPTOR_RESPONSE) => {
+                self.on_descriptor(&message, now);
+                self.report_finished_at(message.sender, events);
             }
+            (zdo::PROFILE, zdo::CLUSTER_BIND_RESPONSE) => {
+                self.on_bind(&message, now);
+                self.report_finished_at(message.sender, events);
+            }
+            (zcl::PROFILE_HOME_AUTOMATION, _) => self.on_zcl(wide, &message, now, events)?,
             _ => {}
         }
+        Ok(())
+    }
+
+    fn device_at(&mut self, nwk: u16) -> Option<&mut Device> {
+        self.pairing.devices.iter_mut().find(|d| d.nwk == nwk)
+    }
+
+    fn on_active_endpoints(&mut self, message: &IncomingMessage, now: u64) {
+        let Some(device) = self.device_at(message.sender) else {
+            return;
+        };
+        let Step::WaitEndpoints { tsn, .. } = device.step else {
+            return;
+        };
+        if message.payload.first() != Some(&tsn) {
+            return;
+        }
+        // The first endpoint the device lists, or endpoint 1 if it gives none.
+        device.endpoint = zdo::parse_active_endpoints_response(&message.payload)
+            .ok()
+            .and_then(|r| r.endpoints.first().copied())
+            .unwrap_or(1);
+        device.step = Step::SendRead;
+        device.due = now;
+    }
+
+    /// A device that failed some clusters sends a message: it is awake, they are tried once more.
+    fn wake_for_retry(&mut self, nwk: u16, now: u64) {
+        let Some(device) = self.device_at(nwk) else {
+            return;
+        };
+        if device.step == Step::Done && device.setup.is_none() && !device.retry.is_empty() {
+            let clusters = std::mem::take(&mut device.retry);
+            device.setup = Some(Setup::retrying(clusters, now));
+        }
+    }
+
+    /// The `Simple_Desc_rsp` of the setup: the clusters to set up, or "no descriptor".
+    fn on_descriptor(&mut self, message: &IncomingMessage, now: u64) {
+        let Some(setup) = self
+            .device_at(message.sender)
+            .and_then(|d| d.setup.as_mut())
+        else {
+            return;
+        };
+        let Stage::WaitDescriptor { tsn, .. } = setup.stage else {
+            return;
+        };
+        if message.payload.first() != Some(&tsn) {
+            return;
+        }
+        match zdo::parse_simple_descriptor_response(&message.payload) {
+            Ok(descriptor) => {
+                setup.todo = measures::clusters_to_set_up(&descriptor.input_clusters);
+                setup.attempts = 0;
+                setup.busy = 0;
+                setup.due = now;
+                setup.stage = if setup.todo.is_empty() {
+                    Stage::Finish
+                } else {
+                    Stage::SendBind
+                };
+            }
+            Err(_) => {
+                setup.no_descriptor = true;
+                setup.stage = Stage::Finish;
+            }
+        }
+    }
+
+    /// The `Bind_rsp` of the setup: on to the Configure Reporting, or the cluster failed.
+    fn on_bind(&mut self, message: &IncomingMessage, now: u64) {
+        let Some(setup) = self
+            .device_at(message.sender)
+            .and_then(|d| d.setup.as_mut())
+        else {
+            return;
+        };
+        let Stage::WaitBind { tsn, .. } = setup.stage else {
+            return;
+        };
+        if message.payload.first() != Some(&tsn) {
+            return;
+        }
+        if zdo::parse_bind_response(&message.payload).is_ok() {
+            setup.attempts = 0;
+            setup.busy = 0;
+            setup.due = now;
+            setup.stage = Stage::SendConfigure;
+        } else {
+            setup.cluster_done(now, false);
+        }
+    }
+
+    /// A ZCL frame: the Basic answer of the identification, the answer to a Configure Reporting,
+    /// measures, and the Default Response the frame may ask for.
+    fn on_zcl(
+        &mut self,
+        wide: bool,
+        message: &IncomingMessage,
+        now: u64,
+        events: &mut Vec<PairingEvent>,
+    ) -> Result<(), RadioError> {
+        let cluster = message.aps.cluster;
+        let frame = &message.payload;
+        if cluster == zcl::CLUSTER_BASIC {
+            self.on_basic_answer(message, now, events);
+        }
+        self.on_configure_answer(message, now);
+        self.report_finished_at(message.sender, events);
+
+        let measured = if cluster == zcl::CLUSTER_IAS_ZONE {
+            zcl::parse_zone_status_change(frame)
+                .map(measures::from_zone_status)
+                .unwrap_or_default()
+        } else {
+            zcl::parse_attribute_report(frame)
+                .map(|report| measures::from_records(cluster, &report.records))
+                .unwrap_or_default()
+        };
+        if !measured.is_empty() {
+            let sender = self.sender_address(wide, message)?;
+            events.push(PairingEvent::Measures(MeasureEvent {
+                sender,
+                endpoint: message.aps.source_endpoint,
+                measures: measured,
+            }));
+        }
+        self.answer_with_default_response(wide, message)
+    }
+
+    /// The Read Attributes Response of the identification.
+    fn on_basic_answer(
+        &mut self,
+        message: &IncomingMessage,
+        now: u64,
+        events: &mut Vec<PairingEvent>,
+    ) {
+        let Some(device) = self.device_at(message.sender) else {
+            return;
+        };
+        let Step::WaitRead { tsn, .. } = device.step else {
+            return;
+        };
+        // A Default Response, or an answer with another transaction number, is not it.
+        let Ok(response) = zcl::parse_read_attributes_response(&message.payload) else {
+            return;
+        };
+        if response.tsn != tsn {
+            return;
+        }
+        device.step = Step::Done;
+        // The device is awake: its reporting is set up right now.
+        device.setup = Some(Setup::new(now));
+        events.push(PairingEvent::Identified {
+            eui64: device.eui64,
+            manufacturer: response
+                .string(zcl::ATTRIBUTE_MANUFACTURER_NAME)
+                .map(str::to_string),
+            model: response
+                .string(zcl::ATTRIBUTE_MODEL_IDENTIFIER)
+                .map(str::to_string),
+        });
+    }
+
+    /// The answer to the Configure Reporting in progress: a Configure Reporting Response or a
+    /// Default Response, matched by sender, cluster, command and transaction number.
+    fn on_configure_answer(&mut self, message: &IncomingMessage, now: u64) {
+        let cluster = message.aps.cluster;
+        let Some(setup) = self
+            .device_at(message.sender)
+            .and_then(|d| d.setup.as_mut())
+        else {
+            return;
+        };
+        let Stage::WaitConfigure { tsn, .. } = setup.stage else {
+            return;
+        };
+        if setup.todo.first() != Some(&cluster) {
+            return;
+        }
+        let frame = &message.payload;
+        let succeeded = if let Ok(response) = zcl::parse_configure_reporting_response(frame) {
+            if response.tsn != tsn {
+                return;
+            }
+            // Set up when the device accepted at least one attribute of the cluster.
+            let wanted = measures::reporting_cluster(cluster).map_or(0, |c| c.attributes.len());
+            response.failed.is_none() && response.refused.len() < wanted
+        } else if let Ok(response) = zcl::parse_default_response(frame) {
+            if response.tsn != tsn || response.command != COMMAND_CONFIGURE_REPORTING {
+                return;
+            }
+            response.status == 0
+        } else {
+            return;
+        };
+        setup.cluster_done(now, succeeded);
+    }
+
+    /// The 64-bit address of the sender of a message: the device followed in this session, what
+    /// is remembered, what the packet carried, then what the radio's address table says; its node
+    /// address if nobody knows.
+    fn sender_address(
+        &mut self,
+        wide: bool,
+        message: &IncomingMessage,
+    ) -> Result<Sender, RadioError> {
+        let nwk = message.sender;
+        if let Some(device) = self.device_at(nwk) {
+            return Ok(Sender::Eui64(device.eui64));
+        }
+        if let Some((_, eui64)) = self.pairing.addresses.iter().find(|(n, _)| *n == nwk) {
+            return Ok(Sender::Eui64(*eui64));
+        }
+        let known = match message.sender_eui64 {
+            Some(eui64) => Some(eui64),
+            None => {
+                let response = self.call(
+                    ezsp::ID_LOOKUP_EUI64_BY_NODE_ID,
+                    &ezsp::lookup_eui64_by_node_id(nwk),
+                )?;
+                ezsp::parse_lookup_eui64(wide, &response).unwrap_or(None)
+            }
+        };
+        Ok(match known {
+            Some(eui64) => {
+                self.pairing.remember_address(nwk, eui64);
+                Sender::Eui64(eui64)
+            }
+            None => Sender::Nwk(nwk),
+        })
+    }
+
+    /// Sends the Default Response a unicast frame asks for, once per transaction and sender. It
+    /// is sent once and not waited for: it takes no request slot of the setup.
+    fn answer_with_default_response(
+        &mut self,
+        wide: bool,
+        message: &IncomingMessage,
+    ) -> Result<(), RadioError> {
+        if !message.is_unicast() {
+            return Ok(());
+        }
+        let Some(response) = zcl::default_response(message.aps.cluster, &message.payload) else {
+            return Ok(());
+        };
+        let Ok((header, _)) = zcl::parse_header(&message.payload) else {
+            return Ok(());
+        };
+        if !self
+            .pairing
+            .first_default_response(message.sender, header.tsn)
+        {
+            return Ok(());
+        }
+        // From the endpoint the frame was addressed to, to the endpoint that sent it.
+        let aps = ApsFrame {
+            profile: zcl::PROFILE_HOME_AUTOMATION,
+            cluster: message.aps.cluster,
+            source_endpoint: message.aps.destination_endpoint,
+            destination_endpoint: message.aps.source_endpoint,
+            options: ezsp::APS_OPTIONS_DEFAULT,
+            group_id: 0,
+            sequence: 0,
+        };
+        // Refused or lost: nobody waits for it, the device asks again if it needs it.
+        self.send_to_device(wide, message.sender, &aps, header.tsn, &response)?;
+        Ok(())
     }
 
     /// A device joined or announced itself: one `Joined` per device per session. An announce
@@ -630,7 +1143,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         announced: bool,
         events: &mut Vec<PairingEvent>,
     ) {
+        if self.pairing.listening {
+            return;
+        }
         let now = (self.now)();
+        self.pairing.forget_address(nwk, eui64);
         if let Some(device) = self.pairing.devices.iter_mut().find(|d| d.eui64 == eui64) {
             device.nwk = nwk;
             if announced && device.step == Step::SendEndpoints {
@@ -657,6 +1174,8 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             busy: 0,
             reads: 0,
             endpoint: 1,
+            setup: None,
+            retry: Vec::new(),
         });
         events.push(PairingEvent::Joined { eui64, nwk });
     }
@@ -782,6 +1301,159 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 }
                 _ => {}
             }
+            self.drive_setup(wide, index, events)?;
+        }
+        Ok(())
+    }
+
+    fn report_finished_at(&mut self, nwk: u16, events: &mut Vec<PairingEvent>) {
+        if let Some(index) = self.pairing.devices.iter().position(|d| d.nwk == nwk) {
+            self.report_finished(index, events);
+        }
+    }
+
+    /// Reports the result of a setup that is at its end, and arms the retry of what failed.
+    fn report_finished(&mut self, index: usize, events: &mut Vec<PairingEvent>) {
+        let device = &mut self.pairing.devices[index];
+        if device.setup.as_ref().map(|s| s.stage) != Some(Stage::Finish) {
+            return;
+        }
+        let Some(setup) = device.setup.take() else {
+            return;
+        };
+        if !setup.retry && !setup.no_descriptor {
+            device.retry = setup.failed.clone();
+        }
+        events.push(PairingEvent::ReportingConfigured {
+            eui64: device.eui64,
+            ok: setup.ok,
+            failed: setup.failed,
+            no_descriptor: setup.no_descriptor,
+        });
+    }
+
+    /// The radio's own address: read when it was identified, asked again if it was not.
+    fn own_eui64(&mut self) -> Result<[u8; 8], RadioError> {
+        if let Some(eui64) = self.pairing.own_eui64 {
+            return Ok(eui64);
+        }
+        let response = self.call(ezsp::ID_GET_EUI64, &[])?;
+        let eui64 = ezsp::parse_eui64(&response)?;
+        self.pairing.set_own_eui64(eui64);
+        Ok(eui64)
+    }
+
+    /// Does what the reporting setup of one device is due to do: send its next request, send
+    /// it again, give up, or report the result.
+    fn drive_setup(
+        &mut self,
+        wide: bool,
+        index: usize,
+        events: &mut Vec<PairingEvent>,
+    ) -> Result<(), RadioError> {
+        let now = (self.now)();
+        let device = &mut self.pairing.devices[index];
+        let (nwk, eui64, endpoint) = (device.nwk, device.eui64, device.endpoint);
+        let Some(setup) = device.setup.as_mut() else {
+            return Ok(());
+        };
+        let cluster = setup.todo.first().copied();
+        match setup.stage {
+            Stage::Finish => self.report_finished(index, events),
+            Stage::WaitDescriptor { until, .. }
+            | Stage::WaitBind { until, .. }
+            | Stage::WaitConfigure { until, .. }
+                if now >= until =>
+            {
+                // No answer: the same request again, then the end of the setup.
+                setup.attempts += 1;
+                if setup.attempts < MAX_ATTEMPTS {
+                    setup.due = now;
+                    setup.stage = match setup.stage {
+                        Stage::WaitDescriptor { .. } => Stage::SendDescriptor,
+                        Stage::WaitBind { .. } => Stage::SendBind,
+                        _ => Stage::SendConfigure,
+                    };
+                } else {
+                    setup.no_descriptor = matches!(setup.stage, Stage::WaitDescriptor { .. });
+                    setup.give_up();
+                }
+            }
+            stage @ (Stage::SendDescriptor | Stage::SendBind | Stage::SendConfigure)
+                if now >= setup.due =>
+            {
+                let tsn = self.next_tsn();
+                let zdo_aps = |cluster: u16| ApsFrame {
+                    profile: zdo::PROFILE,
+                    cluster,
+                    source_endpoint: 0,
+                    destination_endpoint: 0,
+                    options: ezsp::APS_OPTIONS_DEFAULT,
+                    group_id: 0,
+                    sequence: 0,
+                };
+                let (aps, message, timeout) = match (stage, cluster) {
+                    (Stage::SendDescriptor, _) => (
+                        zdo_aps(zdo::CLUSTER_SIMPLE_DESCRIPTOR_REQUEST),
+                        zdo::simple_descriptor_request(tsn, nwk, endpoint),
+                        ZDO_ANSWER_TIMEOUT_MS,
+                    ),
+                    (Stage::SendBind, Some(cluster)) => {
+                        let own = self.own_eui64()?;
+                        (
+                            zdo_aps(zdo::CLUSTER_BIND_REQUEST),
+                            zdo::bind_request(tsn, eui64, endpoint, cluster, own, HOST_ENDPOINT),
+                            ZDO_ANSWER_TIMEOUT_MS,
+                        )
+                    }
+                    (Stage::SendConfigure, Some(cluster)) => {
+                        let attributes =
+                            measures::reporting_cluster(cluster).map_or(&[][..], |c| c.attributes);
+                        (
+                            ApsFrame {
+                                profile: zcl::PROFILE_HOME_AUTOMATION,
+                                cluster,
+                                source_endpoint: HOST_ENDPOINT,
+                                destination_endpoint: endpoint,
+                                options: ezsp::APS_OPTIONS_DEFAULT,
+                                group_id: 0,
+                                sequence: 0,
+                            },
+                            zcl::configure_reporting_request(tsn, attributes),
+                            ANSWER_TIMEOUT_MS,
+                        )
+                    }
+                    // A cluster step without a cluster: nothing to send, report the result.
+                    _ => {
+                        if let Some(setup) = self.pairing.devices[index].setup.as_mut() {
+                            setup.stage = Stage::Finish;
+                        }
+                        return Ok(());
+                    }
+                };
+                let taken = self.send_to_device(wide, nwk, &aps, tsn, &message)?;
+                let until = (self.now)() + timeout;
+                let Some(setup) = self.pairing.devices[index].setup.as_mut() else {
+                    return Ok(());
+                };
+                if taken {
+                    setup.busy = 0;
+                    setup.stage = match stage {
+                        Stage::SendDescriptor => Stage::WaitDescriptor { tsn, until },
+                        Stage::SendBind => Stage::WaitBind { tsn, until },
+                        _ => Stage::WaitConfigure { tsn, until },
+                    };
+                } else {
+                    setup.busy += 1;
+                    if setup.busy >= MAX_BUSY {
+                        setup.no_descriptor = stage == Stage::SendDescriptor;
+                        setup.give_up();
+                    } else {
+                        setup.due = now + BUSY_RETRY_MS;
+                    }
+                }
+            }
+            _ => {}
         }
         Ok(())
     }

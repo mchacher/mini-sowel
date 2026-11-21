@@ -43,8 +43,62 @@ pub enum Attr {
     Unsupported,
 }
 
+/// How the device answers a Configure Reporting request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigureAnswer {
+    /// A Configure Reporting Response with the single status byte 0x00.
+    Single,
+    /// A Configure Reporting Response with one record (status 0) per attribute.
+    PerAttribute,
+    /// A Configure Reporting Response refusing every attribute with this status.
+    Refuse(u8),
+    /// A Default Response with this status.
+    Default(u8),
+    /// A Configure Reporting Response with the single status byte given (the whole command
+    /// failed when it is not 0x00).
+    SingleStatus(u8),
+    /// A Configure Reporting Response refusing this one attribute with the status, and accepting
+    /// the others (as one record per attribute).
+    RefuseAttribute(u16, u8),
+    /// No answer.
+    Silent,
+}
+
+/// A ZCL Report Attributes frame from a device (server to client, default response disabled by
+/// the device): the records are `(attribute, data type, value bytes)`.
+pub fn report_frame(tsn: u8, records: &[(u16, u8, Vec<u8>)]) -> Vec<u8> {
+    report_frame_with_control(0x18, tsn, records)
+}
+
+/// The same with the frame control given: 0x08 asks the coordinator for a Default Response.
+pub fn report_frame_with_control(control: u8, tsn: u8, records: &[(u16, u8, Vec<u8>)]) -> Vec<u8> {
+    let mut frame = vec![control, tsn, 0x0A];
+    for (attribute, data_type, value) in records {
+        frame.extend_from_slice(&attribute.to_le_bytes());
+        frame.push(*data_type);
+        frame.extend_from_slice(value);
+    }
+    frame
+}
+
+/// A temperature report, in hundredths of a degree.
+pub fn temperature_report(tsn: u8, hundredths: i16) -> Vec<u8> {
+    report_frame(tsn, &[(0x0000, 0x29, hundredths.to_le_bytes().to_vec())])
+}
+
+/// A humidity report, in hundredths of a percent.
+pub fn humidity_report(tsn: u8, hundredths: u16) -> Vec<u8> {
+    report_frame(tsn, &[(0x0000, 0x21, hundredths.to_le_bytes().to_vec())])
+}
+
+/// A battery report: half-percent units.
+pub fn battery_report(tsn: u8, half_percent: u8) -> Vec<u8> {
+    report_frame(tsn, &[(0x0021, 0x20, vec![half_percent])])
+}
+
 /// A simulated Zigbee device: it joins when pairing opens, answers the endpoint request and the
-/// Basic read.
+/// Basic read, then (like an eWeLink SNZB-02) its descriptor, binds and Configure Reporting, and
+/// sends reports.
 #[derive(Clone, Debug)]
 pub struct FakeDevice {
     /// As on the wire (little-endian).
@@ -73,6 +127,28 @@ pub struct FakeDevice {
     pub answer_delay_ms: u64,
     /// Sends `messageSentHandler` after the answer instead of before.
     pub message_sent_last: bool,
+    /// The input clusters of its endpoint, as its descriptor lists them.
+    pub input_clusters: Vec<u16>,
+    /// Number of Simple_Desc requests it ignores before it answers; `u32::MAX`: never.
+    pub ignore_descriptors: u32,
+    /// Clusters whose Bind it refuses (status 0x84).
+    pub bind_refused: Vec<u16>,
+    /// How it answers a Configure Reporting, and the clusters that get another answer.
+    pub configure: ConfigureAnswer,
+    pub configure_overrides: Vec<(u16, ConfigureAnswer)>,
+    /// Number of Configure Reporting requests it ignores before it answers; `u32::MAX`: never.
+    pub ignore_configures: u32,
+    /// `(cluster, ZCL frame)` reports sent right after the first Bind is answered, before the
+    /// Configure Reporting.
+    pub reports_during_setup: Vec<(u16, Vec<u8>)>,
+    /// `(cluster, ZCL frame)` reports sent once the Configure Reporting of every cluster the
+    /// host sets up is answered (right after the last answer).
+    pub reports: Vec<(u16, Vec<u8>)>,
+    /// Sends all its `reports` when the network is resumed (a second run of the host).
+    pub reports_on_resume: bool,
+    bound: bool,
+    configured: Vec<u16>,
+    reports_sent: bool,
     joined: bool,
 }
 
@@ -95,6 +171,22 @@ impl FakeDevice {
             decoys: false,
             answer_delay_ms: 0,
             message_sent_last: false,
+            input_clusters: vec![0x0000, 0x0001, 0x0402, 0x0405, 0x0003],
+            ignore_descriptors: 0,
+            bind_refused: Vec::new(),
+            configure: ConfigureAnswer::Single,
+            configure_overrides: Vec::new(),
+            ignore_configures: 0,
+            reports_during_setup: Vec::new(),
+            reports: vec![
+                (0x0402, temperature_report(0x31, 1952)),
+                (0x0405, humidity_report(0x32, 5410)),
+                (0x0001, battery_report(0x33, 200)),
+            ],
+            reports_on_resume: true,
+            bound: false,
+            configured: Vec::new(),
+            reports_sent: false,
             joined: false,
         }
     }
@@ -152,6 +244,10 @@ pub struct FakeNcp {
     pub busy_sends: u32,
     /// The simulated device.
     pub device: Option<FakeDevice>,
+    /// What `lookupEui64ByNodeId` knows: node address and address as on the wire.
+    pub known_addresses: Vec<(u16, [u8; 8])>,
+    /// The sender's address the radio puts in the packet info of an incoming message (EZSP 14+).
+    pub packet_eui_wire: Option<[u8; 8]>,
     /// The join callbacks of a pairing come before the response of `permitJoining`.
     pub join_before_response: bool,
     /// Devices that only join (trust-centre join, no answers), after the main device.
@@ -223,6 +319,8 @@ impl FakeNcp {
             overflow_flag: false,
             busy_sends: 0,
             device: None,
+            known_addresses: Vec::new(),
+            packet_eui_wire: None,
             crowd: 0,
             crowd_spread_ms: 50,
             join_before_response: false,
@@ -232,6 +330,26 @@ impl FakeNcp {
             now: 0,
             scheduled: Vec::new(),
         }
+    }
+
+    /// A message arrives from the network at the next tick: a unicast to the host's endpoint 1.
+    pub fn inject(&mut self, sender: u16, profile: u16, cluster: u16, source: u8, payload: &[u8]) {
+        self.inject_kind(0x00, sender, profile, cluster, source, payload);
+    }
+
+    /// The same with the message kind of `incomingMessageHandler` given (4 is a broadcast).
+    pub fn inject_kind(
+        &mut self,
+        kind: u8,
+        sender: u16,
+        profile: u16,
+        cluster: u16,
+        source: u8,
+        payload: &[u8],
+    ) {
+        let mut frame = self.incoming(sender, profile, cluster, source, payload);
+        frame[5] = kind;
+        self.scheduled.push((self.now, frame));
     }
 
     /// Time passes: returns the callbacks that are due (ASH frames).
@@ -358,7 +476,8 @@ impl FakeNcp {
         params.extend(aps(profile, cluster, source, 1));
         if self.wide() {
             params.extend_from_slice(&sender.to_le_bytes());
-            params.extend_from_slice(&[0; 8]); // long id unknown
+            // The sender's 64-bit address: all zeros when the radio does not know it.
+            params.extend_from_slice(&self.packet_eui_wire.unwrap_or([0; 8]));
             params.extend_from_slice(&[0xFF, 0xFF, 0xC8, 0xD0]); // indexes, lqi, rssi
             params.extend_from_slice(&0u32.to_le_bytes()); // timestamp
         } else {
@@ -420,6 +539,20 @@ impl FakeNcp {
             reply.before.push(up);
         } else {
             reply.after.push(up);
+        }
+    }
+
+    /// The network is resumed: a device that joined earlier sends its reports.
+    fn resume_reports(&mut self, reply: &mut Reply) {
+        let Some(device) = self.device.clone() else {
+            return;
+        };
+        if !device.joined || !device.reports_on_resume {
+            return;
+        }
+        for (cluster, frame) in &device.reports {
+            let report = self.incoming(device.nwk, 0x0104, *cluster, 1, frame);
+            self.emit(reply, device.answer_delay_ms, report);
         }
     }
 
@@ -595,6 +728,120 @@ impl FakeNcp {
                 &frame(tsn, &records(&device.manufacturer, &device.model)),
             );
             answers.push(right);
+        } else if sent.profile == 0x0000 && sent.cluster == 0x0004 {
+            if let Some(device) = self.device.as_mut()
+                && device.ignore_descriptors > 0
+            {
+                if device.ignore_descriptors != u32::MAX {
+                    device.ignore_descriptors -= 1;
+                }
+                reply.after.push(message_sent);
+                return;
+            }
+            let tsn = sent.message[0];
+            let mut descriptor = vec![sent.message[3]]; // endpoint
+            descriptor.extend_from_slice(&0x0104u16.to_le_bytes());
+            descriptor.extend_from_slice(&0x0302u16.to_le_bytes()); // temperature sensor
+            descriptor.push(0); // device version
+            descriptor.push(device.input_clusters.len() as u8);
+            for cluster in &device.input_clusters {
+                descriptor.extend_from_slice(&cluster.to_le_bytes());
+            }
+            descriptor.push(1);
+            descriptor.extend_from_slice(&0x0019u16.to_le_bytes());
+            let mut payload = vec![tsn, 0x00];
+            payload.extend_from_slice(&device.nwk.to_le_bytes());
+            payload.push(descriptor.len() as u8);
+            payload.extend(descriptor);
+            answers.push(self.incoming(device.nwk, 0, 0x8004, 0, &payload));
+        } else if sent.profile == 0x0000 && sent.cluster == 0x0021 {
+            // Bind_req: [tsn][source EUI64][source endpoint][cluster][mode][destination...]
+            let tsn = sent.message[0];
+            let cluster = u16::from_le_bytes([sent.message[10], sent.message[11]]);
+            let status = if device.bind_refused.contains(&cluster) {
+                0x84
+            } else {
+                0x00
+            };
+            answers.push(self.incoming(device.nwk, 0, 0x8021, 0, &[tsn, status]));
+            let first = self.device.as_mut().is_some_and(|d| {
+                let first = !d.bound;
+                d.bound = true;
+                first
+            });
+            if first {
+                for (cluster, frame) in &device.reports_during_setup {
+                    answers.push(self.incoming(device.nwk, 0x0104, *cluster, 1, frame));
+                }
+            }
+        } else if sent.profile == 0x0104
+            && device.input_clusters.contains(&sent.cluster)
+            && sent.message.get(2) == Some(&0x06)
+        {
+            if let Some(device) = self.device.as_mut()
+                && device.ignore_configures > 0
+            {
+                if device.ignore_configures != u32::MAX {
+                    device.ignore_configures -= 1;
+                }
+                reply.after.push(message_sent);
+                return;
+            }
+            let tsn = sent.message[1];
+            let attributes = configured_attributes(&sent.message[3..]);
+            let mode = device
+                .configure_overrides
+                .iter()
+                .find(|(cluster, _)| *cluster == sent.cluster)
+                .map_or(device.configure, |(_, mode)| *mode);
+            let response = |body: &[u8]| {
+                let mut frame = vec![0x18, tsn];
+                frame.extend_from_slice(body);
+                frame
+            };
+            let frame = match mode {
+                ConfigureAnswer::Silent => None,
+                ConfigureAnswer::Single => Some(response(&[0x07, 0x00])),
+                ConfigureAnswer::SingleStatus(status) => Some(response(&[0x07, status])),
+                ConfigureAnswer::RefuseAttribute(refused, status) => {
+                    let mut body = vec![0x07];
+                    for attribute in &attributes {
+                        let status = if *attribute == refused { status } else { 0x00 };
+                        body.extend_from_slice(&[status, 0x00]);
+                        body.extend_from_slice(&attribute.to_le_bytes());
+                    }
+                    Some(response(&body))
+                }
+                ConfigureAnswer::PerAttribute | ConfigureAnswer::Refuse(_) => {
+                    let status = match mode {
+                        ConfigureAnswer::Refuse(status) => status,
+                        _ => 0x00,
+                    };
+                    let mut body = vec![0x07];
+                    for attribute in &attributes {
+                        body.extend_from_slice(&[status, 0x00]);
+                        body.extend_from_slice(&attribute.to_le_bytes());
+                    }
+                    Some(response(&body))
+                }
+                ConfigureAnswer::Default(status) => Some(response(&[0x0B, 0x06, status])),
+            };
+            if let Some(frame) = frame {
+                answers.push(self.incoming(device.nwk, 0x0104, sent.cluster, 1, &frame));
+                let all_done = self.device.as_mut().is_some_and(|d| {
+                    d.configured.push(sent.cluster);
+                    let wanted = d.input_clusters.iter().filter(|c| REPORTABLE.contains(c));
+                    let done = wanted.clone().all(|c| d.configured.contains(c));
+                    let first = done && !d.reports_sent;
+                    d.reports_sent |= done;
+                    first
+                });
+                if all_done {
+                    for (cluster, report) in &device.reports {
+                        answers.push(self.incoming(device.nwk, 0x0104, *cluster, 1, report));
+                    }
+                }
+            }
         } else {
             reply.after.push(message_sent);
             return;
@@ -658,6 +905,7 @@ impl FakeNcp {
             0x17 => {
                 if self.network.is_some() {
                     self.network_up(&mut reply);
+                    self.resume_reports(&mut reply);
                     ok
                 } else {
                     self.st(SL_NOT_JOINED)
@@ -699,6 +947,25 @@ impl FakeNcp {
                 }
                 None => self.st(SL_NOT_JOINED),
             },
+            // lookupEui64ByNodeId
+            0x61 => {
+                let nwk = u16::from_le_bytes([args[0], args[1]]);
+                // The radio's address table has what was added, and the device that joined it.
+                let joined = self
+                    .device
+                    .as_ref()
+                    .filter(|d| d.joined && d.nwk == nwk)
+                    .map(|d| (d.nwk, d.eui_wire));
+                let known = self.known_addresses.iter().copied().chain(joined);
+                match known.into_iter().find(|(n, _)| *n == nwk) {
+                    Some((_, eui)) => {
+                        let mut p = ok;
+                        p.extend_from_slice(&eui);
+                        p
+                    }
+                    None => self.st(SL_FAIL),
+                }
+            }
             0x5A => 0u32.to_le_bytes().to_vec(),
             // importTransientKey answers a 32-bit status on every version.
             0x111 => 0u32.to_le_bytes().to_vec(),
@@ -766,6 +1033,26 @@ impl FakeNcp {
         reply.response = Some(frame);
         reply
     }
+}
+
+/// The clusters the host sets up reporting for.
+const REPORTABLE: [u16; 8] = [
+    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0001,
+];
+
+/// The attribute ids of the records of a Configure Reporting request (after its header).
+fn configured_attributes(mut records: &[u8]) -> Vec<u16> {
+    let mut attributes = Vec::new();
+    while records.len() >= 6 {
+        attributes.push(u16::from_le_bytes([records[1], records[2]]));
+        let change = match records[3] {
+            0x20 => 1,
+            0x21 | 0x29 => 2,
+            _ => 0,
+        };
+        records = records.get(8 + change..).unwrap_or(&[]);
+    }
+    attributes
 }
 
 fn rstack() -> Vec<u8> {

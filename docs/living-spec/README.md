@@ -77,8 +77,15 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
   does not answer, `device: <address> not identified (radio busy)` when the radio stays busy;
   beyond 32 devices in one session, `pairing: too many devices, <address> ignored`; a device
   already in the network that announces itself again is shown again;
-- pairing closes at the end of the time (identifications in progress finish first, at most 40 s),
-  or on Ctrl-C (exit 130).
+- after identification, the host sets up the device's reporting: it binds each standard cluster
+  the device has (temperature, humidity, pressure, illuminance, occupancy, on/off, level, power)
+  to itself and asks for reports (`reporting: <address> temperature, humidity, battery`, or
+  `reporting: <address> failed: <clusters>`, both parts when some succeed and some fail,
+  `reporting: <address> none` when the device has none of them); a failed setup is tried once more when the device
+  next speaks, except when the device gave no description of its clusters (`reporting: <address>
+  failed: no descriptor`: pair it again); then the measures it sends are shown;
+- pairing closes at the end of the time (identifications and reporting setups in progress finish
+  first, at most 70 s), or on Ctrl-C (exit 130).
 
 With `--pair`, the identification's `network: <state>` line is replaced by the `network:` line
 below; `network: resumed (made by another program), ...` for a network the host has no backup
@@ -97,6 +104,30 @@ pairing: closed
 New errors: `radio: network did not start`, `radio: the radio is not a coordinator`,
 `radio: the radio refused <command> (status 0x<code>)`, `no random source: <reason>`,
 `cannot write <path>`. The host keeps nothing about devices between runs.
+
+### Shows the measures
+
+`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen` resumes the radio's
+network (never forms one: `radio: no network, pair a device first`) and shows every measure the
+paired devices send, until Ctrl-C (exit 130):
+
+```
+network: resumed, channel 15, PAN 0x1A2B, extended PAN 0xDDDDDDDDDDDDDDDD
+listening
+0x00124B0012345678 temperature 19.52 °C
+0x00124B0012345678 humidity 54.1 %
+0x00124B0012345678 battery 100 %
+```
+
+Measures are read from the standard Zigbee clusters, without a device definition, and named as
+in Sowel: `temperature` (°C), `humidity` (%), `pressure` (hPa), `luminosity` (lx), `motion`,
+`light_state`, `light_brightness` (%), `battery` (%), `voltage` (V); booleans are shown
+`motion true`, `light_state on`. The banner and the radio's lines come first, as with `--pair`.
+Invalid values and
+implausible ones (temperature outside −50 to 150 °C, humidity outside 0 to 100 %) are not shown.
+A device is shown by its 64-bit address, or by its network address when the radio does not know
+it. The host answers each report as Zigbee requires (a default response). A sensor reports at most
+every 30 s and at least every hour; its battery every few hours.
 
 ### Measures the coverage of Zigbee2MQTT's definitions
 
@@ -121,7 +152,7 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 No device, equipment, zone, mode or recipe exists in the tool: it stores no device and has no
 API; the host keeps one file, the network backup. It talks to the radio to identify it, start
-its network and pair devices.
+its network, pair devices and receive their measures.
 
 ## History
 
@@ -132,3 +163,4 @@ its network and pair devices.
 | 003 | The firmware shows its free memory and boots in QEMU on the Mac |
 | 004 | The host identifies the Dongle Max's radio over TCP (ASH, EZSP) |
 | 005 | The radio runs a Zigbee network; the host pairs a device and shows what it is |
+| 006 | The host sets up reporting and shows the measures of the standard clusters (`--listen`) |
