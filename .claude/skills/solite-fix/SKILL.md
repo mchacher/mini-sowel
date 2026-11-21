@@ -79,6 +79,9 @@ bug, not for another one.
 
 ## Phase 3: Fix the Cause
 
+Models (table in `CLAUDE.md`): stay on Sonnet; a fix that needs a design decision is Opus's
+(ask the user to `/model opus`), and any agent you launch names its `model:`.
+
 1. Find the **cause**, not only the symptom. Explain it to the user in two plain sentences.
 2. Fix it with the smallest change that removes the cause.
 3. Look for the same mistake elsewhere in the code; tell the user what you found, and fix it in the
