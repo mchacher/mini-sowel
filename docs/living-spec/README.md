@@ -166,7 +166,7 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 ### Serves Sowel's device API
 
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, resumes the network, listens, keeps
-the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only, without authentication (a browser page
+the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
 from another site is refused by a `Host` check, and by an `Origin` check on `/ws`):
 
 | Route | Answer |

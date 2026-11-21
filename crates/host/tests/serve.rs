@@ -322,6 +322,48 @@ fn pairing_then_serving_lists_three_devices_and_the_temperature_changes() {
 }
 
 #[test]
+fn a_port_taken_in_ipv6_is_the_error_and_exit_1() {
+    // Another program listening on [::1]: `localhost` would reach it, not the host.
+    let Ok(taken) = TcpListener::bind("[::1]:0") else {
+        return; // no IPv6 loopback on this computer: nothing to clash with
+    };
+    let port = taken.local_addr().unwrap().port();
+    let dir = data_dir();
+    let output = host()
+        .args(["--sim", GARAGE, "--serve", &port.to_string(), "--data"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with(&format!("serve: cannot listen on [::1]:{port}: ")),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_port_taken_on_the_ipv6_wildcard_is_the_error_and_exit_1() {
+    // What Node's `listen(port)` binds: `[::]`, which also answers on `[::1]`.
+    let Ok(taken) = TcpListener::bind("[::]:0") else {
+        return;
+    };
+    let port = taken.local_addr().unwrap().port();
+    let dir = data_dir();
+    let output = host()
+        .args(["--sim", GARAGE, "--serve", &port.to_string(), "--data"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.starts_with(&format!("serve: cannot listen on [::1]:{port}: ")),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn a_port_in_use_is_the_error_and_exit_1() {
     let dir = data_dir();
     let taken = TcpListener::bind("127.0.0.1:0").unwrap();

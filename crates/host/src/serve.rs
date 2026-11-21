@@ -68,10 +68,21 @@ pub fn monotonic_ms() -> u64 {
 }
 
 /// Binds the port on 127.0.0.1 only: the door's listener (the port asked for), and the API's
-/// `tiny_http` server on a loopback port of its own, whose address is returned.
+/// `tiny_http` server on a loopback port of its own, whose address is returned. The port must
+/// also be free on `[::1]`: a browser tries it first for `localhost`, so a program listening
+/// there would capture the page meant for the host.
 fn bind(port: u16) -> Result<(TcpListener, Arc<Server>, std::net::SocketAddr), String> {
     let listener = TcpListener::bind(("127.0.0.1", port))
         .map_err(|e| format!("serve: cannot listen on 127.0.0.1:{port}: {e}"))?;
+    // Someone answering on `[::1]` is a clash, whatever address they bound (`[::1]` or the
+    // wildcard `[::]` that Node uses): a bind test cannot see the wildcard, a connection can. A
+    // computer without an IPv6 loopback, or nobody there, refuses the connection: no clash.
+    let ipv6 = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port));
+    if std::net::TcpStream::connect_timeout(&ipv6, Duration::from_millis(300)).is_ok() {
+        return Err(format!(
+            "serve: cannot listen on [::1]:{port}: address already in use (another program answers there, `localhost` would reach it)"
+        ));
+    }
     let server = Server::http(("127.0.0.1", 0))
         .map(Arc::new)
         .map_err(|e| format!("serve: cannot start the API's server: {e}"))?;
