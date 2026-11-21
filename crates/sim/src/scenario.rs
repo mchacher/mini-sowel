@@ -309,7 +309,7 @@ fn allows(kind: Kind, field: &str) -> bool {
     match kind {
         Kind::TemperatureHumidity => matches!(field, "temperature" | "humidity" | "battery"),
         Kind::Motion => matches!(field, "motion" | "battery"),
-        Kind::Relay => field == "light_state",
+        Kind::Relay | Kind::Dimmer => field == "light_state",
     }
 }
 

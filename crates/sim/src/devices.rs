@@ -10,6 +10,9 @@ pub enum Kind {
     Motion,
     /// A mains-powered relay answering On, Off and Toggle (Sonoff ZBMINIR2).
     Relay,
+    /// A mains-powered dimmable light: the relay's commands and Move to Level with On/Off. Only
+    /// the tests of brightness orders use it (spec 011); no shipped scenario has one.
+    Dimmer,
 }
 
 impl Kind {
@@ -19,14 +22,20 @@ impl Kind {
             Kind::TemperatureHumidity => "temperature-humidity",
             Kind::Motion => "motion",
             Kind::Relay => "relay",
+            Kind::Dimmer => "dimmer",
         }
     }
 
     /// The kind with this scenario name.
     pub fn from_name(name: &str) -> Option<Kind> {
-        [Kind::TemperatureHumidity, Kind::Motion, Kind::Relay]
-            .into_iter()
-            .find(|kind| kind.name() == name)
+        [
+            Kind::TemperatureHumidity,
+            Kind::Motion,
+            Kind::Relay,
+            Kind::Dimmer,
+        ]
+        .into_iter()
+        .find(|kind| kind.name() == name)
     }
 
     /// The Zigbee device id of the endpoint's simple descriptor.
@@ -35,6 +44,7 @@ impl Kind {
             Kind::TemperatureHumidity => 0x0302,
             Kind::Motion => 0x0402,
             Kind::Relay => 0x0100,
+            Kind::Dimmer => 0x0101,
         }
     }
 }
@@ -133,6 +143,11 @@ pub fn on_off_report(tsn: u8, on: bool) -> Vec<u8> {
     report_frame(tsn, &[(0x0000, 0x10, vec![u8::from(on)])])
 }
 
+/// A level report: the `CurrentLevel` attribute (uint8).
+pub fn level_report(tsn: u8, level: u8) -> Vec<u8> {
+    report_frame(tsn, &[(0x0000, 0x20, vec![level])])
+}
+
 /// An IAS Zone Status Change Notification (cluster-specific, server to client): the alarm bit
 /// is set or cleared.
 pub fn zone_notification(tsn: u8, alarm: bool) -> Vec<u8> {
@@ -213,9 +228,11 @@ pub struct SimDevice {
     pub(crate) bound: bool,
     pub(crate) configured: Vec<u16>,
     /// `(cluster, attribute)` whose reporting the host configured: only these are reported.
-    pub(crate) configured_attributes: Vec<(u16, u16)>,
+    pub configured_attributes: Vec<(u16, u16)>,
     pub(crate) reports_sent: bool,
     pub(crate) relay_on: bool,
+    /// The level of a dimmer (0 to 254).
+    pub(crate) level: u8,
     /// The CIE address was written to the IAS zone (the first half of the enrollment).
     pub(crate) cie_written: bool,
     /// The Zone Enroll Response was received: the zone reports.
@@ -232,6 +249,16 @@ pub struct SimDevice {
     pub ignore_zone_reads: u32,
     /// Number of IAS zone reads it answers; the next ones get no answer.
     pub zone_reads_answered: u32,
+    /// The device answers no On/Off or Level Control command or read, and changes nothing (the
+    /// tests of orders; kept in the radio's memory file so a test can set it between two runs).
+    pub silent: bool,
+    /// The radio's address table answers "unknown" to a lookup of this device's address (a test
+    /// switch: the host then reaches it only at the address its own files keep; kept in the
+    /// memory file like `silent`).
+    pub lookup_unknown: bool,
+    /// The device answers every On/Off or Level Control command with a Default Response of this
+    /// status, and changes nothing.
+    pub refuse_commands: Option<u8>,
     // State of the run, not kept.
     pub(crate) awake_until: u64,
     pub(crate) tsn: u8,
@@ -286,6 +313,7 @@ impl SimDevice {
             configured_attributes: Vec::new(),
             reports_sent: false,
             relay_on: false,
+            level: 0,
             cie_written: false,
             enrolled: false,
             cie: [0; 8],
@@ -294,6 +322,9 @@ impl SimDevice {
             zone_stays_unenrolled: false,
             ignore_zone_reads: 0,
             zone_reads_answered: u32::MAX,
+            silent: false,
+            lookup_unknown: false,
+            refuse_commands: None,
             awake_until: 0,
             tsn: 0,
         }
@@ -327,6 +358,12 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006],
                 false,
             ),
+            Kind::Dimmer => (
+                "TEST",
+                "DIM01",
+                vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008],
+                false,
+            ),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
@@ -336,7 +373,7 @@ impl SimDevice {
             device.zone_type = Some(0x000D);
         }
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
-        if kind == Kind::Relay {
+        if matches!(kind, Kind::Relay | Kind::Dimmer) {
             device.capability = CAPABILITY_MAINS;
         }
         device

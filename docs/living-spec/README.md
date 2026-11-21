@@ -166,7 +166,7 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 ### Serves Sowel's device API
 
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, resumes the network, listens, keeps
-the devices up to date, and serves on `127.0.0.1` only, without authentication (a browser page
+the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only, without authentication (a browser page
 from another site is refused by a `Host` check):
 
 | Route | Answer |
@@ -175,9 +175,11 @@ from another site is refused by a `Host` check):
 | `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
 | `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
+| `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 
-Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413; 503 `Busy` beyond 4 requests at
-once). The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
+Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415; 502 for an order no device took; 503 `Busy` beyond 4 requests at
+once, or beyond 2 orders at once). A request with a body is refused with 415 unless it is sent as
+`application/json`, so a web page cannot send one from the browser. The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
 the same file. Ctrl-C writes the store and exits 130.
@@ -201,6 +203,20 @@ binds device data and orders under **aliases**.
   humidity, pressure or luminosity silent for 65 minutes), and its `status`: `online`,
   `degraded` (a device offline among several, or a binding stale) or `offline` (all its devices
   offline, or no binding), with the reason. At most 64 equipments, 16 bindings of each kind.
+- **Orders**: `POST /api/v1/equipments/:id/orders/:alias {"value": ...}` sends the order bound
+  under that alias to its devices, as Sowel: `state` takes `true`/`false`, `"on"`/`"off"`,
+  `"true"`/`"false"`, `1`/`0` (any case, spaces ignored; empty means on) or `"toggle"`;
+  `brightness` takes 0 to 254 (255 counts as 254). Answers: `{"success":true}` when a device
+  acknowledged; 502 with the reason (`device did not answer`, `device refused the command
+  (status 0x..)`, `radio busy`, `device address unknown`) otherwise; 404 `Equipment not found`,
+  400 `Equipment is disabled`, 404 `Order alias not found: <alias>`, 400 `Invalid value for
+  <alias>`. A device that does not answer is tried once more 2 s later; the answer comes within
+  12 s; no attempt is sent with less than 4.5 s left, so an order that could not start in time
+  is dropped, never sent late, and a late answer to the first attempt is never followed by a
+  second one. The new state is
+  read back from the device, then shows in its data, its equipment and the zone aggregation.
+  Each device's last network address and endpoint are kept, so a relay is reachable after a
+  restart before it speaks.
 - **Zone aggregation** (`GET /api/v1/zones/aggregation`), as Sowel computes it, over each zone and
   its sub-zones: average `temperature` (1 decimal), `humidity`, `luminosity`; `motion`, the
   number of motion sensors and `motionSince`; open doors and windows; water leak, smoke; lights
@@ -257,8 +273,9 @@ It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
 No mode or recipe exists in the tool; the host keeps the devices, zones, equipments and the
-network backup, serves Sowel's device, zone and equipment API (above), and talks to the radio to
-identify it, start its network, pair devices and receive their measures.
+network backup, serves Sowel's device, zone and equipment API (above), executes equipment orders,
+and talks to the radio to identify it, start its network, pair devices and receive their
+measures.
 
 ## History
 
@@ -274,3 +291,4 @@ identify it, start its network, pair devices and receive their measures.
 | 008 | Devices kept in Sowel's format and served by Sowel's device API (`--serve`) |
 | 009 | Alarm sensors enrolled; their motion, contact, leak or smoke becomes device data |
 | 010 | Zones, equipments and zone aggregation, with Sowel's routes |
+| 011 | Equipment orders sent to the Zigbee devices (`POST .../orders/:alias`) |

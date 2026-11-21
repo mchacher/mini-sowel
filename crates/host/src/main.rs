@@ -261,6 +261,7 @@ fn pair<T: RadioTransport>(
             }
             let events = radio.poll_pairing().map_err(|e| format!("radio: {e}"))?;
             let activity = radio.take_activity();
+            let routes = radio.take_routes();
             let now = serve::now_ms();
             {
                 let mut guard = mini_sowel_core::devices::lock(&home);
@@ -273,6 +274,10 @@ fn pair<T: RadioTransport>(
                     for note in guard.devices.apply(event, now, &mut fill)? {
                         println!("{note}");
                     }
+                }
+                // After the events: a device is in the store once it was identified.
+                for update in &routes {
+                    guard.devices.set_route(update);
                 }
             }
             saver.tick(&home, now, false)?;

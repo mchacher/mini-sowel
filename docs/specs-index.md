@@ -14,3 +14,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 008 | devices-in-sowel-format | Paired devices become Sowel devices with data and orders, kept on disk and served by Sowel's device API | 2026-11-21 | in progress |
 | 009 | alarm-sensors | IAS zone devices (motion, contact, leak, smoke) enrolled at pairing; their alarms become device data | 2026-11-21 | in progress |
 | 010 | equipments-and-zones | Zones (tree under Sowel's root), equipments bound to device data and orders by alias, and Sowel's zone aggregation, with Sowel's routes | 2026-11-21 | in progress |
+| 011 | orders | Equipment orders (on, off, toggle, brightness) sent to the Zigbee devices through the radio loop, with Sowel's route, texts and value rules | 2026-11-21 | in progress |

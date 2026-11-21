@@ -49,7 +49,7 @@ const ENROLL_WAIT_MS: u64 = 500;
 /// the enrollment's work per device.
 const MAX_ZONE_POLLS: u8 = 20;
 /// The host's endpoint, Home Automation profile.
-const HOST_ENDPOINT: u8 = 1;
+pub(super) const HOST_ENDPOINT: u8 = 1;
 /// The Zigbee channels.
 const CHANNELS: std::ops::RangeInclusive<u8> = 11..=26;
 
@@ -532,6 +532,20 @@ impl Pairing {
         self.own_eui64 = Some(eui64);
     }
 
+    /// The node address remembered for this device: the cache, or a device being followed.
+    pub(super) fn nwk_of(&self, eui64: &[u8; 8]) -> Option<u16> {
+        self.addresses
+            .iter()
+            .find(|(_, e)| e == eui64)
+            .map(|(n, _)| *n)
+            .or_else(|| {
+                self.devices
+                    .iter()
+                    .find(|d| d.eui64 == *eui64)
+                    .map(|d| d.nwk)
+            })
+    }
+
     fn push_activity(&mut self, activity: Activity) {
         if self.activity.len() >= MAX_ACTIVITY {
             self.activity.pop_front();
@@ -539,7 +553,7 @@ impl Pairing {
         self.activity.push_back(activity);
     }
 
-    fn remember_address(&mut self, nwk: u16, eui64: [u8; 8]) {
+    pub(super) fn remember_address(&mut self, nwk: u16, eui64: [u8; 8]) {
         self.forget_address(nwk, eui64);
         if self.addresses.len() >= MAX_ADDRESSES {
             self.addresses.pop_front();
@@ -599,14 +613,14 @@ const ENDPOINT_OUTPUTS: [u16; 18] = [
 ];
 
 impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
-    fn wide(&self) -> Result<bool, RadioError> {
+    pub(super) fn wide(&self) -> Result<bool, RadioError> {
         self.ezsp
             .protocol_version()
             .map(ezsp::is_wide)
             .ok_or(RadioError::NotIdentified)
     }
 
-    fn call(&mut self, id: u16, params: &[u8]) -> Result<Vec<u8>, RadioError> {
+    pub(super) fn call(&mut self, id: u16, params: &[u8]) -> Result<Vec<u8>, RadioError> {
         let command = self.ezsp.command(id, params);
         self.exchange(command)
     }
@@ -955,6 +969,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             self.on_callback(wide, callback, &mut events)?;
         }
         self.drive_devices(wide, &mut events)?;
+        self.drive_commands(wide)?;
         Ok(events)
     }
 
@@ -1012,6 +1027,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             ezsp::DEVICE_UPDATE_UNSECURED_JOIN | ezsp::DEVICE_UPDATE_UNSECURED_REJOIN
         ) && join.decision != ezsp::JOIN_DECISION_DENY;
         if joined {
+            self.commands.note_route(join.eui64, join.node_id, None);
             self.register(join.eui64, join.node_id, false, events);
         }
     }
@@ -1033,6 +1049,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                             capability,
                         });
                     }
+                    self.commands.note_route(announce.eui64, announce.nwk, None);
                     self.register(announce.eui64, announce.nwk, true, events);
                 }
             }
@@ -1161,6 +1178,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
     ) -> Result<(), RadioError> {
         let cluster = message.aps.cluster;
         let frame = &message.payload;
+        self.on_command_answer(message);
         if cluster == zcl::CLUSTER_BASIC {
             self.on_basic_answer(message, now, events);
         }
@@ -1188,6 +1206,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         if measured.is_empty() {
             if let Some(sender) = self.known_sender(message) {
                 self.pairing.push_activity(Activity::Message { sender });
+                if let Sender::Eui64(eui64) = sender {
+                    self.note_route_of(message, eui64);
+                }
             }
         } else {
             // The Default Response is sent whatever the lookup gives.
@@ -1195,6 +1216,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             let answered = self.answer_with_default_response(wide, message);
             let sender = sender?;
             self.pairing.push_activity(Activity::Message { sender });
+            if let Sender::Eui64(eui64) = sender {
+                self.note_route_of(message, eui64);
+            }
             events.push(PairingEvent::Measures(MeasureEvent {
                 sender,
                 endpoint: message.aps.source_endpoint,
@@ -1549,14 +1573,14 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         events.push(PairingEvent::Joined { eui64, nwk });
     }
 
-    fn next_tsn(&mut self) -> u8 {
+    pub(super) fn next_tsn(&mut self) -> u8 {
         self.pairing.tsn = self.pairing.tsn.wrapping_add(1) & 0x7F;
         self.pairing.tsn
     }
 
     /// Sends one message to a device. `Ok(true)` when the radio took it, `Ok(false)` when it
     /// did not (busy or another refusal).
-    fn send_to_device(
+    pub(super) fn send_to_device(
         &mut self,
         wide: bool,
         nwk: u16,

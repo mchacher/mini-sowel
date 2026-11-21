@@ -40,8 +40,14 @@ fn host() -> Command {
 
 /// `--pair` on the garage scenario: three devices, written to `devices.json`.
 fn pair(dir: &Path) {
+    pair_scenario(dir, GARAGE);
+}
+
+fn pair_scenario(dir: &Path, scenario: &str) {
     let output = host()
-        .args(["--sim", GARAGE, "--pair", "30", "--speed", "100", "--data"])
+        .args([
+            "--sim", scenario, "--pair", "30", "--speed", "100", "--data",
+        ])
         .arg(dir)
         .output()
         .expect("the host program starts");
@@ -57,11 +63,15 @@ struct Serving {
 }
 
 fn serve(dir: &Path, speed: &str, extra: &[&str]) -> Serving {
+    serve_scenario(dir, GARAGE, speed, extra)
+}
+
+fn serve_scenario(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Serving {
     let port = free_port();
     let mut child = host()
         .args([
             "--sim",
-            GARAGE,
+            scenario,
             "--serve",
             &port.to_string(),
             "--speed",
@@ -121,13 +131,25 @@ impl Serving {
         host: &str,
         body: &str,
     ) -> (u16, String, String) {
+        self.request_typed(method, path, host, body, "application/json")
+    }
+
+    /// The same with the `Content-Type` of the request given.
+    fn request_typed(
+        &self,
+        method: &str,
+        path: &str,
+        host: &str,
+        body: &str,
+        content_type: &str,
+    ) -> (u16, String, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
@@ -429,7 +451,7 @@ fn a_client_that_stalls_in_its_body_blocks_neither_other_requests_nor_ctrl_c() {
     let mut stalled = TcpStream::connect(("127.0.0.1", serving.port)).unwrap();
     write!(
         stalled,
-        "PUT /api/v1/devices/x HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: 10000\r\n\r\n{{",
+        "PUT /api/v1/devices/x HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{{",
         serving.port
     )
     .unwrap();
@@ -740,7 +762,7 @@ fn the_new_routes_refuse_a_foreign_host_and_answer_json_errors_over_http() {
                 let body = format!(r#"{{"name":"Zone {i}"}}"#);
                 write!(
                     stream,
-                    "POST /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "POST /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -860,5 +882,396 @@ fn the_long_lists_come_chunked_and_are_the_same_json_with_filter_sorting_and_emp
         all.iter()
             .all(|e| e["status"].is_string() && e["dataBindings"].is_array())
     );
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+// ---- Spec 011: orders ----
+
+const ROOT: &str = "00000000-0000-0000-0000-000000000001";
+/// The garage relay's address as the simulated radio keeps it (little-endian).
+const RELAY_WIRE: &str = "7A563412004B1200";
+
+/// A light equipment (in the root zone) on the device of this model; its id.
+fn light_on(serving: &Serving, model: &str, kind: &str) -> String {
+    let devices = serving.devices();
+    let id = find(&devices, model)["id"].as_str().unwrap();
+    let (status, body) = serving.send(
+        "POST",
+        "/api/v1/equipments",
+        &serde_json::json!({"name": "Light", "type": kind, "zoneId": ROOT, "deviceIds": [id]}),
+    );
+    assert_eq!(status, 201, "{body}");
+    body["id"].as_str().unwrap().to_string()
+}
+
+fn order(serving: &Serving, equipment: &str, alias: &str, body: &str) -> (u16, Value) {
+    post_order(serving.port, equipment, alias, body)
+}
+
+/// `POST .../orders/<alias>` on a port (a thread has no `Serving`).
+fn post_order(port: u16, equipment: &str, alias: &str, body: &str) -> (u16, Value) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    write!(
+        stream,
+        "POST /api/v1/equipments/{equipment}/orders/{alias} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut text = String::new();
+    stream.read_to_string(&mut text).unwrap();
+    let (head, body) = text.split_once("\r\n\r\n").expect("an HTTP answer");
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, serde_json::from_str(body).unwrap_or(Value::Null))
+}
+
+/// The value of a binding of an equipment.
+fn binding_value(serving: &Serving, equipment: &str, alias: &str) -> Value {
+    let (status, body) = serving.send(
+        "GET",
+        &format!("/api/v1/equipments/{equipment}"),
+        &Value::Null,
+    );
+    assert_eq!(status, 200);
+    body["dataBindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["alias"] == alias)
+        .map_or(Value::Null, |b| b["value"].clone())
+}
+
+fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(20), "{what}");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Puts a switch in the simulated radio's memory (`sim-garage.json`): the relay answers nothing.
+fn silence_the_relay(dir: &Path) {
+    switch_the_relay(dir, "silent");
+}
+
+/// Sets a boolean switch of the relay in the simulated radio's memory.
+fn switch_the_relay(dir: &Path, switch: &str) {
+    let file = dir.join("sim-garage.json");
+    let mut memory: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let relay = memory["devices"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|d| d["eui64Wire"] == RELAY_WIRE)
+        .expect("the relay joined");
+    relay[switch] = Value::Bool(true);
+    std::fs::write(&file, memory.to_string()).unwrap();
+}
+
+#[test]
+fn an_order_on_the_sim_relay_switches_it_the_state_and_the_lights_on_follow() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "100", &[]);
+    let zone = set_up_the_garage(&serving);
+    let (_, equipments) = serving.send("GET", "/api/v1/equipments", &Value::Null);
+    let light = equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Garage light")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let lights_on = |serving: &Serving| serving.aggregation()[zone.as_str()]["lightsOn"].clone();
+    assert_eq!(lights_on(&serving), 0);
+
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    wait_until("state true", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    wait_until("lightsOn 1", || lights_on(&serving) == 1);
+    assert_eq!(serving.aggregation()[ROOT]["lightsOn"], 1);
+    let (status, body) = order(&serving, &light, "state", r#"{"value":false}"#);
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    wait_until("state false", || {
+        binding_value(&serving, &light, "state") == false
+    });
+    wait_until("lightsOn 0", || lights_on(&serving) == 0);
+
+    // Sowel's refusals, over HTTP.
+    let (status, body) = order(&serving, &light, "state", r#"{"value":"x"}"#);
+    assert_eq!(
+        (status, body),
+        (400, serde_json::json!({"error": "Invalid value for state"}))
+    );
+    let (status, body) = order(&serving, &light, "nothing", "{}");
+    assert_eq!(
+        (status, body),
+        (
+            404,
+            serde_json::json!({"error": "Order alias not found: nothing"})
+        )
+    );
+    let (status, body) = order(
+        &serving,
+        "11111111-2222-4333-8444-555555555555",
+        "state",
+        "{}",
+    );
+    assert_eq!(
+        (status, body),
+        (404, serde_json::json!({"error": "Equipment not found"}))
+    );
+    let (status, _) = serving.send(
+        "PUT",
+        &format!("/api/v1/equipments/{light}"),
+        &serde_json::json!({"enabled": false}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = order(&serving, &light, "state", "{}");
+    assert_eq!(
+        (status, body),
+        (400, serde_json::json!({"error": "Equipment is disabled"}))
+    );
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_relay_not_heard_since_the_start_is_reached_at_the_address_devices_json_keeps() {
+    let dir = data_dir();
+    pair(&dir);
+    // The address and endpoint the pairing learned are in devices.json, beside Sowel's fields.
+    let stored: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("devices.json")).unwrap()).unwrap();
+    let relay = stored
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["model"] == "ZBMINIR2")
+        .unwrap();
+    assert!(relay["nwk"].is_u64(), "{relay}");
+    assert_eq!(relay["endpoint"], 1);
+    // The radio's address table does not know the relay: only devices.json does.
+    switch_the_relay(&dir, "lookupUnknown");
+    // Speed 1: the scenario's reports are far away, the relay says nothing in this run before
+    // the order.
+    let serving = serve(&dir, "1", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    wait_until("state true", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_silenced_relay_is_a_502_device_did_not_answer_after_the_retry() {
+    let dir = data_dir();
+    pair(&dir);
+    silence_the_relay(&dir);
+    let serving = serve(&dir, "100", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    let started = Instant::now();
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    let took = started.elapsed();
+    assert_eq!(
+        (status, body),
+        (502, serde_json::json!({"error": "device did not answer"}))
+    );
+    // 5 s, the retry 2 s later, 5 s more: the answer comes at the deadline, not much later.
+    assert!(
+        took >= Duration::from_secs(11) && took < Duration::from_secs(14),
+        "{took:?}"
+    );
+    // The relay never switched: its state is not true.
+    assert_ne!(binding_value(&serving, &light, "state"), true);
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_post_that_is_not_json_is_a_415_and_an_order_of_that_kind_sends_nothing() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "100", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    let host = format!("127.0.0.1:{}", serving.port);
+    let before = binding_value(&serving, &light, "state");
+    let started = Instant::now();
+    for path in [
+        format!("/api/v1/equipments/{light}/orders/state"),
+        "/api/v1/zones".to_string(),
+    ] {
+        let (status, _, body) =
+            serving.request_typed("POST", &path, &host, r#"{"value":true}"#, "text/plain");
+        assert_eq!(
+            (status, body.as_str()),
+            (415, r#"{"error":"Unsupported Media Type"}"#)
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "answered at once"
+    );
+    // Nothing was sent: the relay's state is what it was.
+    assert_eq!(binding_value(&serving, &light, "state"), before);
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_third_order_is_busy_and_reads_are_still_served_while_two_wait_on_a_silenced_relay() {
+    let dir = data_dir();
+    pair(&dir);
+    silence_the_relay(&dir);
+    let serving = serve(&dir, "100", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    let mut waiting = Vec::new();
+    for _ in 0..2 {
+        let (port, light) = (serving.port, light.clone());
+        waiting.push(thread::spawn(move || {
+            post_order(port, &light, "state", r#"{"value":true}"#)
+        }));
+        thread::sleep(Duration::from_millis(200));
+    }
+    let started = Instant::now();
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    assert_eq!((status, body), (503, serde_json::json!({"error": "Busy"})));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "refused at once"
+    );
+    // The reads are served meanwhile.
+    assert_eq!(serving.devices().len(), 3);
+    for handle in waiting {
+        let (status, body) = handle.join().unwrap();
+        assert_eq!(
+            (status, body),
+            (502, serde_json::json!({"error": "device did not answer"}))
+        );
+    }
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_relay_whose_address_is_unknown_to_the_registry_and_the_radio_is_a_502_device_address_unknown()
+{
+    let dir = data_dir();
+    pair(&dir);
+    // The registry loses the relay's address and the radio does not know the device any more:
+    // its address in devices.json is one the radio never saw.
+    let file = dir.join("devices.json");
+    let mut stored: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let relay = stored
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|d| d["model"] == "ZBMINIR2")
+        .unwrap();
+    relay["sourceDeviceId"] = Value::String("0x00124b00deadbeef".into());
+    relay.as_object_mut().unwrap().remove("nwk");
+    relay.as_object_mut().unwrap().remove("endpoint");
+    std::fs::write(&file, stored.to_string()).unwrap();
+    let serving = serve(&dir, "100", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    let started = Instant::now();
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    assert_eq!(
+        (status, body),
+        (502, serde_json::json!({"error": "device address unknown"}))
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+const DIMMER: &str = r#"{
+  "devices": [ { "id": "lamp", "kind": "dimmer", "eui64": "00124B00123456B1" } ],
+  "events": [ { "at": "2s", "device": "lamp", "do": "join" } ]
+}"#;
+
+#[test]
+fn brightness_on_the_sim_dimmer_is_a_200_and_the_brightness_is_reported() {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    let scenario = dir.join("dimmer.json");
+    std::fs::write(&scenario, DIMMER).unwrap();
+    let scenario = scenario.to_str().unwrap();
+    pair_scenario(&dir, scenario);
+    let serving = serve_scenario(&dir, scenario, "100", &[]);
+    let lamp = light_on(&serving, "DIM01", "light_dimmable");
+    let (status, body) = order(&serving, &lamp, "brightness", r#"{"value":200}"#);
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    wait_until("brightness 200", || {
+        binding_value(&serving, &lamp, "brightness") == 200
+    });
+    assert_eq!(binding_value(&serving, &lamp, "state"), true);
+    // 255 counts as 254; 0 switches it off.
+    let (status, _) = order(&serving, &lamp, "brightness", r#"{"value":255}"#);
+    assert_eq!(status, 200);
+    wait_until("brightness 254", || {
+        binding_value(&serving, &lamp, "brightness") == 254
+    });
+    let (status, _) = order(&serving, &lamp, "brightness", r#"{"value":0}"#);
+    assert_eq!(status, 200);
+    wait_until("state false", || {
+        binding_value(&serving, &lamp, "state") == false
+    });
+    let (status, body) = order(&serving, &lamp, "brightness", r#"{"value":300}"#);
+    assert_eq!(
+        (status, body),
+        (
+            400,
+            serde_json::json!({"error": "Invalid value for brightness"})
+        )
+    );
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn an_order_is_answered_while_slow_clients_hold_the_long_lists_open() {
+    let dir = data_dir();
+    pair(&dir);
+    let serving = serve(&dir, "100", &[]);
+    let light = light_on(&serving, "ZBMINIR2", "light_onoff");
+    // As many equipments as the home holds, so the list is long.
+    let devices = serving.devices();
+    let ids: Vec<String> = devices
+        .iter()
+        .map(|d| d["id"].as_str().unwrap().to_string())
+        .collect();
+    for i in 0..60 {
+        let (status, _) = serving.send(
+            "POST",
+            "/api/v1/equipments",
+            &serde_json::json!({"name": format!("E{i:02}"), "type": "sensor", "zoneId": ROOT, "deviceIds": ids}),
+        );
+        assert_eq!(status, 201);
+    }
+    // Two clients ask for the list and read none of it.
+    let mut slow = Vec::new();
+    for _ in 0..2 {
+        let mut stream = TcpStream::connect(("127.0.0.1", serving.port)).unwrap();
+        write!(
+            stream,
+            "GET /api/v1/equipments HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            serving.port
+        )
+        .unwrap();
+        slow.push(stream);
+    }
+    thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    let (status, body) = order(&serving, &light, "state", r#"{"value":true}"#);
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(slow);
     assert_eq!(serving.interrupt(), Some(130));
 }

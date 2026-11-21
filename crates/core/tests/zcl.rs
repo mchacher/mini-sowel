@@ -515,3 +515,28 @@ fn a_zone_enroll_request_gives_its_zone_type_and_manufacturer_code() {
         Err(ZclError::TooShort)
     );
 }
+
+// ---- Spec 011: commands to a device ----
+
+#[test]
+fn on_off_and_toggle_are_01_tsn_01_01_tsn_00_and_01_tsn_02_on_the_on_off_cluster() {
+    // Frame control 0x01: cluster-specific, client to server, a Default Response asked for.
+    assert_eq!(Command::On.frame(0x2A), vec![0x01, 0x2A, 0x01]);
+    assert_eq!(Command::Off.frame(0x2A), vec![0x01, 0x2A, 0x00]);
+    assert_eq!(Command::Toggle.frame(0x2A), vec![0x01, 0x2A, 0x02]);
+    for command in [Command::On, Command::Off, Command::Toggle] {
+        assert_eq!(command.cluster(), CLUSTER_ON_OFF);
+        // The id a Default Response carries back is the third byte of the frame.
+        assert_eq!(command.frame(1)[2], command.id());
+    }
+}
+
+#[test]
+fn move_to_level_with_on_off_200_is_01_tsn_04_c8_then_the_transition_and_the_options() {
+    assert_eq!(
+        Command::MoveToLevel(200).frame(0x05),
+        vec![0x01, 0x05, 0x04, 0xC8, 0x00, 0x00, 0x00, 0x00]
+    );
+    assert_eq!(Command::MoveToLevel(0).cluster(), CLUSTER_LEVEL_CONTROL);
+    assert_eq!(Command::MoveToLevel(0).id(), 0x04);
+}

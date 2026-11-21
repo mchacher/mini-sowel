@@ -8,10 +8,13 @@ use serde_json::{Number, Value};
 
 use super::catalog::{self, DataSpec, OrderSpec};
 use super::model::{
-    Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Id, PowerSource, ValueType,
+    Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Id, PowerSource, Route,
+    ValueType,
 };
 use crate::radio::measures::Value as MeasureValue;
-use crate::radio::{Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, Sender};
+use crate::radio::{
+    Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, RouteUpdate, Sender,
+};
 
 /// Devices kept; one past it is not added.
 pub const MAX_DEVICES: usize = 64;
@@ -265,6 +268,7 @@ impl Devices {
             device,
             data: Vec::new(),
             orders: Vec::new(),
+            route: Route::default(),
         });
         self.definitions = true;
         self.refused.retain(|e| *e != eui64);
@@ -478,6 +482,28 @@ impl Devices {
             self.mark_seen(index, now);
             self.refresh_status(now);
         }
+    }
+
+    /// How a device is reached, as its messages told: a change is a change of definitions (written
+    /// at once; it is rare). A device not in the store is ignored.
+    pub fn set_route(&mut self, update: &RouteUpdate) {
+        let Some(index) = self.index_of(&update.eui64) else {
+            return;
+        };
+        let route = &mut self.items[index].route;
+        let new = Route {
+            nwk: Some(update.nwk),
+            endpoint: update.endpoint.or(route.endpoint),
+        };
+        if *route != new {
+            *route = new;
+            self.definitions = true;
+        }
+    }
+
+    /// The device with this address, for sending it an order.
+    pub fn by_eui64(&self, eui64: &[u8; 8]) -> Option<&DeviceWithDetails> {
+        self.index_of(eui64).map(|i| &self.items[i])
     }
 
     /// The measures of a message: the matching data get their value. A measure the device has

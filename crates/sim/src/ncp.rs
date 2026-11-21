@@ -8,7 +8,8 @@ use mini_sowel_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
-    battery_report, humidity_report, on_off_report, temperature_report, zone_notification,
+    battery_report, humidity_report, level_report, on_off_report, temperature_report,
+    zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -1046,46 +1047,102 @@ impl Ncp {
                 self.dirty = true;
             }
         } else if sent.profile == 0x0104
-            && sent.cluster == 0x0006
-            && device.kind == Kind::Relay
-            && control & 0x03 == 0x01
-            && matches!(message.get(2), Some(0x00..=0x02))
+            && matches!(device.kind, Kind::Relay | Kind::Dimmer)
+            && device.input_clusters.contains(&sent.cluster)
+            && matches!(sent.cluster, 0x0006 | 0x0008)
+            && match control & 0x03 {
+                // On/Off: Off (0), On (1), Toggle (2); Level Control: Move to Level with On/Off.
+                0x01 => matches!(
+                    (sent.cluster, message.get(2)),
+                    (0x0006, Some(0x00..=0x02)) | (0x0008, Some(0x04))
+                ),
+                // Read Attributes.
+                0x00 => message.get(2) == Some(&0x00),
+                _ => false,
+            }
         {
-            // On/Off cluster command: Off (0), On (1), Toggle (2).
             let (Some(tsn), Some(command)) = (message.get(1).copied(), message.get(2).copied())
             else {
                 reply.after.push(message_sent);
                 return;
             };
-            let on = match command {
-                0x00 => false,
-                0x01 => true,
-                _ => !device.relay_on,
-            };
-            let reports = self.devices.get_mut(index).is_some_and(|d| {
-                d.relay_on = on;
-                d.reports_attribute(0x0006, 0x0000)
-            });
-            self.dirty = true;
-            // The command asks for a Default Response unless it says "disable default response".
-            if control & 0x10 == 0 {
-                answers.push(self.incoming(
-                    device.nwk,
-                    0x0104,
-                    0x0006,
-                    1,
-                    &[0x18, tsn, 0x0B, command, 0x00],
-                ));
+            if device.silent {
+                reply.after.push(message_sent);
+                return;
             }
-            if reports {
-                let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);
+            if control & 0x03 == 0x00 {
+                let mut frame = vec![0x18, tsn, 0x01];
+                for pair in message.get(3..).unwrap_or(&[]).as_chunks::<2>().0 {
+                    let attribute = u16::from_le_bytes(*pair);
+                    frame.extend_from_slice(&attribute.to_le_bytes());
+                    match (sent.cluster, attribute) {
+                        (0x0006, 0x0000) => {
+                            frame.extend_from_slice(&[0x00, 0x10, u8::from(device.relay_on)]);
+                        }
+                        (0x0008, 0x0000) => frame.extend_from_slice(&[0x00, 0x20, device.level]),
+                        _ => frame.push(0x86),
+                    }
+                }
+                answers.push(self.incoming(device.nwk, 0x0104, sent.cluster, 1, &frame));
+            } else if let Some(status) = device.refuse_commands {
                 answers.push(self.incoming(
                     device.nwk,
                     0x0104,
-                    0x0006,
+                    sent.cluster,
                     1,
-                    &on_off_report(report_tsn, on),
+                    &[0x18, tsn, 0x0B, command, status],
                 ));
+            } else {
+                let (on, level) = match (sent.cluster, command) {
+                    (0x0006, 0x00) => (false, device.level),
+                    (0x0006, 0x01) => (true, device.level),
+                    (0x0006, _) => (!device.relay_on, device.level),
+                    _ => {
+                        let level = message.get(3).copied().unwrap_or(0);
+                        (level > 0, level)
+                    }
+                };
+                let (reports_on_off, reports_level) =
+                    self.devices.get_mut(index).map_or((false, false), |d| {
+                        d.relay_on = on;
+                        d.level = level;
+                        (
+                            d.reports_attribute(0x0006, 0x0000),
+                            d.kind == Kind::Dimmer && d.reports_attribute(0x0008, 0x0000),
+                        )
+                    });
+                self.dirty = true;
+                // The command asks for a Default Response unless it says "disable default
+                // response".
+                if control & 0x10 == 0 {
+                    answers.push(self.incoming(
+                        device.nwk,
+                        0x0104,
+                        sent.cluster,
+                        1,
+                        &[0x18, tsn, 0x0B, command, 0x00],
+                    ));
+                }
+                if reports_on_off {
+                    let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);
+                    answers.push(self.incoming(
+                        device.nwk,
+                        0x0104,
+                        0x0006,
+                        1,
+                        &on_off_report(report_tsn, on),
+                    ));
+                }
+                if reports_level && sent.cluster == 0x0008 {
+                    let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);
+                    answers.push(self.incoming(
+                        device.nwk,
+                        0x0104,
+                        0x0008,
+                        1,
+                        &level_report(report_tsn, level),
+                    ));
+                }
             }
         } else if sent.profile == 0x0104
             && device.input_clusters.contains(&sent.cluster)
@@ -1287,6 +1344,32 @@ impl Ncp {
                 }
                 None => self.st(SL_NOT_JOINED),
             },
+            // lookupNodeIdByEui64: the node address, or 0xFFFF; no status.
+            0x60 => {
+                let Some(wire) = args.get(..8) else {
+                    return reply;
+                };
+                let hidden = self
+                    .devices
+                    .iter()
+                    .any(|d| d.lookup_unknown && d.eui_wire[..] == *wire);
+                let joined = self
+                    .devices
+                    .iter()
+                    .filter(|d| !hidden && d.joined && d.eui_wire[..] == *wire)
+                    .map(|d| d.nwk);
+                let known = self
+                    .known_addresses
+                    .iter()
+                    .filter(|(_, eui)| !hidden && eui[..] == *wire)
+                    .map(|(n, _)| *n);
+                known
+                    .chain(joined)
+                    .next()
+                    .unwrap_or(0xFFFF)
+                    .to_le_bytes()
+                    .to_vec()
+            }
             // lookupEui64ByNodeId
             0x61 => {
                 let Some(nwk) = u16_at(args, 0) else {

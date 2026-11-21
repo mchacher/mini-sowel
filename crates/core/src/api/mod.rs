@@ -6,15 +6,18 @@
 mod devices;
 mod equipments;
 mod input;
+mod orders;
 mod zones;
 
 pub use crate::home::{CHUNK_ITEMS, ListCursor};
+pub use orders::order_response;
 
 use serde_json::{Map, Value};
 
 use crate::devices::{Random, to_json};
 use crate::failure::Failure;
 use crate::home::Home;
+use crate::orders::OrderWait;
 
 /// Request bodies over this many bytes are refused (413).
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -31,16 +34,22 @@ pub struct Request<'a> {
     pub host: Option<&'a str>,
     /// The port the server listens on: the only `Host` ports accepted.
     pub port: u16,
+    /// The `Content-Type` header, if any.
+    pub content_type: Option<&'a str>,
     /// At most `MAX_BODY_BYTES + 1` bytes are needed to see that it is too long.
     pub body: &'a [u8],
 }
 
-/// What a request is answered with: a whole response, or a list streamed from a cursor (status
-/// 200, `application/json; charset=utf-8`).
+/// What a request is answered with: a whole response, a list streamed from a cursor (status
+/// 200, `application/json; charset=utf-8`), or an order to wait for.
 #[derive(Debug)]
 pub enum Reply {
     Whole(Response),
     List(ListCursor),
+    /// An order put in the home's queue (spec 011): the caller releases the home, then waits for
+    /// the radio loop's answer with `OrderWait::wait` and turns it into a response with
+    /// `order_response`.
+    Order(OrderWait),
 }
 
 /// The answer: a status, and a JSON body (`None` for 204). The content type is
@@ -96,8 +105,10 @@ fn host_allowed(host: Option<&str>, port: u16) -> bool {
 /// Answers a request; the long lists are drained into one body (tests, tools). The host streams
 /// them with `handle_stream`.
 pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> Response {
-    match handle_stream(home, request, now, random) {
+    match dispatch(home, request, now, random, false) {
         Reply::Whole(response) => response,
+        // Not reachable: without the streaming handler, an order is refused before it is queued.
+        Reply::Order(_) => error(501, ORDERS_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
             loop {
@@ -120,11 +131,41 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
 /// date. `GET /devices` and `GET /equipments` answer a cursor: the caller serves its chunks,
 /// taking the home for each one and never holding it while writing.
 pub fn handle_stream(home: &mut Home, request: &Request, now: u64, random: Random) -> Reply {
+    dispatch(home, request, now, random, true)
+}
+
+/// What the plain `handle` answers to an order: it cannot wait for the radio, so it does not
+/// queue the order.
+const ORDERS_NEED_STREAMING: &str = "Orders need the streaming handler";
+
+/// True when the body of a POST or PUT is declared as JSON (`application/json`, parameters such
+/// as `charset` allowed), the only type Fastify's JSON parser takes. A request of another type
+/// cannot come from a cross-origin "simple" form POST.
+fn json_content_type(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        v.split(';')
+            .next()
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
+    })
+}
+
+fn dispatch(
+    home: &mut Home,
+    request: &Request,
+    now: u64,
+    random: Random,
+    streaming: bool,
+) -> Reply {
     if !host_allowed(request.host, request.port) {
         return Reply::Whole(error(403, "Forbidden host"));
     }
     if request.body.len() > MAX_BODY_BYTES {
         return Reply::Whole(error(413, "Body too large"));
+    }
+    // Every POST and PUT of the API takes a JSON body (the only routes without one are GET and
+    // DELETE).
+    if matches!(request.method, "POST" | "PUT") && !json_content_type(request.content_type) {
+        return Reply::Whole(error(415, "Unsupported Media Type"));
     }
     let (path, query) = match request.path.split_once('?') {
         Some((path, query)) => (path, query),
@@ -154,6 +195,12 @@ pub fn handle_stream(home: &mut Home, request: &Request, now: u64, random: Rando
             }
             _ => {}
         }
+    }
+    if let ["equipments", id, "orders", alias] = segments.as_slice() {
+        if request.method == "POST" {
+            return orders::route(home, id, alias, request.body, now, streaming);
+        }
+        return Reply::Whole(method_not_allowed());
     }
     let response = match segments.first().copied() {
         Some("devices") => devices::route(home, &segments, request, now),

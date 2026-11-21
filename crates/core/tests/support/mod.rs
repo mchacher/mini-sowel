@@ -72,6 +72,7 @@ impl Rig {
                 path,
                 host: Some(HOST),
                 port: PORT,
+                content_type: Some("application/json"),
                 body: body.as_bytes(),
             },
             self.now,

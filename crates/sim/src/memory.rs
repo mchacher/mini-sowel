@@ -47,6 +47,15 @@ pub struct DeviceMemory {
     /// (zeros) in a file written before it was kept.
     #[serde(default)]
     cie: String,
+    /// The level of a dimmer; absent in a file written before spec 011.
+    #[serde(default)]
+    level: u8,
+    /// The device answers no On/Off or Level Control frame (a test switch, spec 011).
+    #[serde(default)]
+    silent: bool,
+    /// The radio's address table does not know the device (a test switch).
+    #[serde(default)]
+    lookup_unknown: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -88,6 +97,9 @@ impl DeviceMemory {
         device.cie_written = self.cie_written;
         device.enrolled = self.enrolled;
         device.cie = unhex(&self.cie).unwrap_or([0; 8]);
+        device.level = self.level;
+        device.silent = self.silent;
+        device.lookup_unknown = self.lookup_unknown;
     }
 }
 
@@ -121,6 +133,9 @@ impl Memory {
                     cie_written: d.cie_written,
                     enrolled: d.enrolled,
                     cie: hex(&d.cie),
+                    level: d.level,
+                    silent: d.silent,
+                    lookup_unknown: d.lookup_unknown,
                 })
                 .collect(),
         }

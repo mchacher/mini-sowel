@@ -17,6 +17,7 @@ fn stream(rig: &mut Rig, path: &str) -> ListCursor {
             path,
             host: Some(HOST),
             port: PORT,
+            content_type: Some("application/json"),
             body: b"",
         },
         rig.now,
@@ -24,7 +25,7 @@ fn stream(rig: &mut Rig, path: &str) -> ListCursor {
     );
     match reply {
         Reply::List(cursor) => cursor,
-        Reply::Whole(r) => panic!("not streamed: {r:?}"),
+        other => panic!("not streamed: {other:?}"),
     }
 }
 

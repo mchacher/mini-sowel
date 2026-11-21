@@ -338,12 +338,24 @@ impl Serialize for OrderList<'_> {
     }
 }
 
+/// How to reach a device on the network (spec 011): the node address and the endpoint its On/Off
+/// and Level Control frames come from, as the last messages told. Kept in `devices.json` beside
+/// Sowel's fields, never in the device API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Route {
+    pub nwk: Option<u16>,
+    /// `None` until a frame tells it: endpoint 1 is then used.
+    pub endpoint: Option<u8>,
+}
+
 /// Sowel's `DeviceWithDetails`: a device with its data and orders.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceWithDetails {
     pub device: Device,
     pub data: Vec<DeviceData>,
     pub orders: Vec<DeviceOrder>,
+    /// Not Sowel's: how to send the device an order.
+    pub route: Route,
 }
 
 #[derive(Serialize)]
@@ -381,6 +393,7 @@ impl<'de> Deserialize<'de> for DeviceWithDetails {
             device: d.device,
             data: d.data,
             orders: d.orders,
+            route: Route::default(),
         })
     }
 }

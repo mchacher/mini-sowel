@@ -1,18 +1,22 @@
 //! `--serve`: resume the network, keep the devices up to date from what they send, and serve
 //! Sowel's device, zone and equipment API on 127.0.0.1. The radio loop runs in the calling thread
 //! and is the only writer of the files; HTTP workers answer requests, with the home behind a lock
-//! that is never held during radio I/O or a file write. The random source is shared and always
-//! taken after the home lock.
+//! that is never held during radio I/O, a file write, or the wait for an order's answer. An order
+//! goes through the home's queue to the radio loop, which sends it between two polls. The random
+//! source is shared and always taken after the home lock.
 
 use std::io::{self, Read};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mini_sowel_core::api::{ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream};
+use mini_sowel_core::api::{
+    ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream, order_response,
+};
 use mini_sowel_core::devices::lock;
 use mini_sowel_core::home::Home;
+use mini_sowel_core::orders::OrderRunner;
 use mini_sowel_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use tiny_http::{Header, Response, Server};
 
@@ -36,6 +40,14 @@ pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Milliseconds on a monotonic clock, from the first call: the clock of the orders' deadlines,
+/// which the HTTP waiter (an `Instant`) shares. The wall clock (`now_ms`) can jump; it stays for
+/// the timestamps of data.
+pub fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Binds the port on 127.0.0.1 only.
@@ -94,6 +106,11 @@ fn answer(
         .iter()
         .find(|h| h.field.equiv("Host"))
         .map(|h| h.value.to_string());
+    let request_type = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Content-Type"))
+        .map(|h| h.value.to_string());
     // One byte more than allowed is enough to see that the body is too long.
     let mut body = Vec::new();
     let _ = request
@@ -110,11 +127,17 @@ fn answer(
                 path: &path,
                 host: host.as_deref(),
                 port,
+                content_type: request_type.as_deref(),
                 body: &body,
             },
             now_ms(),
             &mut fill,
         )
+    };
+    // An order waits for the radio loop's answer, without the lock.
+    let reply = match reply {
+        Reply::Order(wait) => Reply::Whole(order_response(wait)),
+        other => other,
     };
     // The client may have gone: nothing to do about it.
     let _ = match reply {
@@ -131,6 +154,7 @@ fn answer(
             None,
             None,
         )),
+        Reply::Order(_) => request.respond(Response::empty(500)),
         Reply::Whole(response) => match response.body {
             Some(text) => request.respond(
                 Response::from_string(text)
@@ -237,14 +261,23 @@ fn radio_loop<T: RadioTransport>(
     let foreign = !backup::matches(data, &network);
     println!("{}", network_line(&network, foreign));
     println!("serving: http://127.0.0.1:{port}");
+    // The orders of the API (and of the core) wait in this queue; the radio loop is the only one
+    // that sends them.
+    let orders = lock(home).orders().clone();
+    orders.set_clock(Arc::new(monotonic_ms));
+    let mut runner = OrderRunner::new();
     while !stop.load(Ordering::SeqCst) {
         let events = radio.poll().map_err(|e| format!("radio: {e}"))?;
         let activity = radio.take_activity();
+        let routes = radio.take_routes();
         let now = now_ms();
         {
             let mut guard = lock(home);
             for item in &activity {
                 guard.devices.apply_activity(item, now);
+            }
+            for update in &routes {
+                guard.devices.set_route(update);
             }
             for event in &events {
                 guard.devices.measures(event, now, &mut fill)?;
@@ -256,6 +289,9 @@ fn radio_loop<T: RadioTransport>(
                 guard.recompute(now);
             }
         }
+        // After the measures: the answer of an order (and the state it makes the device read
+        // back) comes through the same polls.
+        runner.step(&mut radio, &orders, monotonic_ms());
         if verbose {
             for event in &events {
                 for line in event.lines() {

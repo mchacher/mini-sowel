@@ -416,3 +416,15 @@ fn statuses_of_ezsp_13_are_read_as_the_statuses_of_14_and_later() {
     assert!(status_is_busy(STATUS_BUSY));
     assert!(!status_is_busy(STATUS_OK));
 }
+
+#[test]
+fn lookup_node_id_by_eui64_sends_the_address_little_endian_and_reads_the_node_or_0xffff() {
+    assert_eq!(ID_LOOKUP_NODE_ID_BY_EUI64, 0x0060);
+    assert_eq!(
+        lookup_node_id_by_eui64(&[0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x78]),
+        vec![0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00]
+    );
+    assert_eq!(parse_lookup_node_id(&[0x02, 0x20]), Ok(Some(0x2002)));
+    assert_eq!(parse_lookup_node_id(&[0xFF, 0xFF]), Ok(None));
+    assert!(parse_lookup_node_id(&[0x02]).is_err());
+}

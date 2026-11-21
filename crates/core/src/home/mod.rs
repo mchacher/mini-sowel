@@ -14,6 +14,7 @@ use serde::{Serialize, Serializer};
 use crate::devices::{Device, Devices, Id, Random};
 use crate::equipments::{Alias, Equipments, StoredEquipment};
 use crate::failure::{Failure, Outcome};
+use crate::orders::OrderQueue;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
 
@@ -48,6 +49,8 @@ pub struct Home {
     motion: Vec<Motion>,
     zones_changed: bool,
     equipments_changed: bool,
+    /// The orders waiting for the radio (spec 011); at most `MAX_ORDERS`.
+    orders: OrderQueue,
 }
 
 impl Home {
@@ -119,6 +122,7 @@ impl Home {
             motion: Vec::new(),
             zones_changed: zones_repaired,
             equipments_changed: repaired,
+            orders: OrderQueue::new(),
         }
     }
 
@@ -128,6 +132,12 @@ impl Home {
 
     pub fn equipments(&self) -> &Equipments {
         &self.equipments
+    }
+
+    /// The queue of orders for the radio: the API gives it the orders it receives, and the core
+    /// its own (a recipe) the same way; the radio loop takes them from a clone of this handle.
+    pub fn orders(&self) -> &OrderQueue {
+        &self.orders
     }
 
     // ---- What is to be written ----

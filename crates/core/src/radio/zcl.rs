@@ -120,6 +120,59 @@ pub fn parse_write_attributes_response(frame: &[u8]) -> Result<WriteResponse, Zc
     })
 }
 
+/// The On/Off cluster.
+pub const CLUSTER_ON_OFF: u16 = 0x0006;
+/// The Level Control cluster.
+pub const CLUSTER_LEVEL_CONTROL: u16 = 0x0008;
+/// On/Off attribute: the state (boolean). Level Control attribute: the current level (uint8).
+pub const ATTRIBUTE_ON_OFF: u16 = 0x0000;
+pub const ATTRIBUTE_CURRENT_LEVEL: u16 = 0x0000;
+
+/// A cluster-specific command the coordinator sends to a device (spec 011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    /// On/Off cluster, On (0x01).
+    On,
+    /// On/Off cluster, Off (0x00).
+    Off,
+    /// On/Off cluster, Toggle (0x02).
+    Toggle,
+    /// Level Control cluster, Move to Level with On/Off (0x04): the level 0..=254, immediately.
+    MoveToLevel(u8),
+}
+
+impl Command {
+    /// The cluster the command belongs to.
+    pub fn cluster(self) -> u16 {
+        match self {
+            Command::On | Command::Off | Command::Toggle => CLUSTER_ON_OFF,
+            Command::MoveToLevel(_) => CLUSTER_LEVEL_CONTROL,
+        }
+    }
+
+    /// The command id inside its cluster (what a Default Response carries back).
+    pub fn id(self) -> u8 {
+        match self {
+            Command::Off => 0x00,
+            Command::On => 0x01,
+            Command::Toggle => 0x02,
+            Command::MoveToLevel(_) => 0x04,
+        }
+    }
+
+    /// The ZCL frame: frame control 0x01 (cluster-specific, client to server, a Default Response
+    /// asked for), the transaction number, the command id and its payload. Move to Level is
+    /// `01 <tsn> 04 <level> 00 00 00 00` (level, transition time 0 on two bytes, options mask 0,
+    /// options override 0), as Zigbee2MQTT sends it.
+    pub fn frame(self, tsn: u8) -> Vec<u8> {
+        let mut frame = vec![FRAME_TYPE_CLUSTER, tsn, self.id()];
+        if let Command::MoveToLevel(level) = self {
+            frame.extend_from_slice(&[level, 0, 0, 0, 0]);
+        }
+        frame
+    }
+}
+
 /// A Zone Enroll Response: cluster-specific command 0x00, client to server, default response
 /// disabled; status success, zone id 23. `11 <tsn> 00 00 17`.
 pub fn zone_enroll_response(tsn: u8) -> Vec<u8> {

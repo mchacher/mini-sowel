@@ -3,6 +3,7 @@
 //! the transport and the time.
 
 pub mod ash;
+mod commands;
 mod coordinator;
 pub mod ezsp;
 pub mod measures;
@@ -14,6 +15,9 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use ash::{AshError, AshFailure, Event, Output, Session};
+pub use commands::{
+    CommandFailure, CommandHandle, CommandTarget, Commands, MAX_COMMANDS, RouteUpdate,
+};
 pub use coordinator::{
     Activity, Enrollment, EnrollmentOutcome, MeasureEvent, Network, NetworkKeys, NetworkSettings,
     PairingEvent, Sender, cut_short_line, network_line,
@@ -148,6 +152,7 @@ pub struct Radio<T: RadioTransport, C: FnMut() -> u64> {
     /// EZSP frames received and not yet read; at most `MAX_INBOX`.
     inbox: VecDeque<Vec<u8>>,
     pairing: coordinator::Pairing,
+    commands: commands::Commands,
 }
 
 impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
@@ -161,6 +166,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             callbacks: VecDeque::new(),
             inbox: VecDeque::new(),
             pairing: coordinator::Pairing::default(),
+            commands: commands::Commands::default(),
         }
     }
 

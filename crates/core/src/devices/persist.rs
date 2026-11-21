@@ -6,7 +6,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use serde::{Deserialize, Serialize, Serializer};
 
-use super::model::{Device, DeviceData, DeviceOrder, DeviceWithDetails, Id, OrderList, iso_option};
+use super::model::{
+    Device, DeviceData, DeviceOrder, DeviceWithDetails, Id, OrderList, Route, iso_option,
+};
 use super::registry::Devices;
 use crate::home::{Home, ListCursor};
 
@@ -90,6 +92,7 @@ pub fn stored_item(item: &DeviceWithDetails) -> impl Serialize + '_ {
         device: &item.device,
         data: StoredDataList(item.device.id, &item.data),
         orders: OrderList(item.device.id, &item.orders),
+        route: item.route,
     }
 }
 
@@ -128,6 +131,7 @@ impl Serialize for Stored<'_> {
             device: &item.device,
             data: StoredDataList(item.device.id, &item.data),
             orders: OrderList(item.device.id, &item.orders),
+            route: item.route,
         }))
     }
 }
@@ -138,6 +142,23 @@ struct StoredOut<'a> {
     device: &'a Device,
     data: StoredDataList<'a>,
     orders: OrderList<'a>,
+    #[serde(flatten)]
+    route: Route,
+}
+
+/// The route as `devices.json` writes it: `nwk` and `endpoint`, left out while unknown.
+impl Serialize for Route {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        if let Some(nwk) = self.nwk {
+            map.serialize_entry("nwk", &nwk)?;
+        }
+        if let Some(endpoint) = self.endpoint {
+            map.serialize_entry("endpoint", &endpoint)?;
+        }
+        map.end()
+    }
 }
 
 struct StoredDataList<'a>(Id, &'a [DeviceData]);
@@ -168,6 +189,11 @@ struct StoredIn {
     device: Device,
     data: Vec<StoredDataIn>,
     orders: Vec<DeviceOrder>,
+    /// Missing in a file written before spec 011.
+    #[serde(default)]
+    nwk: Option<u16>,
+    #[serde(default)]
+    endpoint: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -196,6 +222,10 @@ pub fn parse_list(json: &str) -> Result<Vec<DeviceWithDetails>, String> {
                 })
                 .collect(),
             orders: item.orders,
+            route: Route {
+                nwk: item.nwk,
+                endpoint: item.endpoint,
+            },
         })
         .collect())
 }

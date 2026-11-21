@@ -341,6 +341,7 @@ pub const ID_INCOMING_MESSAGE_HANDLER: u16 = 0x0045;
 pub const ID_SET_CONFIGURATION_VALUE: u16 = 0x0053;
 pub const ID_SET_POLICY: u16 = 0x0055;
 pub const ID_SET_SOURCE_ROUTE_DISCOVERY_MODE: u16 = 0x005A;
+pub const ID_LOOKUP_NODE_ID_BY_EUI64: u16 = 0x0060;
 pub const ID_LOOKUP_EUI64_BY_NODE_ID: u16 = 0x0061;
 pub const ID_SET_INITIAL_SECURITY_STATE: u16 = 0x0068;
 pub const ID_CLEAR_TRANSIENT_LINK_KEYS: u16 = 0x006B;
@@ -804,6 +805,19 @@ pub fn parse_lookup_eui64(wide: bool, params: &[u8]) -> Result<Option<[u8; 8]>, 
     }
     let eui64 = reader.eui64()?;
     Ok((eui64 != [0; 8]).then_some(eui64))
+}
+
+/// The parameters of `lookupNodeIdByEui64`: the address, most significant byte first as the core
+/// keeps it, sent little-endian.
+pub fn lookup_node_id_by_eui64(eui64: &[u8; 8]) -> Vec<u8> {
+    eui64.iter().rev().copied().collect()
+}
+
+/// The answer to `lookupNodeIdByEui64`: the node address, or `None` when the radio's address table
+/// does not know the device (it answers 0xFFFF). The answer has no status, on any version.
+pub fn parse_lookup_node_id(params: &[u8]) -> Result<Option<u16>, EzspError> {
+    let node_id = Reader::new(params).u16()?;
+    Ok((node_id != 0xFFFF).then_some(node_id))
 }
 
 /// A `messageSentHandler` callback: what became of a message we sent.

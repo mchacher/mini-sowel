@@ -21,6 +21,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
         path,
         host: Some("127.0.0.1:8080"),
         port: 8080,
+        content_type: Some("application/json"),
         body,
     }
 }

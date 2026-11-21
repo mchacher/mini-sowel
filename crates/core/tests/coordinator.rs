@@ -1735,3 +1735,362 @@ fn an_unknown_own_address_never_stops_the_run_the_enrollment_fails_and_the_clust
     assert_eq!(reporting(&events), vec![(vec![], vec![POWER], false)]);
     assert!(!zone_sends(&h).iter().any(is_write));
 }
+
+// ---- Spec 011: commands to a device ----
+
+use mini_sowel_core::radio::zcl::Command;
+use mini_sowel_core::radio::{CommandFailure, CommandHandle, CommandTarget, Radio};
+use mini_sowel_sim::{FakeClock, SimTransport};
+
+const RELAY_WIRE: [u8; 8] = [0x7A, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00];
+const RELAY_EUI: [u8; 8] = [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x7A];
+const RELAY_NWK: u16 = 0x2001;
+const ON_OFF: u16 = 0x0006;
+
+/// A mains relay like the ZBMINIR2, always awake, joining when pairing opens.
+fn relay() -> SimDevice {
+    let mut device = SimDevice::of_kind(Kind::Relay, RELAY_WIRE, None, None);
+    device.nwk = RELAY_NWK;
+    device.auto_join = true;
+    device
+}
+
+fn target(nwk: Option<u16>) -> CommandTarget {
+    CommandTarget {
+        eui64: RELAY_EUI,
+        nwk,
+        endpoint: 1,
+    }
+}
+
+type Outcome = (CommandHandle, Result<(), CommandFailure>);
+
+/// Polls for `ms` of fake time: the events, and the outcomes of commands as they finish.
+fn poll_commands(h: &mut Harness, ms: u64) -> (Vec<PairingEvent>, Vec<Outcome>) {
+    let end = h.clock.get() + ms;
+    let (mut events, mut outcomes) = (Vec::new(), Vec::new());
+    while h.clock.get() < end {
+        events.extend(h.radio.poll_pairing().unwrap());
+        outcomes.extend(h.radio.take_command_results());
+    }
+    (events, outcomes)
+}
+
+/// The commands (cluster-specific frames) the host sent on the On/Off cluster, in order.
+fn command_frames(h: &Harness) -> Vec<SentMessage> {
+    sends_on(h, 0x0104, ON_OFF)
+        .into_iter()
+        .filter(|m| m.message[0] & 0x03 == 0x01)
+        .collect()
+}
+
+fn light_state_events(events: &[PairingEvent]) -> Vec<bool> {
+    measure_events(events)
+        .iter()
+        .flat_map(|e| e.measures.iter())
+        .filter(|m| m.kind == "light_state")
+        .map(|m| m.value == Value::Bool(true))
+        .collect()
+}
+
+#[test]
+fn a_command_acknowledged_by_a_default_response_success_is_a_success() {
+    let (mut h, _) = paired(relay());
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    assert_eq!(h.radio.commands_in_flight(), 1);
+    let (_, outcomes) = poll_commands(&mut h, 300);
+    assert_eq!(outcomes, vec![(handle, Ok(()))]);
+    assert_eq!(h.radio.commands_in_flight(), 0);
+    let sent = command_frames(&h);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].destination, RELAY_NWK);
+    assert_eq!(
+        (sent[0].source_endpoint, sent[0].destination_endpoint),
+        (1, 1)
+    );
+    assert_eq!(sent[0].message[0], 0x01);
+    assert_eq!(sent[0].message[2], 0x01, "On");
+}
+
+#[test]
+fn a_default_response_with_the_error_status_0x81_is_a_refusal_that_says_the_status() {
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].refuse_commands = Some(0x81);
+    let handle = h
+        .radio
+        .send_command(target(None), Command::Off, 12_000)
+        .unwrap();
+    let (_, outcomes) = poll_commands(&mut h, 300);
+    assert_eq!(outcomes, vec![(handle, Err(CommandFailure::Refused(0x81)))]);
+    assert_eq!(
+        CommandFailure::Refused(0x81).to_string(),
+        "device refused the command (status 0x81)"
+    );
+}
+
+#[test]
+fn no_answer_is_sent_again_2_s_after_the_5_s_wait_and_then_it_is_the_device_not_answering() {
+    // Silent: sent at t, again at t + 7 s, given up at t + 12 s.
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].silent = true;
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    let (_, outcomes) = poll_commands(&mut h, 13_000);
+    assert_eq!(outcomes, vec![(handle, Err(CommandFailure::NoAnswer))]);
+    assert_eq!(
+        CommandFailure::NoAnswer.to_string(),
+        "device did not answer"
+    );
+    assert_eq!(command_frames(&h).len(), 2);
+    let times = h.ncp.borrow().sent_at.clone();
+    let sends = h.ncp.borrow().sent.clone();
+    let at: Vec<u64> = sends
+        .iter()
+        .zip(&times)
+        .filter(|(m, _)| m.cluster == ON_OFF && m.message[0] & 0x03 == 0x01)
+        .map(|(_, t)| *t)
+        .collect();
+    assert!((7_000..7_200).contains(&(at[1] - at[0])), "{at:?}");
+
+    // The device wakes up between the two sends: the retry is the answer.
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].silent = true;
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    let (_, early) = poll_commands(&mut h, 6_000);
+    assert!(early.is_empty(), "still waiting for the retry");
+    h.ncp.borrow_mut().devices[0].silent = false;
+    let (_, outcomes) = poll_commands(&mut h, 3_000);
+    assert_eq!(outcomes, vec![(handle, Ok(()))]);
+    assert_eq!(command_frames(&h).len(), 2);
+}
+
+#[test]
+fn measures_from_another_device_keep_arriving_while_a_command_waits() {
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![relay(), SimDevice::sensor()];
+    let mut h = started(ncp);
+    h.radio.permit_join(180).unwrap();
+    poll_until_idle(&mut h);
+    h.ncp.borrow_mut().devices[0].silent = true;
+    h.radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    h.ncp.borrow_mut().inject(
+        DEVICE_NWK,
+        0x0104,
+        TEMPERATURE,
+        1,
+        &temperature_report(9, 1500),
+    );
+    let (events, outcomes) = poll_commands(&mut h, 300);
+    assert!(outcomes.is_empty(), "the command still waits");
+    assert_eq!(h.radio.commands_in_flight(), 1);
+    let measures = measure_events(&events);
+    assert_eq!(measures.len(), 1);
+    assert_eq!(measures[0].measures[0].kind, "temperature");
+}
+
+#[test]
+fn after_a_success_the_state_is_read_once_and_the_answer_is_the_devices_measure() {
+    let (mut h, _) = paired(relay());
+    // A relay that does not report: only the read tells its new state.
+    h.ncp.borrow_mut().devices[0].configured_attributes.clear();
+    h.radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    let (events, outcomes) = poll_commands(&mut h, 500);
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(light_state_events(&events), vec![true]);
+    let reads: Vec<SentMessage> = sends_on(&h, 0x0104, ON_OFF)
+        .into_iter()
+        .filter(|m| m.message[0] & 0x03 == 0 && m.message[2] == 0x00)
+        .collect();
+    assert_eq!(reads.len(), 1, "one read, after the command");
+    assert_eq!(reads[0].message[3..], [0x00, 0x00]);
+    // Off: the next read says off.
+    h.radio
+        .send_command(target(None), Command::Off, 12_000)
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 500);
+    assert_eq!(light_state_events(&events), vec![false]);
+}
+
+#[test]
+fn a_busy_radio_is_retried_once_after_2_s_and_an_error_status_is_never_retried() {
+    // Busy once: the retry gets through.
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().busy_sends = 1;
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    let (_, outcomes) = poll_commands(&mut h, 3_000);
+    assert_eq!(outcomes, vec![(handle, Ok(()))]);
+    assert_eq!(command_frames(&h).len(), 2, "the busy send and its retry");
+
+    // Busy twice: radio busy.
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().busy_sends = 2;
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    let (_, outcomes) = poll_commands(&mut h, 3_000);
+    assert_eq!(outcomes, vec![(handle, Err(CommandFailure::Busy))]);
+    assert_eq!(CommandFailure::Busy.to_string(), "radio busy");
+
+    // An error status: one send, no retry.
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].refuse_commands = Some(0x81);
+    h.radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    poll_commands(&mut h, 8_000);
+    assert_eq!(command_frames(&h).len(), 1);
+}
+
+#[test]
+fn a_default_response_from_another_device_or_with_another_tsn_command_or_cluster_is_no_answer() {
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].silent = true;
+    let handle = h
+        .radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    poll_commands(&mut h, 100);
+    let tsn = command_frames(&h)[0].message[1];
+    let response = |tsn: u8, command: u8| [0x18, tsn, 0x0B, command, 0x00];
+    {
+        let mut ncp = h.ncp.borrow_mut();
+        // Another device (its node address), another transaction, another command, another
+        // cluster: none of them answers the command.
+        ncp.inject(0x3333, 0x0104, ON_OFF, 1, &response(tsn, 0x01));
+        ncp.inject(
+            RELAY_NWK,
+            0x0104,
+            ON_OFF,
+            1,
+            &response(tsn.wrapping_add(1), 0x01),
+        );
+        ncp.inject(RELAY_NWK, 0x0104, ON_OFF, 1, &response(tsn, 0x00));
+        ncp.inject(RELAY_NWK, 0x0104, 0x0008, 1, &response(tsn, 0x01));
+    }
+    let (_, outcomes) = poll_commands(&mut h, 300);
+    assert!(outcomes.is_empty(), "{outcomes:?}");
+    assert_eq!(h.radio.commands_in_flight(), 1);
+    // The right one answers.
+    h.ncp
+        .borrow_mut()
+        .inject(RELAY_NWK, 0x0104, ON_OFF, 1, &response(tsn, 0x01));
+    let (_, outcomes) = poll_commands(&mut h, 300);
+    assert_eq!(outcomes, vec![(handle, Ok(()))]);
+}
+
+/// A second radio on the same simulated radio and network, that has heard nothing of the devices
+/// (a restart of the host).
+fn restarted(h: &Harness) -> Radio<SimTransport<FakeClock>, Box<dyn FnMut() -> u64>> {
+    let clock = FakeClock::default();
+    let time = std::rc::Rc::clone(&clock.time);
+    let transport = SimTransport::new(std::rc::Rc::clone(&h.ncp), Vec::new(), 1, clock);
+    let mut radio = Radio::new(
+        transport,
+        Box::new(move || time.get()) as Box<dyn FnMut() -> u64>,
+    );
+    radio.identify().unwrap();
+    radio.listen().unwrap();
+    radio
+}
+
+#[test]
+fn the_address_comes_from_the_registry_else_the_radios_table_and_unknown_is_not_sent() {
+    let (h, _) = paired(relay());
+    let mut radio = restarted(&h);
+    let wait = |radio: &mut Radio<_, _>| {
+        let mut outcomes = Vec::new();
+        for _ in 0..200 {
+            radio.poll().unwrap();
+            outcomes.extend(radio.take_command_results());
+        }
+        outcomes
+    };
+    let lookups = |h: &Harness| {
+        h.ncp
+            .borrow()
+            .commands
+            .iter()
+            .filter(|c| c.0 == 0x60)
+            .count()
+    };
+
+    // The registry knows the address: no lookup.
+    let first = radio
+        .send_command(target(Some(RELAY_NWK)), Command::On, 12_000)
+        .unwrap();
+    assert_eq!(wait(&mut radio), vec![(first, Ok(()))]);
+    assert_eq!(lookups(&h), 0);
+
+    // Another restart, the registry knows nothing: the radio's address table does.
+    let mut radio = restarted(&h);
+    let second = radio
+        .send_command(target(None), Command::On, 12_000)
+        .unwrap();
+    assert_eq!(wait(&mut radio), vec![(second, Ok(()))]);
+    assert_eq!(lookups(&h), 1);
+    assert_eq!(command_frames(&h).len(), 2, "one command each");
+
+    // A device nobody knows: nothing is sent.
+    let before = h.ncp.borrow().sent.len();
+    let stranger = CommandTarget {
+        eui64: [9; 8],
+        nwk: None,
+        endpoint: 1,
+    };
+    let third = radio.send_command(stranger, Command::On, 12_000).unwrap();
+    assert_eq!(
+        wait(&mut radio),
+        vec![(third, Err(CommandFailure::UnknownAddress))]
+    );
+    assert_eq!(h.ncp.borrow().sent.len(), before);
+    assert_eq!(
+        CommandFailure::UnknownAddress.to_string(),
+        "device address unknown"
+    );
+}
+
+#[test]
+fn the_messages_of_a_paired_relay_tell_its_address_and_the_endpoint_of_its_on_off_frames() {
+    let (mut h, _) = paired(relay());
+    let routes = h.radio.take_routes();
+    let route = routes
+        .iter()
+        .find(|r| r.eui64 == RELAY_EUI)
+        .expect("a route");
+    assert_eq!(route.nwk, RELAY_NWK);
+    assert_eq!(route.endpoint, Some(1), "from the On/Off configure answer");
+    assert!(h.radio.take_routes().is_empty(), "taken once");
+}
+
+#[test]
+fn more_commands_than_the_bound_are_refused_and_the_bound_is_8() {
+    let (mut h, _) = paired(relay());
+    h.ncp.borrow_mut().devices[0].silent = true;
+    for _ in 0..mini_sowel_core::radio::MAX_COMMANDS {
+        h.radio
+            .send_command(target(None), Command::On, 12_000)
+            .unwrap();
+    }
+    assert!(
+        h.radio
+            .send_command(target(None), Command::On, 12_000)
+            .is_err()
+    );
+    assert_eq!(h.radio.commands_in_flight(), 8);
+}

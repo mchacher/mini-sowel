@@ -61,6 +61,7 @@ fn call(home: &mut Home, method: &str, path: &str, host: Option<&str>, body: &[u
             path,
             host,
             port: PORT,
+            content_type: Some("application/json"),
             body,
         },
         T0 + 2000,
@@ -265,4 +266,36 @@ fn the_64_character_limit_counts_the_trimmed_name() {
         error(&local(&mut devices, "PUT", &path, &too_long)),
         (400, "Invalid name".into())
     );
+}
+
+#[test]
+fn a_post_or_put_without_a_json_content_type_is_a_415_whatever_the_route() {
+    let (mut home, id, _) = two_devices();
+    for (method, path) in [
+        ("POST", "/api/v1/zones".to_string()),
+        ("PUT", format!("/api/v1/devices/{id}")),
+        ("POST", "/api/v1/equipments".to_string()),
+    ] {
+        for content_type in [Some("text/plain"), None] {
+            let response = handle(
+                &mut home,
+                &Request {
+                    method,
+                    path: &path,
+                    host: Some("127.0.0.1:8080"),
+                    port: PORT,
+                    content_type,
+                    body: br#"{"name":"x"}"#,
+                },
+                T0 + 2000,
+                &mut counter(),
+            );
+            assert_eq!(
+                error(&response),
+                (415, "Unsupported Media Type".to_string())
+            );
+        }
+    }
+    // Nothing was created, and a GET or DELETE has no body to type.
+    assert_eq!(local(&mut home, "GET", "/api/v1/zones", "").status, 200);
 }

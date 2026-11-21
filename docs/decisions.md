@@ -218,3 +218,17 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   run at once, so the peak grew with the home and with the clients; on the box's 2 MB of PSRAM,
   shared with WebSocket clients, recipes, TLS and OTA, that growth would end in a restart, against
   the true north (a month without intervention). Discussed with the user, who chose it.
+
+## D16: Orders, and their divergences from Sowel
+
+- **Date**: 2026-11-21
+- **Choice**: equipment orders follow Sowel's route, messages and value rules (spec 011), and go
+  through a queue the radio loop serves, so HTTP never touches the radio. Divergences kept on
+  purpose: no order outcome events yet; a value Sowel would pass to its integration unchecked is
+  refused here (400); every order is answered within 12 s and dropped, never sent late, once its
+  deadline passed; a retry only for a missing answer or a busy radio; brightness 255 counts as
+  254; after an order the state is read back from the device instead of being set from the order
+  (Zigbee2MQTT sets it optimistically). At most 2 orders at once (one being sent, one waiting), so reads keep being served.
+- **Why**: a light that switches after the client was told it failed is worse than no answer; the
+  ZBMINIR2 is not set up for reporting by Zigbee2MQTT, so its state must be read; the box serves
+  few HTTP clients at once and must stay readable while orders wait.

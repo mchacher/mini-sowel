@@ -11,7 +11,7 @@ mod time;
 pub use catalog::{DataSpec, OrderSpec, data_for_cluster, key_for_measure, orders_for_cluster};
 pub use model::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, INTEGRATION_ID, Id,
-    PowerSource, ValueType,
+    PowerSource, Route, ValueType,
 };
 pub(crate) use model::{iso, iso_option};
 pub use persist::{

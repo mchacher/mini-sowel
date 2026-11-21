@@ -14,8 +14,8 @@ pub mod transport;
 pub use clock::{Clock, FakeClock, RealClock, ScenarioClock};
 pub use devices::{
     Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, SimDevice, battery_report,
-    humidity_report, on_off_report, report_frame, report_frame_with_control, temperature_report,
-    zone_notification, zone_status_notification,
+    humidity_report, level_report, on_off_report, report_frame, report_frame_with_control,
+    temperature_report, zone_notification, zone_status_notification,
 };
 pub use harness::{Harness, harness};
 pub use ncp::{MAX_DEVICES, MAX_RECORDS, Mode, Ncp, SentMessage, StoredNetwork};

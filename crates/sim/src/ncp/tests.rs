@@ -289,9 +289,16 @@ fn frames_that_are_not_valid_never_bring_the_radio_down() {
             ncp.respond(&command);
         }
     }
-    for kind in [Kind::TemperatureHumidity, Kind::Motion, Kind::Relay] {
-        let mut ncp = joined(kind, &[(0x0006, 0), (0x0402, 0)]);
-        for cluster in [0x0000, 0x0004, 0x0005, 0x0006, 0x0021, 0x0402, 0x0500] {
+    for kind in [
+        Kind::TemperatureHumidity,
+        Kind::Motion,
+        Kind::Relay,
+        Kind::Dimmer,
+    ] {
+        let mut ncp = joined(kind, &[(0x0006, 0), (0x0008, 0), (0x0402, 0)]);
+        for cluster in [
+            0x0000, 0x0004, 0x0005, 0x0006, 0x0008, 0x0021, 0x0402, 0x0500,
+        ] {
             for len in 0..14usize {
                 for fill in [0x00u8, 0x01, 0x02, 0x06, 0x11, 0xFF] {
                     for profile in [0x0000u16, 0x0104] {
@@ -325,4 +332,77 @@ fn configuring_a_cluster_twice_keeps_one_entry() {
     }
     assert_eq!(ncp.devices[0].configured, vec![0x0402]);
     assert_eq!(ncp.devices[0].configured_attributes, vec![(0x0402, 0x0000)]);
+}
+
+#[test]
+fn a_dimmer_obeys_move_to_level_with_a_default_response_and_reports_level_and_state() {
+    let mut ncp = joined(Kind::Dimmer, &[(0x0006, 0x0000), (0x0008, 0x0000)]);
+    // Move to Level with On/Off: level 200, transition 0, options 0.
+    let answers = ask(&mut ncp, 0x0008, &[0x01, 5, 0x04, 200, 0, 0, 0, 0]);
+    assert_eq!(answers.len(), 3);
+    assert_eq!(answers[0], (0x0008, vec![0x18, 5, 0x0B, 0x04, 0x00]));
+    assert!(on_off_state(&answers[1].1));
+    assert_eq!(answers[2].0, 0x0008);
+    // Report Attributes: control, tsn, 0x0A, attribute (2), type uint8, value.
+    assert_eq!(&answers[2].1[2..6], &[0x0A, 0x00, 0x00, 0x20]);
+    assert_eq!(answers[2].1[6], 200);
+    assert!(ncp.devices[0].relay_on);
+    assert_eq!(ncp.devices[0].level, 200);
+    // Level 0 turns it off.
+    let answers = ask(&mut ncp, 0x0008, &[0x01, 6, 0x04, 0, 0, 0, 0, 0]);
+    assert!(!on_off_state(&answers[1].1));
+    assert!(!ncp.devices[0].relay_on);
+    // A relay has no level control: it answers nothing.
+    let mut relay = joined(Kind::Relay, &[]);
+    assert!(ask(&mut relay, 0x0008, &[0x01, 7, 0x04, 9, 0, 0, 0, 0]).is_empty());
+}
+
+#[test]
+fn a_silent_device_answers_no_command_and_no_read_and_a_refusing_one_changes_nothing() {
+    let mut ncp = joined(Kind::Relay, &[(0x0006, 0x0000)]);
+    ncp.devices[0].silent = true;
+    assert!(ask(&mut ncp, 0x0006, &[0x01, 1, 0x01]).is_empty());
+    assert!(ask(&mut ncp, 0x0006, &[0x10, 2, 0x00, 0x00, 0x00]).is_empty());
+    assert!(!ncp.devices[0].relay_on);
+    ncp.devices[0].silent = false;
+    ncp.devices[0].refuse_commands = Some(0x81);
+    let answers = ask(&mut ncp, 0x0006, &[0x01, 3, 0x01]);
+    assert_eq!(answers, vec![(0x0006, vec![0x18, 3, 0x0B, 0x01, 0x81])]);
+    assert!(!ncp.devices[0].relay_on);
+}
+
+#[test]
+fn reading_the_on_off_state_and_the_level_gives_a_read_attributes_response() {
+    let mut ncp = joined(Kind::Dimmer, &[]);
+    ask(&mut ncp, 0x0008, &[0x01, 1, 0x04, 90, 0, 0, 0, 0]);
+    let on_off = ask(&mut ncp, 0x0006, &[0x10, 2, 0x00, 0x00, 0x00]);
+    assert_eq!(
+        on_off,
+        vec![(0x0006, vec![0x18, 2, 0x01, 0x00, 0x00, 0x00, 0x10, 0x01])]
+    );
+    let level = ask(&mut ncp, 0x0008, &[0x10, 3, 0x00, 0x00, 0x00]);
+    assert_eq!(
+        level,
+        vec![(0x0008, vec![0x18, 3, 0x01, 0x00, 0x00, 0x00, 0x20, 90])]
+    );
+}
+
+#[test]
+fn lookup_node_id_by_eui64_gives_the_node_address_of_a_joined_device_or_0xffff() {
+    let mut ncp = joined(Kind::Relay, &[]);
+    let mut command = vec![1, 0x00, 0x01, 0x60, 0x00];
+    command.extend_from_slice(&EUI);
+    let reply = ncp.respond(&command);
+    // sequence, frame control, extended marker, id (2), then the node address alone.
+    assert_eq!(
+        reply.response,
+        Some(vec![1, 0x80, 0x01, 0x60, 0x00, 0x00, 0x20])
+    );
+    let mut other = vec![1, 0x00, 0x01, 0x60, 0x00];
+    other.extend_from_slice(&[9; 8]);
+    let reply = ncp.respond(&other);
+    assert_eq!(
+        reply.response,
+        Some(vec![1, 0x80, 0x01, 0x60, 0x00, 0xFF, 0xFF])
+    );
 }
