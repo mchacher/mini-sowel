@@ -1,9 +1,10 @@
 [build]
 target = "xtensa-esp32-espidf"
 
+# `cargo run` runs from firmware/, so the table path is relative to that folder.
 [target.xtensa-esp32-espidf]
 linker = "ldproxy"
-runner = "espflash flash --monitor"
+runner = "espflash flash --monitor --partition-table partitions.csv"
 rustflags = ["--cfg", "espidf_time64"]
 
 [unstable]

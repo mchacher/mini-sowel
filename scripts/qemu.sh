@@ -58,23 +58,39 @@ if [ -z "$QEMU" ]; then
   [ -n "$QEMU" ] || fail "QEMU is still missing after its installation."
 fi
 
-# Bootloader and partition table: from the esp-idf-sys build folder whose bootloader was built
-# last (a folder rebuilt in place keeps its own date, so the folder's date would mislead).
+# The bootloader: from the esp-idf-sys build folder whose bootloader was built last (a folder
+# rebuilt in place keeps its own date, so the folder's date would mislead).
 BOOTLOADER=$(ls -t "$TARGET_DIR"/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin 2>/dev/null | head -n 1)
-OUT=${BOOTLOADER%/build/bootloader/bootloader.bin}
-PARTITIONS=$OUT/build/partition_table/partition-table.bin
-[ -f "$BOOTLOADER" ] && [ -f "$PARTITIONS" ] || fail "bootloader or partition table not found in $TARGET_DIR/build."
+[ -f "$BOOTLOADER" ] || fail "bootloader not found in $TARGET_DIR/build."
 
 WORK=firmware/target/qemu
 mkdir -p "$WORK"
 LOG=$WORK/serial.log
 : > "$LOG"
 
+# The partition table: firmware/partitions.csv (the one the box is flashed with), built here; the
+# application goes at the offset of `ota_0` in the built table, read from it, not written here.
+PARTITIONS=$WORK/partition-table.bin
+GEN="$PY $IDF_PATH/components/partition_table/gen_esp32part.py"
+$GEN firmware/partitions.csv "$PARTITIONS" >/dev/null 2>&1 || fail "firmware/partitions.csv does not build."
+APP_OFFSET=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /, "", $4); print $4 }')
+[ -n "$APP_OFFSET" ] || fail "no ota_0 slot in firmware/partitions.csv."
+
 echo "== Flash image (16 MB)"
 ESPTOOL="$PY -m esptool --chip esp32"
 $ESPTOOL elf2image --flash_mode dio --flash_size 16MB -o "$WORK/app.bin" "$TARGET_DIR/solite-firmware" >/dev/null
+SLOT_SIZE=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /, "", $5); print $5 }')
+APP_SIZE=$(wc -c < "$WORK/app.bin" | tr -d ' ')
+[ -n "$SLOT_SIZE" ] || fail "no size for the ota_0 slot in firmware/partitions.csv."
+# The table prints sizes as 4M, 64K or 0x400000.
+case "$SLOT_SIZE" in
+  *M) SLOT_BYTES=$((${SLOT_SIZE%M} * 1048576)) ;;
+  *K) SLOT_BYTES=$((${SLOT_SIZE%K} * 1024)) ;;
+  *) SLOT_BYTES=$((SLOT_SIZE)) ;;
+esac
+[ "$APP_SIZE" -le "$SLOT_BYTES" ] || fail "app.bin ($APP_SIZE bytes) is larger than the ota_0 slot ($SLOT_BYTES bytes)."
 $ESPTOOL merge_bin --fill-flash-size 16MB -o "$WORK/flash.bin" \
-  0x1000 "$BOOTLOADER" 0x8000 "$PARTITIONS" 0x10000 "$WORK/app.bin" >/dev/null
+  0x1000 "$BOOTLOADER" 0x8000 "$PARTITIONS" "$APP_OFFSET" "$WORK/app.bin" >/dev/null
 
 # eFuses of a chip revision 3 (the values ESP-IDF's own `idf.py qemu` uses), so that the
 # bootloader accepts CONFIG_ESP32_REV_MIN_3.

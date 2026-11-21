@@ -327,3 +327,48 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   radio box) while the house and its smile stay Sowel's; outlined glyphs keep web fonts off the
   box. Nunito is under the SIL Open Font License (`ui/src/lib/NUNITO-OFL.txt`); the glyphs are
   outlined again from Google Fonts' file before a public release.
+
+## D23: The worst case has its own ceiling of 1 MB, and small allocations go to internal RAM first
+
+- **Date**: 2026-11-21
+- **Choice**: a second test, `memory_worst_case.rs`, builds a home with every bound of the core at
+  its maximum and keeps its peak under 1 MB (measured 987 KB with every recipe log entry at 200
+  bytes); D20's 300 KB stays the ceiling of the realistic home, the two never added. A test fails
+  when a `pub const MAX_*` of the core is missing from its header. In the firmware,
+  `SPIRAM_MALLOC_ALWAYSINTERNAL=4096` keeps allocations of up to 4 KB in internal RAM,
+  `SPIRAM_MALLOC_RESERVE_INTERNAL=65536` keeps 64 KB of it for the network and DMA, and mbedTLS
+  takes its buffers from PSRAM.
+- **Why**: the realistic home says nothing about the day every bound is reached, and a bound added
+  later must not escape the budget. The placement is ESP-IDF's usual one for a Wi-Fi application
+  with PSRAM; the budget (`docs/memory-budget.md`) shows it fits on paper, with the internal RAM
+  as the tight resource (most of the engine's bytes are small allocations). The figures are
+  estimates until the box measures them, as D20's are. Approved by the user.
+
+## D24: One network link, chosen at boot, Wi-Fi first
+
+- **Date**: 2026-11-21
+- **Choice**: one image holds Wi-Fi and Ethernet, and only one link is active, chosen once at
+  boot from the setting `{"link": "auto" | "wifi" | "ethernet"}` and the cable: `auto` (the
+  default, and the fallback for a missing or wrong setting) means Ethernet with a cable at boot,
+  else Wi-Fi; nothing switches while running. The choice is a function of the core
+  (`network::choose`); the firmware starts the link. Values are case-sensitive, as Sowel's enums.
+  Wi-Fi is built first.
+- **Why**: two links at once would add their memory (the budget takes the larger, Wi-Fi), and a
+  switch while running is a source of states nobody tests. Wi-Fi first because QEMU has no Wi-Fi
+  to test against and the box needs one to be reachable without a cable. Approved by the user.
+
+## D25: The partition table has two application slots and a data partition
+
+- **Date**: 2026-11-21
+- **Choice**: `firmware/partitions.csv`, 16 MB, no factory slot: `nvs` 24 KB, `otadata` 8 KB,
+  `phy_init` 4 KB, `ota_0` and `ota_1` of 4 MB each, `storage` (FAT with wear levelling, built
+  into ESP-IDF) of about 7.9 MB. With `otadata` empty the bootloader starts `ota_0`. The table is
+  not set in `sdkconfig.defaults`: `esp-idf-sys` ignores a custom table there (its README says to
+  leave `CONFIG_PARTITION_TABLE_*` out), so the table reaches the box through `espflash
+  --partition-table` and QEMU through `scripts/qemu.sh`, which builds its image from the same
+  file and places the application at the offset of `ota_0` that the built table gives.
+- **Why**: two slots allow an update that can fall back, and a data partition holds the home's
+  files. The slots are 4 MB because the firmware is about 1 to 2 MB and the interface and
+  recipes need room. FAT rather than LittleFS: it is in ESP-IDF, with no extra component. The
+  table is cheap to change before the first flash and needs a full re-flash after. Chosen in
+  autonomy, to be confirmed by the user at the demo.

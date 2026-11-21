@@ -36,9 +36,23 @@ Each of the three programs starts and says which tool it is, with its version:
 - **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the same firmware in
   Espressif's QEMU, with 2 MB of PSRAM, and prints its banner and memory line; it fails, with the
   last lines of the log, when the firmware panics, reboots, or does not show its memory within
-  60 seconds. `sh scripts/validate.sh` runs it.
+  60 seconds. `sh scripts/validate.sh` runs it. The image holds the bootloader, the 16 MB
+  partition table of `firmware/partitions.csv` (settings, two application slots of 4 MB, and a
+  data partition of about 7.9 MB) and the application in the first slot, at the offset the built
+  table gives. Allocations above 4 KB go to PSRAM; 64 KB of internal RAM are kept for the network
+  and DMA, and the TLS library takes its buffers from PSRAM.
 - **In the browser**: the home screen (see "Shows the home in the browser"), in Sowel's Hybrid or
   Dark theme as the system asks.
+
+### Chooses its network
+
+The box has one network link, Wi-Fi or Ethernet, set by `auto`, `wifi` or `ethernet` (read from
+`{"link": "auto"}`, values in lowercase, other fields ignored). `auto` is the default, and the
+setting a missing, empty, over-long (more than 256 bytes), invalid or unknown one falls back to,
+with a one-line reason for the log, for example `network: setting unknown "WiFi", auto`. With
+`auto`, a cable at boot means Ethernet, else Wi-Fi; `wifi` and `ethernet` hold whatever the
+cable says. The choice is made once and holds until the next start. The core makes this choice
+(`solite_core::network`); the firmware starts no link.
 
 ### Talks to the radio
 
@@ -349,6 +363,17 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
+### Stays within a memory budget
+
+The engine stays under 300 KB for a realistic home (50 devices, 10 zones, 50 equipments, 3
+recipe instances with full logs, a live client with a full queue, the largest answer in flight),
+and under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
+equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
+full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
+are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
+counted in the worst case. `docs/memory-budget.md` shares the box's 2 MB of PSRAM and its internal
+RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's wiring and its risks.
+
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
@@ -373,3 +398,4 @@ measures.
 | 012 | The `motion-light` recipe, with Sowel's recipe routes |
 | 013 | Live events on Sowel's WebSocket (`/ws`) |
 | 014 | The interface: the rooms and their equipments, live, served by the host |
+| 015 | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot |

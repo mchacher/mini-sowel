@@ -30,7 +30,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
 }
 
 #[test]
-fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb() {
+fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_300_kb() {
     // Distinct ids: a counter in the first bytes, the rest filled.
     let mut calls = 0u32;
     let mut random = move |buffer: &mut [u8]| -> Result<(), String> {
