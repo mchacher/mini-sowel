@@ -1,4 +1,4 @@
-//! The simulated radio of mini-Sowel: an EmberZNet NCP speaking real ASH and EZSP, simulated
+//! The simulated radio of Solite: an EmberZNet NCP speaking real ASH and EZSP, simulated
 //! Zigbee devices behind it, and scenario files that say what happens when. It runs on the Mac
 //! only (never on the ESP32): the host program drives it through `SimTransport`, the tests of
 //! the core and the host through `Ncp` and `harness`.

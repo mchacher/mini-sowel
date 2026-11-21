@@ -116,8 +116,8 @@ pub(crate) mod iso_option {
     }
 }
 
-/// The `integrationId` and the `source` of every device of mini-Sowel.
-pub const INTEGRATION_ID: &str = "mini-sowel";
+/// The `integrationId` and the `source` of every device of Solite.
+pub const INTEGRATION_ID: &str = "solite";
 
 /// Sowel's `DeviceStatus`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,7 +137,7 @@ pub enum PowerSource {
     Unknown,
 }
 
-/// Sowel's `DataType`, the two values mini-Sowel uses.
+/// Sowel's `DataType`, the two values Solite uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValueType {

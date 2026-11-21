@@ -1,4 +1,4 @@
-// mini-Sowel's own file: the banner shown while the live connection has been closed for more than
+// Solite's own file: the banner shown while the live connection has been closed for more than
 // 3 seconds (a restart of the host shows nothing).
 import { useEffect, useState } from "react";
 import { WifiOff } from "lucide-react";

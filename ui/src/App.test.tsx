@@ -179,7 +179,7 @@ describe("App", () => {
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
     render(<App />);
     act(() => FakeWebSocket.last.open());
-    expect(await screen.findByText("Cannot reach mini-Sowel")).toBeTruthy();
+    expect(await screen.findByText("Cannot reach Solite")).toBeTruthy();
   });
 
   it("updates the aggregate and the light live, without reloading", async () => {

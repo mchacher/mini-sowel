@@ -17,7 +17,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn data_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "mini-sowel-serve-test-{}-{}",
+        "solite-serve-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -35,7 +35,7 @@ fn free_port() -> u16 {
 }
 
 fn host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
 /// `--pair` on the garage scenario: three devices, written to `devices.json`.
@@ -259,7 +259,7 @@ fn pairing_then_serving_lists_three_devices_and_the_temperature_changes() {
     let dir = data_dir();
     pair(&dir);
     let serving = serve(&dir, "100", &[]);
-    assert!(serving.shown[0].starts_with("mini-sowel "));
+    assert!(serving.shown[0].starts_with("solite "));
     assert_eq!(
         serving.shown.last().unwrap(),
         &format!("serving: http://127.0.0.1:{}", serving.port)
@@ -280,7 +280,7 @@ fn pairing_then_serving_lists_three_devices_and_the_temperature_changes() {
     let motion = find(&devices, "MS01");
     assert_eq!(data(motion, "battery")["category"], "battery");
     assert_eq!(data(motion, "voltage")["unit"], "mV");
-    assert_eq!(motion["integrationId"], "mini-sowel");
+    assert_eq!(motion["integrationId"], "solite");
     assert!(motion["zoneId"].is_null());
 
     let first = data(find(&devices, "TH01"), "temperature")["value"].clone();

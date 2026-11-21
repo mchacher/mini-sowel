@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: |
-  Independent review of a change to mini-sowel, before the user sees the demo.
+  Independent review of a change to Solite, before the user sees the demo.
   Reads the branch diff against its spec (feature) or its bug (fix) and reports findings ranked by
   severity, each with file:line and a concrete failure scenario. Read-only: it never edits.
   Used by the feature skill (Phase 5) and the fix skill (Phase 4).

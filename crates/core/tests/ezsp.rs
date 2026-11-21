@@ -1,7 +1,7 @@
 //! EZSP: frames, negotiation, responses. Constants from UG100 and the enums of
 //! zigbee-herdsman's ember adapter.
 
-use mini_sowel_core::radio::ezsp::*;
+use solite_core::radio::ezsp::*;
 
 /// A legacy response frame: sequence, frame control 0x80, id, parameters.
 fn legacy_response(seq: u8, id: u8, params: &[u8]) -> Vec<u8> {

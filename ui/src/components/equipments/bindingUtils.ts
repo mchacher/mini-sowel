@@ -1,7 +1,7 @@
 // Subset of Sowel ui/src/components/equipments/bindingUtils.ts (Sowel commit 5da84dc1, UI 1.87.0):
 // `findOrderByCategory`, `findMainOnOffOrder` and `relayStateOn`, copied unchanged with the
 // minimal binding types they take. The rest of the file (binding candidates, the device API, the
-// EV contracts) is not used by mini-Sowel's screen.
+// EV contracts) is not used by Solite's screen.
 import type { DataCategory, OrderCategory } from "../../types";
 
 interface MinimalOrderBinding {

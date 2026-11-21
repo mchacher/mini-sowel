@@ -1,6 +1,6 @@
 //! Reading measures from the standard clusters: bytes in, measures out.
 
-use mini_sowel_core::radio::measures::{Measure, Value, decode};
+use solite_core::radio::measures::{Measure, Value, decode};
 
 const TEMPERATURE: u16 = 0x0402;
 const HUMIDITY: u16 = 0x0405;

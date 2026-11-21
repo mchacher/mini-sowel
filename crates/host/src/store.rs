@@ -9,13 +9,13 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use mini_sowel_core::devices::{
+use solite_core::devices::{
     DeviceStore, DeviceWithDetails, Devices, WritePolicy, lock, parse_list,
 };
-use mini_sowel_core::equipments::{self, StoredEquipment};
-use mini_sowel_core::home::{Home, ListCursor};
-use mini_sowel_core::recipes::RecipeInstance;
-use mini_sowel_core::zones::{self, Zone};
+use solite_core::equipments::{self, StoredEquipment};
+use solite_core::home::{Home, ListCursor};
+use solite_core::recipes::RecipeInstance;
+use solite_core::zones::{self, Zone};
 
 const FILE_NAME: &str = "devices.json";
 const ZONES_FILE_NAME: &str = "zones.json";
@@ -272,8 +272,7 @@ mod tests {
     use super::*;
 
     fn dir(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mini-sowel-store-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("solite-store-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -319,7 +318,7 @@ mod tests {
         let mut home = Home::from_devices(Devices::from_list(devices()), 1_795_252_323_120);
         let zone = home
             .create_zone(
-                mini_sowel_core::zones::NewZone {
+                solite_core::zones::NewZone {
                     name: "Garage".into(),
                     ..Default::default()
                 },
@@ -328,7 +327,7 @@ mod tests {
             )
             .unwrap();
         home.create_equipment(
-            mini_sowel_core::home::NewEquipment {
+            solite_core::home::NewEquipment {
                 name: "Climate".into(),
                 kind: "sensor".into(),
                 zone_id: zone.id.to_string(),
@@ -412,7 +411,7 @@ mod tests {
 
     fn instance(n: u8) -> RecipeInstance {
         RecipeInstance {
-            id: mini_sowel_core::devices::Id::from_random([n; 16]),
+            id: solite_core::devices::Id::from_random([n; 16]),
             recipe_id: "motion-light".into(),
             params: serde_json::json!({"zone": "z", "timeout": "20s"})
                 .to_string()

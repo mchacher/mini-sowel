@@ -1,4 +1,4 @@
-//! The devices of mini-Sowel, in Sowel's format (spec 008): the model with Sowel's names, the
+//! The devices of Solite, in Sowel's format (spec 008): the model with Sowel's names, the
 //! catalog that says which data and orders a cluster gives, the registry that keeps them up to
 //! date from the radio's events, and the rules for writing them to storage.
 

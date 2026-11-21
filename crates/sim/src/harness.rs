@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use mini_sowel_core::radio::Radio;
+use solite_core::radio::Radio;
 
 use crate::clock::FakeClock;
 use crate::ncp::Ncp;

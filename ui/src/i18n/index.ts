@@ -1,4 +1,4 @@
-// mini-Sowel's replacement for Sowel's ui/src/i18n/index.ts (i18next, its language detector and
+// Solite's replacement for Sowel's ui/src/i18n/index.ts (i18next, its language detector and
 // 67 KB of locales): a `t()` over the two small dictionaries of `messages.ts`, with the same
 // default export (`i18n.language`, `i18n.t`) so that Sowel's `lib/format.ts` and `lib/api-error.ts`
 // are ported unchanged. French when `navigator.language` starts with `fr`, English otherwise.

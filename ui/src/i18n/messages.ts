@@ -1,6 +1,6 @@
-// mini-Sowel's texts: the keys of Sowel's ui/src/i18n/locales/{en,fr}.json that the ported
+// Solite's texts: the keys of Sowel's ui/src/i18n/locales/{en,fr}.json that the ported
 // components use, with Sowel's texts (Sowel commit 5da84dc1, UI 1.87.0), and the `app.*` keys
-// of mini-Sowel's own page. A plural key has `_one` and `_other` forms, as in i18next.
+// of Solite's own page. A plural key has `_one` and `_other` forms, as in i18next.
 // Two texts differ from Sowel's: `errors.network.message`, which says what a failed request
 // means here.
 
@@ -15,7 +15,7 @@ export const en: Messages = {
   "errors.rateLimited.title": "Server busy",
   "errors.rateLimited.message": "Too many requests in a short time. Try again in a few seconds.",
   "errors.network.title": "Cannot connect",
-  "errors.network.message": "Cannot reach mini-Sowel",
+  "errors.network.message": "Cannot reach Solite",
   "errors.server.title": "Server error",
   "errors.server.message": "The server could not handle the request. Try again in a moment.",
   "errors.notFound.title": "Not found",
@@ -96,7 +96,7 @@ export const fr: Messages = {
   "errors.rateLimited.message":
     "Trop de demandes en peu de temps. Réessayez dans quelques secondes.",
   "errors.network.title": "Connexion impossible",
-  "errors.network.message": "Impossible de joindre mini-Sowel",
+  "errors.network.message": "Impossible de joindre Solite",
   "errors.server.title": "Erreur du serveur",
   "errors.server.message": "Le serveur n'a pas pu traiter la demande. Réessayez dans un moment.",
   "errors.notFound.title": "Introuvable",

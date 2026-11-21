@@ -173,7 +173,7 @@ fn a_second_pairing_finds_the_sensor_enrolled_with_our_address_and_writes_nothin
     // A fresh program on the same memory: the sensor announces itself again.
     let mut second = sim(PIR, Some(&file), 1);
     second.start().unwrap();
-    let wire = mini_sowel_sim::devices::wire([0x00, 0x12, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x02]);
+    let wire = solite_sim::devices::wire([0x00, 0x12, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x02]);
     let mut announce = vec![0x01, 0x00, 0x20];
     announce.extend_from_slice(&wire);
     announce.push(0x80);
@@ -188,12 +188,12 @@ fn a_second_pairing_finds_the_sensor_enrolled_with_our_address_and_writes_nothin
         "the CIE address read back is ours"
     );
     let outcome = events.iter().find_map(|e| match e {
-        mini_sowel_core::radio::PairingEvent::ReportingConfigured { enrollment, .. } => *enrollment,
+        solite_core::radio::PairingEvent::ReportingConfigured { enrollment, .. } => *enrollment,
         _ => None,
     });
     assert_eq!(
         outcome.map(|e| e.outcome),
-        Some(mini_sowel_core::radio::EnrollmentOutcome::Enrolled)
+        Some(solite_core::radio::EnrollmentOutcome::Enrolled)
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }

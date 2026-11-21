@@ -3,10 +3,10 @@
 //! about 112 KB once parsed, so 16 instances would hold about 1.8 MB. One test only in this file,
 //! so the counting allocator sees nothing else.
 
-use mini_sowel_core::api::{Reply, Request, handle, handle_stream};
-use mini_sowel_core::devices::Devices;
-use mini_sowel_core::home::Home;
 use peak_alloc::PeakAlloc;
+use solite_core::api::{Reply, Request, handle, handle_stream};
+use solite_core::devices::Devices;
+use solite_core::home::Home;
 
 #[global_allocator]
 static ALLOCATOR: PeakAlloc = PeakAlloc;

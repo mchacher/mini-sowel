@@ -1,7 +1,7 @@
 # Design system
 
-How the interface of mini-Sowel looks: **Sowel's design system**, adapted to a web app served by
-the box (decision D4). A screen of mini-Sowel looks like a screen of Sowel. A feature that needs a
+How the interface of Solite looks: **Sowel's design system**, adapted to a web app served by
+the box (decision D4). A screen of Solite looks like a screen of Sowel. A feature that needs a
 new colour, size or component adds it here and in the files below first, in the same change.
 
 ## Source
@@ -15,12 +15,15 @@ The Sowel repository (`github.com/mchacher/sowel`, usually cloned as `../sowel`)
 | `ui/src/index.css`, its `@theme` and `@theme static` blocks | `ui/src/styles/theme.css` | unchanged, a header added |
 | `ui/eslint/design-classes.js` (type scale, sentence case, radius scale) | `ui/eslint/design-classes.js` | unchanged |
 | `ui/src/components/layout/SowelLogo.tsx` | `ui/src/components/layout/SowelLogo.tsx` | unchanged |
+| `ui/src/components/layout/SowelLogo.tsx` | `ui/src/components/layout/SoliteLogo.tsx` | derived: the same house, face and wink, plus three short rays above the roof for Solite's "light" |
+
+The Solite logo is the one the sidebar and the mobile top bar show; `SowelLogo.tsx` stays as ported.
 
 The interface's components, stores and helpers are ported from Sowel's `ui/src` at commit
 `5da84dc1` (UI 1.87.0), read on 2026-11-21 (spec 014); each ported file starts with a header
 naming its Sowel source and commit:
 
-| Sowel file (`ui/src/`) | In mini-Sowel | How |
+| Sowel file (`ui/src/`) | In Solite | How |
 | ---------------------- | ------------- | --- |
 | `lib/{format,locale,equipment-family,api-error,brightness,coalesce-calls}.ts`, `i18n/translate.ts`, `hooks/useSliderOverride.ts` | same paths | unchanged |
 | `components/equipments/{SensorValues,sensorUtils,EquipmentStatusBadge}.tsx`, `components/home/{ZoneHeroLead,Panel}.tsx`, `store/useZoneAggregation.ts` | same paths | unchanged |
@@ -54,7 +57,7 @@ repeated here: read them in Sowel's `design-system/` folder.
 | File | What it holds |
 | ---- | ------------- |
 | [`ui/src/styles/tokens.css`](../ui/src/styles/tokens.css) | The **single source** of every colour, radius, shadow, spacing and type size, as CSS variables, for the Hybrid (light) and Dark themes |
-| [`ui/src/styles/embedded.css`](../ui/src/styles/embedded.css) | What mini-Sowel changes in the tokens for the box, loaded after them |
+| [`ui/src/styles/embedded.css`](../ui/src/styles/embedded.css) | What Solite changes in the tokens for the box, loaded after them |
 | [`ui/src/styles/theme.css`](../ui/src/styles/theme.css) | The Tailwind 4 theme: the tokens as utilities (`bg-surface`, `text-primary`, `text-small`, `rounded-md`...) |
 | [`ui/src/styles/utilities.css`](../ui/src/styles/utilities.css) | Sowel's utility classes the ported components use (`card`, `panel-lid`, `slices`, `slice-rows`) |
 | [`ui/src/index.css`](../ui/src/index.css) | Loads Tailwind, then `tokens.css`, `embedded.css`, `theme.css` and `utilities.css` in this order |
@@ -67,13 +70,13 @@ runs.
 
 ## Embedded: what changes from Sowel
 
-| Sowel | mini-Sowel | Why |
+| Sowel | Solite | Why |
 | ----- | ---------- | --- |
 | Inter (variable) and JetBrains Mono, served from `@fontsource` | System fonts: `system-ui` for text, `ui-monospace` for code (`embedded.css`) | The box serves its pages from its flash: no room for web fonts |
 | React 19 | Preact, with `preact/compat`: Sowel's React components work unchanged | About 4 KB instead of about 45 KB gzip |
 | Lucide icons by name, one rule against the whole set | The same rule; icons by name only | Every icon counts in the budget |
 | First load under 1.4 MB raw | First load under **170 KB gzip**, checked by `npm run check:bundle` in the validate command | The framing note: 100 to 170 KB gzip, served from flash |
-| Sidebar: logo and "SOWEL" in Nunito | Logo and "MINI-SOWEL" in the system font | No web font |
+| Sidebar: logo and "SOWEL" in Nunito | Logo and "SOLITE" in the system font | No web font |
 | i18next with its locale files | A `t()` with Sowel's keys, French and English, `react-i18next` aliased to it | About 21 KB of library and 67 KB of locales |
 | React Router | The room in the address's hash (`#/zone/<id>`) | About 28 KB, one page |
 | `useWebSocket`, eleven stores | `useLive`: zones and equipments, Sowel's reconnection | The tool has no modes, energy or activity |

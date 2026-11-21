@@ -1,7 +1,7 @@
 import { Menu, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FlatZone } from "../../zones";
-import { SowelLogo } from "./SowelLogo";
+import { SoliteLogo } from "./SoliteLogo";
 import { ZoneTree } from "./ZoneTree";
 
 type Zones = { zones: FlatZone[]; activeId: string | null };
@@ -9,9 +9,9 @@ type Zones = { zones: FlatZone[]; activeId: string | null };
 function Brand() {
   return (
     <>
-      <SowelLogo size={40} className="flex-shrink-0" />
+      <SoliteLogo size={40} className="flex-shrink-0" />
       <span className="font-extrabold text-title tracking-[0.18em] text-primary ml-2.5 mt-1 whitespace-nowrap">
-        MINI-SOWEL
+        SOLITE
       </span>
     </>
   );

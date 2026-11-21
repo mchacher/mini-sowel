@@ -1,8 +1,8 @@
 //! The interface's files, as the core routes them: the path checks and the content types. The
 //! host opens and streams the files (`crates/host/tests/static_files.rs`).
 
-use mini_sowel_core::api::{Reply, Request, StaticFile, handle_stream};
-use mini_sowel_core::home::Home;
+use solite_core::api::{Reply, Request, StaticFile, handle_stream};
+use solite_core::home::Home;
 
 const PORT: u16 = 8080;
 const HOST: &str = "127.0.0.1:8080";

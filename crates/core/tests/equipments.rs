@@ -4,12 +4,10 @@
 
 mod support;
 
-use mini_sowel_core::devices::{Devices, ValueType, format_iso};
-use mini_sowel_core::equipments::{
-    EquipmentType, MAX_BINDINGS, is_stale, parse_list, stale_window_ms,
-};
-use mini_sowel_core::home::Home;
 use serde_json::{Value, json};
+use solite_core::devices::{Devices, ValueType, format_iso};
+use solite_core::equipments::{EquipmentType, MAX_BINDINGS, is_stale, parse_list, stale_window_ms};
+use solite_core::home::Home;
 use support::*;
 
 fn text(value: &Value) -> &str {

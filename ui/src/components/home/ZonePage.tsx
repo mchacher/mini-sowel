@@ -1,4 +1,4 @@
-// mini-Sowel's own file: the page of one zone. Sowel's HomePage (451 lines) pulls about 35 modules,
+// Solite's own file: the page of one zone. Sowel's HomePage (451 lines) pulls about 35 modules,
 // the 11-store WebSocket and a router; this one keeps its parts (the title, Sowel's
 // ZoneHeroLead and ZoneAggregationPills, Sowel's Panel with the equipments grouped by family) and
 // nothing else.

@@ -1,4 +1,4 @@
-# mini-sowel Feature Reference
+# Solite Feature Reference
 
 Templates for the feature workflow: [SKILL.md](SKILL.md).
 

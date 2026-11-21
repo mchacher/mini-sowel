@@ -21,13 +21,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mini_sowel_core::api::{
-    ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream, order_response,
-};
-use mini_sowel_core::devices::lock;
-use mini_sowel_core::home::Home;
-use mini_sowel_core::orders::OrderRunner;
-use mini_sowel_core::radio::{Radio, RadioTransport, identity_lines, network_line};
+use solite_core::api::{ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream, order_response};
+use solite_core::devices::lock;
+use solite_core::home::Home;
+use solite_core::orders::OrderRunner;
+use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use tiny_http::{Header, Response, Server};
 
 use crate::front::{self, Door};

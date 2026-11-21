@@ -72,7 +72,7 @@ LOG=$WORK/serial.log
 
 echo "== Flash image (16 MB)"
 ESPTOOL="$PY -m esptool --chip esp32"
-$ESPTOOL elf2image --flash_mode dio --flash_size 16MB -o "$WORK/app.bin" "$TARGET_DIR/mini-sowel-firmware" >/dev/null
+$ESPTOOL elf2image --flash_mode dio --flash_size 16MB -o "$WORK/app.bin" "$TARGET_DIR/solite-firmware" >/dev/null
 $ESPTOOL merge_bin --fill-flash-size 16MB -o "$WORK/flash.bin" \
   0x1000 "$BOOTLOADER" 0x8000 "$PARTITIONS" 0x10000 "$WORK/app.bin" >/dev/null
 
@@ -106,7 +106,7 @@ broken() {
   [ "$(grep -ac 'rst:' "$LOG")" -ge 2 ]
 }
 ok() {
-  grep -aqF "mini-sowel $VERSION" "$LOG" && grep -aq 'memory: internal' "$LOG"
+  grep -aqF "solite $VERSION" "$LOG" && grep -aq 'memory: internal' "$LOG"
 }
 show_failure() {
   echo "qemu: $1" >&2
@@ -124,7 +124,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     # A short grace period: a reboot right after the banner must not pass.
     sleep 3
     broken && show_failure "the firmware panicked or rebooted."
-    grep -aF "mini-sowel $VERSION" "$LOG"
+    grep -aF "solite $VERSION" "$LOG"
     grep -a 'memory: internal' "$LOG"
     exit 0
   fi

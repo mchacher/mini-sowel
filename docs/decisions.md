@@ -299,3 +299,18 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the likely case: the engine can take 300 KB, while the risks lie in the internal SRAM, the
   WebAssembly recipes and bounds no test checks together. Approved by the user.
 
+
+## D21: The tool is named Solite
+
+- **Date**: 2026-11-21
+- **Choice**: the tool, until then mini-Sowel, is named **Solite**, pronounced "so-light": Sowel
+  is "so well", Solite is "so light", the light version of Sowel that runs on its own (and its
+  first recipe switches a light). Crates `solite-core`, `solite-host`, `solite-sim`,
+  `solite-firmware`; skills `/solite-*`; the logo is Sowel's smiling house with three short rays
+  above the roof, in the logo's own blues. A radio variant, if one comes, is "Solite Thread", not
+  a new name. Earlier specs and decisions keep the old name: they are history.
+- **Why**: "mini-Sowel" only said "a smaller Sowel"; Solite keeps Sowel's play on words and
+  says what the box is. Checked on 2026-11-21: the crates are free; the common domains are taken
+  (the site goes under Sowel's); trademarks named SOLITE exist in the United States in other
+  classes (luggage, building materials; lighting abandoned or cancelled): a search in TMview and
+  WIPO, classes 9 and 42, comes before a public release. Chosen by the user.

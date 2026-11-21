@@ -1,4 +1,4 @@
-//! mini-Sowel on the Mac.
+//! Solite on the Mac.
 
 mod backup;
 mod front;
@@ -18,32 +18,32 @@ use std::time::{Duration, Instant};
 
 use std::sync::Mutex;
 
-use mini_sowel_core::radio::{
+use solite_core::radio::{
     NetworkSettings, Radio, RadioError, RadioTransport, identity_lines, network_line,
 };
-use mini_sowel_sim::{RealClock, Scenario, SimTransport};
+use solite_sim::{RealClock, Scenario, SimTransport};
 
 use radio_tcp::TcpTransport;
 use random::SystemRandom;
 use store::{FileStore, Saver};
 
-const USAGE: &str = "usage: mini-sowel-host [--radio tcp://<address>:<port> | \
+const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
 --sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
 [--data <dir>]";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
 /// Port of `--serve` when it has no number.
 const DEFAULT_SERVE_PORT: u16 = 8080;
-const DEFAULT_DATA_DIR: &str = "mini-sowel-data";
+const DEFAULT_DATA_DIR: &str = "solite-data";
 /// Under `--sim` the data folder is another one, so the real radio's backup is never touched.
-const DEFAULT_SIM_DATA_DIR: &str = "mini-sowel-data/sim";
+const DEFAULT_SIM_DATA_DIR: &str = "solite-data/sim";
 /// After the pairing time is over, identifications and reporting setups in progress may go on
 /// this long, in seconds.
 const CLOSE_GRACE_SECONDS: u64 = 70;
 /// The grace after the pairing time: `CLOSE_GRACE_SECONDS`, or the number of seconds the
-/// variable `MINI_SOWEL_CLOSE_GRACE_SECONDS` gives (for the tests).
+/// variable `SOLITE_CLOSE_GRACE_SECONDS` gives (for the tests).
 fn close_grace() -> Duration {
-    let seconds = std::env::var("MINI_SOWEL_CLOSE_GRACE_SECONDS")
+    let seconds = std::env::var("SOLITE_CLOSE_GRACE_SECONDS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(CLOSE_GRACE_SECONDS);
@@ -265,7 +265,7 @@ fn pair<T: RadioTransport>(
             if closed && (!radio.pairing_busy() || Instant::now() >= deadline + close_grace()) {
                 // The time cap cut the setups in progress short: say which.
                 for eui64 in radio.setups_in_progress() {
-                    println!("{}", mini_sowel_core::radio::cut_short_line(&eui64));
+                    println!("{}", solite_core::radio::cut_short_line(&eui64));
                 }
                 return Ok(false);
             }
@@ -274,7 +274,7 @@ fn pair<T: RadioTransport>(
             let routes = radio.take_routes();
             let now = serve::now_ms();
             {
-                let mut guard = mini_sowel_core::devices::lock(&home);
+                let mut guard = solite_core::devices::lock(&home);
                 // The announces first: a device's power source is known when it is added.
                 for item in &activity {
                     guard.devices.apply_activity(item, now);
@@ -387,7 +387,7 @@ fn main() -> ExitCode {
         }
     };
     logger::install();
-    println!("{}", mini_sowel_core::banner());
+    println!("{}", solite_core::banner());
     let Some(source) = args.source else {
         return ExitCode::SUCCESS;
     };

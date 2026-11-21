@@ -4,12 +4,12 @@
 //! (`GET /equipments`, one answer at a time, never all at once), then the save path. The
 //! Mac's 64-bit figure is an upper bound of the ESP32's.
 
-use mini_sowel_core::api::{Reply, Request, handle, handle_stream};
-use mini_sowel_core::devices::Devices;
-use mini_sowel_core::home::{Home, ListCursor};
-use mini_sowel_core::radio::measures::{Measure, Value as MeasureValue};
-use mini_sowel_core::radio::{MeasureEvent, Sender};
 use peak_alloc::PeakAlloc;
+use solite_core::api::{Reply, Request, handle, handle_stream};
+use solite_core::devices::Devices;
+use solite_core::home::{Home, ListCursor};
+use solite_core::radio::measures::{Measure, Value as MeasureValue};
+use solite_core::radio::{MeasureEvent, Sender};
 
 #[global_allocator]
 static ALLOCATOR: PeakAlloc = PeakAlloc;
@@ -214,7 +214,7 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
     ));
     let fill_queue = |home: &mut Home, now: u64, from: u8| {
         let mut device = from;
-        while hub.queued(client).1 + 750 <= mini_sowel_core::live::MAX_QUEUED_BYTES {
+        while hub.queued(client).1 + 750 <= solite_core::live::MAX_QUEUED_BYTES {
             let report = MeasureEvent {
                 sender: Sender::Eui64([0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, device]),
                 endpoint: 1,
@@ -238,7 +238,7 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_200_kb()
     assert_eq!(hub.close_request(client), None, "not overflowed");
     let (queued_events, queued_bytes) = hub.queued(client);
     assert!(
-        queued_bytes + 750 > mini_sowel_core::live::MAX_QUEUED_BYTES,
+        queued_bytes + 750 > solite_core::live::MAX_QUEUED_BYTES,
         "the queue is full: {queued_bytes} bytes"
     );
     assert_eq!(hub.begin_batch(client), queued_events);

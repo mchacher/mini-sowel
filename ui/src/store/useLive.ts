@@ -1,4 +1,4 @@
-// mini-Sowel's own file: the live connection to the host's `/ws` (spec 013), written for the
+// Solite's own file: the live connection to the host's `/ws` (spec 013), written for the
 // two topics the screen needs. Sowel's ui/src/store/useWebSocket.ts is a monolith of 645 lines that
 // imports 11 stores; this one keeps its behaviour (subprotocol, batched events, reconnection with
 // backoff and jitter, refetch on every open, reconnection when the page comes back) and nothing else.

@@ -1,7 +1,7 @@
 // Ported from Sowel ui/src/theme.ts (Sowel commit 5da84dc1, UI 1.87.0). One line added in
-// setDarkClass: mini-Sowel's tokens choose the theme by `data-theme` (hybrid or dark) on <html>.
+// setDarkClass: Solite's tokens choose the theme by `data-theme` (hybrid or dark) on <html>.
 // Cut: `THEME_COLOR` and the update of the `theme-color` metas (two raw colours, which the design
-// rules refuse, for metas that mini-Sowel's index.html has not).
+// rules refuse, for metas that Solite's index.html has not).
 /**
  * Theme management — applies "dark" class on <html> based on user preference.
  *

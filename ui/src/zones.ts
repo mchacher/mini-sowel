@@ -1,4 +1,4 @@
-// mini-Sowel's own file: which zone the page shows. The zone is kept in `location.hash`
+// Solite's own file: which zone the page shows. The zone is kept in `location.hash`
 // (`#/zone/<id>`), there is no router (spec 014).
 import type { EquipmentWithDetails, ZoneWithChildren } from "./types";
 

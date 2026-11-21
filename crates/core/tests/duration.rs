@@ -1,7 +1,7 @@
 //! Durations as Sowel writes and reads them (spec 012, R3, R8.8).
 
-use mini_sowel_core::recipes::duration::{format_duration, parse_duration};
 use serde_json::json;
+use solite_core::recipes::duration::{format_duration, parse_duration};
 
 const FORMAT: &str = ". Use e.g. \"10m\", \"30s\", \"1h\"";
 

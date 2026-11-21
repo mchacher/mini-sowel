@@ -4,12 +4,12 @@
 
 mod support;
 
-use mini_sowel_core::api::{Reply, Request, handle_stream};
-use mini_sowel_core::devices::Id;
-use mini_sowel_core::home::Home;
-use mini_sowel_core::radio::zcl::Command;
-use mini_sowel_core::recipes::RecipeInstance;
 use serde_json::{Value, json};
+use solite_core::api::{Reply, Request, handle_stream};
+use solite_core::devices::Id;
+use solite_core::home::Home;
+use solite_core::radio::zcl::Command;
+use solite_core::recipes::RecipeInstance;
 use support::*;
 
 const GHOST: &str = "11111111-2222-4333-8444-555555555555";

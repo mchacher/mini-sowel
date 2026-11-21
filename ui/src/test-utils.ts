@@ -201,7 +201,7 @@ export function equipment(
   };
 }
 
-/** A `light_onoff` as mini-Sowel's API gives it: a `state` data binding and a `state` order. */
+/** A `light_onoff` as Solite's API gives it: a `state` data binding and a `state` order. */
 export function light(
   id: string,
   name: string,

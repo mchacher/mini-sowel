@@ -43,7 +43,7 @@ impl Drop for TempDir {
 
 fn data_dir() -> TempDir {
     let dir = std::env::temp_dir().join(format!(
-        "mini-sowel-ws-test-{}-{}",
+        "solite-ws-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -60,7 +60,7 @@ fn free_port() -> u16 {
 }
 
 fn host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
 fn pair(dir: &Path) {
@@ -841,8 +841,8 @@ fn a_silent_client_is_dropped_and_a_reading_one_is_pinged_and_stays() {
         &dir,
         "100",
         &[
-            ("MINI_SOWEL_WS_PING_SECONDS", "1"),
-            ("MINI_SOWEL_WS_SILENCE_SECONDS", "3"),
+            ("SOLITE_WS_PING_SECONDS", "1"),
+            ("SOLITE_WS_SILENCE_SECONDS", "3"),
         ],
     );
     // Three silent clients: they read nothing, so no pong ever goes back.

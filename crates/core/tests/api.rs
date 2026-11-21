@@ -1,8 +1,8 @@
 //! Sowel's device routes as a pure function.
 
-use mini_sowel_core::api::{MAX_BODY_BYTES, Request, Response, handle};
-use mini_sowel_core::devices::Devices;
-use mini_sowel_core::home::Home;
+use solite_core::api::{MAX_BODY_BYTES, Request, Response, handle};
+use solite_core::devices::Devices;
+use solite_core::home::Home;
 
 const T0: u64 = 1_795_252_323_120;
 const PORT: u16 = 8080;

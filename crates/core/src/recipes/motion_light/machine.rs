@@ -152,7 +152,7 @@ fn send(home: &Home, instance: Id, lights: &[Id], on: bool, now: u64) -> Vec<Str
     errors
 }
 
-/// The root zone's `isDaylight`: mini-Sowel computes no sunrise or sunset, so it is always
+/// The root zone's `isDaylight`: Solite computes no sunrise or sunset, so it is always
 /// `null`, read as night (spec 012, R6).
 fn root_is_daylight(_home: &Home) -> Option<bool> {
     None

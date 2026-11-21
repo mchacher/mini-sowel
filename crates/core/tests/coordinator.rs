@@ -1,8 +1,8 @@
 //! The coordinator against the scripted radio, with fake time: start or resume the network,
 //! pairing, identification of the devices that join.
 
-use mini_sowel_core::radio::{Network, NetworkSettings, PairingEvent, RadioError};
-use mini_sowel_sim::{Attr, Harness, Ncp, SentMessage, SimDevice, StoredNetwork, harness};
+use solite_core::radio::{Network, NetworkSettings, PairingEvent, RadioError};
+use solite_sim::{Attr, Harness, Ncp, SentMessage, SimDevice, StoredNetwork, harness};
 
 const DEVICE_EUI: [u8; 8] = [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x78];
 const DEVICE_NWK: u16 = 0x5C3D;
@@ -709,7 +709,7 @@ fn the_queue_keeps_the_16_newest_callbacks_and_drops_the_oldest_without_failing(
 
 #[test]
 fn the_network_line_and_the_event_lines_are_those_of_the_spec() {
-    use mini_sowel_core::radio::network_line;
+    use solite_core::radio::network_line;
     let network = Network {
         pan_id: 0x1A2B,
         extended_pan_id: [0xDD; 8],
@@ -830,9 +830,9 @@ fn a_late_response_with_an_older_sequence_number_is_ignored_not_an_error() {
 
 // Reporting setup and measures (spec 006).
 
-use mini_sowel_core::radio::measures::{Measure, Value};
-use mini_sowel_core::radio::{MeasureEvent, Sender};
-use mini_sowel_sim::{ConfigureAnswer, report_frame, temperature_report};
+use solite_core::radio::measures::{Measure, Value};
+use solite_core::radio::{MeasureEvent, Sender};
+use solite_sim::{ConfigureAnswer, report_frame, temperature_report};
 
 const TEMPERATURE: u16 = 0x0402;
 const HUMIDITY: u16 = 0x0405;
@@ -1291,12 +1291,11 @@ fn a_default_response_for_another_command_is_not_the_answer_to_the_configure_rep
 
 #[test]
 fn a_frame_without_measures_costs_no_lookup_and_still_gets_its_default_response() {
-    use mini_sowel_core::radio::{Activity, Sender};
+    use solite_core::radio::{Activity, Sender};
     const UNKNOWN_CLUSTER: u16 = 0x0B04;
     // A report on a cluster that gives no measure, asking for a Default Response.
-    let unknown_report = |tsn: u8| {
-        mini_sowel_sim::report_frame_with_control(0x08, tsn, &[(0x0000, 0x29, vec![1, 0])])
-    };
+    let unknown_report =
+        |tsn: u8| solite_sim::report_frame_with_control(0x08, tsn, &[(0x0000, 0x29, vec![1, 0])]);
     let mut h = started(Ncp::recording());
     h.ncp
         .borrow_mut()
@@ -1334,8 +1333,8 @@ fn a_frame_without_measures_costs_no_lookup_and_still_gets_its_default_response(
 
 // ---- Spec 009: enrollment of IAS zone devices ----
 
-use mini_sowel_core::radio::{Enrollment, EnrollmentOutcome};
-use mini_sowel_sim::{CieAnswer, Kind};
+use solite_core::radio::{Enrollment, EnrollmentOutcome};
+use solite_sim::{CieAnswer, Kind};
 
 const IAS: u16 = 0x0500;
 const OWN_WIRE: [u8; 8] = [0x56, 0x34, 0x12, 0xFE, 0xFF, 0xB9, 0x6F, 0x8C];
@@ -1738,9 +1737,9 @@ fn an_unknown_own_address_never_stops_the_run_the_enrollment_fails_and_the_clust
 
 // ---- Spec 011: commands to a device ----
 
-use mini_sowel_core::radio::zcl::Command;
-use mini_sowel_core::radio::{CommandFailure, CommandHandle, CommandTarget, Radio};
-use mini_sowel_sim::{FakeClock, SimTransport};
+use solite_core::radio::zcl::Command;
+use solite_core::radio::{CommandFailure, CommandHandle, CommandTarget, Radio};
+use solite_sim::{FakeClock, SimTransport};
 
 const RELAY_WIRE: [u8; 8] = [0x7A, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00];
 const RELAY_EUI: [u8; 8] = [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x7A];
@@ -2082,7 +2081,7 @@ fn the_messages_of_a_paired_relay_tell_its_address_and_the_endpoint_of_its_on_of
 fn more_commands_than_the_bound_are_refused_and_the_bound_is_8() {
     let (mut h, _) = paired(relay());
     h.ncp.borrow_mut().devices[0].silent = true;
-    for _ in 0..mini_sowel_core::radio::MAX_COMMANDS {
+    for _ in 0..solite_core::radio::MAX_COMMANDS {
         h.radio
             .send_command(target(None), Command::On, 12_000)
             .unwrap();

@@ -1,12 +1,12 @@
 # Living spec
 
-What mini-Sowel does **today**, in business words. The source of truth: the code follows it, and
+What Solite does **today**, in business words. The source of truth: the code follows it, and
 every change updates it in the same pull request (the "living spec delta" of its spec). Present
 tense only: what it does not do is not written here, but in the roadmap.
 
 ## Purpose
 
-mini-Sowel is a minimal Sowel in a Zigbee coordinator sold off the shelf, the Sonoff Dongle Max.
+Solite is a minimal Sowel in a Zigbee coordinator sold off the shelf, the Sonoff Dongle Max.
 It automates an annex of a house (garage, pool house, workshop, outbuilding) or a small home on
 its own, without a server, Docker or the cloud, by proposing the recipes itself; when a Sowel
 exists, it becomes its extension. It keeps Sowel's concepts (devices, equipments, zones, recipes,
@@ -26,9 +26,9 @@ its web interface or from Sowel.
 
 Each of the three programs starts and says which tool it is, with its version:
 
-- **On the Mac**: `cargo run -p mini-sowel-host`, without `--radio` or `--sim`, prints `mini-sowel 0.1.0`
+- **On the Mac**: `cargo run -p solite-host`, without `--radio` or `--sim`, prints `solite 0.1.0`
   and exits.
-- **On the ESP32**: the firmware starts ESP-IDF and writes `mini-sowel 0.1.0` to the serial log,
+- **On the ESP32**: the firmware starts ESP-IDF and writes `solite 0.1.0` to the serial log,
   then its free memory: internal RAM (free, and largest free block) and PSRAM (free, of total),
   for example `memory: internal 245 KB free (largest block 110 KB), psram 2039 KB free of
   2048 KB`, or `psram none` without PSRAM. It runs on chips of revision 3 and later, like the
@@ -42,7 +42,7 @@ Each of the three programs starts and says which tool it is, with its version:
 
 ### Talks to the radio
 
-`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638` connects to the radio of a Dongle
+`cargo run -p solite-host -- --radio tcp://<address>:6638` connects to the radio of a Dongle
 Max that runs its original firmware (its ESP32 relays the radio over TCP, port 6638, one client at
 a time). It resets the radio, speaks Silicon Labs' ASH and EZSP protocols with it, and shows:
 
@@ -63,12 +63,12 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
 
 ### Pairs a device
 
-`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair [seconds]` (180 by default,
+`cargo run -p solite-host -- --radio tcp://<address>:6638 --pair [seconds]` (180 by default,
 1 to 254) starts the radio's Zigbee network and opens pairing:
 
 - the first time, the radio **forms** a network on channel 15, with random keys and identifiers,
   and saves it in its own flash; the host writes a backup of it (identifiers and keys) to
-  `mini-sowel-data/network.json` (`mini-sowel-data/sim/network.json` under `--sim`; `--data
+  `solite-data/network.json` (`solite-data/sim/network.json` under `--sim`; `--data
   <dir>` for another folder), readable by its owner only,
   never printed;
 - after that, the radio **resumes** its network; a coordinator network another program made is
@@ -114,7 +114,7 @@ New errors: `radio: network did not start`, `radio: the radio is not a coordinat
 
 ### Shows the measures
 
-`cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen` resumes the radio's
+`cargo run -p solite-host -- --radio tcp://<address>:6638 --listen` resumes the radio's
 network (never forms one: `radio: no network, pair a device first`) and shows every measure the
 paired devices send, until Ctrl-C (exit 130):
 
@@ -142,7 +142,7 @@ every 30 s and at least every hour; its battery every few hours.
 A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (UUID), `name`
 (`TH01 5678` by default: the model and the end of the address; `Zigbee 5678` without a model),
 `manufacturer` and `model` as sent, `ieeeAddress` and `sourceDeviceId` (`0x` + 16 lowercase hex
-digits), `source` and `integrationId` `mini-sowel`, `zoneId` (its zone, `null` until placed), `powerSource` (`mains`,
+digits), `source` and `integrationId` `solite`, `zoneId` (its zone, `null` until placed), `powerSource` (`mains`,
 `battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
 minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
 `lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds).
@@ -323,7 +323,7 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `motion` | eWeLink MS01 (Sonoff SNZB-03) | enrolled at pairing; then `alarm true` on motion, and `alarm false` 60 s of scenario time later |
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
 
-The simulated radio keeps its network and its devices in `mini-sowel-data/sim/` (or `--data`),
+The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
 relay).

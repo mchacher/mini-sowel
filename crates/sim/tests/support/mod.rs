@@ -8,10 +8,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use mini_sowel_core::radio::{
-    MeasureEvent, Network, NetworkSettings, PairingEvent, Radio, RadioError,
-};
-use mini_sowel_sim::{FakeClock, Ncp, Scenario, SimTransport};
+use solite_core::radio::{MeasureEvent, Network, NetworkSettings, PairingEvent, Radio, RadioError};
+use solite_sim::{FakeClock, Ncp, Scenario, SimTransport};
 
 pub type SimRadio = Radio<SimTransport<FakeClock>, Box<dyn FnMut() -> u64>>;
 
@@ -143,7 +141,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// A fresh scratch folder name, not created.
 pub fn scratch() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "mini-sowel-sim-test-{}-{}",
+        "solite-sim-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ))

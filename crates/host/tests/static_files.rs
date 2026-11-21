@@ -31,7 +31,7 @@ impl Drop for TempDir {
 
 fn temp_dir(kind: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
-        "mini-sowel-static-{kind}-{}-{}",
+        "solite-static-{kind}-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
@@ -49,7 +49,7 @@ fn free_port() -> u16 {
 }
 
 fn host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
 /// A host program that is killed and reaped when the test ends, however it ends.
@@ -113,7 +113,7 @@ fn serve(ui: Option<&Path>) -> Serving {
     let data = temp_dir("data");
     // The network is formed once (`--pair`), as the serve tests do.
     let paired = host()
-        .env("MINI_SOWEL_CLOSE_GRACE_SECONDS", "1")
+        .env("SOLITE_CLOSE_GRACE_SECONDS", "1")
         .args(["--sim", GARAGE, "--pair", "2", "--speed", "100", "--data"])
         .arg(&*data)
         .output()

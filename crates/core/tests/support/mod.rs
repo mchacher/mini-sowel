@@ -3,14 +3,14 @@
 //! from JSON for the categories no catalog device gives, and measure events.
 #![allow(dead_code)]
 
-use mini_sowel_core::api::{Request, Response, handle};
-use mini_sowel_core::devices::{Devices, parse_list};
-use mini_sowel_core::home::Home;
-use mini_sowel_core::orders::DeviceCommand;
-use mini_sowel_core::radio::measures::{Measure, Value};
-use mini_sowel_core::radio::zcl::Command;
-use mini_sowel_core::radio::{MeasureEvent, Sender};
 use serde_json::{Value as Json, json};
+use solite_core::api::{Request, Response, handle};
+use solite_core::devices::{Devices, parse_list};
+use solite_core::home::Home;
+use solite_core::orders::DeviceCommand;
+use solite_core::radio::measures::{Measure, Value};
+use solite_core::radio::zcl::Command;
+use solite_core::radio::{MeasureEvent, Sender};
 
 pub const T0: u64 = 1_795_252_323_120; // 2026-11-21T09:12:03.120Z
 pub const MINUTE: u64 = 60_000;
@@ -285,23 +285,23 @@ pub fn device_json(
                 "type": kind,
                 "category": category,
                 "value": value,
-                "lastUpdated": updated.map(mini_sowel_core::devices::format_iso),
-                "lastChanged": updated.map(mini_sowel_core::devices::format_iso),
+                "lastUpdated": updated.map(solite_core::devices::format_iso),
+                "lastChanged": updated.map(solite_core::devices::format_iso),
             })
         })
         .collect();
     json!({
         "id": device_id,
-        "integrationId": "mini-sowel",
+        "integrationId": "solite",
         "sourceDeviceId": format!("0x00124b00ff{n:06x}"),
         "name": name,
         "zoneId": null,
-        "source": "mini-sowel",
+        "source": "solite",
         "status": "online",
         "powerSource": if battery { "battery" } else { "mains" },
-        "lastSeen": mini_sowel_core::devices::format_iso(T0),
-        "createdAt": mini_sowel_core::devices::format_iso(T0),
-        "updatedAt": mini_sowel_core::devices::format_iso(T0),
+        "lastSeen": solite_core::devices::format_iso(T0),
+        "createdAt": solite_core::devices::format_iso(T0),
+        "updatedAt": solite_core::devices::format_iso(T0),
         "data": items,
         "orders": [],
     })

@@ -13,7 +13,7 @@ use crate::equipments::{
     EquipmentStatus, EquipmentType, Equipments, Index, StoredEquipment, status_with,
 };
 
-/// Sowel's `ZoneAggregatedData`. The fields of what mini-Sowel has no equipment for (doors,
+/// Sowel's `ZoneAggregatedData`. The fields of what Solite has no equipment for (doors,
 /// valves, power, displays, sunlight) are present with their empty value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

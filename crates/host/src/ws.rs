@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use mini_sowel_core::api::host_allowed;
-use mini_sowel_core::live::{ClientId, LiveHandle};
+use solite_core::api::host_allowed;
+use solite_core::live::{ClientId, LiveHandle};
 use tungstenite::protocol::frame::coding::{CloseCode, Data, OpCode};
 use tungstenite::protocol::frame::{CloseFrame, Frame};
 use tungstenite::protocol::{Role, WebSocket, WebSocketConfig};
@@ -25,11 +25,11 @@ use tungstenite::{Bytes, Error, Message};
 pub const TICK_MS: u64 = 200;
 /// A write that takes longer drops the client, in seconds.
 pub const WRITE_TIMEOUT_SECONDS: u64 = 5;
-/// Pings are sent this often, in seconds, unless `MINI_SOWEL_WS_PING_SECONDS` says otherwise (for
+/// Pings are sent this often, in seconds, unless `SOLITE_WS_PING_SECONDS` says otherwise (for
 /// the tests).
 pub const PING_SECONDS: u64 = 30;
 /// A client from which nothing arrived for this long is dropped, in seconds, unless
-/// `MINI_SOWEL_WS_SILENCE_SECONDS` says otherwise (for the tests).
+/// `SOLITE_WS_SILENCE_SECONDS` says otherwise (for the tests).
 pub const SILENCE_SECONDS: u64 = 60;
 /// Incoming messages and frames are refused (close 1009) past this many bytes.
 pub const MAX_INCOMING_BYTES: usize = 1024;
@@ -71,8 +71,8 @@ impl Timing {
             Duration::from_secs(value)
         };
         Timing {
-            ping: seconds("MINI_SOWEL_WS_PING_SECONDS", PING_SECONDS),
-            silence: seconds("MINI_SOWEL_WS_SILENCE_SECONDS", SILENCE_SECONDS),
+            ping: seconds("SOLITE_WS_PING_SECONDS", PING_SECONDS),
+            silence: seconds("SOLITE_WS_SILENCE_SECONDS", SILENCE_SECONDS),
         }
     }
 }

@@ -894,25 +894,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "mini-sowel-core"
-version = "0.1.0"
-dependencies = [
- "log",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mini-sowel-firmware"
-version = "0.1.0"
-dependencies = [
- "embuild",
- "esp-idf-svc",
- "log",
- "mini-sowel-core",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1219,6 +1200,25 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "solite-core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "solite-firmware"
+version = "0.1.0"
+dependencies = [
+ "embuild",
+ "esp-idf-svc",
+ "log",
+ "solite-core",
+]
 
 [[package]]
 name = "stable_deref_trait"

@@ -1,4 +1,4 @@
-//! The devices of mini-Sowel, kept up to date from what the radio reports: added or completed at
+//! The devices of Solite, kept up to date from what the radio reports: added or completed at
 //! pairing, values and `lastSeen` on each message, status from the time. No clock and no random
 //! source of its own: the caller gives both. No I/O: the caller writes the snapshots.
 

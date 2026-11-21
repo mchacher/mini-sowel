@@ -1,13 +1,13 @@
 ---
-name: mini-sowel-release
+name: solite-release
 description: |
-  Publishes a new version of mini-sowel: version number, release notes, tag, and
-  the package or deployment. Use when the user types /mini-sowel-release, or says
+  Publishes a new version of Solite: version number, release notes, tag, and
+  the package or deployment. Use when the user types /solite-release, or says
   "publish a version", "sortir une version", "release".
 argument-hint: "[version, optional: patch, minor or major]"
 ---
 
-# mini-sowel Release
+# Solite Release
 
 Version: $ARGUMENTS
 

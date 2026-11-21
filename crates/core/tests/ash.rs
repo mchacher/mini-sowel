@@ -2,7 +2,7 @@
 //! RSTACK, ERROR, ACK, NAK) and were checked against the algorithm of zigbee-herdsman's ember
 //! adapter (CRC-CCITT 0x1021 from 0xFFFF; LFSR seed 0x42, polynomial 0xB8).
 
-use mini_sowel_core::radio::ash::*;
+use solite_core::radio::ash::*;
 
 fn hex(bytes: &[u8]) -> String {
     bytes

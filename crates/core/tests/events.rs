@@ -3,10 +3,10 @@
 
 mod support;
 
-use mini_sowel_core::devices::Id;
-use mini_sowel_core::home::Home;
-use mini_sowel_core::home::events::{Event, EventValue, MAX_EVENTS, MAX_TEXT_BYTES};
 use serde_json::json;
+use solite_core::devices::Id;
+use solite_core::home::Home;
+use solite_core::home::events::{Event, EventValue, MAX_EVENTS, MAX_TEXT_BYTES};
 use support::*;
 
 fn id(text: &str) -> Id {
@@ -18,7 +18,7 @@ fn events(rig: &Rig) -> Vec<Event> {
 }
 
 /// Applies a message to the home as the radio loop does, without handing the events over.
-fn apply(rig: &mut Rig, event: &mini_sowel_core::radio::MeasureEvent) {
+fn apply(rig: &mut Rig, event: &solite_core::radio::MeasureEvent) {
     rig.home.measures(event, rig.now, &mut *rig.random).unwrap();
     rig.home.recompute(rig.now);
 }
@@ -196,7 +196,7 @@ fn an_edit_over_the_api_queues_its_zone_event_which_goes_to_the_instance_at_the_
     // The next loop turn hands it over: the recipe acts on the motion.
     rig.turn();
     assert!(events(&rig).is_empty());
-    assert_eq!(rig.sent(), [mini_sowel_core::radio::zcl::Command::On]);
+    assert_eq!(rig.sent(), [solite_core::radio::zcl::Command::On]);
 }
 
 #[test]

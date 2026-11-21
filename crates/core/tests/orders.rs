@@ -3,15 +3,15 @@
 
 mod support;
 
-use mini_sowel_core::api::{Reply, Request, handle_stream};
-use mini_sowel_core::home::Home;
-use mini_sowel_core::orders::{
+use serde_json::{Value, json};
+use solite_core::api::{Reply, Request, handle_stream};
+use solite_core::home::Home;
+use solite_core::orders::{
     DEADLINE_MS, DeviceCommand, OrderQueue, OrderRequest, OrderRunner, commands_for,
 };
-use mini_sowel_core::radio::zcl::Command;
-use mini_sowel_core::radio::{NetworkSettings, Radio};
-use mini_sowel_sim::{Harness, Kind, Ncp, SentMessage, SimDevice, harness};
-use serde_json::{Value, json};
+use solite_core::radio::zcl::Command;
+use solite_core::radio::{NetworkSettings, Radio};
+use solite_sim::{Harness, Kind, Ncp, SentMessage, SimDevice, harness};
 use support::{HOST, PORT, Rig, T0, eui};
 
 /// What an order gives: the commands queued, or the status and text of the refusal.
@@ -207,7 +207,7 @@ fn two_devices_under_one_alias_give_two_commands_each_with_its_own_address_and_e
     // The registry knows the first one's route; the second's is not known yet.
     rig.home
         .devices
-        .set_route(&mini_sowel_core::radio::RouteUpdate {
+        .set_route(&solite_core::radio::RouteUpdate {
             eui64: eui(0x7A),
             nwk: 0x1234,
             endpoint: Some(3),
@@ -280,7 +280,7 @@ fn paired(devices: Vec<SimDevice>) -> Harness {
 
 fn request(commands: Vec<DeviceCommand>) -> OrderRequest {
     OrderRequest {
-        equipment: mini_sowel_core::devices::Id::ROOT_ZONE,
+        equipment: solite_core::devices::Id::ROOT_ZONE,
         alias: "state".to_string(),
         value: serde_json::Value::Null,
         source: None,
@@ -298,7 +298,7 @@ fn to(last: u8, nwk: Option<u16>, command: Command) -> DeviceCommand {
 }
 
 /// Polls the radio and steps the runner until `until` is true or `ms` of fake time passed.
-fn run<T: mini_sowel_core::radio::RadioTransport, C: FnMut() -> u64>(
+fn run<T: solite_core::radio::RadioTransport, C: FnMut() -> u64>(
     radio: &mut Radio<T, C>,
     runner: &mut OrderRunner,
     queue: &OrderQueue,
@@ -465,8 +465,8 @@ fn a_third_order_is_busy_and_an_order_past_its_deadline_or_without_a_waiter_is_n
 
 #[test]
 fn the_route_of_a_device_is_kept_in_devices_json_beside_sowels_fields_and_not_in_the_api() {
-    use mini_sowel_core::devices::{Devices, parse_list};
-    use mini_sowel_core::radio::RouteUpdate;
+    use solite_core::devices::{Devices, parse_list};
+    use solite_core::radio::RouteUpdate;
     let mut rig = Rig::new();
     let relay = rig.relay(0x7A);
     // Unknown: nothing written, nothing in the device API.
@@ -486,7 +486,7 @@ fn the_route_of_a_device_is_kept_in_devices_json_beside_sowels_fields_and_not_in
     );
     // The cursor that writes the file chunk by chunk writes the same.
     let item = rig.home.devices.get(&relay).unwrap();
-    let chunk = serde_json::to_string(&mini_sowel_core::devices::stored_item(item)).unwrap();
+    let chunk = serde_json::to_string(&solite_core::devices::stored_item(item)).unwrap();
     assert!(
         chunk.contains("\"nwk\":8193") && chunk.contains("\"endpoint\":2"),
         "{chunk}"
@@ -569,7 +569,7 @@ fn silent_relay_with_an_order() -> (
     Harness,
     OrderRunner,
     OrderQueue,
-    mini_sowel_core::orders::OrderWait,
+    solite_core::orders::OrderWait,
 ) {
     let h = paired(vec![relay(0x7A, 0x2001)]);
     h.ncp.borrow_mut().devices[0].silent = true;
@@ -661,7 +661,7 @@ fn a_radio_that_fails_while_sending_fails_that_command_with_a_reason_and_polling
         )
         .unwrap();
     // The radio takes the frames but no longer answers its commands.
-    h.ncp.borrow_mut().mode = mini_sowel_sim::Mode::DeafToCommands;
+    h.ncp.borrow_mut().mode = solite_sim::Mode::DeafToCommands;
     run_until(&mut h, &mut runner, &queue, 2_000, |_| false);
     let Err(reason) = wait.wait(std::time::Duration::from_millis(1)) else {
         panic!("the order cannot succeed");
@@ -687,7 +687,7 @@ fn post_order_typed(
     if streaming {
         handle_stream(&mut rig.home, &request, rig.now, &mut *rig.random)
     } else {
-        Reply::Whole(mini_sowel_core::api::handle(
+        Reply::Whole(solite_core::api::handle(
             &mut rig.home,
             &request,
             rig.now,
@@ -761,7 +761,7 @@ fn the_deadline_of_an_order_of_the_api_is_counted_on_the_queues_monotonic_clock(
 
 fn tagged(tag: &str) -> OrderRequest {
     OrderRequest {
-        equipment: mini_sowel_core::devices::Id::ROOT_ZONE,
+        equipment: solite_core::devices::Id::ROOT_ZONE,
         alias: tag.to_string(),
         value: serde_json::Value::Null,
         source: None,
@@ -898,21 +898,21 @@ fn an_order_of_the_api_that_waits_behind_a_core_order_past_its_deadline_is_a_dev
 // ---- Spec 013: the end of an order is an event ----
 
 /// A client of the home's hub, listening to `equipments`.
-fn listening(home: &Home) -> (mini_sowel_core::live::LiveHandle, u64) {
+fn listening(home: &Home) -> (solite_core::live::LiveHandle, u64) {
     let hub = home.live();
     let id = hub.connect().unwrap();
     assert!(hub.subscribe(id, r#"{"type":"subscribe","topics":["equipments"]}"#));
     (hub, id)
 }
 
-fn events_of(hub: &mini_sowel_core::live::LiveHandle, id: u64) -> Vec<Value> {
+fn events_of(hub: &solite_core::live::LiveHandle, id: u64) -> Vec<Value> {
     hub.take_batch(id)
         .map(|text| serde_json::from_str::<Vec<Value>>(&text).unwrap())
         .unwrap_or_default()
 }
 
 /// POSTs an order of the API; the wait for its answer.
-fn api_order(rig: &mut Rig, equipment: &str, body: &str) -> mini_sowel_core::orders::OrderWait {
+fn api_order(rig: &mut Rig, equipment: &str, body: &str) -> solite_core::orders::OrderWait {
     let path = format!("/api/v1/equipments/{equipment}/orders/state");
     let reply = handle_stream(
         &mut rig.home,
@@ -959,7 +959,7 @@ fn an_order_that_fails_is_a_failed_event_with_the_error_of_the_502() {
     let (hub, client) = listening(&rig.home);
     let queue = rig.home.orders().clone();
     let wait = api_order(&mut rig, &light, r#"{"value":"off"}"#);
-    h.ncp.borrow_mut().mode = mini_sowel_sim::Mode::DeafToCommands;
+    h.ncp.borrow_mut().mode = solite_sim::Mode::DeafToCommands;
     let mut runner = OrderRunner::new();
     run_until(&mut h, &mut runner, &queue, 3_000, |_| false);
     let Err(reason) = wait.wait(std::time::Duration::from_millis(1)) else {

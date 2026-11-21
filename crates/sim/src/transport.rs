@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::rc::Rc;
 
-use mini_sowel_core::radio::{RadioTransport, TransportError};
+use solite_core::radio::{RadioTransport, TransportError};
 
 use crate::clock::{Clock, ScenarioClock};
 use crate::ncp::Ncp;

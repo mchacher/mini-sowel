@@ -1,4 +1,4 @@
-// mini-Sowel's replacement for Sowel's ui/src/components/layout/SidebarZoneTree.tsx, which needs
+// Solite's replacement for Sowel's ui/src/components/layout/SidebarZoneTree.tsx, which needs
 // react-router and an expand/collapse state per node: the same classes and icons, the zones as links
 // to `#/zone/<id>`, every node open.
 import { DoorOpen, Home, Layers } from "lucide-react";

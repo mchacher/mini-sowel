@@ -10,7 +10,7 @@ mod support;
 
 use serde_json::json;
 
-use mini_sowel_core::devices::Devices;
+use solite_core::devices::Devices;
 use support::Rig;
 
 const T0: u64 = 1_795_252_323_120; // 2026-11-21T09:12:03.120Z
@@ -41,14 +41,14 @@ fn a_snzb02_serialises_as_sowels_device_with_details() {
     // Ids: the device 1, then temperature 2, humidity 3, battery 4, voltage 5.
     let expected = json!({
         "id": "01010101-0101-4101-8101-010101010101",
-        "integrationId": "mini-sowel",
+        "integrationId": "solite",
         "sourceDeviceId": "0x00124b0012345678",
         "name": "TH01 5678",
         "manufacturer": "eWeLink",
         "model": "TH01",
         "ieeeAddress": "0x00124b0012345678",
         "zoneId": null,
-        "source": "mini-sowel",
+        "source": "solite",
         "status": "online",
         "powerSource": "battery",
         "lastSeen": "2026-11-21T09:12:03.120Z",

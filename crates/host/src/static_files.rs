@@ -4,7 +4,7 @@
 use std::fs::File;
 use std::path::Path;
 
-use mini_sowel_core::api::StaticFile;
+use solite_core::api::StaticFile;
 use tiny_http::{Header, Request, Response, StatusCode};
 
 /// The default folder of `--ui`: the interface's build output.

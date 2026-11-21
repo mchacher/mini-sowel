@@ -4,7 +4,7 @@ use esp_idf_svc::sys::{
     MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM, heap_caps_get_free_size,
     heap_caps_get_largest_free_block, heap_caps_get_total_size,
 };
-use mini_sowel_core::{MemoryStats, PsramStats};
+use solite_core::{MemoryStats, PsramStats};
 
 /// The free internal RAM and PSRAM, now.
 #[allow(unsafe_code)]

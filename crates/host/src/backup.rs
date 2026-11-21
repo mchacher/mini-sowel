@@ -9,7 +9,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use mini_sowel_core::radio::{Network, NetworkKeys};
+use solite_core::radio::{Network, NetworkKeys};
 
 const FILE_NAME: &str = "network.json";
 

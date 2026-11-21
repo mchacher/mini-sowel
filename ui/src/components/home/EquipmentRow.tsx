@@ -1,4 +1,4 @@
-// mini-Sowel's replacement for Sowel's ui/src/components/home/CompactEquipmentCard.tsx (841 lines,
+// Solite's replacement for Sowel's ui/src/components/home/CompactEquipmentCard.tsx (841 lines,
 // about 35 modules: every control of Sowel). One row of an equipment, with Sowel's row classes:
 // a `light_onoff` has Sowel's LightControl (compact), a `sensor` Sowel's SensorValues, any other
 // type its name, its icon and its status badge. A disabled equipment is dimmed, without control.

@@ -5,14 +5,14 @@
 
 mod support;
 
-use mini_sowel_core::devices::{DeviceStatus, Id};
-use mini_sowel_core::equipments::EquipmentStatus;
-use mini_sowel_core::live::{
+use serde_json::{Value, json};
+use solite_core::devices::{DeviceStatus, Id};
+use solite_core::equipments::EquipmentStatus;
+use solite_core::live::{
     CLOSE_TRY_AGAIN_LATER, ClientId, EngineEvent, LiveHandle, LiveHub, MAX_CLIENTS,
     MAX_QUEUED_EVENTS, Topic, topic_of_type,
 };
-use mini_sowel_core::orders::OrderSource;
-use serde_json::{Value, json};
+use solite_core::orders::OrderSource;
 use support::{Rig, T0, motion, temperature};
 
 /// A client of the hub, subscribed to these topics.
@@ -925,7 +925,7 @@ fn no_recipe_event_is_built_for_a_client_that_does_not_listen_to_recipes() {
 
 #[test]
 fn an_instance_that_cannot_be_restored_is_logged_and_is_never_an_error_event() {
-    use mini_sowel_core::recipes::RecipeInstance;
+    use solite_core::recipes::RecipeInstance;
     let mut rig = Rig::new();
     let (hub, c) = listening(&rig);
     let broken = RecipeInstance {

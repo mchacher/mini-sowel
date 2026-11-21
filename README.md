@@ -1,4 +1,4 @@
-# mini-Sowel
+# Solite
 
 A minimal [Sowel](https://github.com/mchacher/sowel) in an off-the-shelf Zigbee coordinator, the
 Sonoff Dongle Max (about 43 $). It automates an annex of a house (garage, pool house, workshop) or
@@ -14,9 +14,9 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 | Folder | What |
 | ------ | ---- |
 | `crates/core` | The Sowel core, in Rust, without any hardware dependency |
-| `crates/host` | mini-Sowel on a Mac (or a Linux or Windows computer) |
+| `crates/host` | Solite on a Mac (or a Linux or Windows computer) |
 | `crates/sim` | A simulated radio and devices, played from `scenarios/`, for working without the dongle |
-| `firmware/` | mini-Sowel on the ESP32 of the Dongle Max (Rust on ESP-IDF) |
+| `firmware/` | Solite on the ESP32 of the Dongle Max (Rust on ESP-IDF) |
 | `ui/` | The web interface (Preact, TypeScript), in Sowel's design system |
 | `tools/` | Node tools run on the Mac, not shipped in the box: `z2m-coverage` measures how many of Zigbee2MQTT's device definitions the box can reuse |
 | `docs/`, `specs/` | What the tool does, how it is built, every change |
@@ -46,12 +46,12 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 ## Run
 
 ```
-cargo run -p mini-sowel-host                      # on the computer
-cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
-cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
-cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen # show the measures
-cargo run -p mini-sowel-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
-cargo run -p mini-sowel-host -- --sim scenarios/garage.json --serve --speed 10    # API and interface on :8080
+cargo run -p solite-host                      # on the computer
+cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
+cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
+cargo run -p solite-host -- --radio tcp://<address>:6638 --listen # show the measures
+cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
+cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API and interface on :8080
 sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)
 cd firmware && cargo build --release              # the ESP32 firmware
@@ -65,8 +65,8 @@ The firmware is built, not flashed: the Dongle Max keeps its original firmware d
 
 ## How the project is worked on
 
-With Claude Code, spec first: `/mini-sowel-roadmap`, `/mini-sowel-feature`, `/mini-sowel-fix`,
-`/mini-sowel-release`. Rules: [CLAUDE.md](CLAUDE.md).
+With Claude Code, spec first: `/solite-roadmap`, `/solite-feature`, `/solite-fix`,
+`/solite-release`. Rules: [CLAUDE.md](CLAUDE.md).
 
 ## License
 

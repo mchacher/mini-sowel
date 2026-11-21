@@ -5,7 +5,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use mini_sowel_core::radio::{RadioTransport, TransportError};
+use solite_core::radio::{RadioTransport, TransportError};
 
 /// How long a connection attempt waits.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);

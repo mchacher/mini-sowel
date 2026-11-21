@@ -1,6 +1,6 @@
 [package]
-name = "mini-sowel-core"
-description = "The Sowel core of mini-Sowel: no hardware dependency, runs on the Mac and on the ESP32."
+name = "solite-core"
+description = "The Sowel core of Solite: no hardware dependency, runs on the Mac and on the ESP32."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,4 +16,4 @@ serde_json = { version = "1", features = ["raw_value"] }
 
 [dev-dependencies]
 peak_alloc = "0.3"
-mini-sowel-sim = { path = "../sim" }
+solite-sim = { path = "../sim" }

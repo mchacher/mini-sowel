@@ -2,12 +2,12 @@
 
 What gets built next, and why, toward the true north in [CLAUDE.md](../CLAUDE.md). The place for
 the future and for how far the work has got: the docs that describe the tool speak of the present
-only. Planned and reviewed with `/mini-sowel-roadmap`: briefly after every feature, fully at every
+only. Planned and reviewed with `/solite-roadmap`: briefly after every feature, fully at every
 milestone. A new need, at any time: one line in the inbox.
 
 ## Current milestone
 
-**A. The radio speaks Rust**. The user can then: from the Mac, `mini-sowel-host` forms its own
+**A. The radio speaks Rust**. The user can then: from the Mac, `solite-host` forms its own
 Zigbee network through the Dongle Max, a real sensor (Sonoff SNZB-02) joins it, and its
 temperature arrives live, still after a restart, without pairing again. The firmware boots in an
 emulated ESP32 (Espressif's QEMU) with its free memory shown, and the share of Zigbee2MQTT

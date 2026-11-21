@@ -1,6 +1,6 @@
 # inputs
 
-The documents mini-Sowel started from. Kept in git: they are the project's origin. A document with
+The documents Solite started from. Kept in git: they are the project's origin. A document with
 confidential or real personal data does not go here, or is listed in `.gitignore`.
 
 | Document | What it brought |

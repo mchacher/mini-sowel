@@ -1,4 +1,4 @@
-//! The home of mini-Sowel: its devices, zones and equipments together, behind the one lock the
+//! The home of Solite: its devices, zones and equipments together, behind the one lock the
 //! host takes. The rules that touch more than one of them live here (a zone deleted frees its
 //! devices, a device deleted frees the bindings made on it); each file has its change flag, so the
 //! radio loop, the only writer, knows what to write. No I/O, no clock and no random source of its

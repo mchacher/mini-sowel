@@ -33,7 +33,7 @@ impl Drop for TempDir {
 }
 
 fn host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
 fn free_port() -> u16 {
@@ -47,14 +47,14 @@ fn free_port() -> u16 {
 /// Pairs the garage's three devices, then serves; returns once the host says `serving:`.
 fn serving() -> (Reaped, u16, TempDir) {
     let dir = std::env::temp_dir().join(format!(
-        "mini-sowel-demo-script-{}-{}",
+        "solite-demo-script-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     let data = TempDir(dir);
     let output = host()
-        .env("MINI_SOWEL_CLOSE_GRACE_SECONDS", "1")
+        .env("SOLITE_CLOSE_GRACE_SECONDS", "1")
         .args(["--sim", GARAGE, "--pair", "2", "--speed", "100", "--data"])
         .arg(&data.0)
         .output()

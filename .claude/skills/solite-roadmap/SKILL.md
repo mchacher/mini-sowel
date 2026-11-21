@@ -1,15 +1,15 @@
 ---
-name: mini-sowel-roadmap
+name: solite-roadmap
 description: |
-  Plans and reviews the roadmap of mini-sowel: the next milestone toward the true
-  north, cut into increments built one by one with /mini-sowel-feature, and the new
-  needs placed as they come. Use when the user types /mini-sowel-roadmap, right after
+  Plans and reviews the roadmap of Solite: the next milestone toward the true
+  north, cut into increments built one by one with /solite-feature, and the new
+  needs placed as they come. Use when the user types /solite-roadmap, right after
   the setup, when a milestone is reached, when a new need comes up, or when they say "roadmap",
   "what next", "on fait quoi ensuite", "replanifier", "j'ai un nouveau besoin".
 argument-hint: "[a new need, optional]"
 ---
 
-# mini-sowel Roadmap
+# Solite Roadmap
 
 New need: $ARGUMENTS
 
@@ -72,18 +72,18 @@ safety net.
 
 Cut the milestone into increments. Each one:
 
-- is built in **one** `/mini-sowel-feature` conversation, and shown in a demo;
+- is built in **one** `/solite-feature` conversation, and shown in a demo;
 - leaves the tool working and more useful than before: value the user can test, not a layer of
   plumbing that only pays off later;
 - has one line, and a **done when** the user can check;
-- is not specified yet: the spec is written in `/mini-sowel-feature`, when its turn
+- is not specified yet: the spec is written in `/solite-feature`, when its turn
   comes, with what the previous increments taught. The one exception is spec 001 of an existing
   project (the safety net), written at setup: the feature skill picks it up.
 
 Order them: first what removes the biggest risk on the core (does it work at all, with real
 data?), then what brings the most value, then the rest. Say why in one line for the first two.
 
-For mini-Sowel, the risks of the framing note (`inputs/note-de-cadrage-mini-sowel.md`, "Risks and
+For Solite, the risks of the framing note (`inputs/note-de-cadrage-mini-sowel.md`, "Risks and
 unknowns") come first, each with a demo on real hardware: EZSP written in Rust (the radio spike),
 the share of Zigbee2MQTT converters that export, the ESP32's memory. An increment that needs a
 device or the box says which one, and whether the user has it. Work on the Sowel side (the
@@ -148,7 +148,7 @@ change), or when the user brings a new need. Keep it short.
    in the current milestone now only if the user wants it and it does not change the milestone.
 4. **Re-plan due?** If the milestone is reached, or a new need changes what the milestone should
    be, or the inbox holds more than five items, say: "A full roadmap review is due:
-   `/mini-sowel-roadmap` in a new conversation."
+   `/solite-roadmap` in a new conversation."
 5. Add a line to the log if anything changed.
 6. **`CLAUDE.md` still short?** Count its lines (`wc -l CLAUDE.md`). Over about 150, propose to the
    user what to move: a subject that grew goes to `docs/`, or becomes a check that enforces it.
@@ -160,5 +160,5 @@ change), or when the user brings a new need. Keep it short.
 
 ## Phase 4: Next Step
 
-Tell the user the next increment, and how to start it: `/mini-sowel-feature
+Tell the user the next increment, and how to start it: `/solite-feature
 <increment>`, **in a new conversation**.

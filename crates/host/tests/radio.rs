@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mini_sowel_sim::{Mode, Ncp};
+use solite_sim::{Mode, Ncp};
 
 /// Serves one connection with the fake radio; returns every byte it received.
 fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Vec<u8>>) {
@@ -39,7 +39,7 @@ fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Vec<u8>>) {
 
 fn run(args: &[&str]) -> (Output, Duration) {
     let start = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args(args)
         .output()
         .expect("the host program starts");
@@ -59,7 +59,7 @@ fn radio_argument_shows_the_four_lines_of_the_fake_radio_and_exits_0() {
     let expected = format!(
         "{}\nradio: {url}\nezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0\n\
          radio address: 0x8C6FB9FFFE123456\nnetwork: no network\n",
-        mini_sowel_core::banner()
+        solite_core::banner()
     );
     assert_eq!(text(&output.stdout), expected);
     assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
@@ -131,10 +131,7 @@ fn a_malformed_radio_argument_prints_the_expected_form_and_exits_2() {
 fn without_argument_the_banner_only_is_printed_and_the_exit_is_0() {
     let (output, _) = run(&[]);
     assert_eq!(output.status.code(), Some(0));
-    assert_eq!(
-        text(&output.stdout),
-        format!("{}\n", mini_sowel_core::banner())
-    );
+    assert_eq!(text(&output.stdout), format!("{}\n", solite_core::banner()));
 }
 
 #[test]

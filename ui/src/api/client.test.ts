@@ -44,7 +44,7 @@ describe("client", () => {
   it("gives a store the text of a failed fetch when nothing answers", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
     await useZones.getState().fetchZones();
-    expect(useZones.getState().error).toBe("Cannot reach mini-Sowel");
+    expect(useZones.getState().error).toBe("Cannot reach Solite");
     expect(useZones.getState().loading).toBe(false);
   });
 });

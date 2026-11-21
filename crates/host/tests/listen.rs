@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mini_sowel_sim::{Ncp, SimDevice};
+use solite_sim::{Ncp, SimDevice};
 
 /// A host program that is killed and reaped when the test ends, however it ends.
 struct Reaped(std::process::Child);
@@ -70,14 +70,14 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// A fresh data folder name, not created.
 fn data_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "mini-sowel-listen-test-{}-{}",
+        "solite-listen-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ))
 }
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args(args)
         .output()
         .expect("the host program starts")
@@ -151,7 +151,7 @@ fn a_second_run_with_listen_resumes_the_network_and_shows_the_reports_until_ctrl
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
     let mut child = Reaped(
-        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
             .args(["--radio", &url, "--listen", "--data", dir_text])
             .stdout(Stdio::piped())
             .spawn()
@@ -185,7 +185,7 @@ fn a_second_run_with_listen_resumes_the_network_and_shows_the_reports_until_ctrl
     assert!(signal.success());
     assert_eq!(child.wait().unwrap().code(), Some(130));
 
-    assert_eq!(shown[0], mini_sowel_core::banner());
+    assert_eq!(shown[0], solite_core::banner());
     assert_eq!(shown[4], network);
     assert_eq!(
         shown[5..],
@@ -236,7 +236,7 @@ fn listen_with_pair_or_without_a_radio_prints_the_usage_and_exits_2() {
 
 #[test]
 fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() {
-    use mini_sowel_sim::{Kind, zone_status_notification};
+    use solite_sim::{Kind, zone_status_notification};
     let dir = data_dir();
     let dir_text = dir.to_str().unwrap();
     let mut device = SimDevice::of_kind(
@@ -266,7 +266,7 @@ fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() 
         l.local_addr().unwrap().port()
     };
     let mut child = Reaped(
-        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
             .args([
                 "--radio",
                 &url,
@@ -332,7 +332,7 @@ fn a_setup_still_going_when_the_time_cap_ends_is_reported_cut_short_before_pairi
     ncp.devices = vec![device];
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
-    let output = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args([
             "--radio",
             &url,
@@ -341,7 +341,7 @@ fn a_setup_still_going_when_the_time_cap_ends_is_reported_cut_short_before_pairi
             "--data",
             dir.to_str().unwrap(),
         ])
-        .env("MINI_SOWEL_CLOSE_GRACE_SECONDS", "5")
+        .env("SOLITE_CLOSE_GRACE_SECONDS", "5")
         .output()
         .expect("the host program starts");
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));

@@ -1,13 +1,13 @@
 ---
-name: mini-sowel-fix
+name: solite-fix
 description: |
-  Fixes a bug in mini-sowel: reproduce it, pin it with a failing test, fix the
-  cause, show it fixed. Use when the user types /mini-sowel-fix, or reports
+  Fixes a bug in Solite: reproduce it, pin it with a failing test, fix the
+  cause, show it fixed. Use when the user types /solite-fix, or reports
   something wrong ("la lumière ne s'éteint pas", "le firmware redémarre en boucle", "ça plante quand...", "bug").
 argument-hint: "[what goes wrong, in one sentence]"
 ---
 
-# mini-sowel Fix Workflow
+# Solite Fix Workflow
 
 Problem: $ARGUMENTS
 
@@ -44,7 +44,7 @@ what you tried and ask for more. Never fix a bug you have not seen.
 
 Decide with the user which is right: the code, or the living spec. If the code does what the living
 spec says, or the living spec is silent, this is a **change of behaviour**, not a fix: suggest
-`/mini-sowel-feature`, and stop here.
+`/solite-feature`, and stop here.
 
 > **GATE 1**: all true before going on:
 >

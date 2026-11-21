@@ -4,7 +4,7 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use mini_sowel_sim::Ncp;
+use solite_sim::Ncp;
 use support::{ONE_SENSOR, joined, measure_lines, scenario, scratch, sim};
 
 #[test]
@@ -63,7 +63,7 @@ fn a_formed_network_in_the_scenario_applies_only_when_there_is_no_file() {
     let mut s = sim(&json, Some(&file), 1);
     assert!(matches!(
         s.listen(),
-        Err(mini_sowel_core::radio::RadioError::NoNetwork)
+        Err(solite_core::radio::RadioError::NoNetwork)
     ));
     fs::remove_dir_all(&dir).unwrap();
 }

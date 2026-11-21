@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use mini_sowel_sim::{Ncp, SimDevice, StoredNetwork};
+use solite_sim::{Ncp, SimDevice, StoredNetwork};
 
 /// A host program that is killed and reaped when the test ends, however it ends.
 struct Reaped(std::process::Child);
@@ -72,7 +72,7 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// A fresh data folder name, not created.
 fn data_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "mini-sowel-test-{}-{}",
+        "solite-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ))
@@ -80,7 +80,7 @@ fn data_dir() -> PathBuf {
 
 fn run(args: &[&str]) -> (Output, Duration) {
     let start = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args(args)
         .output()
         .expect("the host program starts");
@@ -134,7 +134,7 @@ fn pair_with_one_device_shows_the_lines_of_the_spec_writes_a_private_backup_and_
 
     let out = lines(&output);
     assert_eq!(out.len(), 13, "{out:?}");
-    assert_eq!(out[0], mini_sowel_core::banner());
+    assert_eq!(out[0], solite_core::banner());
     assert_eq!(out[1], format!("radio: {url}"));
     assert_eq!(out[2], "ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0");
     assert_eq!(out[3], "radio address: 0x8C6FB9FFFE123456");
@@ -258,7 +258,7 @@ fn ctrl_c_during_pairing_closes_joining_and_exits_130() {
     let url = format!("tcp://{address}");
     let dir = data_dir();
     let mut child = Reaped(
-        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
             .args(pair_args(&url, "30", dir.to_str().unwrap()))
             .stdout(Stdio::piped())
             .spawn()
@@ -323,7 +323,7 @@ fn without_pair_the_host_only_identifies_and_does_not_start_the_network() {
     assert_eq!(lines(&output)[4], "network: no network");
     let ncp = handle.join().unwrap();
     assert!(!ncp.commands.iter().any(|c| c.0 == 0x17 || c.0 == 0x1E));
-    assert!(!PathBuf::from("mini-sowel-data").exists());
+    assert!(!PathBuf::from("solite-data").exists());
 }
 
 #[test]
@@ -424,7 +424,7 @@ fn ctrl_c_during_the_start_exits_130_without_opening_joining() {
     let url = format!("tcp://{address}");
     let dir = data_dir();
     let mut child = Reaped(
-        Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
             .args(pair_args(&url, "30", dir.to_str().unwrap()))
             .stdout(Stdio::piped())
             .spawn()

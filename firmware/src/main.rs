@@ -1,4 +1,4 @@
-//! mini-Sowel on the ESP32: starts ESP-IDF, then writes its banner and its free memory to the
+//! Solite on the ESP32: starts ESP-IDF, then writes its banner and its free memory to the
 //! serial log.
 
 mod memory;
@@ -8,6 +8,6 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    log::info!("{}", mini_sowel_core::banner());
-    log::info!("{}", mini_sowel_core::memory_line(&memory::read()));
+    log::info!("{}", solite_core::banner());
+    log::info!("{}", solite_core::memory_line(&memory::read()));
 }

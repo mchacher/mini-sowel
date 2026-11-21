@@ -2,10 +2,10 @@
 //! bytes in, types out; and the Default Response the coordinator sends, against the scripted
 //! radio.
 
-use mini_sowel_core::radio::NetworkSettings;
-use mini_sowel_core::radio::measures::{self, Value};
-use mini_sowel_core::radio::zcl::*;
-use mini_sowel_sim::{
+use solite_core::radio::NetworkSettings;
+use solite_core::radio::measures::{self, Value};
+use solite_core::radio::zcl::*;
+use solite_sim::{
     Harness, Ncp, SentMessage, harness, report_frame, report_frame_with_control, temperature_report,
 };
 
@@ -473,7 +473,7 @@ fn a_report_with_default_response_disabled_or_a_broadcast_gets_no_default_respon
 #[test]
 fn write_attributes_of_the_cie_address_is_the_attribute_then_type_f0_then_the_eui64_little_endian()
 {
-    use mini_sowel_core::radio::zcl::write_cie_address_request;
+    use solite_core::radio::zcl::write_cie_address_request;
     let eui = [0x8C, 0x6F, 0xB9, 0xFF, 0xFE, 0x12, 0x34, 0x56];
     assert_eq!(
         write_cie_address_request(0x21, &eui),
@@ -485,7 +485,7 @@ fn write_attributes_of_the_cie_address_is_the_attribute_then_type_f0_then_the_eu
 
 #[test]
 fn the_zone_enroll_response_is_success_and_zone_23_with_the_default_response_disabled() {
-    use mini_sowel_core::radio::zcl::zone_enroll_response;
+    use solite_core::radio::zcl::zone_enroll_response;
     assert_eq!(
         zone_enroll_response(0x42),
         vec![0x11, 0x42, 0x00, 0x00, 0x17]
@@ -494,7 +494,7 @@ fn the_zone_enroll_response_is_success_and_zone_23_with_the_default_response_dis
 
 #[test]
 fn a_zone_enroll_request_gives_its_zone_type_and_manufacturer_code() {
-    use mini_sowel_core::radio::zcl::{ZoneEnrollRequest, parse_zone_enroll_request};
+    use solite_core::radio::zcl::{ZoneEnrollRequest, parse_zone_enroll_request};
     // Cluster-specific, from the server, command 1: zone type 0x000D, manufacturer code 0x1234.
     let frame = [0x09, 0x33, 0x01, 0x0D, 0x00, 0x34, 0x12];
     assert_eq!(

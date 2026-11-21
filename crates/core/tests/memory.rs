@@ -1,4 +1,4 @@
-use mini_sowel_core::{MemoryStats, PsramStats, memory_line};
+use solite_core::{MemoryStats, PsramStats, memory_line};
 
 #[test]
 fn line_shows_internal_and_psram_in_kib() {

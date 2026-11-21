@@ -7,13 +7,13 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use mini_sowel_core::devices::{
+use solite_core::devices::{
     DeviceStatus, DeviceStore, DeviceWithDetails, Devices, MAX_DATA, MAX_DEVICES, MAX_ORDERS,
     PowerSource, VALUE_WRITE_INTERVAL_MS, ValueType, WritePolicy, data_for_cluster, lock,
     orders_for_cluster, parse_list,
 };
-use mini_sowel_core::radio::measures::{Measure, Value, decode};
-use mini_sowel_core::radio::{Activity, MeasureEvent, PairingEvent, Sender};
+use solite_core::radio::measures::{Measure, Value, decode};
+use solite_core::radio::{Activity, MeasureEvent, PairingEvent, Sender};
 
 const T0: u64 = 1_795_252_323_120; // 2026-11-21T09:12:03.120Z
 const MINUTE: u64 = 60_000;
@@ -176,8 +176,8 @@ fn pairing_a_snzb02_gives_temperature_humidity_battery_and_voltage() {
     // `ieeeAddress`, `integrationId` and `source` are not stored but written.
     let json = serde_json::to_value(item).unwrap();
     assert_eq!(json["ieeeAddress"], "0x00124b0012345678");
-    assert_eq!(json["integrationId"], "mini-sowel");
-    assert_eq!(json["source"], "mini-sowel");
+    assert_eq!(json["integrationId"], "solite");
+    assert_eq!(json["source"], "solite");
 }
 
 #[test]
@@ -358,7 +358,7 @@ fn the_65th_device_the_17th_data_and_the_5th_order_are_not_added() {
 
 #[test]
 fn relay_announce_gives_capability_0x8c_and_a_mains_power_source() {
-    use mini_sowel_sim::{Kind, Ncp, SimDevice, harness};
+    use solite_sim::{Kind, Ncp, SimDevice, harness};
     let mut device = SimDevice::of_kind(
         Kind::Relay,
         [0x7A, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
@@ -373,7 +373,7 @@ fn relay_announce_gives_capability_0x8c_and_a_mains_power_source() {
     h.radio.identify().unwrap();
     h.radio
         .start_network(
-            &mini_sowel_core::radio::NetworkSettings::default(),
+            &solite_core::radio::NetworkSettings::default(),
             &mut |b: &mut [u8]| {
                 b.fill(7);
                 Ok(())
@@ -619,10 +619,10 @@ fn a_rename_from_another_thread_is_written_by_the_one_writer_and_not_lost() {
 
 // ---- Spec 009: the data of IAS zone devices ----
 
-use mini_sowel_core::radio::measures::{self, from_zone_status};
-use mini_sowel_core::radio::zcl::parse_attribute_report;
-use mini_sowel_core::radio::{Enrollment, EnrollmentOutcome};
 use serde_json::Value as Json;
+use solite_core::radio::measures::{self, from_zone_status};
+use solite_core::radio::zcl::parse_attribute_report;
+use solite_core::radio::{Enrollment, EnrollmentOutcome};
 
 type Random<'a> = &'a mut dyn FnMut(&mut [u8]) -> Result<(), String>;
 
@@ -830,7 +830,7 @@ fn the_zone_data_are_kept_in_devices_json_and_known_by_a_later_process() {
 
 // ---- Spec 010: lastChanged ----
 
-fn data_of<'a>(devices: &'a Devices, key: &str) -> &'a mini_sowel_core::devices::DeviceData {
+fn data_of<'a>(devices: &'a Devices, key: &str) -> &'a solite_core::devices::DeviceData {
     devices.list()[0]
         .data
         .iter()

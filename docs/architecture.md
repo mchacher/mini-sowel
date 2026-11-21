@@ -1,6 +1,6 @@
 # Architecture
 
-How mini-Sowel is built **today**. Short: the blocks, where they run, how data flows. Only what
+How Solite is built **today**. Short: the blocks, where they run, how data flows. Only what
 exists: the target architecture is decision D1, and what comes next is in the roadmap.
 
 ## Overview
@@ -36,7 +36,7 @@ app, built by Vite into `ui/dist`, which the host's `--serve` serves; the box do
 | Recipes | In the core: `recipes/` (the engine: instances, their state and log, timers checked on each loop turn; `motion_light/`, Sowel's recipe in Rust: settings, validation, state machine) and `home/events.rs` (the compact events recipes listen to, filtered and bounded); a recipe's orders go through the order queue after the API's; the API serves Sowel's recipe routes; the host runs the engine in its radio loop and stores `recipes.json` | `crates/core/src/{recipes,home}/`, `crates/host/src/{serve,store}.rs` |
 | Live events | In the core: `live/` (Sowel's `EngineEvent`s, their topics and dedup keys, the clients' subscriptions and bounded queues, built only for a topic a client listens to) and `equipments/status_tracker.rs`; in the host: `front.rs` (the public port: `/ws` kept on sockets the host owns, any other request passed to `tiny_http` on a loopback port) and `ws.rs` (one thread per client, the 200 ms batches written as fragments, pings) | `crates/core/src/live/`, `crates/host/src/{front,ws}.rs` |
 | Simulator | A simulated EmberZNet radio and simulated devices (temperature-humidity, motion, relay) playing scenario files (`scenarios/`); it implements the core's `RadioTransport`, so the host and the tests run the real protocol code against it; Mac only | `crates/sim/` |
-| Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
+| Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`solite-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system: Sowel's components and stores ported (`store/`, `components/`, `lib/`, `api/`), its own page, live store (`useLive`) and `t()`; the core answers `/` and `/assets/*` with the file to send (`api/static_files.rs`), the host streams it from `--ui` (`static_files.rs`) | `ui/`, `crates/core/src/api/static_files.rs`, `crates/host/src/static_files.rs` |
 | Tools | Node programs run on the Mac, never shipped in the box: `z2m-coverage` loads Zigbee2MQTT's device library (`zigbee-herdsman-converters`, pinned) and writes its coverage report | `tools/` (each tool its own `package.json`) |

@@ -38,14 +38,14 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// A fresh data folder name, not created.
 fn data_dir() -> PathBuf {
     std::env::temp_dir().join(format!(
-        "mini-sowel-sim-host-test-{}-{}",
+        "solite-sim-host-test-{}-{}",
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::SeqCst)
     ))
 }
 
 fn host() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
 fn run(args: &[&str], cwd: Option<&Path>) -> Output {
@@ -79,7 +79,7 @@ fn pair_on_the_snzb02_scenario_shows_the_device_its_reporting_and_its_measures()
     );
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
     let out = lines(&output);
-    assert_eq!(out[0], mini_sowel_core::banner());
+    assert_eq!(out[0], solite_core::banner());
     assert_eq!(out[1], format!("radio: sim {SNZB02}"));
     assert!(out[2].starts_with("ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0"));
     assert_eq!(out[3], "radio address: 0x8C6FB9FFFE123456");
@@ -184,7 +184,7 @@ fn a_missing_scenario_file_is_a_one_line_error_and_exit_1() {
 }
 
 #[test]
-fn sim_without_data_writes_under_mini_sowel_data_sim_and_never_touches_the_real_backup() {
+fn sim_without_data_writes_under_solite_data_sim_and_never_touches_the_real_backup() {
     let cwd = data_dir();
     std::fs::create_dir_all(&cwd).unwrap();
     let output = run(
@@ -192,11 +192,11 @@ fn sim_without_data_writes_under_mini_sowel_data_sim_and_never_touches_the_real_
         Some(&cwd),
     );
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
-    let sim = cwd.join("mini-sowel-data/sim");
+    let sim = cwd.join("solite-data/sim");
     assert!(sim.join("network.json").is_file());
     assert!(sim.join("sim-snzb02.json").is_file());
     assert!(
-        !cwd.join("mini-sowel-data/network.json").exists(),
+        !cwd.join("solite-data/network.json").exists(),
         "the real radio's backup is never touched"
     );
     std::fs::remove_dir_all(&cwd).unwrap();

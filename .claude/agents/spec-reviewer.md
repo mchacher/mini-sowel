@@ -1,7 +1,7 @@
 ---
 name: spec-reviewer
 description: |
-  Independent review of a spec of mini-sowel before the user is asked to approve
+  Independent review of a spec of Solite before the user is asked to approve
   it: gaps, ambiguities, criteria nobody can check, edge cases without a test, a living spec delta
   that does not match. Read-only: it never edits. Used by the feature skill (Phase 2).
 tools: Read, Grep, Glob

@@ -99,6 +99,6 @@ describe("a refused order", () => {
 
   it("shows the translated text of a network error, not the browser's", async () => {
     await pressWith(new ApiError(0, "Failed to fetch"));
-    expect(screen.getByRole("alert").textContent).toBe("Cannot reach mini-Sowel");
+    expect(screen.getByRole("alert").textContent).toBe("Cannot reach Solite");
   });
 });

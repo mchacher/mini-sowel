@@ -4,9 +4,9 @@
 
 mod support;
 
-use mini_sowel_core::api::{CHUNK_ITEMS, ListCursor, Reply, Request, handle_stream};
-use mini_sowel_core::home::Home;
 use serde_json::{Value, json};
+use solite_core::api::{CHUNK_ITEMS, ListCursor, Reply, Request, handle_stream};
+use solite_core::home::Home;
 use support::*;
 
 fn stream(rig: &mut Rig, path: &str) -> ListCursor {
@@ -248,7 +248,7 @@ fn the_files_written_from_cursors_are_the_files_built_whole() {
     rig.zone("More");
     assert!(rig.home.take_zones_cursor().is_some());
     // And they read back.
-    let devices = mini_sowel_core::devices::parse_list(&built.0).unwrap();
+    let devices = solite_core::devices::parse_list(&built.0).unwrap();
     assert_eq!(devices, rig.home.devices.snapshot());
 }
 

@@ -2,10 +2,8 @@
 
 use std::fs;
 
-use mini_sowel_sim::scenario::{MAX_EVENTS, parse_at};
-use mini_sowel_sim::{
-    Action, DeviceReport, Kind, MAX_DEVICES, NetworkInit, Scenario, ScenarioClock,
-};
+use solite_sim::scenario::{MAX_EVENTS, parse_at};
+use solite_sim::{Action, DeviceReport, Kind, MAX_DEVICES, NetworkInit, Scenario, ScenarioClock};
 
 mod support;
 use support::{ONE_SENSOR, scratch};

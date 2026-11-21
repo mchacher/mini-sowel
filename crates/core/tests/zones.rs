@@ -4,10 +4,10 @@
 
 mod support;
 
-use mini_sowel_core::devices::Devices;
-use mini_sowel_core::home::Home;
-use mini_sowel_core::zones::{Zone, parse_list};
 use serde_json::{Value, json};
+use solite_core::devices::Devices;
+use solite_core::home::Home;
+use solite_core::zones::{Zone, parse_list};
 use support::*;
 
 fn text(value: &Value) -> &str {

@@ -1,14 +1,14 @@
 ---
-name: mini-sowel-feature
+name: solite-feature
 description: |
-  Builds a new feature for mini-sowel, spec first. Use when the user types
-  /mini-sowel-feature, or asks to add, create or change something in the tool
+  Builds a new feature for Solite, spec first. Use when the user types
+  /solite-feature, or asks to add, create or change something in the tool
   ("ajouter la recette motion-light", "gérer les volets", "add the zone aggregation",
   "ajouter une fonctionnalité", "je voudrais que le boîtier...").
 argument-hint: "[the idea, in one sentence]"
 ---
 
-# mini-sowel Feature Workflow
+# Solite Feature Workflow
 
 Idea: $ARGUMENTS
 
@@ -216,7 +216,7 @@ spec turns out wrong or incomplete, stop, tell the user, update the spec, and ge
   restore it.
 
 ```bash
-cargo test -p mini-sowel-core --test <file name without .rs>   # one Rust test file
+cargo test -p solite-core --test <file name without .rs>   # one Rust test file
 cd ui && npx vitest run src/<path>/<Name>.test.tsx              # one UI test file
 ```
 
@@ -296,7 +296,7 @@ Phase 4. Summarise the review to the user in a few lines: what was found, what w
 
 Show the user that it works, **in their terms**, as the spec's "How the user will check it" says:
 run the tool and show the screen, the file produced, the number computed, with their data or the
-spec's example. On the Mac: `cargo run -p mini-sowel-host` (with the simulated radio's scenario,
+spec's example. On the Mac: `cargo run -p solite-host` (with the simulated radio's scenario,
 or the Dongle Max's radio over TCP, as the spec says), and show its output or the API's answers.
 Interface: `cd ui && npm run dev`, open the screen, and show screenshots of every screen changed,
 in the Hybrid and Dark themes. ESP32: the firmware build and, only with the user's yes to flash,
@@ -320,7 +320,7 @@ Tick the acceptance criteria in `spec.md` and the steps in `plan.md`; set the ro
 `docs/specs-index.md` to "done".
 
 Then **review the roadmap**: follow Phase 3, *Quick review*, of
-`.claude/skills/mini-sowel-roadmap/SKILL.md`. The demo is the best moment to ask
+`.claude/skills/solite-roadmap/SKILL.md`. The demo is the best moment to ask
 whether this feature gave the user a new need. The roadmap change goes into this feature's commit.
 
 ### 7.2 Commit
@@ -360,7 +360,7 @@ git branch -D feat/NNN-<short-name>                      # and the remote branch
 ```
 
 Confirm to the user in one sentence, and say what is next on the roadmap: the next increment, or
-a full review with `/mini-sowel-roadmap` if one is due.
+a full review with `/solite-roadmap` if one is due.
 
 > **GATE 7 (STOP)**: all true at the end:
 >

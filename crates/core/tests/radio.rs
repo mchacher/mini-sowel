@@ -3,10 +3,10 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use mini_sowel_core::radio::ash::AshFailure;
-use mini_sowel_core::radio::ezsp::NetworkState;
-use mini_sowel_core::radio::{Radio, RadioError, RadioTransport, TransportError};
-use mini_sowel_sim::{Mode, Ncp};
+use solite_core::radio::ash::AshFailure;
+use solite_core::radio::ezsp::NetworkState;
+use solite_core::radio::{Radio, RadioError, RadioTransport, TransportError};
+use solite_sim::{Mode, Ncp};
 
 /// A transport wired to the fake radio. Reading advances the fake clock by the timeout when
 /// nothing is waiting, so no test really waits.

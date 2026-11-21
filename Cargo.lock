@@ -199,42 +199,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "mini-sowel-core"
-version = "0.1.0"
-dependencies = [
- "log",
- "mini-sowel-sim",
- "peak_alloc",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "mini-sowel-host"
-version = "0.1.0"
-dependencies = [
- "ctrlc",
- "httparse",
- "log",
- "mini-sowel-core",
- "mini-sowel-sim",
- "serde_json",
- "socket2",
- "tiny_http",
- "tungstenite",
-]
-
-[[package]]
-name = "mini-sowel-sim"
-version = "0.1.0"
-dependencies = [
- "log",
- "mini-sowel-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -370,6 +334,42 @@ checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "solite-core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "peak_alloc",
+ "serde",
+ "serde_json",
+ "solite-sim",
+]
+
+[[package]]
+name = "solite-host"
+version = "0.1.0"
+dependencies = [
+ "ctrlc",
+ "httparse",
+ "log",
+ "serde_json",
+ "socket2",
+ "solite-core",
+ "solite-sim",
+ "tiny_http",
+ "tungstenite",
+]
+
+[[package]]
+name = "solite-sim"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "solite-core",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mini_sowel_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
+use solite_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,

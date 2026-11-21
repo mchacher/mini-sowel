@@ -4,10 +4,10 @@
 
 mod support;
 
-use mini_sowel_core::home::events::EventValue;
-use mini_sowel_core::radio::zcl::Command;
-use mini_sowel_core::recipes::motion_light::{info, is_motion_active, resolve_motion_sources};
 use serde_json::{Value, json};
+use solite_core::home::events::EventValue;
+use solite_core::radio::zcl::Command;
+use solite_core::recipes::motion_light::{info, is_motion_active, resolve_motion_sources};
 use support::*;
 
 const SECOND: u64 = 1000;
@@ -68,7 +68,7 @@ fn a_motion_source_is_a_device_and_a_key_once_and_two_devices_are_two_sources() 
     // Two equipments on the same sensor: the same (device, key).
     rig.equipment("Again", "sensor", &g.zone, &[&g.motion_device]);
     rig.equipment("Other", "sensor", &g.zone, &[&second]);
-    let zone = mini_sowel_core::devices::Id::parse(&g.zone).unwrap();
+    let zone = solite_core::devices::Id::parse(&g.zone).unwrap();
     let sources = resolve_motion_sources(&rig.home, &zone);
     assert_eq!(sources.len(), 2);
     let keys: Vec<&str> = sources.iter().map(|(_, k)| &**k).collect();
@@ -106,7 +106,7 @@ fn the_motion_sources_of_a_zone_include_a_child_zone_and_skip_other_data_and_dis
     // And a second motion sensor in the zone itself: 3 sources in all.
     let more = rig.motion_sensor(0x55);
     rig.equipment("More", "sensor", &g.zone, &[&more]);
-    let zone = mini_sowel_core::devices::Id::parse(&g.zone).unwrap();
+    let zone = solite_core::devices::Id::parse(&g.zone).unwrap();
     let sources = resolve_motion_sources(&rig.home, &zone);
     assert_eq!(sources.len(), 3);
 }

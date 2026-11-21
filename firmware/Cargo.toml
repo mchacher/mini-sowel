@@ -1,6 +1,6 @@
 [package]
-name = "mini-sowel-firmware"
-description = "mini-Sowel on the ESP32 of the Sonoff Dongle Max: the core with the real adapters, on ESP-IDF."
+name = "solite-firmware"
+description = "Solite on the ESP32 of the Sonoff Dongle Max: the core with the real adapters, on ESP-IDF."
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
@@ -9,7 +9,7 @@ repository = "https://github.com/mchacher/mini-sowel"
 build = "build.rs"
 
 [[bin]]
-name = "mini-sowel-firmware"
+name = "solite-firmware"
 harness = false # no std test harness on the ESP32: the logic is tested on the Mac, in crates/
 
 [profile.release]
@@ -20,7 +20,7 @@ debug = true
 opt-level = "z"
 
 [dependencies]
-mini-sowel-core = { path = "../crates/core" }
+solite-core = { path = "../crates/core" }
 esp-idf-svc = "0.53"
 log = "0.4"
 

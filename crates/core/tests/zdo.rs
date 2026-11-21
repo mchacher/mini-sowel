@@ -1,6 +1,6 @@
 //! ZDO messages: bytes in, types out.
 
-use mini_sowel_core::radio::zdo::*;
+use solite_core::radio::zdo::*;
 
 #[test]
 fn device_announce_payload_gives_node_address_and_eui64_most_significant_first() {

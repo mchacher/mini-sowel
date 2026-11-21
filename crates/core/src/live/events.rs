@@ -1,5 +1,5 @@
-//! Sowel's `EngineEvent`s that mini-Sowel sends over the WebSocket, with Sowel's names and
-//! fields (`src/shared/types.ts` T:1819-1974). The events of what mini-Sowel does not have
+//! Sowel's `EngineEvent`s that Solite sends over the WebSocket, with Sowel's names and
+//! fields (`src/shared/types.ts` T:1819-1974). The events of what Solite does not have
 //! (`device.discovered`, modes, activity, energy, system...) are not here: see decision D18.
 
 use serde::Serialize;

@@ -2,7 +2,7 @@
 // unchanged: Zone, ZoneWithChildren, ZoneAggregatedData, Equipment, EquipmentWithDetails,
 // EquipmentType, EquipmentFamily, EquipmentStatus, EquipmentStatusReason, DataBindingWithValue,
 // OrderBindingWithDetails, BatteryAlert, and what they name (DataCategory, OrderCategory...).
-// The file is Sowel's model, which mini-Sowel's API answers (decision D3).
+// The file is Sowel's model, which Solite's API answers (decision D3).
 
 // ============================================================
 // Data Types (mirrors src/shared/types.ts)
