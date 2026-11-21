@@ -357,8 +357,10 @@ fn a_port_taken_on_the_ipv6_wildcard_is_the_error_and_exit_1() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // Linux refuses 127.0.0.1 already (the wildcard covers it); macOS lets it through and the
+    // probe of [::1] catches the clash: either way the host names the port and does not start.
     assert!(
-        stderr.starts_with(&format!("serve: cannot listen on [::1]:{port}: ")),
+        stderr.starts_with("serve: cannot listen on ") && stderr.contains(&format!(":{port}: ")),
         "{stderr}"
     );
 }
