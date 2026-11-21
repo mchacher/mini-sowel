@@ -9,7 +9,9 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use solite_core::radio::{Network, NetworkKeys};
+use solite_core::radio::{
+    Network, NetworkKeys, NetworkSettings, Radio, RadioError, RadioTransport,
+};
 
 const FILE_NAME: &str = "network.json";
 
@@ -97,4 +99,30 @@ pub fn matches(dir: &Path, network: &Network) -> bool {
         return false;
     };
     is_network(&text, network)
+}
+
+/// Starts the radio's network, for `--pair` and `--serve`: resumes the one the radio has, or forms
+/// one (the keys are written to the backup the moment the radio accepts it, before any later step
+/// that can fail). Returns the network, and whether it is one this host has no backup of.
+pub fn start<T: RadioTransport, C: FnMut() -> u64>(
+    radio: &mut Radio<T, C>,
+    data: &Path,
+    fill: &mut dyn FnMut(&mut [u8]) -> Result<(), String>,
+) -> Result<(Network, bool), String> {
+    let network = radio
+        .start_network(
+            &NetworkSettings::default(),
+            fill,
+            &mut |network| match &network.keys {
+                Some(keys) => write(data, network, keys),
+                None => Ok(()),
+            },
+        )
+        .map_err(|e| match e {
+            // The backup's own message, as it is.
+            RadioError::OnFormed(message) => message,
+            other => format!("radio: {other}"),
+        })?;
+    let foreign = network.keys.is_none() && !matches(data, &network);
+    Ok((network, foreign))
 }

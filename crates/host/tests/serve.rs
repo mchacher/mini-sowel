@@ -1436,3 +1436,187 @@ fn a_motion_light_instance_switches_the_garage_light_and_runs_again_after_a_rest
     assert_eq!(recipes[0]["id"], "motion-light");
     assert_eq!(serving.interrupt(), Some(130));
 }
+
+// ---- Pairing while serving (spec 017) ----
+
+const PERMIT_JOIN: &str = "/api/v1/integrations/solite/permit-join";
+
+impl Serving {
+    fn post(&self, path: &str, body: &str) -> (u16, String) {
+        self.request("POST", path, &format!("127.0.0.1:{}", self.port), body)
+    }
+
+    /// Lines the host printed after `serving:`, waiting up to 20 s for `wanted` of them.
+    fn lines_until(&mut self, wanted: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let start = Instant::now();
+        while !wanted(&self.shown) {
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "the lines wanted never came: {:?}",
+                self.shown
+            );
+            if let Ok(line) = self.lines.recv_timeout(Duration::from_millis(100)) {
+                self.shown.push(line);
+            }
+        }
+        self.shown.clone()
+    }
+}
+
+#[test]
+fn serve_on_an_empty_folder_forms_the_network_and_no_device_joins_before_pairing_is_opened() {
+    let dir = data_dir();
+    let serving = serve(&dir, "10", &[]);
+    assert!(
+        serving
+            .shown
+            .iter()
+            .any(|l| l.starts_with("network: formed, ")),
+        "{:?}",
+        serving.shown
+    );
+    assert!(dir.join("network.json").exists());
+    let (status, body) = serving.get(PERMIT_JOIN);
+    assert_eq!(
+        (status, body.as_str()),
+        (200, r#"{"permitJoin":false,"remaining":0}"#)
+    );
+    thread::sleep(Duration::from_millis(1500));
+    assert!(serving.devices().is_empty());
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_post_opens_pairing_the_three_devices_appear_with_their_lines_and_the_window_counts_down() {
+    let dir = data_dir();
+    let mut serving = serve(&dir, "10", &[]);
+    let (status, body) = serving.post(PERMIT_JOIN, r#"{"time":6}"#);
+    assert_eq!(
+        (status, body.as_str()),
+        (202, r#"{"permitJoin":true,"remaining":6}"#)
+    );
+    wait_until("the three devices", || serving.devices().len() == 3);
+    thread::sleep(Duration::from_millis(1200));
+    let (status, body) = serving.get(PERMIT_JOIN);
+    let state: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(state["permitJoin"], true);
+    assert!(state["remaining"].as_u64().unwrap() < 6, "{state}");
+    // The lines of pairing are shown without `--verbose`.
+    let shown = serving.lines_until(|lines| {
+        let count = |prefix: &str| lines.iter().filter(|l| l.starts_with(prefix)).count();
+        count("pairing: open for 6 s") == 1
+            && count("joined:") == 3
+            && count("device:") == 3
+            && count("reporting:") == 3
+    });
+    assert_eq!(shown.iter().filter(|l| l.starts_with("joined:")).count(), 3);
+    // Their reporting is set up: each device has its data.
+    for device in serving.devices() {
+        assert!(!device["data"].as_array().unwrap().is_empty(), "{device}");
+    }
+    // After the time, the window reads closed again.
+    wait_until("the window closes", || {
+        serving.get(PERMIT_JOIN).1 == r#"{"permitJoin":false,"remaining":0}"#
+    });
+    serving.lines_until(|lines| lines.iter().any(|l| l == "pairing: closed"));
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn time_zero_closes_the_window_at_once() {
+    let dir = data_dir();
+    let serving = serve(&dir, "10", &[]);
+    serving.post(PERMIT_JOIN, r#"{"time":120}"#);
+    let (_, body) = serving.post(PERMIT_JOIN, r#"{"time":0}"#);
+    assert_eq!(body, r#"{"permitJoin":false,"remaining":0}"#);
+    wait_until("closed", || {
+        serving.get(PERMIT_JOIN).1 == r#"{"permitJoin":false,"remaining":0}"#
+    });
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn restarting_serve_resumes_the_network_and_keeps_the_devices_added_from_the_api() {
+    let dir = data_dir();
+    let serving = serve(&dir, "10", &[]);
+    serving.post(PERMIT_JOIN, r#"{"time":30}"#);
+    wait_until("the three devices", || serving.devices().len() == 3);
+    wait_until("their reporting", || {
+        std::fs::read_to_string(dir.join("devices.json"))
+            .is_ok_and(|text| text.contains("ZBMINIR2"))
+    });
+    assert_eq!(serving.interrupt(), Some(130));
+    let serving = serve(&dir, "10", &[]);
+    assert!(
+        serving
+            .shown
+            .iter()
+            .any(|l| l.starts_with("network: resumed, ")),
+        "{:?}",
+        serving.shown
+    );
+    assert_eq!(serving.devices().len(), 3);
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_data_folder_that_cannot_be_written_stops_serve_before_serving() {
+    let file = data_dir();
+    std::fs::write(&file, b"not a folder").unwrap();
+    let dir = file.join("data");
+    let output = host()
+        .args([
+            "--sim",
+            GARAGE,
+            "--serve",
+            &free_port().to_string(),
+            "--data",
+        ])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot write"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("serving:"));
+    std::fs::remove_file(&file).unwrap();
+}
+
+#[test]
+fn ctrl_c_while_the_window_is_open_exits_130_and_writes_the_store() {
+    let dir = data_dir();
+    let mut serving = serve(&dir, "10", &[]);
+    serving.post(PERMIT_JOIN, r#"{"time":120}"#);
+    wait_until("a device", || !serving.devices().is_empty());
+    serving.lines_until(|lines| lines.iter().any(|l| l.starts_with("pairing: open for 120")));
+    assert_eq!(serving.interrupt(), Some(130));
+    let text = std::fs::read_to_string(dir.join("devices.json")).unwrap();
+    assert!(text.contains("sourceDeviceId"), "{text}");
+}
+
+#[test]
+fn a_device_being_paired_cannot_be_deleted_and_a_finished_one_can() {
+    let dir = data_dir();
+    let serving = serve(&dir, "10", &[]);
+    serving.post(PERMIT_JOIN, r#"{"time":60}"#);
+    wait_until("the three devices", || serving.devices().len() == 3);
+    wait_until("the relay's reporting", || {
+        std::fs::read_to_string(dir.join("devices.json"))
+            .is_ok_and(|text| text.contains("ZBMINIR2"))
+    });
+    // Whatever the moment, the answer is 204 or the 409 of a setup still running; the second
+    // try after a moment is 404 or 204.
+    let devices = serving.devices();
+    let id = devices[0]["id"].as_str().unwrap().to_string();
+    let path = format!("/api/v1/devices/{id}");
+    let host = format!("127.0.0.1:{}", serving.port);
+    let mut status = serving.request("DELETE", &path, &host, "").0;
+    let start = Instant::now();
+    while status == 409 {
+        assert!(start.elapsed() < Duration::from_secs(20));
+        thread::sleep(Duration::from_millis(100));
+        status = serving.request("DELETE", &path, &host, "").0;
+    }
+    assert_eq!(status, 204);
+    assert_eq!(serving.interrupt(), Some(130));
+}

@@ -1131,3 +1131,41 @@ fn an_upgrade_anywhere_but_on_ws_is_a_400_and_never_pins_an_api_worker() {
     }
     drop(held);
 }
+
+#[test]
+fn a_client_on_devices_gets_one_device_discovered_per_new_device_when_pairing_opens() {
+    let dir = data_dir();
+    let mut serving = serve(&dir, "10", &[]);
+    serving.dir = Some(dir);
+    let mut client = connect(serving.port);
+    client.welcome();
+    client.subscribe(&["devices"]);
+    thread::sleep(Duration::from_millis(400));
+    let (status, _) = serving.send(
+        "POST",
+        "/api/v1/integrations/solite/permit-join",
+        &json!({"time": 30}),
+    );
+    assert_eq!(status, 202);
+    let mut found: Vec<Value> = Vec::new();
+    let end = Instant::now() + Duration::from_secs(25);
+    while found.len() < 3 && Instant::now() < end {
+        found.extend(
+            client
+                .events(Duration::from_secs(1))
+                .into_iter()
+                .filter(|e| e["type"] == "device.discovered"),
+        );
+    }
+    assert_eq!(found.len(), 3, "{found:?}");
+    let mut models: Vec<&str> = found
+        .iter()
+        .map(|e| e["device"]["model"].as_str().unwrap())
+        .collect();
+    models.sort_unstable();
+    assert_eq!(models, ["MS01", "TH01", "ZBMINIR2"]);
+    for event in &found {
+        assert!(event["device"].get("data").is_none());
+        assert_eq!(event["device"]["integrationId"], "solite");
+    }
+}
