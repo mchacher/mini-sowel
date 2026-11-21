@@ -1,4 +1,4 @@
-use solite_core::{MemoryStats, PsramStats, memory_line};
+use solite_core::{EngineStats, MemoryStats, PsramStats, engine_line, memory_line};
 
 #[test]
 fn line_shows_internal_and_psram_in_kib() {
@@ -55,5 +55,25 @@ fn zeros_do_not_panic() {
     assert_eq!(
         memory_line(&stats),
         "memory: internal 0 KB free (largest block 0 KB), psram 0 KB free of 0 KB"
+    );
+}
+
+#[test]
+fn the_engine_line_shows_counts_and_sizes_in_kib_rounded_down() {
+    let stats = EngineStats {
+        devices: 50,
+        zones: 10,
+        equipments: 50,
+        recipes: 3,
+        heap_used: 160 * 1024 + 1023,
+        heap_peak: 190 * 1024,
+        internal_free: 120 * 1024,
+        internal_min: 90 * 1024,
+        psram_free: 1700 * 1024,
+        psram_min: 1650 * 1024,
+    };
+    assert_eq!(
+        engine_line(&stats),
+        "engine: 50 devices, 10 zones, 50 equipments, 3 recipes; heap 160 KB (peak 190 KB); internal 120 KB free (min 90 KB); psram 1700 KB free (min 1650 KB)"
     );
 }

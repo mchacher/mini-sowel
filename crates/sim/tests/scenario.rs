@@ -357,3 +357,40 @@ fn an_identity_over_32_characters_or_a_top_level_field_of_the_wrong_type_names_t
         "scenario: s.json: radio: must be an object"
     );
 }
+
+#[test]
+fn a_scenario_is_finished_once_its_last_event_has_played() {
+    use solite_core::radio::RadioTransport;
+    use solite_sim::{FakeClock, SimTransport};
+
+    let clock = FakeClock::default();
+    let time = std::rc::Rc::clone(&clock.time);
+    let mut transport = SimTransport::for_scenario(
+        &Scenario::parse(ONE_SENSOR, "s.json").unwrap(),
+        None,
+        1,
+        clock,
+    )
+    .unwrap();
+    assert!(!transport.finished(), "before the first event");
+    let mut buffer = [0u8; 64];
+    // The last event is at 1m30s: not finished before, finished when the clock reaches it.
+    while !transport.finished() {
+        assert!(time.get() < 90_000, "never finished");
+        transport.read(&mut buffer, 1000).unwrap();
+    }
+    assert!(time.get() >= 90_000, "finished at {} ms", time.get());
+    transport.read(&mut buffer, 1000).unwrap();
+    assert!(transport.finished(), "and after");
+
+    // No event at all: nothing to wait for.
+    let empty = r#"{"radio": {"ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE123456", "network": "none"}, "devices": [], "events": []}"#;
+    let transport = SimTransport::for_scenario(
+        &Scenario::parse(empty, "e.json").unwrap(),
+        None,
+        1,
+        FakeClock::default(),
+    )
+    .unwrap();
+    assert!(transport.finished());
+}

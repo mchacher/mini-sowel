@@ -90,3 +90,40 @@ pub fn choose(setting: NetworkSetting, cable: bool) -> Link {
         NetworkSetting::Auto => Link::Wifi,
     }
 }
+
+impl NetworkSetting {
+    /// The setting's value as it is written in the file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetworkSetting::Auto => "auto",
+            NetworkSetting::Wifi => "wifi",
+            NetworkSetting::Ethernet => "ethernet",
+        }
+    }
+}
+
+impl Link {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Link::Wifi => "wifi",
+            Link::Ethernet => "ethernet",
+        }
+    }
+}
+
+/// The lines the firmware logs at boot for the setting's text: the fallback reason when the
+/// setting fell back to `auto`, then the choice, for example `network: wifi (setting auto), no
+/// link started` (the firmware starts no link and detects no cable: `cable` is what it passes).
+pub fn boot_lines(text: Option<&str>, cable: bool) -> Vec<String> {
+    let (setting, fallback) = parse(text);
+    let mut lines = Vec::new();
+    if let Some(reason) = fallback {
+        lines.push(reason.message());
+    }
+    lines.push(format!(
+        "network: {} (setting {}), no link started",
+        choose(setting, cable).as_str(),
+        setting.as_str()
+    ));
+    lines
+}

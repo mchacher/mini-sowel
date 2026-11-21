@@ -2,16 +2,16 @@
 
 ## Steps
 
-- [ ] 1. Living spec updated (delta of the spec)
-- [ ] 2. `core::engine`: the loop and the saver moved from the host, `Storage` trait; host adapted;
+- [x] 1. Living spec updated (delta of the spec)
+- [x] 2. `core::engine`: the loop and the saver moved from the host, `Storage` trait; host adapted;
       every existing test green
-- [ ] 3. `crates/sim` builds for the ESP32
-- [ ] 4. Fixtures of the realistic home and their test
-- [ ] 5. Firmware: storage mount, network line, `radio: none`; feature `sim`: seed, engine,
+- [x] 3. `crates/sim` builds for the ESP32
+- [x] 4. Fixtures of the realistic home and their test
+- [x] 5. Firmware: storage mount, network line, `radio: none`; feature `sim`: seed, engine,
       `engine:` line
-- [ ] 6. `scripts/qemu.sh` and `scripts/validate.sh`; QEMU figures in `docs/memory-budget.md`
-- [ ] 7. D26, architecture, roadmap (E1 done when both specs are), what this makes false
-- [ ] 8. Types mirroring Sowel, API, WebSocket, interface: not applicable
+- [x] 6. `scripts/qemu.sh` and `scripts/validate.sh`; QEMU figures in `docs/memory-budget.md`
+- [x] 7. D26, architecture, roadmap (E1 done when both specs are), what this makes false
+- [x] 8. Types mirroring Sowel, API, WebSocket, interface: not applicable
 
 ## Test plan
 
@@ -39,6 +39,6 @@
 
 ## Validation
 
-- [ ] Validate command green
+- [x] Validate command green
 - [ ] Agent review done, blocking findings fixed
 - [ ] Demo seen and approved by the user

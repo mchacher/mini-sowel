@@ -1,12 +1,18 @@
 #!/bin/sh
-# Boots the ESP32 firmware in Espressif's QEMU and checks that it starts.
+# Boots the ESP32 firmware in Espressif's QEMU and checks the engine's memory.
 #
-#   sh scripts/qemu.sh
+#   sh scripts/qemu.sh          the image QEMU runs (feature `sim`): the engine on the simulated
+#                               radio with the realistic home of firmware/fixtures/
+#   sh scripts/qemu.sh --box    the image of the box (no `sim`): storage, network, `radio: none`
 #
-# Builds the firmware (release), assembles a 16 MB flash image, starts QEMU (machine esp32, 2 MB of
-# PSRAM, chip revision 3), and waits for the banner and the memory line. Exit 0 and both lines
-# printed when they show; exit 1 and the last 40 lines of the serial output when the firmware
-# panics, reboots, or shows nothing within 60 seconds. QEMU is always stopped, also on Ctrl-C.
+# Builds the firmware (release), assembles a 16 MB flash image (bootloader, partition table,
+# application; the data partition stays blank, so every run formats it), starts QEMU (machine
+# esp32, 2 MB of PSRAM, chip revision 3), and waits for the banner, the memory line, the `storage:`
+# and `network:` lines and, for the sim image, the `engine:` line, which it prints. Exit 0 when they
+# show and the engine's heap peak is at most 300 KB (decision D20) and its internal RAM minimum
+# free at least 64 KB (spec 015's reserve); exit 1 and the last 40 lines of the serial output when
+# a limit is crossed, the firmware panics, reboots, or a line is missing within the time allowed.
+# QEMU is always stopped, also on Ctrl-C.
 # Installs QEMU into firmware/.embuild/ at the first run (a download, like ESP-IDF's).
 set -e
 cd "$(dirname "$0")/.."
@@ -28,7 +34,18 @@ VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Ca
 
 TARGET_DIR=firmware/target/xtensa-esp32-espidf/release
 ESPRESSIF=$ROOT/firmware/.embuild/espressif
-TIMEOUT=60
+# The engine's limits, in KB (spec 016 R4.4): heap peak (D20) and internal RAM minimum free.
+PEAK_LIMIT_KB=300
+INTERNAL_MIN_KB=64
+
+MODE=sim
+case "$1" in
+  "") ;;
+  --box) MODE=box ;;
+  *) fail "usage: sh scripts/qemu.sh [--box]" ;;
+esac
+# Time allowed: the blank partition is formatted, then 12 s of scenario time on a slow emulator.
+if [ "$MODE" = sim ]; then TIMEOUT=240; else TIMEOUT=60; fi
 
 # QEMU's system libraries on macOS (Homebrew).
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -40,8 +57,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
   fi
 fi
 
-echo "== Firmware build"
-(cd firmware && cargo build --release --quiet)
+echo "== Firmware build ($MODE image)"
+if [ "$MODE" = sim ]; then
+  (cd firmware && cargo build --release --features sim --quiet)
+else
+  (cd firmware && cargo build --release --quiet)
+fi
 
 # ESP-IDF's tools: the Python environment and ESP-IDF itself, downloaded by the firmware build.
 IDF_PATH=$(ls -d "$ESPRESSIF"/esp-idf/*/ 2>/dev/null | tail -n 1)
@@ -121,8 +142,12 @@ broken() {
   grep -aqE 'Guru Meditation Error|abort\(\) was called|panicked at' "$LOG" && return 0
   [ "$(grep -ac 'rst:' "$LOG")" -ge 2 ]
 }
+# The lines that must show: the banner, the memory, the storage and the network; then the engine's
+# (sim image) or `radio: none` (box image).
 ok() {
-  grep -aqF "solite $VERSION" "$LOG" && grep -aq 'memory: internal' "$LOG"
+  grep -aqF "solite $VERSION" "$LOG" && grep -aq 'memory: internal' "$LOG" \
+    && grep -aq 'storage: /data, ' "$LOG" && grep -aq 'network: .* no link started' "$LOG" || return 1
+  if [ "$MODE" = sim ]; then grep -aq 'engine: ' "$LOG"; else grep -aq 'radio: none' "$LOG"; fi
 }
 show_failure() {
   echo "qemu: $1" >&2
@@ -142,9 +167,22 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     broken && show_failure "the firmware panicked or rebooted."
     grep -aF "solite $VERSION" "$LOG"
     grep -a 'memory: internal' "$LOG"
+    grep -a 'storage: ' "$LOG"
+    grep -a 'network: ' "$LOG"
+    if [ "$MODE" = box ]; then
+      grep -a 'radio: none' "$LOG"
+      exit 0
+    fi
+    ENGINE=$(grep -a 'engine: ' "$LOG" | tail -n 1)
+    echo "$ENGINE"
+    PEAK=$(echo "$ENGINE" | sed -n 's/.*(peak \([0-9]*\) KB).*/\1/p')
+    INTERNAL_MIN=$(echo "$ENGINE" | sed -n 's/.*internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
+    [ -n "$PEAK" ] && [ -n "$INTERNAL_MIN" ] || show_failure "cannot read the peak and the internal minimum from the engine line."
+    [ "$PEAK" -le "$PEAK_LIMIT_KB" ] || show_failure "the engine's heap peak is $PEAK KB, above the $PEAK_LIMIT_KB KB of decision D20."
+    [ "$INTERNAL_MIN" -ge "$INTERNAL_MIN_KB" ] || show_failure "the internal RAM minimum free is $INTERNAL_MIN KB, below the $INTERNAL_MIN_KB KB kept for the network."
     exit 0
   fi
   sleep 1
   elapsed=$((elapsed + 1))
 done
-show_failure "no banner and memory line within $TIMEOUT seconds."
+show_failure "the lines of the $MODE image did not all show within $TIMEOUT seconds."

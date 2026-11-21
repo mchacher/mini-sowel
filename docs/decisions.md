@@ -372,3 +372,32 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   recipes need room. FAT rather than LittleFS: it is in ESP-IDF, with no extra component. The
   table is cheap to change before the first flash and needs a full re-flash after. Chosen in
   autonomy, to be confirmed by the user at the demo.
+
+## D26: The engine's loop is in the core, and the simulator is built into the QEMU image
+
+- **Date**: 2026-11-21
+- **Choice**: the radio loop and the saver of the host move to `crates/core/src/engine/`, generic
+  over the radio transport, a `Storage` trait (the engine's four named files, written chunk by
+  chunk, D15), clock closures, a random closure and an output closure; the host (files in a
+  folder) and the firmware (the FAT partition) implement `Storage`. `crates/sim` builds for the
+  ESP32: the firmware has a cargo feature `sim`, which embeds the simulator, the realistic home
+  of D20 and its scenario (`firmware/fixtures/`) and runs the engine on them in a thread of 32 KB
+  of stack; without it the image is the box's and starts no radio. This replaces spec 007's "the
+  simulator is never built for the ESP32": it is built for the image QEMU runs, not for the box.
+  The engine's heap peak and the internal RAM minimum are read by the firmware with ESP-IDF's
+  local-minimum monitor of the free heap, phase by phase (load the home, build the simulator,
+  run), and `scripts/qemu.sh` fails above 300 KB (D20) or below 64 KB of internal RAM free
+  (spec 015's reserve).
+- **Why**: the loop had to run on the box before the box is flashed, and moving it keeps one loop
+  for both programs (the host's tests are its safety net). D20 said the 300 KB is "read again on
+  the box (QEMU, then the Dongle Max)": the QEMU figure is an upper bound, with the simulator
+  inside, and the box measures it again in E3. The monitor's figures are the sum of the low
+  watermarks of the internal RAM and the PSRAM, which may have been reached at different
+  moments: over the whole run the sum gave 329 KB for the same run, phase by phase 287 KB
+  (heap 175 KB at the end), so the gate uses the phases. `SPIRAM_MALLOC_ALWAYSINTERNAL` was
+  tried at 512 as the first remedy (D23's knob): the total heap does not shrink when allocations
+  move between the two memories, and the peak read 359 KB (whole-run sum), so it stays at 4096.
+  What the peak holds: the 32 KB stack, the home loaded from its files (text and parsed data,
+  about 260 KB at the highest), then the simulator; the loading is the largest transient and
+  is the first optimisation to make if the ceiling is crossed.
+

@@ -1,0 +1,824 @@
+{
+  "devices": [
+    {
+      "eui64": "00124B0012345600",
+      "id": "sensor0",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345601",
+      "id": "sensor1",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345602",
+      "id": "sensor2",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345603",
+      "id": "sensor3",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345604",
+      "id": "sensor4",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345605",
+      "id": "sensor5",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345606",
+      "id": "sensor6",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345607",
+      "id": "sensor7",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345608",
+      "id": "sensor8",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345609",
+      "id": "sensor9",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560A",
+      "id": "sensor10",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560B",
+      "id": "sensor11",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560C",
+      "id": "sensor12",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560D",
+      "id": "sensor13",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560E",
+      "id": "sensor14",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234560F",
+      "id": "sensor15",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345610",
+      "id": "sensor16",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345611",
+      "id": "sensor17",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345612",
+      "id": "sensor18",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345613",
+      "id": "sensor19",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345614",
+      "id": "sensor20",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345615",
+      "id": "sensor21",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345616",
+      "id": "sensor22",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345617",
+      "id": "sensor23",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345618",
+      "id": "sensor24",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345619",
+      "id": "sensor25",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561A",
+      "id": "sensor26",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561B",
+      "id": "sensor27",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561C",
+      "id": "sensor28",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561D",
+      "id": "sensor29",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561E",
+      "id": "sensor30",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B001234561F",
+      "id": "sensor31",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345620",
+      "id": "sensor32",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345621",
+      "id": "sensor33",
+      "kind": "temperature-humidity"
+    },
+    {
+      "eui64": "00124B0012345622",
+      "id": "light34",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345623",
+      "id": "light35",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345624",
+      "id": "light36",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345625",
+      "id": "light37",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345626",
+      "id": "light38",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345627",
+      "id": "light39",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345628",
+      "id": "light40",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345629",
+      "id": "light41",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562A",
+      "id": "light42",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562B",
+      "id": "light43",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562C",
+      "id": "light44",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562D",
+      "id": "light45",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562E",
+      "id": "light46",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B001234562F",
+      "id": "light47",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345630",
+      "id": "light48",
+      "kind": "relay"
+    },
+    {
+      "eui64": "00124B0012345631",
+      "id": "light49",
+      "kind": "relay"
+    }
+  ],
+  "events": [
+    {
+      "at": "5s",
+      "device": "sensor0",
+      "do": "report",
+      "humidity": 40.0,
+      "temperature": 18.0
+    },
+    {
+      "at": "50s",
+      "battery": 100,
+      "device": "sensor0",
+      "do": "report"
+    },
+    {
+      "at": "6s",
+      "device": "sensor1",
+      "do": "report",
+      "humidity": 41.0,
+      "temperature": 18.25
+    },
+    {
+      "at": "51s",
+      "battery": 99,
+      "device": "sensor1",
+      "do": "report"
+    },
+    {
+      "at": "7s",
+      "device": "sensor2",
+      "do": "report",
+      "humidity": 42.0,
+      "temperature": 18.5
+    },
+    {
+      "at": "52s",
+      "battery": 98,
+      "device": "sensor2",
+      "do": "report"
+    },
+    {
+      "at": "8s",
+      "device": "sensor3",
+      "do": "report",
+      "humidity": 43.0,
+      "temperature": 18.75
+    },
+    {
+      "at": "53s",
+      "battery": 97,
+      "device": "sensor3",
+      "do": "report"
+    },
+    {
+      "at": "9s",
+      "device": "sensor4",
+      "do": "report",
+      "humidity": 44.0,
+      "temperature": 19.0
+    },
+    {
+      "at": "54s",
+      "battery": 96,
+      "device": "sensor4",
+      "do": "report"
+    },
+    {
+      "at": "10s",
+      "device": "sensor5",
+      "do": "report",
+      "humidity": 45.0,
+      "temperature": 19.25
+    },
+    {
+      "at": "55s",
+      "battery": 95,
+      "device": "sensor5",
+      "do": "report"
+    },
+    {
+      "at": "11s",
+      "device": "sensor6",
+      "do": "report",
+      "humidity": 46.0,
+      "temperature": 19.5
+    },
+    {
+      "at": "56s",
+      "battery": 94,
+      "device": "sensor6",
+      "do": "report"
+    },
+    {
+      "at": "12s",
+      "device": "sensor7",
+      "do": "report",
+      "humidity": 47.0,
+      "temperature": 19.75
+    },
+    {
+      "at": "57s",
+      "battery": 93,
+      "device": "sensor7",
+      "do": "report"
+    },
+    {
+      "at": "13s",
+      "device": "sensor8",
+      "do": "report",
+      "humidity": 48.0,
+      "temperature": 20.0
+    },
+    {
+      "at": "58s",
+      "battery": 92,
+      "device": "sensor8",
+      "do": "report"
+    },
+    {
+      "at": "14s",
+      "device": "sensor9",
+      "do": "report",
+      "humidity": 49.0,
+      "temperature": 20.25
+    },
+    {
+      "at": "59s",
+      "battery": 91,
+      "device": "sensor9",
+      "do": "report"
+    },
+    {
+      "at": "15s",
+      "device": "sensor10",
+      "do": "report",
+      "humidity": 50.0,
+      "temperature": 20.5
+    },
+    {
+      "at": "60s",
+      "battery": 90,
+      "device": "sensor10",
+      "do": "report"
+    },
+    {
+      "at": "16s",
+      "device": "sensor11",
+      "do": "report",
+      "humidity": 51.0,
+      "temperature": 20.75
+    },
+    {
+      "at": "61s",
+      "battery": 89,
+      "device": "sensor11",
+      "do": "report"
+    },
+    {
+      "at": "17s",
+      "device": "sensor12",
+      "do": "report",
+      "humidity": 52.0,
+      "temperature": 21.0
+    },
+    {
+      "at": "62s",
+      "battery": 88,
+      "device": "sensor12",
+      "do": "report"
+    },
+    {
+      "at": "18s",
+      "device": "sensor13",
+      "do": "report",
+      "humidity": 53.0,
+      "temperature": 21.25
+    },
+    {
+      "at": "63s",
+      "battery": 87,
+      "device": "sensor13",
+      "do": "report"
+    },
+    {
+      "at": "19s",
+      "device": "sensor14",
+      "do": "report",
+      "humidity": 54.0,
+      "temperature": 21.5
+    },
+    {
+      "at": "64s",
+      "battery": 86,
+      "device": "sensor14",
+      "do": "report"
+    },
+    {
+      "at": "20s",
+      "device": "sensor15",
+      "do": "report",
+      "humidity": 55.0,
+      "temperature": 21.75
+    },
+    {
+      "at": "65s",
+      "battery": 85,
+      "device": "sensor15",
+      "do": "report"
+    },
+    {
+      "at": "21s",
+      "device": "sensor16",
+      "do": "report",
+      "humidity": 56.0,
+      "temperature": 22.0
+    },
+    {
+      "at": "66s",
+      "battery": 84,
+      "device": "sensor16",
+      "do": "report"
+    },
+    {
+      "at": "22s",
+      "device": "sensor17",
+      "do": "report",
+      "humidity": 57.0,
+      "temperature": 22.25
+    },
+    {
+      "at": "67s",
+      "battery": 83,
+      "device": "sensor17",
+      "do": "report"
+    },
+    {
+      "at": "23s",
+      "device": "sensor18",
+      "do": "report",
+      "humidity": 58.0,
+      "temperature": 22.5
+    },
+    {
+      "at": "68s",
+      "battery": 82,
+      "device": "sensor18",
+      "do": "report"
+    },
+    {
+      "at": "24s",
+      "device": "sensor19",
+      "do": "report",
+      "humidity": 59.0,
+      "temperature": 22.75
+    },
+    {
+      "at": "69s",
+      "battery": 81,
+      "device": "sensor19",
+      "do": "report"
+    },
+    {
+      "at": "25s",
+      "device": "sensor20",
+      "do": "report",
+      "humidity": 60.0,
+      "temperature": 23.0
+    },
+    {
+      "at": "70s",
+      "battery": 80,
+      "device": "sensor20",
+      "do": "report"
+    },
+    {
+      "at": "26s",
+      "device": "sensor21",
+      "do": "report",
+      "humidity": 61.0,
+      "temperature": 23.25
+    },
+    {
+      "at": "71s",
+      "battery": 79,
+      "device": "sensor21",
+      "do": "report"
+    },
+    {
+      "at": "27s",
+      "device": "sensor22",
+      "do": "report",
+      "humidity": 62.0,
+      "temperature": 23.5
+    },
+    {
+      "at": "72s",
+      "battery": 78,
+      "device": "sensor22",
+      "do": "report"
+    },
+    {
+      "at": "28s",
+      "device": "sensor23",
+      "do": "report",
+      "humidity": 63.0,
+      "temperature": 23.75
+    },
+    {
+      "at": "73s",
+      "battery": 77,
+      "device": "sensor23",
+      "do": "report"
+    },
+    {
+      "at": "29s",
+      "device": "sensor24",
+      "do": "report",
+      "humidity": 64.0,
+      "temperature": 24.0
+    },
+    {
+      "at": "74s",
+      "battery": 76,
+      "device": "sensor24",
+      "do": "report"
+    },
+    {
+      "at": "30s",
+      "device": "sensor25",
+      "do": "report",
+      "humidity": 65.0,
+      "temperature": 24.25
+    },
+    {
+      "at": "75s",
+      "battery": 75,
+      "device": "sensor25",
+      "do": "report"
+    },
+    {
+      "at": "31s",
+      "device": "sensor26",
+      "do": "report",
+      "humidity": 66.0,
+      "temperature": 24.5
+    },
+    {
+      "at": "76s",
+      "battery": 74,
+      "device": "sensor26",
+      "do": "report"
+    },
+    {
+      "at": "32s",
+      "device": "sensor27",
+      "do": "report",
+      "humidity": 67.0,
+      "temperature": 24.75
+    },
+    {
+      "at": "77s",
+      "battery": 73,
+      "device": "sensor27",
+      "do": "report"
+    },
+    {
+      "at": "33s",
+      "device": "sensor28",
+      "do": "report",
+      "humidity": 68.0,
+      "temperature": 25.0
+    },
+    {
+      "at": "78s",
+      "battery": 72,
+      "device": "sensor28",
+      "do": "report"
+    },
+    {
+      "at": "34s",
+      "device": "sensor29",
+      "do": "report",
+      "humidity": 69.0,
+      "temperature": 25.25
+    },
+    {
+      "at": "79s",
+      "battery": 71,
+      "device": "sensor29",
+      "do": "report"
+    },
+    {
+      "at": "35s",
+      "device": "sensor30",
+      "do": "report",
+      "humidity": 70.0,
+      "temperature": 25.5
+    },
+    {
+      "at": "80s",
+      "battery": 70,
+      "device": "sensor30",
+      "do": "report"
+    },
+    {
+      "at": "36s",
+      "device": "sensor31",
+      "do": "report",
+      "humidity": 71.0,
+      "temperature": 25.75
+    },
+    {
+      "at": "81s",
+      "battery": 69,
+      "device": "sensor31",
+      "do": "report"
+    },
+    {
+      "at": "37s",
+      "device": "sensor32",
+      "do": "report",
+      "humidity": 72.0,
+      "temperature": 26.0
+    },
+    {
+      "at": "82s",
+      "battery": 68,
+      "device": "sensor32",
+      "do": "report"
+    },
+    {
+      "at": "38s",
+      "device": "sensor33",
+      "do": "report",
+      "humidity": 73.0,
+      "temperature": 26.25
+    },
+    {
+      "at": "83s",
+      "battery": 67,
+      "device": "sensor33",
+      "do": "report"
+    },
+    {
+      "at": "90s",
+      "device": "light34",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "91s",
+      "device": "light35",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "92s",
+      "device": "light36",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "93s",
+      "device": "light37",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "94s",
+      "device": "light38",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "95s",
+      "device": "light39",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "96s",
+      "device": "light40",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "97s",
+      "device": "light41",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "98s",
+      "device": "light42",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "99s",
+      "device": "light43",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "100s",
+      "device": "light44",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "101s",
+      "device": "light45",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "102s",
+      "device": "light46",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "103s",
+      "device": "light47",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "104s",
+      "device": "light48",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "105s",
+      "device": "light49",
+      "do": "report",
+      "light_state": "on"
+    },
+    {
+      "at": "110s",
+      "device": "light34",
+      "do": "report",
+      "light_state": "off"
+    },
+    {
+      "at": "111s",
+      "device": "light35",
+      "do": "report",
+      "light_state": "off"
+    },
+    {
+      "at": "112s",
+      "device": "light36",
+      "do": "report",
+      "light_state": "off"
+    },
+    {
+      "at": "113s",
+      "device": "light37",
+      "do": "report",
+      "light_state": "off"
+    }
+  ],
+  "radio": {
+    "eui64": "8C6FB9FFFE123456",
+    "ezsp": 13,
+    "network": "formed",
+    "stack": "7.4.4.0"
+  }
+}

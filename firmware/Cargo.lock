@@ -1218,6 +1218,17 @@ dependencies = [
  "esp-idf-svc",
  "log",
  "solite-core",
+ "solite-sim",
+]
+
+[[package]]
+name = "solite-sim"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "solite-core",
 ]
 
 [[package]]

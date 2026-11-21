@@ -1,8 +1,9 @@
 //! The simulated radio's flash: the network and the devices that joined, kept in a JSON file in
-//! the host's data folder so a second run finds them.
+//! the host's data folder (or the box's data partition) so a second run finds them.
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
@@ -216,14 +217,19 @@ pub fn save(file: &Path, memory: &Memory) -> Result<(), String> {
     let mut temporary = file.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = std::path::PathBuf::from(temporary);
-    // Owner only, like the host's own backup.
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|e| cannot(&e))?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Owner only, like the host's own backup. The ESP32's FAT partition has no permissions: the
+    // file is created with the default mode there.
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut out = options.open(&temporary).map_err(|e| cannot(&e))?;
     out.write_all(text.as_bytes()).map_err(|e| cannot(&e))?;
-    fs::rename(&temporary, file).map_err(|e| cannot(&e))
+    // A rename onto an existing file is refused on the ESP32's FAT partition: the old file goes
+    // first (the new one is complete by now).
+    if fs::rename(&temporary, file).is_err() {
+        let _ = fs::remove_file(file);
+        fs::rename(&temporary, file).map_err(|e| cannot(&e))?;
+    }
+    Ok(())
 }

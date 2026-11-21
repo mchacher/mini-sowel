@@ -26,3 +26,8 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # custom table from here (its README says to leave CONFIG_PARTITION_TABLE_* out), so the table
 # reaches the box through `espflash --partition-table partitions.csv`, and QEMU through
 # `scripts/qemu.sh`, which builds its image from the same file.
+
+# The data partition is FAT with wear levelling (spec 016): the engine's files have names longer
+# than 8.3 (`devices.json`), so long file names are on, their buffer taken from the heap.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64

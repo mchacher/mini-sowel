@@ -68,6 +68,13 @@ impl<C: Clock> SimTransport<C> {
         ))
     }
 
+    /// True once the scenario's last event has played and what it made the radio send has been
+    /// read: nothing more will come from the scenario (a scenario without events is finished at
+    /// once).
+    pub fn finished(&self) -> bool {
+        self.next_event >= self.events.len() && self.to_read.is_empty()
+    }
+
     /// Plays what is due: the scenario's events, the joins that waited for pairing, the radio's
     /// timed callbacks. The answers go to the bytes waiting to be read.
     fn tick(&mut self) -> Result<(), TransportError> {
