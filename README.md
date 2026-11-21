@@ -15,6 +15,7 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
 | ------ | ---- |
 | `crates/core` | The Sowel core, in Rust, without any hardware dependency |
 | `crates/host` | mini-Sowel on a Mac (or a Linux or Windows computer) |
+| `crates/sim` | A simulated radio and devices, played from `scenarios/`, for working without the dongle |
 | `firmware/` | mini-Sowel on the ESP32 of the Dongle Max (Rust on ESP-IDF) |
 | `ui/` | The web interface (Preact, TypeScript), in Sowel's design system |
 | `tools/` | Node tools run on the Mac, not shipped in the box: `z2m-coverage` measures how many of Zigbee2MQTT's device definitions the box can reuse |
@@ -49,6 +50,7 @@ cargo run -p mini-sowel-host                      # on the computer
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen # show the measures
+cargo run -p mini-sowel-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
 cd ui && npm run dev                              # the interface, on http://localhost:5173
 cd firmware && cargo build --release              # the ESP32 firmware
 sh scripts/qemu.sh                                # the firmware, booted in an emulated ESP32

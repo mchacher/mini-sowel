@@ -1,15 +1,25 @@
-//! A scripted radio (NCP) for the tests: bytes in, bytes out, speaking real ASH and EZSP.
-//! Shared by the core's and the host's tests.
+//! The simulated radio (NCP): bytes in, bytes out, speaking real ASH and EZSP, with simulated
+//! devices behind it. The tests of the core and the host drive it directly (with fault
+//! switches); the host runs it for `--sim`, through `SimTransport`.
 
-#![allow(dead_code)]
-
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::path::{Path, PathBuf};
 
 use mini_sowel_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
-use mini_sowel_core::radio::{Radio, RadioTransport, TransportError};
 
-/// How the fake radio behaves after the reset.
+use crate::devices::{
+    AWAKE_MS, Attr, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
+    battery_report, humidity_report, on_off_report, temperature_report, zone_notification,
+};
+use crate::memory::{self, Memory};
+use crate::scenario::{NetworkInit, Scenario};
+
+/// Most devices a radio holds (the scenario's bound too).
+pub const MAX_DEVICES: usize = 64;
+/// Each record the tests inspect (bytes received, commands, messages sent) holds at most this
+/// many entries when recording is on; the entries past it are not kept.
+pub const MAX_RECORDS: usize = 10_000;
+
+/// How the simulated radio behaves after the reset.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Normal,
@@ -34,164 +44,6 @@ pub struct StoredNetwork {
     pub node_type: u8,
 }
 
-/// A character attribute of the simulated device.
-#[derive(Clone, Debug)]
-pub enum Attr {
-    /// The bytes of the string as the device sends them.
-    Text(Vec<u8>),
-    /// The device answers "unsupported attribute" (status 0x86).
-    Unsupported,
-}
-
-/// How the device answers a Configure Reporting request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfigureAnswer {
-    /// A Configure Reporting Response with the single status byte 0x00.
-    Single,
-    /// A Configure Reporting Response with one record (status 0) per attribute.
-    PerAttribute,
-    /// A Configure Reporting Response refusing every attribute with this status.
-    Refuse(u8),
-    /// A Default Response with this status.
-    Default(u8),
-    /// A Configure Reporting Response with the single status byte given (the whole command
-    /// failed when it is not 0x00).
-    SingleStatus(u8),
-    /// A Configure Reporting Response refusing this one attribute with the status, and accepting
-    /// the others (as one record per attribute).
-    RefuseAttribute(u16, u8),
-    /// No answer.
-    Silent,
-}
-
-/// A ZCL Report Attributes frame from a device (server to client, default response disabled by
-/// the device): the records are `(attribute, data type, value bytes)`.
-pub fn report_frame(tsn: u8, records: &[(u16, u8, Vec<u8>)]) -> Vec<u8> {
-    report_frame_with_control(0x18, tsn, records)
-}
-
-/// The same with the frame control given: 0x08 asks the coordinator for a Default Response.
-pub fn report_frame_with_control(control: u8, tsn: u8, records: &[(u16, u8, Vec<u8>)]) -> Vec<u8> {
-    let mut frame = vec![control, tsn, 0x0A];
-    for (attribute, data_type, value) in records {
-        frame.extend_from_slice(&attribute.to_le_bytes());
-        frame.push(*data_type);
-        frame.extend_from_slice(value);
-    }
-    frame
-}
-
-/// A temperature report, in hundredths of a degree.
-pub fn temperature_report(tsn: u8, hundredths: i16) -> Vec<u8> {
-    report_frame(tsn, &[(0x0000, 0x29, hundredths.to_le_bytes().to_vec())])
-}
-
-/// A humidity report, in hundredths of a percent.
-pub fn humidity_report(tsn: u8, hundredths: u16) -> Vec<u8> {
-    report_frame(tsn, &[(0x0000, 0x21, hundredths.to_le_bytes().to_vec())])
-}
-
-/// A battery report: half-percent units.
-pub fn battery_report(tsn: u8, half_percent: u8) -> Vec<u8> {
-    report_frame(tsn, &[(0x0021, 0x20, vec![half_percent])])
-}
-
-/// A simulated Zigbee device: it joins when pairing opens, answers the endpoint request and the
-/// Basic read, then (like an eWeLink SNZB-02) its descriptor, binds and Configure Reporting, and
-/// sends reports.
-#[derive(Clone, Debug)]
-pub struct FakeDevice {
-    /// As on the wire (little-endian).
-    pub eui_wire: [u8; 8],
-    pub nwk: u16,
-    /// Time between the opening of pairing and the join, in milliseconds.
-    pub join_delay_ms: u64,
-    /// `EmberDeviceUpdate` of the trust-centre join, and its `EmberJoinDecision`.
-    pub join_status: u8,
-    pub join_decision: u8,
-    /// Sends a `Device_annce` just after the join; twice if `announce_twice`.
-    pub announce: bool,
-    pub announce_twice: bool,
-    /// The endpoints it lists; `None`: it never answers the endpoint request.
-    pub endpoints: Option<Vec<u8>>,
-    /// Status of its `Active_EP_rsp`.
-    pub endpoint_status: u8,
-    pub manufacturer: Attr,
-    pub model: Attr,
-    /// Number of Read Attributes requests it ignores before it answers; `u32::MAX`: never.
-    pub ignore_reads: u32,
-    /// Sends wrong answers (other device, other transaction number, Default Response) before
-    /// each right one.
-    pub decoys: bool,
-    /// Time between a request and its answer, in milliseconds.
-    pub answer_delay_ms: u64,
-    /// Sends `messageSentHandler` after the answer instead of before.
-    pub message_sent_last: bool,
-    /// The input clusters of its endpoint, as its descriptor lists them.
-    pub input_clusters: Vec<u16>,
-    /// Number of Simple_Desc requests it ignores before it answers; `u32::MAX`: never.
-    pub ignore_descriptors: u32,
-    /// Clusters whose Bind it refuses (status 0x84).
-    pub bind_refused: Vec<u16>,
-    /// How it answers a Configure Reporting, and the clusters that get another answer.
-    pub configure: ConfigureAnswer,
-    pub configure_overrides: Vec<(u16, ConfigureAnswer)>,
-    /// Number of Configure Reporting requests it ignores before it answers; `u32::MAX`: never.
-    pub ignore_configures: u32,
-    /// `(cluster, ZCL frame)` reports sent right after the first Bind is answered, before the
-    /// Configure Reporting.
-    pub reports_during_setup: Vec<(u16, Vec<u8>)>,
-    /// `(cluster, ZCL frame)` reports sent once the Configure Reporting of every cluster the
-    /// host sets up is answered (right after the last answer).
-    pub reports: Vec<(u16, Vec<u8>)>,
-    /// Sends all its `reports` when the network is resumed (a second run of the host).
-    pub reports_on_resume: bool,
-    bound: bool,
-    configured: Vec<u16>,
-    reports_sent: bool,
-    joined: bool,
-}
-
-impl FakeDevice {
-    /// An original SNZB-02: `eWeLink` / `TH01`, on endpoint 1, announcing itself.
-    pub fn sensor() -> Self {
-        FakeDevice {
-            eui_wire: [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
-            nwk: 0x5C3D,
-            join_delay_ms: 0,
-            join_status: 1,
-            join_decision: 0,
-            announce: true,
-            announce_twice: false,
-            endpoints: Some(vec![1]),
-            endpoint_status: 0,
-            manufacturer: Attr::Text(b"eWeLink".to_vec()),
-            model: Attr::Text(b"TH01".to_vec()),
-            ignore_reads: 0,
-            decoys: false,
-            answer_delay_ms: 0,
-            message_sent_last: false,
-            input_clusters: vec![0x0000, 0x0001, 0x0402, 0x0405, 0x0003],
-            ignore_descriptors: 0,
-            bind_refused: Vec::new(),
-            configure: ConfigureAnswer::Single,
-            configure_overrides: Vec::new(),
-            ignore_configures: 0,
-            reports_during_setup: Vec::new(),
-            reports: vec![
-                (0x0402, temperature_report(0x31, 1952)),
-                (0x0405, humidity_report(0x32, 5410)),
-                (0x0001, battery_report(0x33, 200)),
-            ],
-            reports_on_resume: true,
-            bound: false,
-            configured: Vec::new(),
-            reports_sent: false,
-            joined: false,
-        }
-    }
-}
-
 /// A message the host sent with `sendUnicast`, as the radio read it.
 #[derive(Clone, Debug)]
 pub struct SentMessage {
@@ -204,7 +56,7 @@ pub struct SentMessage {
     pub message: Vec<u8>,
 }
 
-pub struct FakeNcp {
+pub struct Ncp {
     pub mode: Mode,
     pub protocol: u8,
     pub stack_type: u8,
@@ -214,11 +66,14 @@ pub struct FakeNcp {
     pub network_state: u8,
     /// Send an asynchronous callback frame before every response.
     pub callback_first: bool,
-    /// Every byte received, in order.
+    /// The three records below are kept only when this is on (off by default: a long run must
+    /// not grow without bound).
+    pub record: bool,
+    /// Every byte received, in order (at most `MAX_RECORDS`).
     pub received: Vec<u8>,
-    /// Every EZSP command received: frame id and parameters.
+    /// Every EZSP command received: frame id and parameters (at most `MAX_RECORDS`).
     pub commands: Vec<(u16, Vec<u8>)>,
-    /// Every `sendUnicast` received.
+    /// Every `sendUnicast` received (at most `MAX_RECORDS`).
     pub sent: Vec<SentMessage>,
     /// The network in the radio's flash. It outlives the connection: a second host run finds it.
     pub network: Option<StoredNetwork>,
@@ -242,15 +97,15 @@ pub struct FakeNcp {
     pub overflow_flag: bool,
     /// The next `sendUnicast` commands answered "busy".
     pub busy_sends: u32,
-    /// The simulated device.
-    pub device: Option<FakeDevice>,
+    /// The simulated devices (at most `MAX_DEVICES`).
+    pub devices: Vec<SimDevice>,
     /// What `lookupEui64ByNodeId` knows: node address and address as on the wire.
     pub known_addresses: Vec<(u16, [u8; 8])>,
     /// The sender's address the radio puts in the packet info of an incoming message (EZSP 14+).
     pub packet_eui_wire: Option<[u8; 8]>,
     /// The join callbacks of a pairing come before the response of `permitJoining`.
     pub join_before_response: bool,
-    /// Devices that only join (trust-centre join, no answers), after the main device.
+    /// Devices that only join (trust-centre join, no answers), after the main devices.
     pub crowd: usize,
     /// Milliseconds between two joins of the crowd.
     pub crowd_spread_ms: u64,
@@ -259,6 +114,10 @@ pub struct FakeNcp {
     rx_next: u8,
     now: u64,
     scheduled: Vec<(u64, Vec<u8>)>,
+    /// When the pairing window closes, if one is open.
+    pairing_until: Option<u64>,
+    memory_file: Option<PathBuf>,
+    dirty: bool,
 }
 
 /// What the radio sends for one command: callbacks before the response, the response, callbacks
@@ -274,6 +133,14 @@ const SL_OK: u32 = 0;
 const SL_BUSY: u32 = 4;
 const SL_NOT_JOINED: u32 = 0x17;
 const SL_FAIL: u32 = 1;
+
+/// The first network address given to a device that has none.
+const FIRST_NWK: u16 = 0x2000;
+
+/// The clusters the host sets up reporting for.
+const REPORTABLE: [u16; 8] = [
+    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0001,
+];
 
 /// An EZSP callback frame (extended format, asynchronous callback flag).
 fn callback(id: u16, params: &[u8]) -> Vec<u8> {
@@ -294,9 +161,27 @@ fn aps(profile: u16, cluster: u16, source: u8, destination: u8) -> Vec<u8> {
     bytes
 }
 
-impl FakeNcp {
+fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]))
+}
+
+/// Keeps `item` unless the record is full.
+fn keep<T>(record: &mut Vec<T>, item: T) {
+    if record.len() < MAX_RECORDS {
+        record.push(item);
+    }
+}
+
+impl Default for Ncp {
+    fn default() -> Self {
+        Ncp::new()
+    }
+}
+
+impl Ncp {
+    /// A radio with nothing in its flash, no device, and the records off.
     pub fn new() -> Self {
-        FakeNcp {
+        Ncp {
             mode: Mode::Normal,
             protocol: 13,
             stack_type: 2,
@@ -304,6 +189,7 @@ impl FakeNcp {
             eui64_wire: [0x56, 0x34, 0x12, 0xFE, 0xFF, 0xB9, 0x6F, 0x8C],
             network_state: 0,
             callback_first: false,
+            record: false,
             received: Vec::new(),
             commands: Vec::new(),
             sent: Vec::new(),
@@ -318,7 +204,7 @@ impl FakeNcp {
             unused_burst: 0,
             overflow_flag: false,
             busy_sends: 0,
-            device: None,
+            devices: Vec::new(),
             known_addresses: Vec::new(),
             packet_eui_wire: None,
             crowd: 0,
@@ -329,7 +215,225 @@ impl FakeNcp {
             rx_next: 0,
             now: 0,
             scheduled: Vec::new(),
+            pairing_until: None,
+            memory_file: None,
+            dirty: false,
         }
+    }
+
+    /// A radio that keeps the records the tests inspect.
+    pub fn recording() -> Self {
+        Ncp {
+            record: true,
+            ..Ncp::new()
+        }
+    }
+
+    /// The radio and devices a scenario describes. The radio's memory is read from
+    /// `memory_file` when it exists (the scenario's `network` then does not apply) and written
+    /// there when it changes. An unreadable or unparsable file, or one that cannot be written,
+    /// is an error naming it.
+    pub fn from_scenario(scenario: &Scenario, memory_file: Option<&Path>) -> Result<Ncp, String> {
+        let mut ncp = Ncp::new();
+        ncp.protocol = scenario.radio.ezsp;
+        ncp.stack_version = scenario.radio.stack_version;
+        ncp.eui64_wire = crate::devices::wire(scenario.radio.eui64);
+        ncp.devices = scenario
+            .devices
+            .iter()
+            .take(MAX_DEVICES)
+            .map(|spec| {
+                SimDevice::of_kind(
+                    spec.kind,
+                    crate::devices::wire(spec.eui64),
+                    spec.manufacturer.as_deref(),
+                    spec.model.as_deref(),
+                )
+            })
+            .collect();
+        let Some(file) = memory_file else {
+            ncp.apply_initial_network(scenario.radio.network);
+            return Ok(ncp);
+        };
+        match memory::load(file)? {
+            Some(stored) => {
+                ncp.restore(stored);
+                // Written back now too: a file that cannot be written is an error before
+                // anything runs, even when listening.
+                memory::save(file, &ncp.to_memory())?;
+            }
+            None => {
+                ncp.apply_initial_network(scenario.radio.network);
+                // The file is written now: a radio that cannot keep its memory is an error
+                // before anything runs.
+                memory::save(file, &ncp.to_memory())?;
+            }
+        }
+        ncp.memory_file = Some(file.to_path_buf());
+        Ok(ncp)
+    }
+
+    fn apply_initial_network(&mut self, init: NetworkInit) {
+        if init == NetworkInit::Formed {
+            self.network = Some(StoredNetwork {
+                extended_pan_wire: [0x5A; 8],
+                pan_id: 0x5A5A,
+                channel: 15,
+                node_type: 1,
+            });
+            self.keys = Some((
+                [
+                    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+                    0x0E, 0x0F, 0x10,
+                ],
+                [
+                    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D,
+                    0x1E, 0x1F, 0x20,
+                ],
+            ));
+            self.network_state = 2;
+        }
+    }
+
+    fn restore(&mut self, stored: Memory) {
+        let (network, keys) = stored.network_and_keys();
+        if network.is_some() {
+            self.network_state = 2;
+        }
+        self.network = network;
+        self.keys = keys;
+        for saved in &stored.devices {
+            if let Some(device) = self
+                .devices
+                .iter_mut()
+                .find(|d| d.eui_wire == saved.eui_wire())
+            {
+                saved.apply_to(device);
+            }
+        }
+    }
+
+    fn to_memory(&self) -> Memory {
+        Memory::new(self.network.as_ref(), self.keys.as_ref(), &self.devices)
+    }
+
+    /// Writes the memory file if something changed since it was last written. A failure is
+    /// logged, never fatal: the simulation goes on.
+    fn flush(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+        if let Some(file) = &self.memory_file
+            && let Err(message) = memory::save(file, &self.to_memory())
+        {
+            log::error!("{message}");
+        }
+    }
+
+    /// Sets the time the radio sees, in milliseconds (the caller's clock).
+    pub fn set_now(&mut self, now: u64) {
+        self.now = now;
+    }
+
+    /// When the next timed callback is due, if any.
+    pub fn next_due(&self) -> Option<u64> {
+        self.scheduled.iter().map(|(at, _)| *at).min()
+    }
+
+    /// True while a pairing window is open.
+    pub fn pairing_open(&self) -> bool {
+        self.pairing_until.is_some_and(|until| self.now < until)
+    }
+
+    /// The device joins now if pairing is open (or it already joined): `true`. `false`: the
+    /// window is closed, the caller tries again later.
+    pub fn join_device(&mut self, index: usize) -> bool {
+        let Some(device) = self.devices.get(index) else {
+            return true;
+        };
+        if device.joined {
+            return true;
+        }
+        if !self.pairing_open() {
+            return false;
+        }
+        let delay = self.devices.get(index).map_or(0, |d| d.join_delay_ms);
+        for (extra, payload) in self.join_callbacks(index) {
+            self.scheduled.push((self.now + delay + extra, payload));
+        }
+        self.flush();
+        true
+    }
+
+    /// The device reports what the scenario says, as far as its state allows: it must be in the
+    /// network, and the host must have set up the reporting of what it reports (a motion sensor
+    /// must be enrolled). `false` when nothing was sent.
+    pub fn device_report(&mut self, index: usize, report: &DeviceReport) -> bool {
+        let now = self.now;
+        let Some(device) = self.devices.get(index) else {
+            return false;
+        };
+        if !device.joined {
+            return false;
+        }
+        let nwk = device.nwk;
+        let mut frames: Vec<(u16, Vec<u8>)> = Vec::new();
+        let mut clear_alarm = false;
+        if let Some(device) = self.devices.get_mut(index) {
+            if let Some(value) = report.temperature
+                && device.reports_attribute(0x0402, 0x0000)
+            {
+                let tsn = device.next_tsn();
+                frames.push((
+                    0x0402,
+                    temperature_report(tsn, (value * 100.0).round() as i16),
+                ));
+            }
+            if let Some(value) = report.humidity
+                && device.reports_attribute(0x0405, 0x0000)
+            {
+                let tsn = device.next_tsn();
+                frames.push((0x0405, humidity_report(tsn, (value * 100.0).round() as u16)));
+            }
+            if let Some(percent) = report.battery
+                && device.reports_attribute(0x0001, 0x0021)
+            {
+                let tsn = device.next_tsn();
+                frames.push((0x0001, battery_report(tsn, percent.min(100) * 2)));
+            }
+            if let Some(on) = report.light_state {
+                device.relay_on = on;
+                if device.reports_attribute(0x0006, 0x0000) {
+                    let tsn = device.next_tsn();
+                    frames.push((0x0006, on_off_report(tsn, on)));
+                }
+            }
+            if let Some(alarm) = report.motion
+                && device.enrolled
+            {
+                let tsn = device.next_tsn();
+                frames.push((0x0500, zone_notification(tsn, alarm)));
+                clear_alarm = alarm;
+            }
+            if !frames.is_empty() && device.sleepy_ms.is_some() {
+                device.awake_until = now + AWAKE_MS;
+            }
+        }
+        let sent = !frames.is_empty();
+        for (cluster, frame) in frames {
+            let message = self.incoming(nwk, 0x0104, cluster, 1, &frame);
+            self.scheduled.push((now, message));
+        }
+        if clear_alarm && let Some(device) = self.devices.get_mut(index) {
+            // The sensor clears its alarm by itself.
+            let tsn = device.next_tsn();
+            let cleared = zone_notification(tsn, false);
+            let message = self.incoming(nwk, 0x0104, 0x0500, 1, &cleared);
+            self.scheduled.push((now + MOTION_CLEAR_MS, message));
+        }
+        self.flush();
+        sent
     }
 
     /// A message arrives from the network at the next tick: a unicast to the host's endpoint 1.
@@ -348,7 +452,9 @@ impl FakeNcp {
         payload: &[u8],
     ) {
         let mut frame = self.incoming(sender, profile, cluster, source, payload);
-        frame[5] = kind;
+        if let Some(byte) = frame.get_mut(5) {
+            *byte = kind;
+        }
         self.scheduled.push((self.now, frame));
     }
 
@@ -365,12 +471,18 @@ impl FakeNcp {
             }
         }
         self.scheduled = later;
+        self.flush();
         out
     }
 
-    /// Feeds the bytes the host wrote; returns what the radio answers.
+    /// Feeds the bytes the host wrote; returns what the radio answers. Bytes that are not a
+    /// valid frame are dropped, as a real radio's ASH layer does.
     pub fn on_bytes(&mut self, bytes: &[u8]) -> Vec<u8> {
-        self.received.extend_from_slice(bytes);
+        if self.record {
+            let room = MAX_RECORDS.saturating_sub(self.received.len());
+            self.received
+                .extend_from_slice(&bytes[..bytes.len().min(room)]);
+        }
         let mut out = Vec::new();
         for event in self.decoder.feed(bytes) {
             let DecodeEvent::Frame(frame) = event else {
@@ -423,6 +535,7 @@ impl FakeNcp {
                 _ => {}
             }
         }
+        self.flush();
         out
     }
 
@@ -542,22 +655,72 @@ impl FakeNcp {
         }
     }
 
-    /// The network is resumed: a device that joined earlier sends its reports.
+    /// The network is resumed: the devices that joined earlier send their reports.
     fn resume_reports(&mut self, reply: &mut Reply) {
-        let Some(device) = self.device.clone() else {
-            return;
-        };
-        if !device.joined || !device.reports_on_resume {
-            return;
-        }
-        for (cluster, frame) in &device.reports {
-            let report = self.incoming(device.nwk, 0x0104, *cluster, 1, frame);
-            self.emit(reply, device.answer_delay_ms, report);
+        let devices: Vec<SimDevice> = self.devices.clone();
+        for device in devices {
+            if !device.joined || !device.reports_on_resume {
+                continue;
+            }
+            for (cluster, frame) in &device.reports {
+                let report = self.incoming(device.nwk, 0x0104, *cluster, 1, frame);
+                self.emit(reply, device.answer_delay_ms, report);
+            }
         }
     }
 
-    /// Pairing opens: the device (and the crowd) join.
-    fn on_permit_joining(&mut self, reply: &mut Reply) {
+    /// A network address no device has.
+    fn free_nwk(&self) -> u16 {
+        let mut candidate = FIRST_NWK;
+        while self.devices.iter().any(|d| d.nwk == candidate) {
+            candidate += 1;
+        }
+        candidate
+    }
+
+    /// The device joins: marks it, gives it an address if it has none, and returns the callbacks
+    /// of the join as `(extra delay, EZSP payload)`.
+    fn join_callbacks(&mut self, index: usize) -> Vec<(u64, Vec<u8>)> {
+        let nwk = self.free_nwk();
+        let now = self.now;
+        let Some(device) = self.devices.get_mut(index) else {
+            return Vec::new();
+        };
+        device.joined = true;
+        if device.nwk == 0 {
+            device.nwk = nwk;
+        }
+        if device.sleepy_ms.is_some() {
+            device.awake_until = now + device.join_delay_ms + AWAKE_MS;
+        }
+        let device = device.clone();
+        self.dirty = true;
+        let mut callbacks = vec![(
+            0,
+            self.trust_center_join(
+                device.nwk,
+                device.eui_wire,
+                device.join_status,
+                device.join_decision,
+            ),
+        )];
+        if device.announce {
+            let mut payload = vec![0x01];
+            payload.extend_from_slice(&device.nwk.to_le_bytes());
+            payload.extend_from_slice(&device.eui_wire);
+            payload.push(0x80);
+            let announce = self.incoming(device.nwk, 0x0000, 0x0013, 0, &payload);
+            callbacks.push((0, announce.clone()));
+            if device.announce_twice {
+                callbacks.push((100, announce));
+            }
+        }
+        callbacks
+    }
+
+    /// Pairing opens: the devices that join by themselves (and the crowd) join.
+    fn on_permit_joining(&mut self, reply: &mut Reply, seconds: u8) {
+        self.pairing_until = Some(self.now + u64::from(seconds) * 1000);
         for i in 0..self.unused_burst {
             // childJoinHandler, then incomingRouteRecordHandler: callbacks the host ignores.
             let burst = if i % 2 == 0 {
@@ -567,39 +730,30 @@ impl FakeNcp {
             };
             reply.after.push(burst);
         }
-        let Some(device) = self.device.as_mut() else {
-            return;
-        };
-        if device.joined {
-            return;
-        }
-        device.joined = true;
-        let device = device.clone();
-        let delay = device.join_delay_ms;
-        let join = self.trust_center_join(
-            device.nwk,
-            device.eui_wire,
-            device.join_status,
-            device.join_decision,
-        );
-        self.emit(reply, delay, join);
-        if device.announce {
-            let mut payload = vec![0x01];
-            payload.extend_from_slice(&device.nwk.to_le_bytes());
-            payload.extend_from_slice(&device.eui_wire);
-            payload.push(0x80);
-            let announce = self.incoming(device.nwk, 0x0000, 0x0013, 0, &payload);
-            self.emit(reply, delay, announce.clone());
-            if device.announce_twice {
-                self.emit(reply, delay + 100, announce);
+        let mut delay = 0;
+        let mut any_joined = false;
+        for index in 0..self.devices.len() {
+            let Some(device) = self.devices.get(index) else {
+                continue;
+            };
+            if device.joined || !device.auto_join {
+                continue;
+            }
+            delay = device.join_delay_ms;
+            any_joined = true;
+            for (extra, payload) in self.join_callbacks(index) {
+                self.emit(reply, delay + extra, payload);
             }
         }
-        for i in 0..self.crowd {
-            let mut eui = [0xA0, 0, 0, 0, 0, 0x4B, 0x12, 0x00];
-            eui[1] = i as u8;
-            let join = self.trust_center_join(0x1000 + i as u16, eui, 1, 0);
-            // Spread over time, as a real burst of joins is; or all at once with a spread of 0.
-            self.emit(reply, delay + self.crowd_spread_ms * (i as u64 + 1), join);
+        if any_joined {
+            for i in 0..self.crowd {
+                let mut eui = [0xA0, 0, 0, 0, 0, 0x4B, 0x12, 0x00];
+                eui[1] = i as u8;
+                let join = self.trust_center_join(0x1000 + i as u16, eui, 1, 0);
+                // Spread over time, as a real burst of joins is; or all at once with a spread of
+                // 0.
+                self.emit(reply, delay + self.crowd_spread_ms * (i as u64 + 1), join);
+            }
         }
     }
 
@@ -611,25 +765,39 @@ impl FakeNcp {
         aps_bytes: &[u8],
         status: u32,
     ) {
-        let Some(device) = self.device.clone() else {
+        let Some(index) = self
+            .devices
+            .iter()
+            .position(|d| d.joined && d.nwk == sent.destination)
+        else {
             return;
         };
-        if !device.joined || sent.destination != device.nwk {
+        let Some(device) = self.devices.get(index).cloned() else {
             return;
-        }
+        };
         let delay = device.answer_delay_ms;
         let message_sent = self.message_sent(sent.destination, aps_bytes, sent.tag, status);
         if status != SL_OK {
             reply.after.push(message_sent);
             return;
         }
+        // A sleepy device that is not listening does not answer.
+        if device.sleepy_ms.is_some() && self.now >= device.awake_until {
+            reply.after.push(message_sent);
+            return;
+        }
+        let message = &sent.message;
+        let control = message.first().copied().unwrap_or(0);
         let mut answers = Vec::new();
         if sent.profile == 0x0000 && sent.cluster == 0x0005 {
             let Some(endpoints) = device.endpoints.clone() else {
                 reply.after.push(message_sent);
                 return;
             };
-            let tsn = sent.message[0];
+            let Some(tsn) = message.first().copied() else {
+                reply.after.push(message_sent);
+                return;
+            };
             let response = |tsn: u8, endpoints: &[u8], status: u8| {
                 let mut payload = vec![tsn, status];
                 payload.extend_from_slice(&device.nwk.to_le_bytes());
@@ -659,11 +827,9 @@ impl FakeNcp {
                 &response(tsn, &list, device.endpoint_status),
             );
             answers.push(right);
-        } else if sent.profile == 0x0104
-            && sent.cluster == 0x0000
-            && sent.message.get(2) == Some(&0x00)
+        } else if sent.profile == 0x0104 && sent.cluster == 0x0000 && message.get(2) == Some(&0x00)
         {
-            if let Some(device) = self.device.as_mut()
+            if let Some(device) = self.devices.get_mut(index)
                 && device.ignore_reads > 0
             {
                 if device.ignore_reads != u32::MAX {
@@ -672,7 +838,10 @@ impl FakeNcp {
                 reply.after.push(message_sent);
                 return;
             }
-            let tsn = sent.message[1];
+            let Some(tsn) = message.get(1).copied() else {
+                reply.after.push(message_sent);
+                return;
+            };
             let source = sent.destination_endpoint;
             let records = |manufacturer: &Attr, model: &Attr| {
                 let mut bytes = Vec::new();
@@ -729,7 +898,7 @@ impl FakeNcp {
             );
             answers.push(right);
         } else if sent.profile == 0x0000 && sent.cluster == 0x0004 {
-            if let Some(device) = self.device.as_mut()
+            if let Some(device) = self.devices.get_mut(index)
                 && device.ignore_descriptors > 0
             {
                 if device.ignore_descriptors != u32::MAX {
@@ -738,10 +907,14 @@ impl FakeNcp {
                 reply.after.push(message_sent);
                 return;
             }
-            let tsn = sent.message[0];
-            let mut descriptor = vec![sent.message[3]]; // endpoint
+            let (Some(tsn), Some(endpoint)) = (message.first().copied(), message.get(3).copied())
+            else {
+                reply.after.push(message_sent);
+                return;
+            };
+            let mut descriptor = vec![endpoint];
             descriptor.extend_from_slice(&0x0104u16.to_le_bytes());
-            descriptor.extend_from_slice(&0x0302u16.to_le_bytes()); // temperature sensor
+            descriptor.extend_from_slice(&device.kind.device_id().to_le_bytes());
             descriptor.push(0); // device version
             descriptor.push(device.input_clusters.len() as u8);
             for cluster in &device.input_clusters {
@@ -756,29 +929,108 @@ impl FakeNcp {
             answers.push(self.incoming(device.nwk, 0, 0x8004, 0, &payload));
         } else if sent.profile == 0x0000 && sent.cluster == 0x0021 {
             // Bind_req: [tsn][source EUI64][source endpoint][cluster][mode][destination...]
-            let tsn = sent.message[0];
-            let cluster = u16::from_le_bytes([sent.message[10], sent.message[11]]);
+            let (Some(tsn), Some(cluster)) = (message.first().copied(), u16_at(message, 10)) else {
+                reply.after.push(message_sent);
+                return;
+            };
             let status = if device.bind_refused.contains(&cluster) {
                 0x84
             } else {
                 0x00
             };
             answers.push(self.incoming(device.nwk, 0, 0x8021, 0, &[tsn, status]));
-            let first = self.device.as_mut().is_some_and(|d| {
+            let first = self.devices.get_mut(index).is_some_and(|d| {
                 let first = !d.bound;
                 d.bound = true;
                 first
             });
+            self.dirty = true;
             if first {
                 for (cluster, frame) in &device.reports_during_setup {
                     answers.push(self.incoming(device.nwk, 0x0104, *cluster, 1, frame));
                 }
             }
         } else if sent.profile == 0x0104
-            && device.input_clusters.contains(&sent.cluster)
-            && sent.message.get(2) == Some(&0x06)
+            && sent.cluster == 0x0500
+            && device.kind == Kind::Motion
+            && device.input_clusters.contains(&0x0500)
         {
-            if let Some(device) = self.device.as_mut()
+            // IAS zone: writing the CIE address, then the Zone Enroll Response, enrolls it.
+            let Some(tsn) = message.get(1).copied() else {
+                reply.after.push(message_sent);
+                return;
+            };
+            let command = message.get(2).copied();
+            let cluster_specific = control & 0x03 == 0x01;
+            if !cluster_specific && command == Some(0x02) {
+                if let Some(device) = self.devices.get_mut(index)
+                    && u16_at(message, 3) == Some(0x0010)
+                {
+                    device.cie_written = true;
+                    self.dirty = true;
+                }
+                answers.push(self.incoming(
+                    device.nwk,
+                    0x0104,
+                    0x0500,
+                    1,
+                    &[0x18, tsn, 0x04, 0x00],
+                ));
+            } else if cluster_specific
+                && command == Some(0x00)
+                && let Some(device) = self.devices.get_mut(index)
+                && device.cie_written
+            {
+                device.enrolled = true;
+                self.dirty = true;
+            }
+        } else if sent.profile == 0x0104
+            && sent.cluster == 0x0006
+            && device.kind == Kind::Relay
+            && control & 0x03 == 0x01
+            && matches!(message.get(2), Some(0x00..=0x02))
+        {
+            // On/Off cluster command: Off (0), On (1), Toggle (2).
+            let (Some(tsn), Some(command)) = (message.get(1).copied(), message.get(2).copied())
+            else {
+                reply.after.push(message_sent);
+                return;
+            };
+            let on = match command {
+                0x00 => false,
+                0x01 => true,
+                _ => !device.relay_on,
+            };
+            let reports = self.devices.get_mut(index).is_some_and(|d| {
+                d.relay_on = on;
+                d.reports_attribute(0x0006, 0x0000)
+            });
+            self.dirty = true;
+            // The command asks for a Default Response unless it says "disable default response".
+            if control & 0x10 == 0 {
+                answers.push(self.incoming(
+                    device.nwk,
+                    0x0104,
+                    0x0006,
+                    1,
+                    &[0x18, tsn, 0x0B, command, 0x00],
+                ));
+            }
+            if reports {
+                let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);
+                answers.push(self.incoming(
+                    device.nwk,
+                    0x0104,
+                    0x0006,
+                    1,
+                    &on_off_report(report_tsn, on),
+                ));
+            }
+        } else if sent.profile == 0x0104
+            && device.input_clusters.contains(&sent.cluster)
+            && message.get(2) == Some(&0x06)
+        {
+            if let Some(device) = self.devices.get_mut(index)
                 && device.ignore_configures > 0
             {
                 if device.ignore_configures != u32::MAX {
@@ -787,8 +1039,11 @@ impl FakeNcp {
                 reply.after.push(message_sent);
                 return;
             }
-            let tsn = sent.message[1];
-            let attributes = configured_attributes(&sent.message[3..]);
+            let Some(tsn) = message.get(1).copied() else {
+                reply.after.push(message_sent);
+                return;
+            };
+            let attributes = configured_attributes(message.get(3..).unwrap_or(&[]));
             let mode = device
                 .configure_overrides
                 .iter()
@@ -828,14 +1083,35 @@ impl FakeNcp {
             };
             if let Some(frame) = frame {
                 answers.push(self.incoming(device.nwk, 0x0104, sent.cluster, 1, &frame));
-                let all_done = self.device.as_mut().is_some_and(|d| {
-                    d.configured.push(sent.cluster);
+                // The attributes the device accepted are the ones it will report.
+                let accepted: Vec<u16> = match mode {
+                    ConfigureAnswer::Refuse(_)
+                    | ConfigureAnswer::Default(_)
+                    | ConfigureAnswer::SingleStatus(1..=255) => Vec::new(),
+                    ConfigureAnswer::RefuseAttribute(refused, _) => attributes
+                        .iter()
+                        .copied()
+                        .filter(|a| *a != refused)
+                        .collect(),
+                    _ => attributes.clone(),
+                };
+                let all_done = self.devices.get_mut(index).is_some_and(|d| {
+                    // At most one entry per cluster, so at most the device's clusters.
+                    if !d.configured.contains(&sent.cluster) {
+                        d.configured.push(sent.cluster);
+                    }
+                    for attribute in accepted {
+                        if !d.configured_attributes.contains(&(sent.cluster, attribute)) {
+                            d.configured_attributes.push((sent.cluster, attribute));
+                        }
+                    }
                     let wanted = d.input_clusters.iter().filter(|c| REPORTABLE.contains(c));
                     let done = wanted.clone().all(|c| d.configured.contains(c));
                     let first = done && !d.reports_sent;
                     d.reports_sent |= done;
                     first
                 });
+                self.dirty = true;
                 if all_done {
                     for (cluster, report) in &device.reports {
                         answers.push(self.incoming(device.nwk, 0x0104, *cluster, 1, report));
@@ -874,8 +1150,8 @@ impl FakeNcp {
         } else {
             &command[3..]
         };
-        if id != 0x0000 {
-            self.commands.push((id, args.to_vec()));
+        if id != 0x0000 && self.record {
+            keep(&mut self.commands, (id, args.to_vec()));
         }
         let ok = self.st(SL_OK);
         let params: Vec<u8> = match id {
@@ -918,6 +1194,7 @@ impl FakeNcp {
                     tc.copy_from_slice(&args[2..18]);
                     nk.copy_from_slice(&args[18..34]);
                     self.keys = Some((nk, tc));
+                    self.dirty = true;
                 }
                 ok
             }
@@ -931,6 +1208,7 @@ impl FakeNcp {
                         channel: args[11],
                         node_type: 1,
                     });
+                    self.dirty = true;
                 }
                 self.network_up(&mut reply);
                 ok
@@ -949,13 +1227,16 @@ impl FakeNcp {
             },
             // lookupEui64ByNodeId
             0x61 => {
-                let nwk = u16::from_le_bytes([args[0], args[1]]);
-                // The radio's address table has what was added, and the device that joined it.
+                let Some(nwk) = u16_at(args, 0) else {
+                    return reply;
+                };
+                // The radio's address table has what was added, and the devices that joined it.
                 let joined = self
-                    .device
-                    .as_ref()
+                    .devices
+                    .iter()
                     .filter(|d| d.joined && d.nwk == nwk)
-                    .map(|d| (d.nwk, d.eui_wire));
+                    .map(|d| (d.nwk, d.eui_wire))
+                    .collect::<Vec<_>>();
                 let known = self.known_addresses.iter().copied().chain(joined);
                 match known.into_iter().find(|(n, _)| *n == nwk) {
                     Some((_, eui)) => {
@@ -971,11 +1252,14 @@ impl FakeNcp {
             0x111 => 0u32.to_le_bytes().to_vec(),
             0x6B => Vec::new(),
             0x22 => {
-                if args.first().is_some_and(|seconds| *seconds > 0) {
-                    self.on_permit_joining(&mut reply);
-                    if self.join_before_response {
-                        reply.before = std::mem::take(&mut reply.after);
+                match args.first() {
+                    Some(seconds) if *seconds > 0 => {
+                        self.on_permit_joining(&mut reply, *seconds);
+                        if self.join_before_response {
+                            reply.before = std::mem::take(&mut reply.after);
+                        }
                     }
+                    _ => self.pairing_until = None,
                 }
                 ok
             }
@@ -991,7 +1275,9 @@ impl FakeNcp {
                     u16::from(args[14])
                 };
                 let length = usize::from(args[14 + tag_len]);
-                let message = args[15 + tag_len..15 + tag_len + length].to_vec();
+                let Some(message) = args.get(15 + tag_len..15 + tag_len + length) else {
+                    return reply;
+                };
                 let sent = SentMessage {
                     destination: u16::from_le_bytes([args[1], args[2]]),
                     profile: u16::from_le_bytes([args[3], args[4]]),
@@ -999,9 +1285,11 @@ impl FakeNcp {
                     source_endpoint: args[7],
                     destination_endpoint: args[8],
                     tag,
-                    message,
+                    message: message.to_vec(),
                 };
-                self.sent.push(sent.clone());
+                if self.record {
+                    keep(&mut self.sent, sent.clone());
+                }
                 let status = if self.busy_sends > 0 {
                     self.busy_sends -= 1;
                     SL_BUSY
@@ -1035,14 +1323,10 @@ impl FakeNcp {
     }
 }
 
-/// The clusters the host sets up reporting for.
-const REPORTABLE: [u16; 8] = [
-    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0001,
-];
-
 /// The attribute ids of the records of a Configure Reporting request (after its header).
 fn configured_attributes(mut records: &[u8]) -> Vec<u16> {
     let mut attributes = Vec::new();
+    // At most a handful of records fit in a frame: the loop is bounded by the bytes.
     while records.len() >= 6 {
         attributes.push(u16::from_le_bytes([records[1], records[2]]));
         let change = match records[3] {
@@ -1062,57 +1346,5 @@ fn rstack() -> Vec<u8> {
     })
 }
 
-/// A transport wired to a fake radio the test keeps hold of. When nothing is waiting, reading
-/// lets the fake radio's timed callbacks come due, then advances the fake clock by the timeout,
-/// so no test really waits.
-pub struct SharedTransport {
-    ncp: Rc<RefCell<FakeNcp>>,
-    to_read: Vec<u8>,
-    clock: Rc<Cell<u64>>,
-}
-
-impl RadioTransport for SharedTransport {
-    fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
-        if self.to_read.is_empty() {
-            let due = self.ncp.borrow_mut().on_tick(self.clock.get());
-            if due.is_empty() {
-                self.clock.set(self.clock.get() + timeout_ms);
-                return Ok(0);
-            }
-            self.to_read.extend(due);
-        }
-        let n = buf.len().min(self.to_read.len());
-        buf[..n].copy_from_slice(&self.to_read[..n]);
-        self.to_read.drain(..n);
-        Ok(n)
-    }
-
-    fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
-        let answer = self.ncp.borrow_mut().on_bytes(bytes);
-        self.to_read.extend(answer);
-        Ok(())
-    }
-}
-
-/// A radio on a fake radio, with the handles a test needs.
-pub struct Harness {
-    pub radio: Radio<SharedTransport, Box<dyn FnMut() -> u64>>,
-    pub ncp: Rc<RefCell<FakeNcp>>,
-    pub clock: Rc<Cell<u64>>,
-}
-
-pub fn harness(ncp: FakeNcp) -> Harness {
-    let ncp = Rc::new(RefCell::new(ncp));
-    let clock = Rc::new(Cell::new(0u64));
-    let transport = SharedTransport {
-        ncp: Rc::clone(&ncp),
-        to_read: Vec::new(),
-        clock: Rc::clone(&clock),
-    };
-    let reader = Rc::clone(&clock);
-    Harness {
-        radio: Radio::new(transport, Box::new(move || reader.get())),
-        ncp,
-        clock,
-    }
-}
+#[cfg(test)]
+mod tests;

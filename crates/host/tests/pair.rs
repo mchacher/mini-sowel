@@ -1,8 +1,5 @@
 //! `--pair` against a fake radio listening on a local TCP port, speaking real ASH and EZSP.
 
-#[path = "../../core/tests/common/mod.rs"]
-mod common;
-
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::PermissionsExt;
@@ -12,11 +9,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use common::{FakeDevice, FakeNcp, StoredNetwork};
+use mini_sowel_sim::{Ncp, SimDevice, StoredNetwork};
 
 /// Serves one connection with the fake radio and gives the radio back when it closes, so a second
 /// run can find what the first one left in it.
-fn serve(ncp: FakeNcp) -> (SocketAddr, JoinHandle<FakeNcp>) {
+fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Ncp>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
@@ -79,9 +76,9 @@ fn lines(output: &Output) -> Vec<String> {
     text(&output.stdout).lines().map(str::to_string).collect()
 }
 
-fn sensor_radio() -> FakeNcp {
-    let mut ncp = FakeNcp::new();
-    ncp.device = Some(FakeDevice::sensor());
+fn sensor_radio() -> Ncp {
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![SimDevice::sensor()];
     ncp
 }
 
@@ -188,7 +185,7 @@ fn pair_twice_on_the_same_radio_resumes_the_network_and_leaves_the_backup_unchan
 
 #[test]
 fn a_coordinator_network_without_a_backup_is_resumed_as_made_by_another_program() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network = Some(StoredNetwork {
         extended_pan_wire: [1, 2, 3, 4, 5, 6, 7, 8],
         pan_id: 0x4321,
@@ -234,7 +231,7 @@ fn a_data_folder_that_cannot_be_written_gives_cannot_write_exit_1_and_the_radio_
 
 #[test]
 fn ctrl_c_during_pairing_closes_joining_and_exits_130() {
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let dir = data_dir();
     let mut child = Command::new(env!("CARGO_BIN_EXE_mini-sowel-host"))
@@ -293,7 +290,7 @@ fn pair_with_zero_a_word_or_too_long_or_without_a_radio_prints_the_usage_and_exi
 
 #[test]
 fn without_pair_the_host_only_identifies_and_does_not_start_the_network() {
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let (output, _) = run(&["--radio", &url]);
     assert_eq!(output.status.code(), Some(0));
@@ -306,7 +303,7 @@ fn without_pair_the_host_only_identifies_and_does_not_start_the_network() {
 
 #[test]
 fn a_step_failing_after_the_form_leaves_the_backup_written_and_the_error_shown() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.refuse_concentrator = true;
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
@@ -329,7 +326,7 @@ fn a_step_failing_after_the_form_leaves_the_backup_written_and_the_error_shown()
 
 #[test]
 fn a_backup_that_cannot_be_written_after_the_form_is_the_first_error_and_the_start_stops() {
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let dir = data_dir();
     std::fs::create_dir_all(&dir).unwrap();
@@ -361,7 +358,7 @@ fn a_backup_of_another_network_is_kept_renamed_with_its_pan_id_before_the_new_on
     let old = "{\n  \"panId\": \"0x4321\",\n  \"extendedPanId\": \"0x0102030405060708\",\n  \
                \"channel\": 20\n}\n";
     std::fs::write(dir.join("network.json"), old).unwrap();
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let (output, _) = run(&pair_args(&url, "1", dir.to_str().unwrap()));
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
@@ -378,7 +375,7 @@ fn a_backup_of_another_network_is_kept_renamed_with_its_pan_id_before_the_new_on
 
 #[test]
 fn warnings_of_the_core_are_shown_on_stderr() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.overflow_flag = true;
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");
@@ -396,7 +393,7 @@ fn warnings_of_the_core_are_shown_on_stderr() {
 
 #[test]
 fn ctrl_c_during_the_start_exits_130_without_opening_joining() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network_up_delay_ms = 2_000; // the start takes a while
     let (address, handle) = serve(ncp);
     let url = format!("tcp://{address}");

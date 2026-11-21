@@ -1,10 +1,8 @@
 //! The coordinator against the scripted radio, with fake time: start or resume the network,
 //! pairing, identification of the devices that join.
 
-mod common;
-
-use common::{Attr, FakeDevice, FakeNcp, Harness, SentMessage, StoredNetwork, harness};
 use mini_sowel_core::radio::{Network, NetworkSettings, PairingEvent, RadioError};
+use mini_sowel_sim::{Attr, Harness, Ncp, SentMessage, SimDevice, StoredNetwork, harness};
 
 const DEVICE_EUI: [u8; 8] = [0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0x78];
 const DEVICE_NWK: u16 = 0x5C3D;
@@ -30,15 +28,15 @@ fn draws() -> Vec<Vec<u8>> {
     ]
 }
 
-fn ncp_at(protocol: u8) -> FakeNcp {
-    let mut ncp = FakeNcp::new();
+fn ncp_at(protocol: u8) -> Ncp {
+    let mut ncp = Ncp::recording();
     ncp.protocol = protocol;
     ncp
 }
 
-fn with_device(device: FakeDevice) -> FakeNcp {
-    let mut ncp = FakeNcp::new();
-    ncp.device = Some(device);
+fn with_device(device: SimDevice) -> Ncp {
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![device];
     ncp
 }
 
@@ -52,7 +50,7 @@ fn start(h: &mut Harness) -> Result<Network, RadioError> {
     )
 }
 
-fn started(ncp: FakeNcp) -> Harness {
+fn started(ncp: Ncp) -> Harness {
     let mut h = harness(ncp);
     start(&mut h).expect("the network starts");
     h
@@ -125,7 +123,7 @@ fn some(text: &str) -> Option<String> {
 #[test]
 fn a_radio_with_no_network_ezsp_13_forms_one_with_the_given_random_values_in_the_documented_order()
 {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     let network = start(&mut h).unwrap();
     assert_eq!(network.pan_id, 0x1A2B);
     assert_eq!(network.extended_pan_id, [8, 7, 6, 5, 4, 3, 2, 1]);
@@ -156,7 +154,7 @@ fn a_radio_with_no_network_ezsp_13_forms_one_with_the_given_random_values_in_the
 
 #[test]
 fn the_keys_of_a_formed_network_are_never_in_its_debug_text() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     let network = start(&mut h).unwrap();
     let text = format!("{network:?}");
     assert!(
@@ -168,7 +166,7 @@ fn the_keys_of_a_formed_network_are_never_in_its_debug_text() {
 
 #[test]
 fn start_up_sets_the_values_a_sleepy_end_device_needs() {
-    let h = started(FakeNcp::new());
+    let h = started(Ncp::recording());
     let commands = h.ncp.borrow().commands.clone();
     let config = |id: u8, value: u16| {
         let v = value.to_le_bytes();
@@ -190,7 +188,7 @@ fn start_up_sets_the_values_a_sleepy_end_device_needs() {
 
 #[test]
 fn network_up_arriving_before_the_form_network_response_is_kept_and_the_start_succeeds() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network_up_before_response = true;
     let mut h = harness(ncp);
     assert!(start(&mut h).unwrap().formed);
@@ -198,7 +196,7 @@ fn network_up_arriving_before_the_form_network_response_is_kept_and_the_start_su
 
 #[test]
 fn twenty_unused_callbacks_then_a_trust_center_join_do_not_lose_the_join() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce = false;
     let mut ncp = with_device(device);
     ncp.unused_burst = 20;
@@ -216,7 +214,7 @@ fn twenty_unused_callbacks_then_a_trust_center_join_do_not_lose_the_join() {
 
 #[test]
 fn a_response_with_the_overflow_flag_is_used_and_is_not_an_error() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.overflow_flag = true;
     let mut h = harness(ncp);
     assert!(start(&mut h).unwrap().formed);
@@ -229,7 +227,7 @@ fn a_random_pan_id_of_ffff_or_0000_is_drawn_again() {
     values.push(vec![0xFF, 0xFF]);
     values.push(vec![0x00, 0x00]);
     values.push(vec![0x34, 0x12]);
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let network = h
         .radio
@@ -247,7 +245,7 @@ fn an_extended_pan_id_of_all_zero_or_all_ff_is_drawn_again() {
     let mut values = draws();
     values.insert(2, vec![0x00; 8]);
     values.insert(3, vec![0xFF; 8]);
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let network = h
         .radio
@@ -262,7 +260,7 @@ fn an_extended_pan_id_of_all_zero_or_all_ff_is_drawn_again() {
 
 #[test]
 fn a_random_source_that_fails_stops_the_start_before_the_network_is_formed() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let error = h
         .radio
@@ -298,7 +296,7 @@ fn a_radio_with_no_network_ezsp_14_and_later_forms_one() {
 
 #[test]
 fn a_radio_with_a_network_as_coordinator_resumes_it_without_a_form_command_or_new_keys() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network = Some(StoredNetwork {
         extended_pan_wire: [9, 9, 9, 9, 9, 9, 9, 0xAA],
         pan_id: 0x4321,
@@ -320,7 +318,7 @@ fn a_radio_with_a_network_as_coordinator_resumes_it_without_a_form_command_or_ne
 
 #[test]
 fn a_radio_joined_as_a_router_is_an_error_and_is_not_made_to_leave() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network = Some(StoredNetwork {
         extended_pan_wire: [1; 8],
         pan_id: 0x4321,
@@ -338,7 +336,7 @@ fn a_radio_joined_as_a_router_is_an_error_and_is_not_made_to_leave() {
 
 #[test]
 fn a_network_that_never_comes_up_gives_network_did_not_start_after_10_seconds() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.no_network_up = true;
     let mut h = harness(ncp);
     let error = start(&mut h).unwrap_err();
@@ -350,7 +348,7 @@ fn a_network_that_never_comes_up_gives_network_did_not_start_after_10_seconds() 
 
 #[test]
 fn a_start_without_identifying_the_radio_first_is_an_error() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     let error = h
         .radio
         .start_network(
@@ -382,7 +380,7 @@ fn permit_join_180_imports_the_well_known_key_allows_joins_then_opens_in_that_or
 
 #[test]
 fn permit_join_0_and_255_are_refused_and_nothing_is_sent() {
-    let mut h = started(FakeNcp::new());
+    let mut h = started(Ncp::recording());
     let before = h.ncp.borrow().commands.len();
     for seconds in [0u8, 255] {
         assert!(matches!(
@@ -395,7 +393,7 @@ fn permit_join_0_and_255_are_refused_and_nothing_is_sent() {
 
 #[test]
 fn closing_sends_permit_joining_0_clears_the_transient_keys_and_goes_back_to_rejoins_only() {
-    let mut h = started(FakeNcp::new());
+    let mut h = started(Ncp::recording());
     h.radio.permit_join(30).unwrap();
     let before = h.ncp.borrow().commands.len();
     h.radio.close_joining().unwrap();
@@ -408,7 +406,7 @@ fn closing_sends_permit_joining_0_clears_the_transient_keys_and_goes_back_to_rej
 
 #[test]
 fn a_join_then_the_announce_of_the_same_device_gives_one_joined_event() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce_twice = true;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -419,7 +417,7 @@ fn a_join_then_the_announce_of_the_same_device_gives_one_joined_event() {
 #[test]
 fn a_device_that_announces_and_answers_the_endpoint_request_and_the_basic_read_is_identified() {
     for protocol in [13, 19] {
-        let mut h = started(with_device_at(protocol, FakeDevice::sensor()));
+        let mut h = started(with_device_at(protocol, SimDevice::sensor()));
         h.radio.permit_join(30).unwrap();
         let events = poll_until_idle(&mut h);
         let without_measures: Vec<PairingEvent> = events
@@ -458,15 +456,15 @@ fn a_device_that_announces_and_answers_the_endpoint_request_and_the_basic_read_i
     }
 }
 
-fn with_device_at(protocol: u8, device: FakeDevice) -> FakeNcp {
+fn with_device_at(protocol: u8, device: SimDevice) -> Ncp {
     let mut ncp = ncp_at(protocol);
-    ncp.device = Some(device);
+    ncp.devices = vec![device];
     ncp
 }
 
 #[test]
 fn a_trust_center_join_without_announce_starts_the_identification_5_seconds_later() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce = false;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -484,7 +482,7 @@ fn a_trust_center_join_without_announce_starts_the_identification_5_seconds_late
 
 #[test]
 fn an_answer_from_another_device_or_with_another_tsn_or_a_default_response_is_ignored() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.decoys = true;
     device.endpoints = Some(vec![2]);
     let mut h = started(with_device(device));
@@ -499,7 +497,7 @@ fn an_answer_from_another_device_or_with_another_tsn_or_a_default_response_is_ig
 
 #[test]
 fn strings_with_trailing_zero_bytes_are_trimmed_and_non_utf8_is_read_lossily() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.manufacturer = Attr::Text(b"eWeLink\0\0\0".to_vec());
     device.model = Attr::Text(vec![b'T', 0xFF, b'1', 0x00]);
     let mut h = started(with_device(device));
@@ -513,7 +511,7 @@ fn strings_with_trailing_zero_bytes_are_trimmed_and_non_utf8_is_read_lossily() {
 
 #[test]
 fn an_unsupported_attribute_is_unknown_and_the_other_is_read() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.manufacturer = Attr::Unsupported;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -523,7 +521,7 @@ fn an_unsupported_attribute_is_unknown_and_the_other_is_read() {
 
 #[test]
 fn a_device_joining_one_second_before_the_window_ends_is_identified_after_the_window_closed() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.join_delay_ms = 4_000;
     let mut h = started(with_device(device));
     h.radio.permit_join(5).unwrap();
@@ -541,7 +539,7 @@ fn a_device_joining_one_second_before_the_window_ends_is_identified_after_the_wi
 
 #[test]
 fn a_device_silent_on_the_endpoint_request_is_read_on_endpoint_1_after_15_seconds() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.endpoints = None;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -558,7 +556,7 @@ fn a_device_silent_on_the_endpoint_request_is_read_on_endpoint_1_after_15_second
 
 #[test]
 fn a_device_that_gives_a_failure_status_to_the_endpoint_request_is_read_on_endpoint_1() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.endpoint_status = 0x80;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -569,7 +567,7 @@ fn a_device_that_gives_a_failure_status_to_the_endpoint_request_is_read_on_endpo
 
 #[test]
 fn a_device_silent_on_the_basic_read_is_asked_twice_then_identified_with_both_unknown() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.ignore_reads = u32::MAX;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -587,7 +585,7 @@ fn a_device_silent_on_the_basic_read_is_asked_twice_then_identified_with_both_un
 
 #[test]
 fn a_device_that_answers_the_retry_is_identified() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.ignore_reads = 1;
     let mut h = started(with_device(device));
     h.radio.permit_join(30).unwrap();
@@ -598,7 +596,7 @@ fn a_device_that_answers_the_retry_is_identified() {
 #[test]
 fn a_trust_center_join_denied_or_a_device_that_left_gives_no_event() {
     for (status, decision) in [(1u8, 2u8), (2, 0)] {
-        let mut device = FakeDevice::sensor();
+        let mut device = SimDevice::sensor();
         device.announce = false;
         device.join_status = status;
         device.join_decision = decision;
@@ -612,7 +610,7 @@ fn a_trust_center_join_denied_or_a_device_that_left_gives_no_event() {
 
 #[test]
 fn a_secure_rejoin_is_not_a_new_join_and_an_unsecured_rejoin_is() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce = false;
     device.join_status = 0; // secured rejoin
     let mut h = started(with_device(device.clone()));
@@ -628,7 +626,7 @@ fn a_secure_rejoin_is_not_a_new_join_and_an_unsecured_rejoin_is() {
 #[test]
 fn send_unicast_busy_twice_then_ok_identifies_and_busy_three_times_gives_not_identified() {
     // Busy twice: the third try goes through, 500 ms apart.
-    let mut ncp = with_device(FakeDevice::sensor());
+    let mut ncp = with_device(SimDevice::sensor());
     ncp.busy_sends = 2;
     let mut h = started(ncp);
     h.radio.permit_join(30).unwrap();
@@ -643,7 +641,7 @@ fn send_unicast_busy_twice_then_ok_identifies_and_busy_three_times_gives_not_ide
     assert!(h.clock.get() - opened >= 1_000);
 
     // Busy three times: the identification fails and the session goes on.
-    let mut ncp = with_device(FakeDevice::sensor());
+    let mut ncp = with_device(SimDevice::sensor());
     ncp.busy_sends = 3;
     let mut h = started(ncp);
     h.radio.permit_join(30).unwrap();
@@ -657,7 +655,7 @@ fn send_unicast_busy_twice_then_ok_identifies_and_busy_three_times_gives_not_ide
 
 #[test]
 fn the_33rd_device_is_reported_and_ignored() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce = false;
     let mut ncp = with_device(device);
     ncp.crowd = 32; // with the main device: 33 joins
@@ -679,7 +677,7 @@ fn the_33rd_device_is_reported_and_ignored() {
 
 #[test]
 fn a_callback_between_a_command_and_its_response_is_not_lost() {
-    let mut ncp = with_device(FakeDevice::sensor());
+    let mut ncp = with_device(SimDevice::sensor());
     ncp.join_before_response = true;
     let mut h = started(ncp);
     // The join and the announce arrive before the response of permitJoining.
@@ -691,7 +689,7 @@ fn a_callback_between_a_command_and_its_response_is_not_lost() {
 
 #[test]
 fn the_queue_keeps_the_16_newest_callbacks_and_drops_the_oldest_without_failing() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.announce = false;
     let mut ncp = with_device(device);
     ncp.crowd = 20; // 21 joins arrive before the response
@@ -755,7 +753,7 @@ fn the_network_line_and_the_event_lines_are_those_of_the_spec() {
 
 #[test]
 fn on_formed_is_called_with_the_network_and_keys_right_after_the_form_before_later_steps() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let mut seen = Vec::new();
     let ncp = std::rc::Rc::clone(&h.ncp);
@@ -779,7 +777,7 @@ fn on_formed_is_called_with_the_network_and_keys_right_after_the_form_before_lat
 
 #[test]
 fn a_step_after_the_form_that_fails_still_leaves_the_keys_to_the_caller() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.refuse_concentrator = true;
     let mut h = harness(ncp);
     h.radio.identify().unwrap();
@@ -807,7 +805,7 @@ fn a_step_after_the_form_that_fails_still_leaves_the_keys_to_the_caller() {
 
 #[test]
 fn an_on_formed_that_fails_ends_the_start_with_its_message_before_other_steps() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let error = h
         .radio
@@ -823,7 +821,7 @@ fn an_on_formed_that_fails_ends_the_start_with_its_message_before_other_steps() 
 
 #[test]
 fn a_late_response_with_an_older_sequence_number_is_ignored_not_an_error() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.stale_response_first = true;
     let mut h = harness(ncp);
     assert!(start(&mut h).unwrap().formed);
@@ -831,9 +829,9 @@ fn a_late_response_with_an_older_sequence_number_is_ignored_not_an_error() {
 
 // Reporting setup and measures (spec 006).
 
-use common::{ConfigureAnswer, report_frame, temperature_report};
 use mini_sowel_core::radio::measures::{Measure, Value};
 use mini_sowel_core::radio::{MeasureEvent, Sender};
+use mini_sowel_sim::{ConfigureAnswer, report_frame, temperature_report};
 
 const TEMPERATURE: u16 = 0x0402;
 const HUMIDITY: u16 = 0x0405;
@@ -885,7 +883,7 @@ fn bound_clusters(h: &Harness) -> Vec<u16> {
 }
 
 /// Pairs the device on a radio and polls until the identification and setup are over.
-fn paired(device: FakeDevice) -> (Harness, Vec<PairingEvent>) {
+fn paired(device: SimDevice) -> (Harness, Vec<PairingEvent>) {
     let mut h = started(with_device(device));
     h.radio.permit_join(180).unwrap();
     let events = poll_until_idle(&mut h);
@@ -902,7 +900,7 @@ fn temperature(value: f64) -> Measure {
 
 #[test]
 fn a_paired_fake_sensor_has_bind_and_configure_reporting_done_for_the_three_clusters() {
-    let (h, events) = paired(FakeDevice::sensor());
+    let (h, events) = paired(SimDevice::sensor());
     assert_eq!(
         reporting(&events),
         vec![(vec![TEMPERATURE, HUMIDITY, POWER], vec![], false)]
@@ -931,7 +929,7 @@ fn a_paired_fake_sensor_has_bind_and_configure_reporting_done_for_the_three_clus
 
 #[test]
 fn a_descriptor_unanswered_twice_gives_failed_no_descriptor_after_two_requests() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.ignore_descriptors = u32::MAX;
     let (h, events) = paired(device);
     assert_eq!(reporting(&events), vec![(vec![], vec![], true)]);
@@ -945,7 +943,7 @@ fn a_descriptor_unanswered_twice_gives_failed_no_descriptor_after_two_requests()
 
 #[test]
 fn a_bind_refused_for_humidity_fails_that_cluster_and_the_others_go_on() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.bind_refused = vec![HUMIDITY];
     let (h, events) = paired(device);
     assert_eq!(
@@ -960,7 +958,7 @@ fn a_bind_refused_for_humidity_fails_that_cluster_and_the_others_go_on() {
 
 #[test]
 fn a_configure_reporting_unanswered_after_its_retry_stops_the_setup_and_fails_the_rest() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.configure = ConfigureAnswer::Silent;
     let (h, events) = paired(device);
     assert_eq!(
@@ -975,7 +973,7 @@ fn a_configure_reporting_unanswered_after_its_retry_stops_the_setup_and_fails_th
 
 #[test]
 fn failed_clusters_are_tried_again_once_when_the_device_next_sends_a_message() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.ignore_configures = 2; // the first request and its retry are not answered
     let (mut h, events) = paired(device);
     assert_eq!(
@@ -1015,7 +1013,7 @@ fn failed_clusters_are_tried_again_once_when_the_device_next_sends_a_message() {
 
 #[test]
 fn a_report_between_the_bind_and_the_configure_response_is_shown_and_the_response_still_matched() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.reports_during_setup = vec![(TEMPERATURE, temperature_report(0x60, 2100))];
     device.reports = Vec::new();
     let (_h, events) = paired(device);
@@ -1049,7 +1047,7 @@ fn an_eui64_of_all_zeros_in_the_packet_info_that_the_radio_does_not_know_shows_t
 
 #[test]
 fn a_frame_giving_more_than_16_measures_keeps_16() {
-    let mut h = started(FakeNcp::new());
+    let mut h = started(Ncp::recording());
     let records: Vec<(u16, u8, Vec<u8>)> = (0..20)
         .map(|i| (0x0000, 0x29, (1000i16 + i).to_le_bytes().to_vec()))
         .collect();
@@ -1064,7 +1062,7 @@ fn a_frame_giving_more_than_16_measures_keeps_16() {
 
 #[test]
 fn reports_from_the_paired_device_give_measure_events_with_its_eui64() {
-    let (_h, events) = paired(FakeDevice::sensor());
+    let (_h, events) = paired(SimDevice::sensor());
     let shown = measure_events(&events);
     let lines: Vec<String> = shown.iter().flat_map(MeasureEvent::lines).collect();
     assert_eq!(
@@ -1119,7 +1117,7 @@ fn a_report_from_an_unknown_nwk_shows_the_eui64_the_radio_knows_or_the_nwk_when_
 
 #[test]
 fn the_address_cache_holds_64_entries_and_drops_the_oldest() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.known_addresses = (0..65u16)
         .map(|i| (0x4000 + i, [i as u8 + 1, 0, 0, 0, 0, 0, 0, 0]))
         .collect();
@@ -1147,7 +1145,7 @@ fn the_address_cache_holds_64_entries_and_drops_the_oldest() {
 
 #[test]
 fn listen_on_a_radio_with_no_network_is_the_error_no_network_and_forms_nothing() {
-    let mut h = harness(FakeNcp::new());
+    let mut h = harness(Ncp::recording());
     h.radio.identify().unwrap();
     let error = h.radio.listen().unwrap_err();
     assert_eq!(error, RadioError::NoNetwork);
@@ -1157,7 +1155,7 @@ fn listen_on_a_radio_with_no_network_is_the_error_no_network_and_forms_nothing()
 
 #[test]
 fn listen_resumes_the_network_and_never_forms_one() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.network = Some(StoredNetwork {
         extended_pan_wire: [1, 2, 3, 4, 5, 6, 7, 8],
         pan_id: 0x4321,
@@ -1188,7 +1186,7 @@ fn listen_resumes_the_network_and_never_forms_one() {
 
 #[test]
 fn a_configure_reporting_response_with_another_tsn_is_not_the_awaited_answer() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.configure = ConfigureAnswer::Silent;
     let mut h = started(with_device(device));
     h.radio.permit_join(180).unwrap();
@@ -1213,7 +1211,7 @@ fn a_configure_reporting_response_with_another_tsn_is_not_the_awaited_answer() {
 /// is tried once more (and fails again, the device answers the same), exactly when a cluster
 /// failed.
 fn configure_answered(cluster: u16, answer: ConfigureAnswer) -> (Vec<u16>, Vec<u16>, bool) {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.configure_overrides = vec![(cluster, answer)];
     let (_h, events) = paired(device);
     let results = reporting(&events);
@@ -1254,7 +1252,7 @@ fn power_answered_by_a_single_failure_byte_86_fails() {
 
 #[test]
 fn a_manufacturer_specific_report_on_the_on_off_cluster_gives_no_measure() {
-    let mut h = started(FakeNcp::new());
+    let mut h = started(Ncp::recording());
     // Global report from the server, manufacturer code 0x1234, on/off attribute 0 = on.
     let frame = [0x1C, 0x34, 0x12, 0x01, 0x0A, 0x00, 0x00, 0x10, 0x01];
     h.ncp.borrow_mut().inject(0x1234, 0x0104, 0x0006, 1, &frame);
@@ -1268,7 +1266,7 @@ fn a_manufacturer_specific_report_on_the_on_off_cluster_gives_no_measure() {
 
 #[test]
 fn a_default_response_for_another_command_is_not_the_answer_to_the_configure_reporting() {
-    let mut device = FakeDevice::sensor();
+    let mut device = SimDevice::sensor();
     device.configure = ConfigureAnswer::Silent;
     let mut h = started(with_device(device));
     h.radio.permit_join(180).unwrap();

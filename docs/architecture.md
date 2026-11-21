@@ -30,6 +30,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 | Block | Role | Where in the code |
 | ----- | ---- | ----------------- |
 | Core | The Sowel core: shared by every program, no hardware. `radio/`: the ASH frame layer, the EZSP commands and callbacks, ZDO and ZCL frames, the generic reading of the standard clusters' measures (`measures.rs`), and the coordinator (start or resume the network, pairing, identifying a device, setting up its reporting, listening to its measures), as state machines fed with bytes, time and random bytes; `RadioTransport` is the trait a transport implements | `crates/core/` |
+| Simulator | A simulated EmberZNet radio and simulated devices (temperature-humidity, motion, relay) playing scenario files (`scenarios/`); it implements the core's `RadioTransport`, so the host and the tests run the real protocol code against it; Mac only | `crates/sim/` |
 | Host | The program on the Mac; `radio_tcp.rs` is the TCP transport to the Dongle Max's radio; `random.rs` reads the system's random source; `backup.rs` writes the network backup to the data folder (`mini-sowel-data/`, ignored by git) | `crates/host/` |
 | Firmware | The program on the Dongle Max's ESP32 | `firmware/` (own toolchain, `firmware/rust-toolchain.toml`) |
 | Interface | The web app, Sowel's design system | `ui/` |
@@ -38,7 +39,7 @@ app, run by Vite's development server; neither the host nor the box serves it.
 
 ## Builds
 
-- **Mac workspace** (`Cargo.toml` at the root): `crates/core`, `crates/host`; Rust stable pinned
+- **Mac workspace** (`Cargo.toml` at the root): `crates/core`, `crates/host`, `crates/sim`; Rust stable pinned
   in `rust-toolchain.toml`.
 - **Firmware** (`firmware/Cargo.toml`): built with the Xtensa toolchain from `espup`, target
   `xtensa-esp32-espidf`, ESP-IDF version pinned in `firmware/.cargo/config.toml`; the build

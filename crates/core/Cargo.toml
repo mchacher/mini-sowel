@@ -11,3 +11,6 @@ workspace = true
 
 [dependencies]
 log = "0.4"
+
+[dev-dependencies]
+mini-sowel-sim = { path = "../sim" }

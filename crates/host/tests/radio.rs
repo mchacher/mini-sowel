@@ -1,18 +1,15 @@
 //! The host program against a fake radio listening on a local TCP port, speaking real ASH.
 
-#[path = "../../core/tests/common/mod.rs"]
-mod common;
-
 use std::io::{ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Command, Output};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use common::{FakeNcp, Mode};
+use mini_sowel_sim::{Mode, Ncp};
 
 /// Serves one connection with the fake radio; returns every byte it received.
-fn serve(ncp: FakeNcp) -> (SocketAddr, JoinHandle<Vec<u8>>) {
+fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
@@ -55,7 +52,7 @@ fn text(bytes: &[u8]) -> String {
 
 #[test]
 fn radio_argument_shows_the_four_lines_of_the_fake_radio_and_exits_0() {
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let (output, elapsed) = run(&["--radio", &url]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
@@ -90,7 +87,7 @@ fn a_refused_connection_prints_cannot_connect_and_exits_1() {
 
 #[test]
 fn a_radio_that_never_answers_prints_no_answer_to_reset_and_exits_1() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.mode = Mode::Silent;
     let (address, handle) = serve(ncp);
     let (output, elapsed) = run(&["--radio", &format!("tcp://{address}")]);
@@ -102,7 +99,7 @@ fn a_radio_that_never_answers_prints_no_answer_to_reset_and_exits_1() {
 
 #[test]
 fn an_error_frame_after_rstack_prints_the_code_and_exits_1() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.mode = Mode::ErrorAfterRstAck(0x51);
     let (address, handle) = serve(ncp);
     let (output, elapsed) = run(&["--radio", &format!("tcp://{address}")]);

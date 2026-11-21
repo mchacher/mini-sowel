@@ -10,6 +10,7 @@ repository.workspace = true
 ctrlc = "3.5.2"
 log = "0.4"
 mini-sowel-core = { path = "../core" }
+mini-sowel-sim = { path = "../sim" }
 
 [lints]
 workspace = true

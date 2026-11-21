@@ -1,19 +1,17 @@
 //! `Radio::identify` against a scripted radio, with fake time.
 
-mod common;
-
 use std::cell::Cell;
 use std::rc::Rc;
 
-use common::{FakeNcp, Mode};
 use mini_sowel_core::radio::ash::AshFailure;
 use mini_sowel_core::radio::ezsp::NetworkState;
 use mini_sowel_core::radio::{Radio, RadioError, RadioTransport, TransportError};
+use mini_sowel_sim::{Mode, Ncp};
 
 /// A transport wired to the fake radio. Reading advances the fake clock by the timeout when
 /// nothing is waiting, so no test really waits.
 struct FakeTransport {
-    ncp: FakeNcp,
+    ncp: Ncp,
     to_read: Vec<u8>,
     clock: Rc<Cell<u64>>,
 }
@@ -37,7 +35,7 @@ impl RadioTransport for FakeTransport {
     }
 }
 
-fn radio(ncp: FakeNcp) -> (Radio<FakeTransport, impl FnMut() -> u64>, Rc<Cell<u64>>) {
+fn radio(ncp: Ncp) -> (Radio<FakeTransport, impl FnMut() -> u64>, Rc<Cell<u64>>) {
     let clock = Rc::new(Cell::new(0u64));
     let transport = FakeTransport {
         ncp,
@@ -50,7 +48,7 @@ fn radio(ncp: FakeNcp) -> (Radio<FakeTransport, impl FnMut() -> u64>, Rc<Cell<u6
 
 #[test]
 fn identify_returns_the_identity_of_the_fake_radio() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.callback_first = true; // callbacks between command and response are skipped
     ncp.network_state = 2;
     let (mut radio, _) = radio(ncp);
@@ -64,7 +62,7 @@ fn identify_returns_the_identity_of_the_fake_radio() {
 
 #[test]
 fn identify_works_with_a_radio_at_protocol_19() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.protocol = 19;
     let (mut radio, _) = radio(ncp);
     assert_eq!(radio.identify().unwrap().protocol, 19);
@@ -72,7 +70,7 @@ fn identify_works_with_a_radio_at_protocol_19() {
 
 #[test]
 fn identify_refuses_a_radio_with_an_unsupported_version() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.protocol = 12;
     let (mut radio, _) = radio(ncp);
     let error = radio.identify().unwrap_err().to_string();
@@ -84,7 +82,7 @@ fn identify_refuses_a_radio_with_an_unsupported_version() {
 
 #[test]
 fn a_radio_that_never_sends_rstack_gives_no_answer_to_reset_within_5_seconds_of_fake_time() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.mode = Mode::Silent;
     let (mut radio, clock) = radio(ncp);
     let error = radio.identify().unwrap_err();
@@ -96,7 +94,7 @@ fn a_radio_that_never_sends_rstack_gives_no_answer_to_reset_within_5_seconds_of_
 
 #[test]
 fn a_command_acknowledged_but_never_answered_gives_no_answer_5_seconds_after_the_ack() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.mode = Mode::MuteOnCommands;
     let (mut radio, clock) = radio(ncp);
     let error = radio.identify().unwrap_err();
@@ -108,7 +106,7 @@ fn a_command_acknowledged_but_never_answered_gives_no_answer_5_seconds_after_the
 
 #[test]
 fn a_command_never_acknowledged_ends_as_a_lost_link() {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.mode = Mode::DeafToCommands;
     let (mut radio, clock) = radio(ncp);
     let error = radio.identify().unwrap_err();

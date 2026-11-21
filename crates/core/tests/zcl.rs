@@ -2,15 +2,12 @@
 //! bytes in, types out; and the Default Response the coordinator sends, against the scripted
 //! radio.
 
-mod common;
-
-use common::{
-    FakeNcp, Harness, SentMessage, harness, report_frame, report_frame_with_control,
-    temperature_report,
-};
 use mini_sowel_core::radio::NetworkSettings;
 use mini_sowel_core::radio::measures::{self, Value};
 use mini_sowel_core::radio::zcl::*;
+use mini_sowel_sim::{
+    Harness, Ncp, SentMessage, harness, report_frame, report_frame_with_control, temperature_report,
+};
 
 /// A Read Attributes response frame with the given records (already encoded).
 fn response(tsn: u8, records: &[u8]) -> Vec<u8> {
@@ -375,7 +372,7 @@ fn the_default_response_status_follows_the_kind_of_command() {
 const SENDER: u16 = 0x2222;
 
 fn started(protocol: u8) -> Harness {
-    let mut ncp = FakeNcp::new();
+    let mut ncp = Ncp::recording();
     ncp.protocol = protocol;
     let mut h = harness(ncp);
     h.radio.identify().unwrap();

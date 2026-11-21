@@ -1,0 +1,29 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE123456", "network": "none" },
+  "devices": [
+    { "id": "th", "kind": "temperature-humidity", "eui64": "00124B0012345678" }
+  ],
+  "events": [
+    { "at": "2s", "device": "th", "do": "join" },
+    { "at": "40s", "device": "th", "do": "report", "temperature": 19.50, "humidity": 54.5 },
+    { "at": "1m10s", "device": "th", "do": "report", "temperature": 19.58, "humidity": 54.3 },
+    { "at": "1m40s", "device": "th", "do": "report", "temperature": 19.59, "humidity": 53.8 },
+    { "at": "2m10s", "device": "th", "do": "report", "temperature": 19.51, "humidity": 53.5 },
+    { "at": "2m40s", "device": "th", "do": "report", "temperature": 19.42, "humidity": 53.7 },
+    { "at": "3m10s", "device": "th", "do": "report", "temperature": 19.40, "humidity": 54.1 },
+    { "at": "3m40s", "device": "th", "do": "report", "temperature": 19.47, "humidity": 54.5 },
+    { "at": "4m10s", "device": "th", "do": "report", "temperature": 19.57, "humidity": 54.4 },
+    { "at": "4m40s", "device": "th", "do": "report", "temperature": 19.60, "humidity": 53.9 },
+    { "at": "5m10s", "device": "th", "do": "report", "temperature": 19.54, "humidity": 53.5 },
+    { "at": "5m40s", "device": "th", "do": "report", "temperature": 19.45, "humidity": 53.6 },
+    { "at": "6m10s", "device": "th", "do": "report", "temperature": 19.40, "humidity": 54.0 },
+    { "at": "6m40s", "device": "th", "do": "report", "temperature": 19.45, "humidity": 54.4 },
+    { "at": "7m10s", "device": "th", "do": "report", "temperature": 19.54, "humidity": 54.5 },
+    { "at": "7m40s", "device": "th", "do": "report", "temperature": 19.60, "humidity": 54.1 },
+    { "at": "8m10s", "device": "th", "do": "report", "temperature": 19.57, "humidity": 53.6 },
+    { "at": "8m40s", "device": "th", "do": "report", "temperature": 19.47, "humidity": 53.5 },
+    { "at": "9m10s", "device": "th", "do": "report", "temperature": 19.40, "humidity": 53.9 },
+    { "at": "9m40s", "device": "th", "do": "report", "temperature": 19.42, "humidity": 54.3 },
+    { "at": "1m30s", "device": "th", "do": "report", "battery": 100 }
+  ]
+}

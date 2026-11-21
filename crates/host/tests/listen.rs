@@ -1,9 +1,6 @@
 //! `--pair` (reporting and measures) and `--listen` against a fake radio listening on a local TCP
 //! port, speaking real ASH and EZSP, with the fake SNZB-02 that reports.
 
-#[path = "../../core/tests/common/mod.rs"]
-mod common;
-
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
@@ -12,10 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use common::{FakeDevice, FakeNcp};
+use mini_sowel_sim::{Ncp, SimDevice};
 
 /// Serves one connection with the fake radio and gives the radio back when it closes.
-fn serve(ncp: FakeNcp) -> (SocketAddr, JoinHandle<FakeNcp>) {
+fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Ncp>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
@@ -71,9 +68,9 @@ fn lines(output: &Output) -> Vec<String> {
     text(&output.stdout).lines().map(str::to_string).collect()
 }
 
-fn sensor_radio() -> FakeNcp {
-    let mut ncp = FakeNcp::new();
-    ncp.device = Some(FakeDevice::sensor());
+fn sensor_radio() -> Ncp {
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![SimDevice::sensor()];
     ncp
 }
 
@@ -184,7 +181,7 @@ fn a_second_run_with_listen_resumes_the_network_and_shows_the_reports_until_ctrl
 
 #[test]
 fn listen_on_a_fake_radio_with_no_network_says_pair_a_device_first_and_exits_1() {
-    let (address, handle) = serve(FakeNcp::new());
+    let (address, handle) = serve(Ncp::recording());
     let url = format!("tcp://{address}");
     let dir = data_dir();
     let output = run(&["--radio", &url, "--listen", "--data", dir.to_str().unwrap()]);

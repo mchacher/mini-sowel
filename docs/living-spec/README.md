@@ -26,7 +26,7 @@ its web interface or from Sowel.
 
 Each of the three programs starts and says which tool it is, with its version:
 
-- **On the Mac**: `cargo run -p mini-sowel-host`, without `--radio`, prints `mini-sowel 0.1.0`
+- **On the Mac**: `cargo run -p mini-sowel-host`, without `--radio` or `--sim`, prints `mini-sowel 0.1.0`
   and exits.
 - **On the ESP32**: the firmware starts ESP-IDF and writes `mini-sowel 0.1.0` to the serial log,
   then its free memory: internal RAM (free, and largest free block) and PSRAM (free, of total),
@@ -59,7 +59,7 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
 <reason>`, `radio: no answer to reset`, `radio: no answer to command`, `radio: link lost`,
 `radio: connection closed by the radio`,
 `radio: error 0x<code>`, or the EZSP error (a version outside 13 to 19 is named); a malformed
-`--radio` prints the expected form and exits 2.
+`--radio` or `--sim` prints the expected form and exits 2.
 
 ### Pairs a device
 
@@ -68,7 +68,8 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
 
 - the first time, the radio **forms** a network on channel 15, with random keys and identifiers,
   and saves it in its own flash; the host writes a backup of it (identifiers and keys) to
-  `mini-sowel-data/network.json` (`--data <dir>` for another folder), readable by its owner only,
+  `mini-sowel-data/network.json` (`mini-sowel-data/sim/network.json` under `--sim`; `--data
+  <dir>` for another folder), readable by its owner only,
   never printed;
 - after that, the radio **resumes** its network; a coordinator network another program made is
   used as it is, never destroyed, and named so;
@@ -121,13 +122,37 @@ listening
 
 Measures are read from the standard Zigbee clusters, without a device definition, and named as
 in Sowel: `temperature` (°C), `humidity` (%), `pressure` (hPa), `luminosity` (lx), `motion`,
-`light_state`, `light_brightness` (%), `battery` (%), `voltage` (V); booleans are shown
+`light_state`, `light_brightness` (%), `battery` (%), `voltage` (V), and `alarm`, `tamper`
+(IAS zone notifications, sent by enrolled alarm devices); booleans are shown
 `motion true`, `light_state on`. The banner and the radio's lines come first, as with `--pair`.
 Invalid values and
 implausible ones (temperature outside −50 to 150 °C, humidity outside 0 to 100 %) are not shown.
 A device is shown by its 64-bit address, or by its network address when the radio does not know
 it. The host answers each report as Zigbee requires (a default response). A sensor reports at most
 every 30 s and at least every hour; its battery every few hours.
+
+### Runs without the dongle
+
+`--sim <scenario>` replaces `--radio tcp://<address>:6638` in every command (identify, `--pair`,
+`--listen`): a simulated radio and simulated devices, speaking the same protocols as the real
+ones, play a scenario file; the lines are the same, `radio: sim <scenario>` first.
+`--speed <1..100>` runs the scenario's clock faster (the pairing time is not affected).
+
+A scenario (JSON, at most 1 MB) names the radio (EZSP version 13 to 19, stack version, address,
+`"network": "none"` or `"formed"`), up to 64 devices and up to 10 000 events: `join` (as soon as
+pairing is open) and `report` (measures by Sowel category, allowed per kind), at times such as
+`40s` or `1m30s`. Its errors name the file and the line, or the device or event and its field.
+
+| Kind | Identity sent | Sends |
+| ---- | ------------- | ----- |
+| `temperature-humidity` | eWeLink TH01 (Sonoff SNZB-02) | temperature, humidity, battery; asleep except 10 s after joining or reporting |
+| `motion` | eWeLink MS01 (Sonoff SNZB-03) | nothing until enrolled as an alarm device; then `alarm true`, and `alarm false` 60 s later |
+| `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
+
+The simulated radio keeps its network and its devices in `mini-sowel-data/sim/` (or `--data`),
+apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
+`scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
+relay).
 
 ### Measures the coverage of Zigbee2MQTT's definitions
 
@@ -164,3 +189,4 @@ its network, pair devices and receive their measures.
 | 004 | The host identifies the Dongle Max's radio over TCP (ASH, EZSP) |
 | 005 | The radio runs a Zigbee network; the host pairs a device and shows what it is |
 | 006 | The host sets up reporting and shows the measures of the standard clusters (`--listen`) |
+| 007 | A simulated radio and devices play scenario files (`--sim`) |
