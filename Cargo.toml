@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/host"]
+members = ["crates/core", "crates/host", "crates/sim"]
 # The ESP32 firmware has its own toolchain (Xtensa) and target: built from firmware/.
 exclude = ["firmware"]
 
@@ -8,7 +8,7 @@ exclude = ["firmware"]
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-repository = "https://github.com/mchacher/mini-sowel"
+repository = "https://github.com/mchacher/solite"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

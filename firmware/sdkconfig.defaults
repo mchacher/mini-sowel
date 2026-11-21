@@ -1,3 +1,16 @@
 # ESP-IDF settings for the ESP32 of the Sonoff Dongle Max.
 # Rust needs a larger main task stack than the ESP-IDF default.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
+
+# Flash: 16 MB.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=n
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# PSRAM (2 MB): on, added to the heap (malloc can use it), and the firmware boots without it.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# The Dongle Max's ESP32-D0WDR2-V3 is revision 3. Below it, ESP-IDF needs a PSRAM cache
+# workaround that only the C compiler applies, which Rust code would not get.
+CONFIG_ESP32_REV_MIN_3=y

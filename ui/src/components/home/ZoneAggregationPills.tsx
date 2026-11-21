@@ -1,0 +1,405 @@
+// Ported from Sowel ui/src/components/home/ZoneAggregationPills.tsx (Sowel commit 5da84dc1, UI
+// 1.87.0). Cuts: the sparkline of each sensor pill (it reads the history, which the tool has not),
+// and the shutter and water-valve pills (the tool has no such equipment, and their icons are not ported).
+import { Fragment, useEffect, useId, useState } from "react";
+import { useTranslation } from "react-i18next";
+import {
+  Thermometer,
+  Droplets,
+  Sun,
+  PersonStanding,
+  Lightbulb,
+  DoorClosed,
+  DoorOpen,
+  SquareStack,
+  Droplet,
+  Flame,
+  Zap,
+} from "lucide-react";
+import type { ZoneAggregatedData } from "../../types";
+import {
+  formatDuration,
+  formatPercent,
+  formatPower,
+  formatTemperature,
+  formatWithUnit,
+} from "../../lib/format";
+
+type PillVariant = "default" | "active" | "info" | "calm" | "alert";
+
+/**
+ * Spec 170 — watts below the kilowatt, kilowatts above, so a house drawing four
+ * figures does not print six characters of noise in a pill. Unit symbols are not
+ * translated, like the `m³/h` suffix on the water-valve pill.
+ */
+function formatWatts(watts: number): string {
+  return formatPower(watts);
+}
+
+interface ZoneAggregationPillsProps {
+  data: ZoneAggregatedData;
+  zoneId?: string;
+}
+
+interface StatusItem {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  /** Mobile-only label override. When undefined, uses `label` on all viewports. Empty string = icon-only on mobile. */
+  mobileLabel?: string;
+  variant: PillVariant;
+  /** Override for the icon color in the default variant. Ignored for non-default variants. */
+  iconTint?: string;
+  /** Override for the value/label color in the default variant. Ignored for non-default variants. */
+  valueTint?: string;
+  /** Name read before the value by screen readers and shown on hover, when the icon alone says it. */
+  name?: string;
+  /** Offline equipments left out of this pill (spec 116, #1134): a marker, named on hover or tap (#1140). */
+  unavailable?: string[];
+}
+
+export function ZoneAggregationPills({ data, zoneId }: ZoneAggregationPillsProps) {
+  const { t } = useTranslation();
+  const duration = useRelativeTime(data.motionSince);
+  // #1140 — the marked pill whose offline names are shown under the strip. A
+  // `title` never shows on a touch screen, so a tap opens them inline.
+  // Keyed by zone too, so an open line never follows the user to another zone.
+  const [namesFor, setNamesFor] = useState<string | null>(null);
+  const openKey = (key: string) => `${zoneId ?? ""}:${key}`;
+  const namesId = useId();
+
+  // Spec 116, #1134: the offline equipments left out of a category's pill. The
+  // pill carries a marker and names them, so the hint can be traced to a zone.
+  const unavail = (cat: string): string[] | undefined => {
+    const names = data.unavailableEquipmentNamesByCategory?.[cat as never] as string[] | undefined;
+    return names && names.length > 0 ? names : undefined;
+  };
+  const offlineLights = unavail("light_state");
+
+  // ── Cluster 1: Sensors (passive measurement) ────────────────
+  const sensorPills: StatusItem[] = [];
+
+  if (data.temperature !== null) {
+    sensorPills.push({
+      key: "temp",
+      icon: <Thermometer size={14} strokeWidth={1.5} />,
+      label: formatTemperature(data.temperature, { style: "compact" }),
+      unavailable: unavail("temperature"),
+      variant: "default",
+      iconTint: "text-primary",
+      valueTint: "text-text",
+    });
+  }
+
+  if (data.humidity !== null) {
+    sensorPills.push({
+      key: "hum",
+      icon: <Droplets size={14} strokeWidth={1.5} />,
+      label: formatPercent(data.humidity),
+      unavailable: unavail("humidity"),
+      variant: "default",
+      iconTint: "text-primary",
+      valueTint: "text-text",
+    });
+  }
+
+  if (data.luminosity !== null) {
+    sensorPills.push({
+      key: "lux",
+      icon: <Sun size={14} strokeWidth={1.5} />,
+      label: formatWithUnit(data.luminosity, "lx"),
+      unavailable: unavail("luminosity"),
+      variant: "default",
+      iconTint: "text-primary",
+      valueTint: "text-text",
+    });
+  }
+
+  // ── Cluster 2: Counters / states (active devices) ───────────
+  const counterPills: StatusItem[] = [];
+
+  if (data.motionSensors > 0) {
+    const label = data.motion ? t("aggregation.motion") : t("aggregation.calm");
+    const suffix = duration ? ` · ${duration}` : "";
+    counterPills.push({
+      key: "motion",
+      icon: <PersonStanding size={14} strokeWidth={1.5} />,
+      label: `${label}${suffix}`,
+      // Mobile: when motion is active, drop the "Mouvement" word but keep the duration.
+      // The icon color signals motion; the word is redundant. Calm stays verbatim.
+      mobileLabel: data.motion ? (duration ?? "") : `${label}${suffix}`,
+      // Motion is activity, not something switched on: primary, not amber.
+      variant: data.motion ? "info" : "calm",
+    });
+  }
+
+  // A zone whose lights are all offline keeps a greyed pill, so the marker its
+  // parent shows can be followed down to it (#1134).
+  if (data.lightsTotal > 0 || offlineLights) {
+    const isOn = data.lightsOn > 0;
+    counterPills.push({
+      key: "lights",
+      icon: <Lightbulb size={14} strokeWidth={1.5} />,
+      label: data.lightsTotal > 0 ? `${data.lightsOn}/${data.lightsTotal}` : "—",
+      variant: isOn ? "active" : "default",
+      iconTint: "text-text-tertiary",
+      valueTint: "text-text-tertiary",
+      unavailable: offlineLights,
+    });
+  }
+
+  // Spec 190 — motorised doors, apart from the shutters and from the door
+  // contact sensors (the `openDoors` alert below).
+  if (data.doorsTotal > 0) {
+    const someOpen = data.doorsOpen > 0;
+    counterPills.push({
+      key: "door-equipments",
+      icon: someOpen ? (
+        <DoorOpen size={14} strokeWidth={1.5} />
+      ) : (
+        <DoorClosed size={14} strokeWidth={1.5} />
+      ),
+      label: `${data.doorsOpen}/${data.doorsTotal}`,
+      // Open/closed is neutral (spec 196): the word and the icon say it.
+      variant: "default",
+      iconTint: "text-text-secondary",
+      valueTint: someOpen ? "text-text" : "text-text-tertiary",
+    });
+  }
+
+  // Spec 170 — the zone's live draw, summed from its submeters. Rendered only
+  // when the zone actually measures something: `null` means no meter here, and
+  // a pill reading "0 W" there would be a measurement the zone never made.
+  if (data.powerTotal !== null) {
+    counterPills.push({
+      key: "power",
+      icon: <Zap size={14} strokeWidth={1.5} />,
+      label: formatWatts(data.powerTotal),
+      // Energy is not "on": a neutral value, never amber.
+      variant: "default",
+      iconTint: "text-text-tertiary",
+      valueTint: data.powerTotal > 0 ? "text-text" : "text-text-tertiary",
+    });
+  }
+
+  // ── Cluster 3: Alerts (anomalies) ───────────────────────────
+  const alertPills: StatusItem[] = [];
+
+  if (data.openDoors > 0) {
+    alertPills.push({
+      key: "doors",
+      icon: <DoorOpen size={14} strokeWidth={1.5} />,
+      label: t("aggregation.open", { count: data.openDoors }),
+      variant: "default",
+      iconTint: "text-text-secondary",
+      valueTint: "text-text",
+    });
+  }
+
+  if (data.openWindows > 0) {
+    alertPills.push({
+      key: "windows",
+      icon: <SquareStack size={14} strokeWidth={1.5} />,
+      label: t("aggregation.open", { count: data.openWindows }),
+      variant: "default",
+      iconTint: "text-text-secondary",
+      valueTint: "text-text",
+    });
+  }
+
+  if (data.waterLeak) {
+    alertPills.push({
+      key: "water",
+      icon: <Droplet size={14} strokeWidth={1.5} />,
+      label: t("aggregation.waterLeak"),
+      variant: "alert",
+    });
+  }
+
+  if (data.smoke) {
+    alertPills.push({
+      key: "smoke",
+      icon: <Flame size={14} strokeWidth={1.5} />,
+      label: t("aggregation.smoke"),
+      variant: "alert",
+    });
+  }
+
+  const clusters = [sensorPills, counterPills, alertPills].filter((c) => c.length > 0);
+
+  if (clusters.length === 0) return null;
+
+  const shownNames = clusters.flat().find((item) => openKey(item.key) === namesFor)?.unavailable;
+  // The line closes for good once it has nothing to name (other zone, back
+  // online): it must not reopen by itself when an equipment drops again.
+  if (namesFor !== null && !shownNames) setNamesFor(null);
+
+  // Below lg (phones and tablets) the strip wraps instead of scrolling
+  // sideways (spec 196): the separators would dangle at line ends there, so
+  // the gap replaces them.
+  return (
+    <div className="card px-1 py-1">
+      <div className="flex flex-wrap lg:flex-nowrap items-center gap-x-2 gap-y-1 lg:gap-x-0 lg:overflow-x-auto">
+        {clusters.map((cluster, ci) => (
+          <Fragment key={ci}>
+            {ci > 0 && <div className="w-px h-5 bg-border mx-2 flex-shrink-0 hidden lg:block" />}
+            {cluster.map((item, ii) => (
+              <Fragment key={item.key}>
+                {ii > 0 && (
+                  <div className="w-px h-4 bg-border-light mx-1 flex-shrink-0 hidden lg:block" />
+                )}
+                <StripPill
+                  item={item}
+                  namesId={namesId}
+                  namesShown={namesFor === openKey(item.key) && !!shownNames}
+                  onToggleNames={() =>
+                    setNamesFor((k) => (k === openKey(item.key) ? null : openKey(item.key)))
+                  }
+                />
+              </Fragment>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+      {shownNames && (
+        <p id={namesId} className="px-2 pt-1 pb-0.5 text-caption text-text-secondary">
+          {t("zones.aggregate.offline", { names: shownNames.join(", ") })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// StripPill — variant → class mapping. Kept in-file for locality.
+// ============================================================
+
+interface StripPillProps {
+  item: StatusItem;
+  /** Id of the line under the strip that names the offline equipments. */
+  namesId: string;
+  /** Whether that line currently names this pill's offline equipments. */
+  namesShown: boolean;
+  onToggleNames: () => void;
+}
+
+function variantClasses(variant: PillVariant): {
+  pill: string;
+  icon: string;
+  value: string;
+} {
+  switch (variant) {
+    case "alert":
+      return {
+        pill: "bg-error/10 font-semibold",
+        icon: "text-error",
+        value: "text-error",
+      };
+    case "active":
+      // Something on or running now: lights on, water flowing.
+      return {
+        pill: "",
+        icon: "text-active-ink",
+        value: "text-active-ink",
+      };
+    case "info":
+      return {
+        pill: "",
+        icon: "text-primary",
+        value: "text-primary",
+      };
+    case "calm":
+      return {
+        pill: "",
+        icon: "text-success",
+        value: "text-success font-semibold",
+      };
+    default:
+      return { pill: "", icon: "", value: "" };
+  }
+}
+
+function StripPill({ item, namesId, namesShown, onToggleNames }: StripPillProps) {
+  const { t } = useTranslation();
+  const v = variantClasses(item.variant);
+  const offline = item.unavailable
+    ? t("zones.aggregate.offline", { names: item.unavailable.join(", ") })
+    : undefined;
+  const title = [item.name, offline].filter(Boolean).join(" · ") || undefined;
+  const iconClass = v.icon || item.iconTint || "text-text-tertiary";
+  const valueClass = v.value || item.valueTint || "text-text";
+  const hasMobileOverride = item.mobileLabel !== undefined;
+  const pillClass = `flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-small font-medium tabular-nums whitespace-nowrap ${v.pill}`;
+
+  const content = (
+    <>
+      <span className={`flex-shrink-0 ${iconClass}`}>{item.icon}</span>
+      {item.name && <span className="sr-only">{item.name}</span>}
+      {hasMobileOverride ? (
+        <>
+          {item.mobileLabel && (
+            <span className={`sm:hidden ${valueClass}`}>{item.mobileLabel}</span>
+          )}
+          <span className={`hidden sm:inline ${valueClass}`}>{item.label}</span>
+        </>
+      ) : (
+        <span className={valueClass}>{item.label}</span>
+      )}
+      {offline && (
+        <>
+          {/* Attention, not a fault: part of the zone is offline (orange role). */}
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-warning flex-shrink-0" />
+          <span className="sr-only">{offline}</span>
+        </>
+      )}
+    </>
+  );
+
+  // #1140 — a marked pill is a button: a tap names its offline equipments under
+  // the strip, where a hover `title` cannot reach on a touch screen.
+  if (offline) {
+    return (
+      <button
+        type="button"
+        className={`${pillClass} cursor-pointer hover:bg-border-light`}
+        title={title}
+        aria-expanded={namesShown}
+        aria-controls={namesShown ? namesId : undefined}
+        onClick={onToggleNames}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div className={pillClass} title={title}>
+      {content}
+    </div>
+  );
+}
+
+// ============================================================
+// Relative time hook — refreshes every 30s, zero CPU when no timestamp
+// ============================================================
+
+function useRelativeTime(since: string | null): string | null {
+  const [, tick] = useState(0);
+
+  useEffect(() => {
+    if (!since) return;
+    const id = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [since]);
+
+  if (!since) return null;
+  return sinceDuration(since);
+}
+
+/** How long since `since`, whole minutes at least (« 24 min », « 2 h 05 »); null under a minute. */
+function sinceDuration(since: string): string | null {
+  const seconds = Math.floor((Date.now() - new Date(since).getTime()) / 1000);
+  if (seconds < 60) return null;
+  // Whole minutes: the pill refreshes every 30 s, seconds would only flicker.
+  return formatDuration(seconds - (seconds % 60));
+}

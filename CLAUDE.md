@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude working on mini-Sowel. The **first file to read** in every conversation. It is
+Guidance for Claude working on Solite. The **first file to read** in every conversation. It is
 short on purpose: it points to where things are, it does not describe them. **It stays under
 about 150 lines**: a subject that grows moves to `docs/` or becomes a check.
 
@@ -51,25 +51,35 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 
 ```
 cd ui && npm ci                                  # once, after a clone
-cargo run -p mini-sowel-host                     # the host program (Mac)
-cd ui && npm run dev                             # the interface, on http://localhost:5173
+cd tools/z2m-coverage && npm ci                  # once, after a clone
+cargo run -p solite-host                     # the host program (Mac)
+cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
+cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
+cargo run -p solite-host -- --radio tcp://<address>:6638 --listen # show the measures
+cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # no dongle
+cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API, interface :8080
+sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
+cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
 cargo test --workspace                           # Rust tests (core, host)
-cargo test -p mini-sowel-core --test banner      # one Rust test file
+cargo test -p solite-core --test banner      # one Rust test file
 cd ui && npx vitest run src/App.test.tsx         # one UI test file
+cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
+sh scripts/qemu.sh                               # the firmware, booted in Espressif's QEMU
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release   # ESP32 firmware (macOS, Linux)
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
+sh scripts/validate.sh --only rust|ui|firmware   # one third of the verdict (the CI's three jobs)
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, ESP32
-firmware build. It must be green before any commit. After a fresh clone: `git config
+firmware build and boot in QEMU. It must be green before any commit. After a fresh clone: `git config
 core.hooksPath .githooks` (Claude's commit hook also sets it). **Never flash the Dongle Max**
 without the user's explicit yes: its original firmware exposes the radio over TCP for development
 (decision D6).
 
 ## How we work
 
-- **Spec-driven**: every change goes through `/mini-sowel-feature` or `/mini-sowel-fix`: spec
+- **Spec-driven**: every change goes through `/solite-feature` or `/solite-fix`: spec
   approved, test plan before code, checks, review, demo.
 - **Living spec**: `docs/living-spec/` describes the tool as it is. Each spec's "living spec delta"
   is applied in the same change as the code. Code that disagrees with it is a bug in one of the
@@ -87,14 +97,17 @@ without the user's explicit yes: its original firmware exposes the radio over TC
   what it makes false elsewhere (feature skill 3.4, fix skill), and the code review checks it.
 - **Git**: never commit to `main` except trivial fixes (the hook asks the user to confirm);
   branches `feat/`, `fix/`, `docs/`, `chore/`; conventional commits in English, scopes in
-  `.claude/skills/mini-sowel-feature/reference.md`; remote `origin` on GitHub, pull requests
+  `.claude/skills/solite-feature/reference.md`; remote `origin` on GitHub, pull requests
   with `gh pr create`, CI runs `sh scripts/validate.sh` (decision D9); **no AI attribution line** (no
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
+- **Models, to save tokens**: the session runs on Sonnet (`/model sonnet`); switch to Opus only to
+  write a spec and arbitrate. Code and tests go to Sonnet agents; `spec-reviewer` runs on Sonnet,
+  `code-reviewer` on Opus (set in their files).
 - **Review agents**: `.claude/agents/` (`spec-reviewer`, `code-reviewer`), launched by the skills.
   If one is not available as an agent type (a conversation started outside the project folder),
   launch a general-purpose agent and tell it to follow that file word for word.
-- **Roadmap**: `docs/roadmap.md`, planned with `/mini-sowel-roadmap`, reviewed after every feature.
+- **Roadmap**: `docs/roadmap.md`, planned with `/solite-roadmap`, reviewed after every feature.
   A **new need, at any time**: one line in its inbox, then carry on; never slipped into the change
   in progress.
 - **Secrets and data**: no secret in the code (`.env`, ignored by git); no signing key in the
@@ -103,7 +116,7 @@ without the user's explicit yes: its original firmware exposes the radio over TC
 
 ## Sowel contract
 
-Everything mini-Sowel exposes takes the names, types and JSON of Sowel's API (decision D3). The
+Everything Solite exposes takes the names, types and JSON of Sowel's API (decision D3). The
 reference is the Sowel repository (`github.com/mchacher/sowel`, usually cloned next to this one as
 `../sowel`):
 
@@ -113,7 +126,7 @@ reference is the Sowel repository (`github.com/mchacher/sowel`, usually cloned n
 - recipes: `docs/technical/recipe-development.md`, and the `sowel-recipe-*` repositories listed in
   Sowel's `plugins/registry.json`.
 
-A spec that adds a type, a field or an event names the Sowel file it mirrors. Something mini-Sowel
+A spec that adds a type, a field or an event names the Sowel file it mirrors. Something Solite
 needs on the Sowel side becomes an ordinary Sowel issue, never a change made from here.
 
 ## Conventions

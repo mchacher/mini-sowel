@@ -1,0 +1,272 @@
+// Helpers of the tests: a WebSocket that the test drives, a `fetch` that answers from a table,
+// and builders of the zones and equipments of Sowel's API.
+import { act } from "@testing-library/preact";
+import { vi } from "vitest";
+import { disconnect, useLive } from "./store/useLive";
+import { useEquipments } from "./store/useEquipments";
+import { useZoneAggregation } from "./store/useZoneAggregation";
+import { useZones } from "./store/useZones";
+import type {
+  DataBindingWithValue,
+  EquipmentWithDetails,
+  OrderBindingWithDetails,
+  ZoneAggregatedData,
+  ZoneWithChildren,
+} from "./types";
+
+/** A WebSocket driven by the test: `FakeWebSocket.instances` lists the sockets the page opened. */
+export class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  static OPEN = 1;
+  static CONNECTING = 0;
+  static CLOSED = 3;
+
+  readyState = 0;
+  sent: string[] = [];
+  onopen: (() => void) | null = null;
+  onmessage: ((message: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  url: string;
+  protocol?: string;
+
+  constructor(url: string, protocol?: string) {
+    this.url = url;
+    this.protocol = protocol;
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 3;
+  }
+
+  /** The server accepts the connection. */
+  open(): void {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+
+  /** The server sends a text frame. */
+  receive(data: unknown): void {
+    this.onmessage?.({ data: typeof data === "string" ? data : JSON.stringify(data) });
+  }
+
+  /** The connection ends (the server stops, or refuses it with a 503). */
+  drop(): void {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+
+  static get last(): FakeWebSocket {
+    return FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+  }
+
+  static reset(): void {
+    FakeWebSocket.instances = [];
+  }
+}
+
+export function installFakeWebSocket(): void {
+  FakeWebSocket.reset();
+  vi.stubGlobal("WebSocket", FakeWebSocket);
+}
+
+type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
+export type Route =
+  Answer | ((request: { method: string; body: unknown }) => Answer | Promise<Answer>);
+
+/** A `fetch` that answers from a table keyed by `"GET /api/v1/zones"`; every call is recorded. */
+export function mockApi(routes: Record<string, Route | Route[]>) {
+  const calls: { key: string; body: unknown }[] = [];
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = (init?.method ?? "GET").toUpperCase();
+    const key = `${method} ${url}`;
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ key, body });
+    const entry = routes[key];
+    // A list answers its first item once, then the next, the last one for good.
+    const route: Route = Array.isArray(entry)
+      ? ((entry.length > 1 ? entry.shift() : entry[0]) ?? { status: 404 })
+      : (entry ?? { status: 404 });
+    const answer = typeof route === "function" ? await route({ method, body }) : route;
+    const status = answer.status ?? 200;
+    return new Response(status === 204 ? null : JSON.stringify(answer.body ?? {}), {
+      status,
+      headers: { "Content-Type": "application/json", ...answer.headers },
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return { fetchMock, calls, count: (key: string) => calls.filter((c) => c.key === key).length };
+}
+
+export function zone(
+  id: string,
+  name: string,
+  children: ZoneWithChildren[] = [],
+  parentId: string | null = null,
+): ZoneWithChildren {
+  return {
+    id,
+    name,
+    parentId,
+    displayOrder: 0,
+    createdAt: "2026-11-21T10:00:00.000Z",
+    updatedAt: "2026-11-21T10:00:00.000Z",
+    children,
+  };
+}
+
+export function aggregate(partial: Partial<ZoneAggregatedData> = {}): ZoneAggregatedData {
+  return {
+    temperature: null,
+    humidity: null,
+    luminosity: null,
+    motion: false,
+    motionSensors: 0,
+    motionSince: null,
+    openDoors: 0,
+    openWindows: 0,
+    waterLeak: false,
+    smoke: false,
+    lightsOn: 0,
+    lightsTotal: 0,
+    shuttersOpen: 0,
+    shuttersTotal: 0,
+    averageShutterPosition: null,
+    doorsOpen: 0,
+    doorsTotal: 0,
+    waterValvesOpen: 0,
+    waterValvesTotal: 0,
+    waterFlowTotal: null,
+    powerTotal: null,
+    sunrise: null,
+    sunset: null,
+    isDaylight: null,
+    displaysOnline: 0,
+    displaysTotal: 0,
+    unavailableEquipmentsByCategory: {},
+    unavailableEquipmentNamesByCategory: {},
+    ...partial,
+  };
+}
+
+export function dataBinding(
+  alias: string,
+  category: DataBindingWithValue["category"],
+  value: unknown,
+  extra: Partial<DataBindingWithValue> = {},
+): DataBindingWithValue {
+  return {
+    id: `db-${alias}`,
+    equipmentId: "e",
+    deviceDataId: `dd-${alias}`,
+    alias,
+    deviceId: "d",
+    deviceName: "Device",
+    key: alias,
+    type: typeof value === "boolean" ? "boolean" : "number",
+    category,
+    value,
+    lastUpdated: null,
+    lastChanged: null,
+    stale: false,
+    ...extra,
+  };
+}
+
+export function equipment(
+  id: string,
+  name: string,
+  type: EquipmentWithDetails["type"],
+  zoneId: string,
+  extra: Partial<EquipmentWithDetails> = {},
+): EquipmentWithDetails {
+  return {
+    id,
+    name,
+    type,
+    zoneId,
+    enabled: true,
+    createdAt: "2026-11-21T10:00:00.000Z",
+    updatedAt: "2026-11-21T10:00:00.000Z",
+    dataBindings: [],
+    orderBindings: [],
+    status: "online",
+    ...extra,
+  };
+}
+
+/** A `light_onoff` as Solite's API gives it: a `state` data binding and a `state` order. */
+export function light(
+  id: string,
+  name: string,
+  zoneId: string,
+  on: boolean,
+  extra: Partial<EquipmentWithDetails> = {},
+): EquipmentWithDetails {
+  const order: OrderBindingWithDetails = {
+    id: `ob-${id}`,
+    equipmentId: id,
+    deviceOrderId: "do",
+    alias: "state",
+    deviceId: "d",
+    deviceName: "Relay",
+    key: "state",
+    type: "enum",
+    category: "light_toggle",
+  };
+  return equipment(id, name, "light_onoff", zoneId, {
+    dataBindings: [dataBinding("state", "light_state", on, { equipmentId: id })],
+    orderBindings: [order],
+    ...extra,
+  });
+}
+
+export function sensor(
+  id: string,
+  name: string,
+  zoneId: string,
+  extra: Partial<EquipmentWithDetails> = {},
+): EquipmentWithDetails {
+  return equipment(id, name, "sensor", zoneId, {
+    dataBindings: [
+      dataBinding("temperature", "temperature", 12.6, { equipmentId: id, unit: "°C" }),
+      dataBinding("humidity", "humidity", 59, { equipmentId: id, unit: "%" }),
+    ],
+    ...extra,
+  });
+}
+
+/** Every store and the live connection back to their start state, between two tests. */
+export function resetStores(): void {
+  disconnect();
+  useZones.setState({ tree: [], loading: false, error: null });
+  useEquipments.setState({ equipments: [], loading: false, error: null });
+  useZoneAggregation.setState({ data: {}, loading: false, error: null });
+  useLive.setState({ status: "connecting" });
+}
+
+/** The three GETs the stores make when the socket opens. */
+export function homeRoutes(home: {
+  zones: ZoneWithChildren[];
+  equipments?: EquipmentWithDetails[];
+  aggregation?: Record<string, ZoneAggregatedData>;
+}): Record<string, Route> {
+  return {
+    "GET /api/v1/zones": { body: home.zones },
+    "GET /api/v1/equipments": { body: home.equipments ?? [] },
+    "GET /api/v1/zones/aggregation": { body: home.aggregation ?? {} },
+  };
+}
+
+/** Moves the fake timers forward inside `act`, so that the page renders what the timers changed. */
+export async function advance(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}

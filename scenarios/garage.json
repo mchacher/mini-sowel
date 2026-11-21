@@ -1,0 +1,26 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE123456", "network": "none" },
+  "devices": [
+    { "id": "th", "kind": "temperature-humidity", "eui64": "00124B0012345678" },
+    { "id": "pir", "kind": "motion", "eui64": "00124B0012345679" },
+    { "id": "relay", "kind": "relay", "eui64": "00124B001234567A" }
+  ],
+  "events": [
+    { "at": "2s", "device": "th", "do": "join" },
+    { "at": "5s", "device": "pir", "do": "join" },
+    { "at": "8s", "device": "relay", "do": "join" },
+    { "at": "1m", "device": "th", "do": "report", "temperature": 12.00, "humidity": 60.0 },
+    { "at": "2m", "device": "th", "do": "report", "temperature": 12.30, "humidity": 59.5 },
+    { "at": "3m", "device": "th", "do": "report", "temperature": 12.60, "humidity": 59.0 },
+    { "at": "4m", "device": "th", "do": "report", "temperature": 12.90, "humidity": 58.5 },
+    { "at": "5m", "device": "th", "do": "report", "temperature": 13.20, "humidity": 58.0 },
+    { "at": "6m", "device": "th", "do": "report", "temperature": 13.50, "humidity": 57.5 },
+    { "at": "7m", "device": "th", "do": "report", "temperature": 13.80, "humidity": 57.0 },
+    { "at": "8m", "device": "th", "do": "report", "temperature": 14.10, "humidity": 56.5 },
+    { "at": "9m", "device": "th", "do": "report", "temperature": 14.40, "humidity": 56.0 },
+    { "at": "10m", "device": "th", "do": "report", "temperature": 14.70, "humidity": 55.5 },
+    { "at": "1m30s", "device": "th", "do": "report", "battery": 100 },
+    { "at": "1m", "device": "pir", "do": "report", "motion": true },
+    { "at": "3m", "device": "pir", "do": "report", "motion": true }
+  ]
+}

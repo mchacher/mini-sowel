@@ -1,0 +1,175 @@
+// Ported from Sowel ui/src/components/equipments/LightControl.tsx (Sowel commit 5da84dc1, UI 1.87.0).
+// Three type-only changes for Preact 11's types: `React.MouseEvent` is `MouseEvent`, and the two
+// `e.target.value` of the brightness sliders are `e.currentTarget.value`.
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Power } from "lucide-react";
+import type { EquipmentWithDetails } from "../../types";
+import { useSliderOverride } from "../../hooks/useSliderOverride";
+import { findOrderByCategory, findMainOnOffOrder, relayStateOn } from "./bindingUtils";
+import { brightnessPercent, brightnessScale } from "../../lib/brightness";
+import { formatPercent } from "../../lib/format";
+
+interface LightControlProps {
+  equipment: EquipmentWithDetails;
+  onExecuteOrder: (alias: string, value: unknown) => Promise<void>;
+  compact?: boolean;
+  /** Compact only: the separator before the toggle (off where nothing precedes it). */
+  divider?: boolean;
+}
+
+export function LightControl({
+  equipment,
+  onExecuteOrder,
+  compact,
+  divider = true,
+}: LightControlProps) {
+  const { t } = useTranslation();
+  const [executing, setExecuting] = useState(false);
+  const slider = useSliderOverride();
+
+  const brightnessBinding = equipment.dataBindings.find(
+    (db) => db.alias === "brightness" || db.category === "light_brightness",
+  );
+
+  const isOn = relayStateOn(equipment.dataBindings);
+
+  const deviceBrightness = brightnessBinding
+    ? typeof brightnessBinding.value === "number"
+      ? brightnessBinding.value
+      : null
+    : null;
+
+  const brightness = slider.displayValue(deviceBrightness);
+
+  // Category-first resolver (spec 110). Falls back to the boolean type / alias
+  // heuristic used by lights bound before category typing existed.
+  const toggleBinding = findMainOnOffOrder(equipment.orderBindings);
+  const hasToggle = !!toggleBinding;
+  const brightnessOrderBinding = findOrderByCategory(
+    equipment.orderBindings,
+    ["set_brightness"],
+    ["brightness"],
+  );
+  const hasBrightness = !!brightnessOrderBinding && brightnessOrderBinding.type === "number";
+  // Issue #933 — the dimmer's declared range, 0–254 only when none is declared.
+  const scale = brightnessScale(brightnessOrderBinding);
+  const pct = brightness !== null ? brightnessPercent(brightness, scale) : 0;
+
+  const handleToggle = async (e?: MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    if (executing || !toggleBinding) return;
+    setExecuting(true);
+    try {
+      const alias = toggleBinding.alias;
+      // Boolean orders use true/false; enum/state orders use the actual enum values
+      const onVal = toggleBinding.enumValues?.find((v) => /^on$/i.test(v)) ?? "ON";
+      const offVal = toggleBinding.enumValues?.find((v) => /^off$/i.test(v)) ?? "OFF";
+      const value =
+        toggleBinding.type === "boolean" && alias !== "state" ? !isOn : isOn ? offVal : onVal;
+      await onExecuteOrder(alias, value);
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const handleBrightnessCommit = () => {
+    if (!brightnessOrderBinding) return;
+    slider.onCommit((v) => onExecuteOrder(brightnessOrderBinding.alias, v));
+  };
+
+  if (compact) {
+    return (
+      <div className="flex items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        {hasBrightness && brightness !== null && (
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={scale.min}
+              max={scale.max}
+              value={brightness}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                slider.onStart();
+              }}
+              onChange={(e) => slider.onChange(Number(e.currentTarget.value))}
+              onMouseUp={handleBrightnessCommit}
+              onTouchEnd={handleBrightnessCommit}
+              onClick={(e) => e.stopPropagation()}
+              className="w-[48px] sm:w-[80px] slider-active"
+              style={{ "--fill-pct": `${pct}%` } as React.CSSProperties}
+            />
+            <span className="text-micro text-text-tertiary w-8 text-right tabular-nums whitespace-nowrap">
+              {formatPercent(pct)}
+            </span>
+          </div>
+        )}
+        {divider && <div className="w-px h-5 bg-border" />}
+        <button
+          onClick={handleToggle}
+          disabled={executing || !hasToggle}
+          className={`
+            p-2 rounded-sm transition-colors duration-150 cursor-pointer
+            ${
+              isOn
+                ? "bg-active text-on-active hover:bg-active/80"
+                : "bg-border-light text-text-tertiary hover:bg-border hover:text-text-secondary"
+            }
+            disabled:opacity-50 disabled:cursor-not-allowed
+          `}
+          title={isOn ? t("controls.turnOff") : t("controls.turnOn")}
+        >
+          <Power size={16} strokeWidth={1.5} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Toggle button */}
+      {hasToggle && (
+        <button
+          onClick={handleToggle}
+          disabled={executing}
+          className={`
+            flex items-center gap-2 px-4 py-2 rounded-sm text-small font-medium
+            transition-colors duration-150
+            ${
+              isOn
+                ? "bg-active text-on-active hover:bg-active/80"
+                : "bg-border-light text-text-secondary hover:bg-border hover:text-text"
+            }
+            disabled:opacity-50
+          `}
+        >
+          <Power size={16} strokeWidth={1.5} />
+          {executing ? "..." : isOn ? t("common.on") : t("common.off")}
+        </button>
+      )}
+
+      {/* Brightness slider */}
+      {hasBrightness && brightness !== null && (
+        <div className="flex items-center gap-3">
+          <span className="text-caption text-text-tertiary w-16">{t("controls.brightness")}</span>
+          <input
+            type="range"
+            min={scale.min}
+            max={scale.max}
+            value={brightness}
+            onPointerDown={slider.onStart}
+            onChange={(e) => slider.onChange(Number(e.currentTarget.value))}
+            onMouseUp={handleBrightnessCommit}
+            onTouchEnd={handleBrightnessCommit}
+            className="flex-1 slider-active"
+            style={{ "--fill-pct": `${pct}%` } as React.CSSProperties}
+          />
+          <span className="text-caption text-text-secondary w-10 text-right tabular-nums whitespace-nowrap">
+            {formatPercent(pct)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}

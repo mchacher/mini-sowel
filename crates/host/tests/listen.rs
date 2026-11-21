@@ -1,0 +1,376 @@
+//! `--pair` (reporting and measures) and `--listen` against a fake radio listening on a local TCP
+//! port, speaking real ASH and EZSP, with the fake SNZB-02 that reports.
+
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpListener};
+use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use solite_sim::{Ncp, SimDevice};
+
+/// A host program that is killed and reaped when the test ends, however it ends.
+struct Reaped(std::process::Child);
+
+impl std::ops::Deref for Reaped {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Reaped {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Serves one connection with the fake radio and gives the radio back when it closes.
+fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Ncp>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let mut ncp = ncp;
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let start = Instant::now();
+        let mut buf = [0u8; 512];
+        loop {
+            let mut answer = match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => ncp.on_bytes(&buf[..n]),
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                    Vec::new()
+                }
+                Err(_) => break,
+            };
+            answer.extend(ncp.on_tick(u64::try_from(start.elapsed().as_millis()).unwrap()));
+            if !answer.is_empty() && stream.write_all(&answer).is_err() {
+                break;
+            }
+        }
+        ncp
+    });
+    (address, handle)
+}
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// A fresh data folder name, not created.
+fn data_dir() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "solite-listen-test-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ))
+}
+
+fn run(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
+        .args(args)
+        .output()
+        .expect("the host program starts")
+}
+
+fn text(bytes: &[u8]) -> String {
+    String::from_utf8(bytes.to_vec()).expect("UTF-8 output")
+}
+
+fn lines(output: &Output) -> Vec<String> {
+    text(&output.stdout).lines().map(str::to_string).collect()
+}
+
+fn sensor_radio() -> Ncp {
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![SimDevice::sensor()];
+    ncp
+}
+
+const EUI: &str = "0x00124B0012345678";
+
+#[test]
+fn pair_with_the_fake_sensor_shows_the_reporting_line_then_the_measure_lines() {
+    let (address, handle) = serve(sensor_radio());
+    let url = format!("tcp://{address}");
+    let dir = data_dir();
+    let output = run(&[
+        "--radio",
+        &url,
+        "--pair",
+        "1",
+        "--data",
+        dir.to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = lines(&output);
+    let device = out
+        .iter()
+        .position(|l| l == &format!("device: {EUI} eWeLink TH01"))
+        .expect("the device line");
+    assert_eq!(
+        out[device + 1..],
+        [
+            format!("reporting: {EUI} temperature, humidity, battery"),
+            format!("{EUI} temperature 19.52 °C"),
+            format!("{EUI} humidity 54.1 %"),
+            format!("{EUI} battery 100 %"),
+            "pairing: closed".to_string(),
+        ]
+    );
+    handle.join().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_second_run_with_listen_resumes_the_network_and_shows_the_reports_until_ctrl_c_exits_130() {
+    let dir = data_dir();
+    let dir_text = dir.to_str().unwrap();
+    let (address, handle) = serve(sensor_radio());
+    let url = format!("tcp://{address}");
+    let first = run(&["--radio", &url, "--pair", "1", "--data", dir_text]);
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr));
+    let network = lines(&first)
+        .into_iter()
+        .find(|l| l.starts_with("network: formed"))
+        .unwrap()
+        .replacen("formed", "resumed", 1);
+    let ncp = handle.join().unwrap();
+    let earlier = ncp.commands.len();
+
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
+            .args(["--radio", &url, "--listen", "--data", dir_text])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
+    // The lines are read on another thread, so that a host that stays silent fails the test
+    // after a few seconds instead of blocking it.
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut shown = Vec::new();
+    while shown.len() < 9 {
+        match receiver.recv_timeout(Duration::from_secs(20)) {
+            Ok(line) => shown.push(line),
+            Err(_) => {
+                let _ = child.kill();
+                panic!("the host stopped or stayed silent: {shown:?}");
+            }
+        }
+    }
+    let signal = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(signal.success());
+    assert_eq!(child.wait().unwrap().code(), Some(130));
+
+    assert_eq!(shown[0], solite_core::banner());
+    assert_eq!(shown[4], network);
+    assert_eq!(
+        shown[5..],
+        [
+            "listening".to_string(),
+            format!("{EUI} temperature 19.52 °C"),
+            format!("{EUI} humidity 54.1 %"),
+            format!("{EUI} battery 100 %"),
+        ]
+    );
+    // It resumed: it did not form a network, did not open joining.
+    let ncp = handle.join().unwrap();
+    let later = &ncp.commands[earlier..];
+    assert!(!later.iter().any(|c| c.0 == 0x1E || c.0 == 0x22));
+    assert!(later.iter().any(|c| c.0 == 0x17));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn listen_on_a_fake_radio_with_no_network_says_pair_a_device_first_and_exits_1() {
+    let (address, handle) = serve(Ncp::recording());
+    let url = format!("tcp://{address}");
+    let dir = data_dir();
+    let output = run(&["--radio", &url, "--listen", "--data", dir.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        text(&output.stderr).trim(),
+        "radio: no network, pair a device first"
+    );
+    assert!(!text(&output.stdout).contains("listening"));
+    let ncp = handle.join().unwrap();
+    assert!(!ncp.commands.iter().any(|c| c.0 == 0x1E));
+    assert!(!dir.exists(), "listening writes nothing");
+}
+
+#[test]
+fn listen_with_pair_or_without_a_radio_prints_the_usage_and_exits_2() {
+    for args in [
+        &["--radio", "tcp://127.0.0.1:1", "--listen", "--pair"][..],
+        &["--radio", "tcp://127.0.0.1:1", "--pair", "5", "--listen"],
+        &["--listen"],
+    ] {
+        let output = run(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(text(&output.stderr).contains("--listen"), "{args:?}");
+    }
+}
+
+#[test]
+fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() {
+    use solite_sim::{Kind, zone_status_notification};
+    let dir = data_dir();
+    let dir_text = dir.to_str().unwrap();
+    let mut device = SimDevice::of_kind(
+        Kind::Motion,
+        [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
+        None,
+        None,
+    );
+    device.nwk = 0x5C3D;
+    device.auto_join = true;
+    device.sleepy_ms = None;
+    device.reports_on_resume = true;
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![device];
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let first = run(&["--radio", &url, "--pair", "3", "--data", dir_text]);
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr));
+    let mut ncp = handle.join().unwrap();
+    // The tamper bit (and the alarm) arrive when the network is resumed by `--serve`.
+    ncp.devices[0].reports = vec![(0x0500, zone_status_notification(0x61, 0x0005))];
+
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let port = {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut child = Reaped(
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
+            .args([
+                "--radio",
+                &url,
+                "--serve",
+                &port.to_string(),
+                "--data",
+                dir_text,
+            ])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("the host program starts"),
+    );
+    let start = Instant::now();
+    let tamper = loop {
+        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            write!(
+                stream,
+                "GET /api/v1/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut body = String::new();
+            let _ = stream.read_to_string(&mut body);
+            if let Some((head, json)) = body.split_once("\r\n\r\n")
+                // The device list is sent chunked (spec 010): the chunks are put together.
+                && let json = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+                    dechunk(json)
+                } else {
+                    json.to_string()
+                }
+                && let Ok(devices) = serde_json::from_str::<serde_json::Value>(&json)
+                && let Some(data) = devices[0]["data"]
+                    .as_array()
+                    .and_then(|d| d.iter().find(|d| d["key"] == "tamper"))
+                && data["value"] == true
+            {
+                break data.clone();
+            }
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            panic!("no tamper data in the API");
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(tamper["category"], "generic");
+    assert_eq!(tamper["type"], "boolean");
+    let _ = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status();
+    child.wait().unwrap();
+    let _ = handle.join();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_setup_still_going_when_the_time_cap_ends_is_reported_cut_short_before_pairing_closed() {
+    let dir = data_dir();
+    let mut device = SimDevice::sensor();
+    // Every answer takes 1.5 s: the identification is over after about 3 s, the setup needs
+    // far longer than the cap of 6 s (1 s of pairing, 5 s of grace).
+    device.answer_delay_ms = 1500;
+    let mut ncp = Ncp::recording();
+    ncp.devices = vec![device];
+    let (address, handle) = serve(ncp);
+    let url = format!("tcp://{address}");
+    let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
+        .args([
+            "--radio",
+            &url,
+            "--pair",
+            "1",
+            "--data",
+            dir.to_str().unwrap(),
+        ])
+        .env("SOLITE_CLOSE_GRACE_SECONDS", "5")
+        .output()
+        .expect("the host program starts");
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = lines(&output);
+    let cut = out
+        .iter()
+        .position(|l| l == &format!("reporting: {EUI} cut short"))
+        .unwrap_or_else(|| panic!("{out:#?}"));
+    assert_eq!(out[cut + 1], "pairing: closed");
+    assert!(
+        !out.iter()
+            .any(|l| l.starts_with(&format!("reporting: {EUI} t")))
+    );
+    let _ = handle.join();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The body of a chunked answer: `<hex size>\r\n<data>\r\n` repeated, ending with a size 0.
+fn dechunk(mut rest: &str) -> String {
+    let mut out = String::new();
+    while let Some((size, after)) = rest.split_once("\r\n") {
+        let Ok(size) = usize::from_str_radix(size.trim(), 16) else {
+            break;
+        };
+        if size == 0 || after.len() < size + 2 {
+            break;
+        }
+        out.push_str(&after[..size]);
+        rest = &after[size + 2..];
+    }
+    out
+}

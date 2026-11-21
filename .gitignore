@@ -7,6 +7,12 @@
 # UI
 /ui/node_modules/
 /ui/dist/
+# Tools
+/tools/*/node_modules/
+# Data the host program writes while running (the network backup)
+/solite-data/
+# Old name of the data folder: an existing local folder stays ignored
+/mini-sowel-data/
 # Secrets and local settings
 .env
 .claude/settings.local.json
