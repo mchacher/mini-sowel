@@ -39,15 +39,7 @@ impl RadioTransport for TcpTransport {
         self.stream
             .set_read_timeout(Some(timeout))
             .map_err(|e| TransportError::Io(e.to_string()))?;
-        match self.stream.read(buf) {
-            Ok(0) => Err(TransportError::Closed),
-            Ok(n) => Ok(n),
-            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(0),
-            Err(e) if matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::BrokenPipe) => {
-                Err(TransportError::Closed)
-            }
-            Err(e) => Err(TransportError::Io(e.to_string())),
-        }
+        read_outcome(self.stream.read(buf))
     }
 
     fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
@@ -55,5 +47,37 @@ impl RadioTransport for TcpTransport {
             .write_all(bytes)
             .and_then(|()| self.stream.flush())
             .map_err(|e| TransportError::Io(e.to_string()))
+    }
+}
+
+/// What a read of the radio's socket means. Nothing read in time, or a signal that interrupted
+/// the read (Ctrl-C on Linux does), is "no byte yet": the caller then checks whether it must stop.
+fn read_outcome(result: std::io::Result<usize>) -> Result<usize, TransportError> {
+    match result {
+        Ok(0) => Err(TransportError::Closed),
+        Ok(n) => Ok(n),
+        Err(e)
+            if matches!(
+                e.kind(),
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(0)
+        }
+        Err(e) if matches!(e.kind(), ErrorKind::ConnectionReset | ErrorKind::BrokenPipe) => {
+            Err(TransportError::Closed)
+        }
+        Err(e) => Err(TransportError::Io(e.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_read_interrupted_by_a_signal_is_no_byte_yet() {
+        let interrupted = std::io::Error::from(ErrorKind::Interrupted);
+        assert!(matches!(read_outcome(Err(interrupted)), Ok(0)));
     }
 }
