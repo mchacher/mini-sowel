@@ -150,6 +150,18 @@ impl fmt::Display for Sender {
     }
 }
 
+/// What a device did, for the device registry (spec 008): the host takes it after each poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Activity {
+    /// The device announced itself: its capability byte (bit 2: mains powered).
+    Announced { eui64: [u8; 8], capability: u8 },
+    /// The device sent a message (of any kind).
+    Message { sender: Sender },
+}
+
+/// Activities kept until the host takes them; the oldest is dropped past this.
+const MAX_ACTIVITY: usize = 64;
+
 /// The measures of one message from a device.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MeasureEvent {
@@ -372,11 +384,20 @@ pub struct Pairing {
     addresses: VecDeque<(u16, [u8; 8])>,
     /// The radio only listens: devices are not followed.
     listening: bool,
+    /// What devices did since the host last took it; at most `MAX_ACTIVITY`.
+    activity: VecDeque<Activity>,
 }
 
 impl Pairing {
     pub(super) fn set_own_eui64(&mut self, eui64: [u8; 8]) {
         self.own_eui64 = Some(eui64);
+    }
+
+    fn push_activity(&mut self, activity: Activity) {
+        if self.activity.len() >= MAX_ACTIVITY {
+            self.activity.pop_front();
+        }
+        self.activity.push_back(activity);
     }
 
     fn remember_address(&mut self, nwk: u16, eui64: [u8; 8]) {
@@ -782,6 +803,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         Ok(events)
     }
 
+    /// What devices did since the last call: announces and messages, oldest first.
+    pub fn take_activity(&mut self) -> Vec<Activity> {
+        self.pairing.activity.drain(..).collect()
+    }
+
     /// Reads the radio for a moment and returns the measures that arrived (after `listen`).
     pub fn poll(&mut self) -> Result<Vec<MeasureEvent>, RadioError> {
         Ok(self
@@ -846,6 +872,12 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         match (message.aps.profile, message.aps.cluster) {
             (zdo::PROFILE, zdo::CLUSTER_DEVICE_ANNOUNCE) => {
                 if let Ok(announce) = zdo::parse_device_announce(&message.payload) {
+                    if let Some(capability) = announce.capability {
+                        self.pairing.push_activity(Activity::Announced {
+                            eui64: announce.eui64,
+                            capability,
+                        });
+                    }
                     self.register(announce.eui64, announce.nwk, true, events);
                 }
             }
@@ -983,13 +1015,24 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 .map(|report| measures::from_records(cluster, &report.records))
                 .unwrap_or_default()
         };
-        if !measured.is_empty() {
-            let sender = self.sender_address(wide, message)?;
+        // A frame without measures never costs a lookup (and never a failure that would skip
+        // the Default Response): its activity is kept only if the sender is already known.
+        if measured.is_empty() {
+            if let Some(sender) = self.known_sender(message) {
+                self.pairing.push_activity(Activity::Message { sender });
+            }
+        } else {
+            // The Default Response is sent whatever the lookup gives.
+            let sender = self.sender_address(wide, message);
+            let answered = self.answer_with_default_response(wide, message);
+            let sender = sender?;
+            self.pairing.push_activity(Activity::Message { sender });
             events.push(PairingEvent::Measures(MeasureEvent {
                 sender,
                 endpoint: message.aps.source_endpoint,
                 measures: measured,
             }));
+            return answered;
         }
         self.answer_with_default_response(wide, message)
     }
@@ -1066,6 +1109,19 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
     /// The 64-bit address of the sender of a message: the device followed in this session, what
     /// is remembered, what the packet carried, then what the radio's address table says; its node
     /// address if nobody knows.
+    /// The sender's 64-bit address if it is known without asking the radio: a device being
+    /// followed, the cache, or the packet itself.
+    fn known_sender(&mut self, message: &IncomingMessage) -> Option<Sender> {
+        let nwk = message.sender;
+        if let Some(device) = self.device_at(nwk) {
+            return Some(Sender::Eui64(device.eui64));
+        }
+        if let Some((_, eui64)) = self.pairing.addresses.iter().find(|(n, _)| *n == nwk) {
+            return Some(Sender::Eui64(*eui64));
+        }
+        message.sender_eui64.map(Sender::Eui64)
+    }
+
     fn sender_address(
         &mut self,
         wide: bool,

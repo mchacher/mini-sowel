@@ -157,6 +157,8 @@ pub struct SimDevice {
     /// Sends a `Device_annce` just after the join; twice if `announce_twice`.
     pub announce: bool,
     pub announce_twice: bool,
+    /// The capability byte of its announce (bit 2: mains powered).
+    pub capability: u8,
     /// The endpoints it lists; `None`: it never answers the endpoint request.
     pub endpoints: Option<Vec<u8>>,
     /// Status of its `Active_EP_rsp`.
@@ -208,6 +210,11 @@ pub struct SimDevice {
     pub(crate) tsn: u8,
 }
 
+/// Announce capability of a battery device: allocate address only.
+const CAPABILITY_BATTERY: u8 = 0x80;
+/// Announce capability of a mains device: allocate address, mains powered, receiver on.
+const CAPABILITY_MAINS: u8 = 0x8C;
+
 /// The EUI64 of a scenario (most significant byte first) as the radio sends it.
 pub fn wire(eui64: [u8; 8]) -> [u8; 8] {
     let mut reversed = eui64;
@@ -228,6 +235,7 @@ impl SimDevice {
             join_decision: 0,
             announce: true,
             announce_twice: false,
+            capability: CAPABILITY_BATTERY,
             endpoints: Some(vec![1]),
             endpoint_status: 0,
             manufacturer: Attr::Unsupported,
@@ -292,6 +300,9 @@ impl SimDevice {
         device.model = text(model.unwrap_or(default_model));
         device.input_clusters = clusters;
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
+        if kind == Kind::Relay {
+            device.capability = CAPABILITY_MAINS;
+        }
         device
     }
 

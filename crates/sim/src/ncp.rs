@@ -708,7 +708,7 @@ impl Ncp {
             let mut payload = vec![0x01];
             payload.extend_from_slice(&device.nwk.to_le_bytes());
             payload.extend_from_slice(&device.eui_wire);
-            payload.push(0x80);
+            payload.push(device.capability);
             let announce = self.incoming(device.nwk, 0x0000, 0x0013, 0, &payload);
             callbacks.push((0, announce.clone()));
             if device.announce_twice {

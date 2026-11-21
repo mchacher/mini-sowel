@@ -51,6 +51,7 @@ cargo run -p mini-sowel-host -- --radio tcp://<address>:6638   # identify the Do
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
 cargo run -p mini-sowel-host -- --radio tcp://<address>:6638 --listen # show the measures
 cargo run -p mini-sowel-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
+cargo run -p mini-sowel-host -- --sim scenarios/garage.json --serve --speed 10    # API on :8080
 cd ui && npm run dev                              # the interface, on http://localhost:5173
 cd firmware && cargo build --release              # the ESP32 firmware
 sh scripts/qemu.sh                                # the firmware, booted in an emulated ESP32

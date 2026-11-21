@@ -11,3 +11,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 005 | pair-a-device | The radio runs a Zigbee network; the host opens pairing and shows the device that joins (manufacturer, model) | 2026-11-21 | in progress |
 | 006 | read-the-measures | Measures of the standard clusters read generically: reporting set up on pairing, shown live with `--listen`, run after run | 2026-11-21 | in progress |
 | 007 | simulated-radio | A simulated radio and devices, driven by scenario files, replace the dongle in every host command and in the tests | 2026-11-21 | in progress |
+| 008 | devices-in-sowel-format | Paired devices become Sowel devices with data and orders, kept on disk and served by Sowel's device API | 2026-11-21 | in progress |

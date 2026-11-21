@@ -15,7 +15,8 @@ use std::fmt;
 
 use ash::{AshError, AshFailure, Event, Output, Session};
 pub use coordinator::{
-    MeasureEvent, Network, NetworkKeys, NetworkSettings, PairingEvent, Sender, network_line,
+    Activity, MeasureEvent, Network, NetworkKeys, NetworkSettings, PairingEvent, Sender,
+    network_line,
 };
 use ezsp::{Callback, Ezsp, EzspError, NetworkState, Parsed};
 pub use transport::{RadioTransport, TransportError};

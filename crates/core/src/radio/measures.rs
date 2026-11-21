@@ -40,6 +40,9 @@ pub struct Measure {
     pub value: Value,
     /// `°C`, `%`, `hPa`, `lx`, `V`; empty when the value has none.
     pub unit: &'static str,
+    /// The value on the device's own scale when it is not the one shown: brightness 0..254,
+    /// voltage in mV (the scales of the device data, spec 008). `None`: the same as `value`.
+    pub device_value: Option<f64>,
 }
 
 impl fmt::Display for Measure {
@@ -65,6 +68,7 @@ fn number(kind: &'static str, value: f64, unit: &'static str) -> Option<Measure>
         kind,
         value: Value::Number(value),
         unit,
+        device_value: None,
     })
 }
 
@@ -73,6 +77,7 @@ fn flag(kind: &'static str, value: bool) -> Option<Measure> {
         kind,
         value: Value::Bool(value),
         unit: "",
+        device_value: None,
     })
 }
 
@@ -125,7 +130,9 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
         (CLUSTER_ON_OFF, 0x0000, TYPE_BOOLEAN) => flag("light_state", u8_value()? != 0),
         (CLUSTER_LEVEL, 0x0000, TYPE_UINT8) => {
             let percent = (f64::from(u8_value()?) / 254.0 * 100.0).round();
-            number("light_brightness", percent.min(100.0), "%")
+            let mut measure = number("light_brightness", percent.min(100.0), "%")?;
+            measure.device_value = Some(f64::from(u8_value()?));
+            Some(measure)
         }
         (CLUSTER_POWER, 0x0021, TYPE_UINT8) => {
             let raw = u8_value()?;
@@ -133,7 +140,12 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
         }
         (CLUSTER_POWER, 0x0020, TYPE_UINT8) => {
             let raw = u8_value()?;
-            (raw != u8::MAX).then(|| number("voltage", f64::from(raw) / 10.0, "V"))?
+            if raw == u8::MAX {
+                return None;
+            }
+            let mut measure = number("voltage", f64::from(raw) / 10.0, "V")?;
+            measure.device_value = Some(f64::from(raw) * 100.0);
+            Some(measure)
         }
         _ => None,
     }

@@ -46,11 +46,12 @@ possible without hardware.
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
 | B1 | Simulated radio: the host replays a scenario (a sensor joins, temperatures, motion) without the dongle (first: makes everything after it testable without hardware, in CI) | `--sim <scenario>` shows the same lines as the real radio | done (spec 007), on the branch of A3 to A5 |
-| B2 | Devices in Sowel's format: a paired device becomes a Sowel `Device` with its data read generically (temperature, humidity, battery, motion, on/off, level), stored on disk, read with `GET /api/v1/devices`; memory ceilings tested from here (second: Sowel's contract, D3, is the base of the rest) | The JSON matches Sowel's, for the real SNZB-02 | |
-| B3 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | |
-| B4 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | |
-| B5 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
-| B6 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
+| B2 | Devices in Sowel's format: a paired device becomes a Sowel `Device` with its data read generically (temperature, humidity, battery, motion, on/off, level), stored on disk, read with `GET /api/v1/devices`; memory ceilings tested from here (second: Sowel's contract, D3, is the base of the rest) | The JSON matches Sowel's, for the real SNZB-02 | built (spec 008), real SNZB-02 pending |
+| B3 | Alarm sensors: IAS zone devices (the Sonoff motion sensor) are enrolled; their motion, contact, leak or smoke becomes device data | The motion sensor's `occupancy` turns true in the API | |
+| B4 | Equipments and zones: create a room, put an equipment in it (sensor, light, switch), with Sowel's zone aggregation (average temperature, motion in the room) | The API shows "Garage: 19.5 °C, motion" | |
+| B5 | Orders: switch a light or relay on and off through the API, on the real ZBMINIR2 | The relay obeys | |
+| B6 | Recipe `motion-light`, native Rust (WebAssembly is F), same name, parameters and behaviour as Sowel's | Motion switches the relay on, then off after the delay | |
+| B7 | Live events and interface: WebSocket in Sowel's format; the interface, served by the host, shows the rooms and their equipments live | The temperature changes in the browser | |
 
 ## Later milestones
 
@@ -112,3 +113,6 @@ Every change to this roadmap: date, what changed, why.
   and a Sonoff motion sensor replace a bulb; modes moved to C; the definitions export and the
   hand-written definitions grouped in a new milestone I (after C), as the A1 report shows the
   generic reading covers more; two inbox lines from the A1 report placed (B2, I).
+- 2026-11-21: B3 inserted (alarm sensors' enrollment, split out of B2 by the user); the next
+  increments renumbered B4 to B7. A1 to A5 and B1 built in an autonomous run (A3 to A5 waiting for
+  their hardware demos).

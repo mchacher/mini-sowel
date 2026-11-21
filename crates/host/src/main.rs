@@ -4,6 +4,8 @@ mod backup;
 mod logger;
 mod radio_tcp;
 mod random;
+mod serve;
+mod store;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -11,6 +13,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use std::sync::Mutex;
+
+use mini_sowel_core::devices::{DeviceStore, Devices};
 use mini_sowel_core::radio::{
     NetworkSettings, Radio, RadioError, RadioTransport, identity_lines, network_line,
 };
@@ -18,11 +23,15 @@ use mini_sowel_sim::{RealClock, Scenario, SimTransport};
 
 use radio_tcp::TcpTransport;
 use random::SystemRandom;
+use store::{FileStore, Saver};
 
 const USAGE: &str = "usage: mini-sowel-host [--radio tcp://<address>:<port> | \
---sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen] [--data <dir>]";
+--sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose]] \
+[--data <dir>]";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
+/// Port of `--serve` when it has no number.
+const DEFAULT_SERVE_PORT: u16 = 8080;
 const DEFAULT_DATA_DIR: &str = "mini-sowel-data";
 /// Under `--sim` the data folder is another one, so the real radio's backup is never touched.
 const DEFAULT_SIM_DATA_DIR: &str = "mini-sowel-data/sim";
@@ -50,6 +59,10 @@ struct Args {
     pair: Option<u8>,
     /// Show the measures of the paired devices, without pairing.
     listen: bool,
+    /// Port of the device API, if `--serve` is given.
+    serve: Option<u16>,
+    /// Print the measures too while serving.
+    verbose: bool,
     data: PathBuf,
 }
 
@@ -61,6 +74,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         speed: 1,
         pair: None,
         listen: false,
+        serve: None,
+        verbose: false,
         data: PathBuf::new(),
     };
     let mut data = None;
@@ -110,17 +125,30 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 });
             }
             "--listen" => parsed.listen = true,
+            "--serve" => {
+                parsed.serve = Some(match rest.next_if(|next| !next.starts_with("--")) {
+                    None => DEFAULT_SERVE_PORT,
+                    Some(text) => match text.parse::<u16>() {
+                        Ok(port) if port >= 1 => port,
+                        _ => return Err(usage()),
+                    },
+                });
+            }
+            "--verbose" => parsed.verbose = true,
             "--data" => data = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             _ => return Err(usage()),
         }
     }
-    if (parsed.pair.is_some() || parsed.listen) && parsed.source.is_none() {
+    if (parsed.pair.is_some() || parsed.listen || parsed.serve.is_some()) && parsed.source.is_none()
+    {
+        return Err(usage());
+    }
+    // One mode at a time; `--verbose` belongs to `--serve`.
+    let modes = [parsed.pair.is_some(), parsed.listen, parsed.serve.is_some()];
+    if modes.iter().filter(|on| **on).count() > 1 || (parsed.verbose && parsed.serve.is_none()) {
         return Err(usage());
     }
     if speed_given && !matches!(parsed.source, Some(Source::Sim(_))) {
-        return Err(usage());
-    }
-    if parsed.pair.is_some() && parsed.listen {
         return Err(usage());
     }
     parsed.data = data.unwrap_or_else(|| {
@@ -160,6 +188,10 @@ fn pair<T: RadioTransport>(
     stop: &AtomicBool,
 ) -> Result<bool, String> {
     let mut random = SystemRandom::open()?;
+    let mut fill = |buffer: &mut [u8]| random.fill(buffer);
+    let store = FileStore::new(data);
+    let devices = Mutex::new(Devices::from_list(store.load()?));
+    let mut saver = Saver::new(store, serve::now_ms());
     let mut radio = Radio::new(transport, clock());
     let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
     let lines = identity_lines(label, &identity);
@@ -172,7 +204,7 @@ fn pair<T: RadioTransport>(
     let network = radio
         .start_network(
             &NetworkSettings::default(),
-            &mut |buffer| random.fill(buffer),
+            &mut fill,
             // The backup is written the moment the radio accepts the network, before any
             // later step that can fail: the keys must not be lost.
             &mut |network| match &network.keys {
@@ -216,9 +248,23 @@ fn pair<T: RadioTransport>(
             {
                 return Ok(false);
             }
-            for event in radio.poll_pairing().map_err(|e| format!("radio: {e}"))? {
-                println!("{}", event.line());
+            let events = radio.poll_pairing().map_err(|e| format!("radio: {e}"))?;
+            let activity = radio.take_activity();
+            let now = serve::now_ms();
+            {
+                let mut guard = mini_sowel_core::devices::lock(&devices);
+                // The announces first: a device's power source is known when it is added.
+                for item in &activity {
+                    guard.apply_activity(item, now);
+                }
+                for event in &events {
+                    println!("{}", event.line());
+                    for note in guard.apply(event, now, &mut fill)? {
+                        println!("{note}");
+                    }
+                }
             }
+            saver.tick(&devices, now, false)?;
         }
     })();
     // Joining is never left open: closed on Ctrl-C and on an error too (best effort).
@@ -226,7 +272,8 @@ fn pair<T: RadioTransport>(
         let _ = radio.close_joining();
     }
     println!("pairing: closed");
-    result
+    let saved = saver.tick(&devices, serve::now_ms(), true);
+    result.and_then(|stopped| saved.map(|()| stopped))
 }
 
 /// Resumes the radio's network, without forming one, and shows the measures it receives until
@@ -263,6 +310,7 @@ enum Task {
     Identify,
     Pair(u8),
     Listen,
+    Serve { port: u16, verbose: bool },
 }
 
 /// The simulated radio of a scenario file: its memory is `sim-<scenario name>.json` in the data
@@ -293,6 +341,9 @@ fn run<T: RadioTransport>(
         }
         Task::Pair(seconds) => pair(transport, label, *seconds, data, stop),
         Task::Listen => listen(transport, label, data, stop),
+        Task::Serve { port, verbose } => {
+            serve::serve(transport, label, *port, *verbose, data, stop)
+        }
     }
 }
 
@@ -310,14 +361,26 @@ fn main() -> ExitCode {
     let Some(source) = args.source else {
         return ExitCode::SUCCESS;
     };
-    let task = match (args.pair, args.listen) {
-        (Some(seconds), _) => Task::Pair(seconds),
-        (None, true) => Task::Listen,
-        (None, false) => Task::Identify,
+    let task = match (args.pair, args.listen, args.serve) {
+        (Some(seconds), _, _) => Task::Pair(seconds),
+        (None, true, _) => Task::Listen,
+        (None, false, Some(port)) => Task::Serve {
+            port,
+            verbose: args.verbose,
+        },
+        (None, false, None) => Task::Identify,
     };
     // Before the radio is touched: the data folder must be writable (listening writes nothing).
-    if matches!(task, Task::Pair(_))
+    if matches!(task, Task::Pair(_) | Task::Serve { .. })
         && let Err(message) = backup::check_writable(&args.data)
+    {
+        eprintln!("{message}");
+        return ExitCode::from(1);
+    }
+    // The devices must be readable before the radio is touched: a `devices.json` that does not
+    // parse stops the host, and is never overwritten.
+    if matches!(task, Task::Pair(_) | Task::Serve { .. })
+        && let Err(message) = FileStore::new(&args.data).load()
     {
         eprintln!("{message}");
         return ExitCode::from(1);
@@ -326,7 +389,12 @@ fn main() -> ExitCode {
     // Identifying is short and never stopped by Ctrl-C: the default behaviour ends it.
     if !matches!(task, Task::Identify) {
         let handler_stop = Arc::clone(&stop);
-        if let Err(e) = ctrlc::set_handler(move || handler_stop.store(true, Ordering::SeqCst)) {
+        let handler = move || {
+            handler_stop.store(true, Ordering::SeqCst);
+            // The HTTP thread of `--serve` waits for a request: wake it so it ends.
+            serve::unblock();
+        };
+        if let Err(e) = ctrlc::set_handler(handler) {
             eprintln!("cannot watch for Ctrl-C: {e}");
             return ExitCode::from(1);
         }

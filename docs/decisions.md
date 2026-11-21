@@ -168,3 +168,21 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: leaving joining open on the radio after the user stopped the host would let a device
   join a network nobody watches; std has no signal handling. Each crate added is named in a
   spec and its review.
+
+## D13: The device API on the Mac, and its divergences from Sowel
+
+- **Date**: 2026-11-21
+- **Choice**: the host serves Sowel's device routes (spec 008) on 127.0.0.1 only, without
+  authentication, with a `Host` header check; Sowel's bearer token comes with the box's
+  commissioning password (milestone E). The routing and the JSON live in the core, so the box
+  reuses them; the host uses the `tiny_http` crate (the user's choice; it widens D12, which
+  allowed a crate only where std cannot do the job). The core gains `serde` and `serde_json`
+  (CLAUDE.md names them for JSON). Divergences from Sowel, kept on purpose: devices in pairing
+  order (Sowel: by name), data in a fixed order (Sowel: by key), dates with `T` and milliseconds
+  (Sowel's SQLite: a space, no milliseconds), data ids random (Sowel: derived), a stricter `PUT`,
+  405 and 413 with `{"error"}` bodies, `zoneId` `null` until zones exist, no `rawExpose`. Values
+  are written to disk every 10 minutes and on stop, definitions at once (the user's choice).
+- **Why**: the Mac is a development host, reached from the same machine; a token without a
+  commissioning flow would be a fake guard. The box's flash must last: writing every measure
+  would wear it out within months. The divergences do not change what a Sowel client reads (the
+  same fields, types and values).

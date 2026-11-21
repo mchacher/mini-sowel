@@ -16,3 +16,6 @@ mod memory;
 pub use memory::{MemoryStats, PsramStats, memory_line};
 
 pub mod radio;
+
+pub mod api;
+pub mod devices;

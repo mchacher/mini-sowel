@@ -104,7 +104,7 @@ pairing: closed
 
 New errors: `radio: network did not start`, `radio: the radio is not a coordinator`,
 `radio: the radio refused <command> (status 0x<code>)`, `no random source: <reason>`,
-`cannot write <path>`. The host keeps nothing about devices between runs.
+`cannot write <path>`. Devices are kept as described below.
 
 ### Shows the measures
 
@@ -131,10 +131,51 @@ A device is shown by its 64-bit address, or by its network address when the radi
 it. The host answers each report as Zigbee requires (a default response). A sensor reports at most
 every 30 s and at least every hour; its battery every few hours.
 
+### Keeps devices, in Sowel's format
+
+A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (UUID), `name`
+(`TH01 5678` by default: the model and the end of the address; `Zigbee 5678` without a model),
+`manufacturer` and `model` as sent, `ieeeAddress` and `sourceDeviceId` (`0x` + 16 lowercase hex
+digits), `source` and `integrationId` `mini-sowel`, `zoneId` `null`, `powerSource` (`mains`,
+`battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
+minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
+`lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds).
+
+Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugin names them:
+`temperature` (°C), `humidity` (%), `pressure` (hPa), `illuminance` (luminosity, lx), `occupancy`
+(motion), `state` (light_state), `brightness` (0 to 254), `battery` (%), `voltage` (mV); each with
+its last `value` and `lastUpdated`. Its orders (`DeviceOrder`): `state` (light_toggle, `ON` /
+`OFF`) for an on/off device, `brightness` (set_brightness, 0 to 254) for a dimmable one. A device
+paired again keeps its id and name. Alarm devices (IAS zone) get only their battery and voltage data.
+
+The host keeps them in `devices.json` in its data folder (owner-only): a device paired, renamed
+or deleted is written at once, the latest values every 10 minutes and when the host stops, so a
+restart keeps them. At most 64 devices, 16 data and 4 orders each; beyond: `pairing: device store
+full (64), <address> ignored`. A `devices.json` that cannot be read stops the host
+(`devices: <file>: cannot read: <reason>`), never overwritten. One host at a time per data folder.
+
+### Serves Sowel's device API
+
+`--serve [port]` (8080 by default), with `--radio` or `--sim`, resumes the network, listens, keeps
+the devices up to date, and serves on `127.0.0.1` only, without authentication (a browser page
+from another site is refused by a `Host` check):
+
+| Route | Answer |
+| ----- | ------ |
+| `GET /api/v1/devices` | the devices with their data and orders, in pairing order |
+| `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
+| `PUT /api/v1/devices/:id` `{"name": ...}` | renames it (1 to 64 characters); `zoneId` only `null` |
+| `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
+
+Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413; 503 `Busy` beyond 4 requests at
+once). It prints `serving:
+http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
+the same file. Ctrl-C writes the store and exits 130.
+
 ### Runs without the dongle
 
 `--sim <scenario>` replaces `--radio tcp://<address>:6638` in every command (identify, `--pair`,
-`--listen`): a simulated radio and simulated devices, speaking the same protocols as the real
+`--listen`, `--serve`): a simulated radio and simulated devices, speaking the same protocols as the real
 ones, play a scenario file; the lines are the same, `radio: sim <scenario>` first.
 `--speed <1..100>` runs the scenario's clock faster (the pairing time is not affected).
 
@@ -175,8 +216,8 @@ its white labels, Sonoff, Schneider Electric, Legrand and others), the report gi
 It also gives totals, the line of a few devices of interest (the Sonoff SNZB-02 among them), and
 how the measure is made and what it cannot see. Nothing of the tool runs in the box.
 
-No device, equipment, zone, mode or recipe exists in the tool: it stores no device and has no
-API; the host keeps one file, the network backup. It talks to the radio to identify it, start
+No equipment, zone, mode or recipe exists in the tool; the host keeps the devices and the
+network backup, serves Sowel's device API (above), and talks to the radio to identify it, start
 its network, pair devices and receive their measures.
 
 ## History
@@ -190,3 +231,4 @@ its network, pair devices and receive their measures.
 | 005 | The radio runs a Zigbee network; the host pairs a device and shows what it is |
 | 006 | The host sets up reporting and shows the measures of the standard clusters (`--listen`) |
 | 007 | A simulated radio and devices play scenario files (`--sim`) |
+| 008 | Devices kept in Sowel's format and served by Sowel's device API (`--serve`) |

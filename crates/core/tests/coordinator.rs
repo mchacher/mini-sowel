@@ -895,6 +895,7 @@ fn temperature(value: f64) -> Measure {
         kind: "temperature",
         value: Value::Number(value),
         unit: "°C",
+        device_value: None,
     }
 }
 
@@ -1285,4 +1286,47 @@ fn a_default_response_for_another_command_is_not_the_answer_to_the_configure_rep
     let events = poll_for(&mut h, 500);
     assert!(reporting(&events).is_empty());
     assert_eq!(bound_clusters(&h), vec![TEMPERATURE], "the setup went on");
+}
+
+#[test]
+fn a_frame_without_measures_costs_no_lookup_and_still_gets_its_default_response() {
+    use mini_sowel_core::radio::{Activity, Sender};
+    const UNKNOWN_CLUSTER: u16 = 0x0B04;
+    // A report on a cluster that gives no measure, asking for a Default Response.
+    let unknown_report = |tsn: u8| {
+        mini_sowel_sim::report_frame_with_control(0x08, tsn, &[(0x0000, 0x29, vec![1, 0])])
+    };
+    let mut h = started(Ncp::recording());
+    h.ncp
+        .borrow_mut()
+        .inject(0x5555, 0x0104, UNKNOWN_CLUSTER, 1, &unknown_report(1));
+    poll_for(&mut h, 500);
+    assert!(
+        !ids(&h).contains(&0x61),
+        "no lookup for a frame without measures"
+    );
+    assert_eq!(
+        sends_on(&h, 0x0104, UNKNOWN_CLUSTER).len(),
+        1,
+        "the Default Response"
+    );
+    assert!(
+        h.radio.take_activity().is_empty(),
+        "sender unknown: no activity"
+    );
+    // With the address in the packet, the activity is kept, still without a lookup.
+    let mut ncp = ncp_at(19);
+    ncp.packet_eui_wire = Some([0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11]);
+    let mut h = started(ncp);
+    h.ncp
+        .borrow_mut()
+        .inject(0x3333, 0x0104, UNKNOWN_CLUSTER, 1, &unknown_report(2));
+    poll_for(&mut h, 500);
+    assert!(!ids(&h).contains(&0x61));
+    assert_eq!(
+        h.radio.take_activity(),
+        vec![Activity::Message {
+            sender: Sender::Eui64([0x11, 0x10, 0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A])
+        }]
+    );
 }

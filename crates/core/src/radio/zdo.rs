@@ -46,6 +46,8 @@ pub struct DeviceAnnounce {
     pub nwk: u16,
     /// Most significant byte first.
     pub eui64: [u8; 8],
+    /// The capability byte (bit 2: mains powered), if the message has it.
+    pub capability: Option<u8>,
 }
 
 /// Reads a `Device_annce` message: transaction, node address, 64-bit address, capabilities.
@@ -59,6 +61,7 @@ pub fn parse_device_announce(message: &[u8]) -> Result<DeviceAnnounce, ZdoError>
     Ok(DeviceAnnounce {
         nwk: u16::from_le_bytes([message[1], message[2]]),
         eui64,
+        capability: message.get(11).copied(),
     })
 }
 
