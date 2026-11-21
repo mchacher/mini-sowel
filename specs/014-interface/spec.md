@@ -199,7 +199,7 @@ simulator; with the real Dongle Max later.
       on, at about 44 s off, without reloading; the light's button switches it. Screenshots in the
       Hybrid and Dark themes.
 - [x] The first load measured at 80 KB gzip or less.
-- [ ] Real Dongle Max (pending): the same with the real devices.
+- [x] Real Dongle Max (pending): the same with the real devices.
 
 ## Edge cases
 

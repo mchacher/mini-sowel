@@ -218,11 +218,11 @@ first `--serve`.
 
 ## Acceptance criteria
 
-- [ ] With `--sim scenarios/garage.json --serve --speed 10`, after pairing: a zone "Garage", the
+- [x] With `--sim scenarios/garage.json --serve --speed 10`, after pairing: a zone "Garage", the
       three devices in it, three equipments (sensor from the SNZB-02, sensor from the motion
       sensor, `light_onoff` from the relay); `GET /zones/aggregation` shows the garage's
       temperature, motion and `lightsTotal` 1; the root `Maison` aggregates the same.
-- [ ] A test compares a zone, an equipment with details and an aggregation with examples written
+- [x] A test compares a zone, an equipment with details and an aggregation with examples written
       from Sowel's `types.ts`.
 
 ## Edge cases

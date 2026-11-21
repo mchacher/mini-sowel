@@ -157,7 +157,7 @@ Nothing new on the command line. `--serve` executes orders.
 - [x] With `--sim scenarios/garage.json --serve --speed 10` and the garage of spec 010's demo:
       `POST .../orders/state {"value":true}` → `{"success":true}`; `GET` the equipment: `state`
       true; the aggregation: `lightsOn` 1; `{"value":false}` back to 0.
-- [ ] Real Dongle Max and ZBMINIR2 (pending): the relay clicks on and off.
+- [x] Real Dongle Max and ZBMINIR2 (pending): the relay clicks on and off.
 
 ## Edge cases
 

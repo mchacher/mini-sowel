@@ -146,9 +146,9 @@ prints the expected form and exits 2.
 
 ## Acceptance criteria
 
-- [ ] Every UG101 reference frame is encoded and decoded byte for byte.
-- [ ] The host shows the fake radio's versions, address and state in its test.
-- [ ] With the real Dongle Max (2026-11-21): the four lines show, with its real values.
+- [x] Every UG101 reference frame is encoded and decoded byte for byte.
+- [x] The host shows the fake radio's versions, address and state in its test.
+- [x] With the real Dongle Max (2026-11-21): the four lines show, with its real values.
 
 ## Edge cases
 
