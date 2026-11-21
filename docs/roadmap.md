@@ -20,7 +20,7 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
-| E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the Wi-Fi antenna, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, one TLS session at a time), the network settled: one image holds Wi-Fi and Ethernet, only one is active (setting `auto | wifi | ethernet`, `auto` by default: a cable at boot means Ethernet, else Wi-Fi; no switching while running), Wi-Fi built first, the memory budget set by the larger of the two (Wi-Fi), not their sum (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | first half built (spec 015: hardware sheet, memory budget, worst-case test, partition table, network choice in the core); second half spec 016 (the engine in the firmware under QEMU) |
+| E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the Wi-Fi antenna, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, one TLS session at a time), the network settled: one image holds Wi-Fi and Ethernet, only one is active (setting `auto | wifi | ethernet`, `auto` by default: a cable at boot means Ethernet, else Wi-Fi; no switching while running), Wi-Fi built first, the memory budget set by the larger of the two (Wi-Fi), not their sum (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | built (spec 015: hardware sheet, memory budget, worst-case test, partition table, network choice in the core; spec 016: the engine in the firmware under QEMU, peak 312 KB for the realistic home) |
 | E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21, merged (pull requests 1 and 2); `setValue` defect open |
 | E3 | Solite in the box: original firmware saved, then flashed with the user's yes; the radio over the serial link, the network (Wi-Fi first, then Ethernet, as E1 settled), data in flash, the API and the interface served by the box (precompressed); configured by `scripts/demo-garage.sh`; with no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings can also be written to flash when flashing); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes | The garage runs in the box for a day, Mac off | |
 
@@ -118,6 +118,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-21 | Stream the loading of the home (its files are read whole and parsed: the largest transient of the engine's peak, 312 KB in QEMU); measure the peak again on the box | Spec 016 |
+| 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
+| 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
+| 2026-11-21 | The engine saves `devices.json` (94 KB) once per device when its route changes (at the first contact, then rarely); the write is synchronous in the radio loop: measure the stall it causes on the box (E3) | Spec 016 review |
 
 ## Sowel issues to open
 
@@ -137,6 +141,7 @@ Needs on the Sowel side, for the user to open as Sowel issues (never changed fro
 | 2026-11-20 | Walking skeleton: the tool starts and shows its name on the Mac, the ESP32 and in the browser | 001 |
 | 2026-11-20 | A1: Zigbee2MQTT coverage of the leading brands | 002 |
 | 2026-11-20 | A2: the firmware boots in QEMU and shows its memory | 003 |
+| 2026-11-21 | E1: the target prepared: hardware sheet, memory budget, partition table, network choice (spec 015); the engine run in the firmware under QEMU, memory measured (spec 016) | 015, 016 |
 
 ## Log
 
@@ -192,3 +197,12 @@ Every change to this roadmap: date, what changed, why.
   allocations (most of its bytes), against about 130 KB for the realistic home; spec 016 measures
   it, and `SPIRAM_MALLOC_ALWAYSINTERNAL` is the knob. The `sdkconfig` cannot carry the partition
   table (esp-idf-sys ignores it, D25): it is given at flashing.
+- 2026-11-21: E1's second half built (spec 016), in an autonomous run: the engine's loop is in the
+  core, the firmware mounts its FAT partition and, in the QEMU image, runs the realistic home on the
+  simulated radio. Peak 312 KB (ceiling 350 KB, D27; upper bound with the simulator inside), internal RAM
+  never below 107 KB free; E1 is built. One inbox line: stream the loading of the home (its files are read
+  whole: the largest transient of the peak); the figure is measured again on the box in E3.
+- 2026-11-21 (review of spec 016): the ceiling of the QEMU run is 350 KB (D27; the Mac test stays at
+  300 KB). Inbox: the 94 KB `devices.json` save is synchronous in the radio loop, its stall is measured on
+  the box (E3); the 16 dropped start orders of the motion-light instances are a line of their own. A
+  save writes `<name>.tmp`, renames it to `<name>.new` once complete, and only `.new` is recovered.

@@ -75,3 +75,30 @@ fn auto_follows_the_cable_and_the_other_settings_win_over_it() {
     assert_eq!(choose(NetworkSetting::Wifi, true), Link::Wifi);
     assert_eq!(choose(NetworkSetting::Ethernet, false), Link::Ethernet);
 }
+
+#[test]
+fn the_boot_lines_give_the_reason_then_the_choice() {
+    use solite_core::network::boot_lines;
+    assert_eq!(
+        boot_lines(Some(r#"{"link": "auto"}"#), false),
+        ["network: wifi (setting auto), no link started"]
+    );
+    assert_eq!(
+        boot_lines(None, false),
+        [
+            "network: no setting, auto",
+            "network: wifi (setting auto), no link started"
+        ]
+    );
+    assert_eq!(
+        boot_lines(Some(r#"{"link": "ethernet"}"#), false),
+        ["network: ethernet (setting ethernet), no link started"]
+    );
+    assert_eq!(
+        boot_lines(Some(r#"{"link": "WiFi"}"#), true),
+        [
+            r#"network: setting unknown "WiFi", auto"#,
+            "network: ethernet (setting auto), no link started"
+        ]
+    );
+}

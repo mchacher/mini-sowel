@@ -54,8 +54,8 @@ cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # 
 cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API and interface on :8080
 sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)
-cd firmware && cargo build --release              # the ESP32 firmware
-sh scripts/qemu.sh                                # the firmware, booted in an emulated ESP32
+cd firmware && cargo build --release              # the ESP32 firmware (box image; --features sim: the QEMU image)
+sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```

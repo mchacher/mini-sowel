@@ -263,3 +263,88 @@ fn pair_on_the_garage_scenario_enrolls_the_motion_sensor_and_says_so() {
     assert!(out.contains(&"0x00124B0012345679 alarm true".to_string()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The realistic home of the firmware's QEMU image (spec 016): the same files, the same scenario.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../firmware/fixtures");
+
+#[test]
+fn the_firmwares_scenario_with_its_home_ends_with_every_device_reported() {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in [
+        "devices.json",
+        "zones.json",
+        "equipments.json",
+        "recipes.json",
+        "sim-realistic.json",
+    ] {
+        std::fs::copy(Path::new(FIXTURES).join(name), dir.join(name)).unwrap();
+    }
+    let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let scenario = format!("{FIXTURES}/realistic.json");
+    let mut child = Reaped(
+        host()
+            .args([
+                "--sim",
+                &scenario,
+                "--serve",
+                &port.to_string(),
+                "--verbose",
+                "--speed",
+                "100",
+                "--data",
+                dir.to_str().unwrap(),
+            ])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    // 120 s of scenario time at speed 100: about 1.2 s. Every device (0x00124B00123456<NN>, NN
+    // from 00 to 31 hexadecimal) must show a measure, and a light order must have been sent: the
+    // motion sensors' alarms make `motion-light` switch the lights on, and the scenario reports
+    // each light `on` once, so a light that shows `on` twice was switched by an order (the
+    // simulated light answers an order with its state).
+    let mut waiting: Vec<String> = (0..50)
+        .map(|i| format!("0x00124B00123456{i:02X} "))
+        .collect();
+    let mut shown = Vec::new();
+    let mut ordered = false;
+    while !waiting.is_empty() || !ordered {
+        match receiver.recv_timeout(Duration::from_secs(60)) {
+            Ok(line) => {
+                waiting.retain(|eui| !line.starts_with(eui.as_str()));
+                if line.ends_with(" light_state on") {
+                    let on = shown.iter().filter(|l| **l == line).count();
+                    ordered |= on >= 1;
+                }
+                shown.push(line);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                panic!(
+                    "silent, still waiting for {waiting:?} (a light order seen: {ordered}); shown: {shown:?}"
+                );
+            }
+        }
+    }
+    let signal = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(signal.success());
+    assert_eq!(child.wait().unwrap().code(), Some(130));
+    let _ = std::fs::remove_dir_all(&dir);
+}

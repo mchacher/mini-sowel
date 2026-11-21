@@ -342,6 +342,12 @@ impl Ncp {
         }
     }
 
+    /// Stops writing the memory file: what was read from it stays, what changes from now on is
+    /// kept in RAM only. For a caller whose storage is slow and not what it measures.
+    pub fn keep_memory_in_ram(&mut self) {
+        self.memory_file = None;
+    }
+
     /// Sets the time the radio sees, in milliseconds (the caller's clock).
     pub fn set_now(&mut self, now: u64) {
         self.now = now;

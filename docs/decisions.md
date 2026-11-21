@@ -372,3 +372,51 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   recipes need room. FAT rather than LittleFS: it is in ESP-IDF, with no extra component. The
   table is cheap to change before the first flash and needs a full re-flash after. Chosen in
   autonomy, to be confirmed by the user at the demo.
+
+## D26: The engine's loop is in the core, and the simulator is built into the QEMU image
+
+- **Date**: 2026-11-21
+- **Choice**: the radio loop and the saver of the host move to `crates/core/src/engine/`, generic
+  over the radio transport, a `Storage` trait (the engine's four named files, written chunk by
+  chunk, D15), clock closures, a random closure and an output closure; the host (files in a
+  folder) and the firmware (the FAT partition) implement `Storage`. `crates/sim` builds for the
+  ESP32: the firmware has a cargo feature `sim`, which embeds the simulator, the realistic home
+  of D20 and its scenario (`firmware/fixtures/`) and runs the engine on them in a thread of 32 KB
+  of stack; without it the image is the box's and starts no radio. This replaces spec 007's "the
+  simulator is never built for the ESP32": it is built for the image QEMU runs, not for the box.
+  The engine's heap peak and the internal RAM minimum are read by the firmware with ESP-IDF's
+  local-minimum monitor of the free heap, phase by phase (load the home, build the simulator,
+  run), and `scripts/qemu.sh` fails above 350 KB (D27, first 300 KB of D20) or below 64 KB of internal RAM free
+  (spec 015's reserve).
+- **Why**: the loop had to run on the box before the box is flashed, and moving it keeps one loop
+  for both programs (the host's tests are its safety net). D20 said the 300 KB is "read again on
+  the box (QEMU, then the Dongle Max)": the QEMU figure is an upper bound, with the simulator
+  inside, and the box measures it again in E3. The monitor's figures are the sum of the low
+  watermarks of the internal RAM and the PSRAM, which may have been reached at different
+  moments: over the whole run the sum gave 329 KB for the first run, phase by phase 287 KB; both
+  readings are upper bounds of the true peak, the per-phase one the tighter and never below it,
+  so the gate uses the phases. A bound holds for what the run exercised: the realistic home,
+  the scenario of `firmware/fixtures/` (motion, light orders), no network. Final run: 312 KB
+  by phases, heap 170 KB at the end. `SPIRAM_MALLOC_ALWAYSINTERNAL` was
+  tried at 512 as the first remedy (D23's knob): the total heap does not shrink when allocations
+  move between the two memories, and the peak read 359 KB (whole-run sum), so it stays at 4096.
+  What the peak holds: the 32 KB stack, the home loaded from its files (text and parsed data,
+  about 260 KB at the highest), then the simulator; the loading is the largest transient and
+  is the first optimisation to make if the ceiling is crossed.
+
+## D27: The engine's ceiling is 350 KB in QEMU, replacing D20's 300 KB as the gate
+
+- **Date**: 2026-11-21
+- **Choice**: the heap peak of the engine in QEMU (`scripts/qemu.sh`) may reach 350 KB; D20's
+  300 KB was the gate until then. Approved by the user on 2026-11-21, pending optimisation: the
+  inbox of `docs/roadmap.md` has the line to bring the engine back under 300 KB, loading the
+  home by streaming first. The Mac test (`memory_ceiling.rs`: 182 KB, 194 KB with every log full)
+  stays at 300 KB, and D23's 1 MB for the worst case is unchanged.
+- **Why**: once the scenario plays at its own pace, with motion and light orders (spec 016
+  review), the QEMU run reads 312 KB by phases: the second phase (the recipes' start and the
+  simulator's build) is the largest at 312 KB, the load of the home 258 KB, the run 197 KB, the
+  identification 186 KB. Both readings of the monitor (whole run, per phase) are upper bounds, the
+  per-phase one the tighter, and the figure holds for what the run exercised. Internal RAM stays
+  at 107 KB free at the lowest, above the 64 KB floor. The measured run differs from the box: its
+  saves are dropped (the last one written to flash), the simulator's memory is kept in RAM, and the
+  scenario is clocked by its waits, so no File buffer or wear-levelling write is in the figure.

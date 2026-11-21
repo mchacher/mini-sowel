@@ -1,6 +1,6 @@
 [package]
 name = "solite-sim"
-description = "The simulated radio of Solite: an EmberZNet NCP and Zigbee devices that run on the Mac, driven by scenario files."
+description = "The simulated radio of Solite: an EmberZNet NCP and Zigbee devices that run on the Mac and in the QEMU image of the firmware, driven by scenario files."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

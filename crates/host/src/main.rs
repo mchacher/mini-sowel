@@ -25,7 +25,8 @@ use solite_sim::{RealClock, Scenario, SimTransport};
 
 use radio_tcp::TcpTransport;
 use random::SystemRandom;
-use store::{FileStore, Saver};
+use solite_core::engine::Saver;
+use store::{FileStore, show_on_stderr};
 
 const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
 --sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
@@ -211,7 +212,7 @@ fn pair<T: RadioTransport>(
     // The whole home is read (a device's zone must not be lost), but `--pair` writes the devices
     // only.
     let home = Mutex::new(store.load_home(serve::now_ms())?);
-    let mut saver = Saver::devices_only(store, serve::now_ms());
+    let mut saver = Saver::devices_only(store, serve::now_ms()).with_sink(show_on_stderr);
     let mut radio = Radio::new(transport, clock());
     let identity = radio.identify().map_err(|e| format!("radio: {e}"))?;
     let lines = identity_lines(label, &identity);

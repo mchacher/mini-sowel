@@ -13,12 +13,13 @@ pub fn banner() -> String {
 }
 
 mod memory;
-pub use memory::{MemoryStats, PsramStats, memory_line};
+pub use memory::{EngineStats, MemoryStats, PsramStats, engine_line, memory_line};
 
 pub mod radio;
 
 pub mod api;
 pub mod devices;
+pub mod engine;
 pub mod equipments;
 pub mod failure;
 pub mod home;

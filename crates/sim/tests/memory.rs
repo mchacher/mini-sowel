@@ -125,3 +125,40 @@ fn a_memory_file_that_does_not_parse_or_cannot_be_written_is_an_error_naming_it(
     assert!(error.contains(&file.display().to_string()), "{error}");
     fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_save_cut_between_the_delete_and_the_rename_is_recovered_at_the_next_read() {
+    let dir = scratch();
+    let file = dir.join("sim-cut.json");
+    let mut first = sim(ONE_SENSOR, Some(&file), 1);
+    first.start().unwrap();
+    assert_eq!(joined(&first.pair(10)).len(), 1);
+    drop(first);
+    // The power went out after the old file was deleted and before the rename: only `.new`.
+    let temporary = dir.join("sim-cut.json.new");
+    fs::rename(&file, &temporary).unwrap();
+    assert!(!file.exists());
+
+    let mut second = sim(ONE_SENSOR, Some(&file), 1);
+    let resumed = second.listen().unwrap();
+    assert!(
+        !resumed.formed,
+        "the network of the recovered file is resumed"
+    );
+    assert!(file.exists() && !temporary.exists());
+}
+
+#[test]
+fn a_truncated_temporary_file_with_no_memory_file_is_not_promoted() {
+    let dir = scratch();
+    let file = dir.join("sim-first.json");
+    let temporary = dir.join("sim-first.json.tmp");
+    fs::create_dir_all(&dir).unwrap();
+    // The first save was cut while it wrote: the temporary file holds half a document.
+    fs::write(&temporary, "{\"devices\": [").unwrap();
+
+    let mut first = sim(ONE_SENSOR, Some(&file), 1);
+    let started = first.start().unwrap();
+    assert!(started.formed, "no memory: a new network forms");
+    assert!(!temporary.exists(), "the stray temporary file is deleted");
+}

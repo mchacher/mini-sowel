@@ -1,36 +1,36 @@
 //! The home on disk, in the data folder: `devices.json` (a JSON list of Sowel's
 //! `DeviceWithDetails`), `zones.json` (`Zone`s), `equipments.json` (equipments with their
 //! bindings) and `recipes.json` (the recipe instances), each readable by its owner only. Written under a temporary name, then renamed, so
-//! a stop in the middle never leaves half a file. Only the radio loop writes (`Saver`).
+//! a stop in the middle never leaves half a file. Only the radio loop writes (`Saver`, in the
+//! core's `engine`); this file is the Mac's `Storage`.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use solite_core::devices::{
-    DeviceStore, DeviceWithDetails, Devices, WritePolicy, lock, parse_list,
-};
-use solite_core::equipments::{self, StoredEquipment};
-use solite_core::home::{Home, ListCursor};
+use solite_core::devices::{DeviceStore, DeviceWithDetails};
+use solite_core::engine::{self, Storage};
+use solite_core::home::Home;
+#[cfg(test)]
 use solite_core::recipes::RecipeInstance;
-use solite_core::zones::{self, Zone};
 
-const FILE_NAME: &str = "devices.json";
-const ZONES_FILE_NAME: &str = "zones.json";
-const EQUIPMENTS_FILE_NAME: &str = "equipments.json";
-const RECIPES_FILE_NAME: &str = "recipes.json";
-/// A zones or equipments file that could not be written is tried again after this, in
-/// milliseconds (never in a tight loop).
-const RETRY_MS: u64 = 60 * 1000;
+const FILE_NAME: &str = engine::DEVICES_FILE;
+#[cfg(test)]
+const ZONES_FILE_NAME: &str = engine::ZONES_FILE;
+#[cfg(test)]
+const EQUIPMENTS_FILE_NAME: &str = engine::EQUIPMENTS_FILE;
+#[cfg(test)]
+const RECIPES_FILE_NAME: &str = engine::RECIPES_FILE;
+
+/// Where a write failure of the saver is shown: the standard error, as always.
+pub fn show_on_stderr(message: &str) {
+    eprintln!("{message}");
+}
 
 /// The files of a data folder.
 pub struct FileStore {
-    path: PathBuf,
-    zones: PathBuf,
-    equipments: PathBuf,
-    recipes: PathBuf,
+    dir: PathBuf,
 }
 
 /// Reads a file; a missing file is `None` (first run), one that cannot be read is the error.
@@ -90,71 +90,54 @@ fn write_chunks(
 impl FileStore {
     pub fn new(dir: &Path) -> Self {
         FileStore {
-            path: dir.join(FILE_NAME),
-            zones: dir.join(ZONES_FILE_NAME),
-            equipments: dir.join(EQUIPMENTS_FILE_NAME),
-            recipes: dir.join(RECIPES_FILE_NAME),
+            dir: dir.to_path_buf(),
         }
-    }
-
-    fn cannot_read(&self, reason: impl std::fmt::Display) -> String {
-        format!("devices: {}: cannot read: {reason}", self.path.display())
-    }
-
-    /// The zones; the root alone when there is no file. A file that cannot be read or parsed is
-    /// an error, and the file is left as it is.
-    pub fn load_zones(&self) -> Result<Vec<Zone>, String> {
-        let Some(text) = read(&self.zones, "zones")? else {
-            return Ok(Vec::new());
-        };
-        zones::parse_list(&text)
-            .map_err(|e| format!("zones: {}: cannot read: {e}", self.zones.display()))
     }
 
     #[cfg(test)]
     pub fn save_zones(&self, text: &str) -> Result<(), String> {
-        write(&self.zones, text, "zones")
-    }
-
-    pub fn load_equipments(&self) -> Result<Vec<StoredEquipment>, String> {
-        let Some(text) = read(&self.equipments, "equipments")? else {
-            return Ok(Vec::new());
-        };
-        equipments::parse_list(&text).map_err(|e| {
-            format!(
-                "equipments: {}: cannot read: {e}",
-                self.equipments.display()
-            )
-        })
+        write(&self.dir.join(ZONES_FILE_NAME), text, "zones")
     }
 
     #[cfg(test)]
     pub fn save_equipments(&self, text: &str) -> Result<(), String> {
-        write(&self.equipments, text, "equipments")
+        write(&self.dir.join(EQUIPMENTS_FILE_NAME), text, "equipments")
     }
 
     /// The recipe instances; none when there is no file. A file that cannot be read or parsed is
     /// an error, and the file is left as it is.
+    #[cfg(test)]
     pub fn load_recipes(&self) -> Result<Vec<RecipeInstance>, String> {
-        let Some(text) = read(&self.recipes, "recipes")? else {
-            return Ok(Vec::new());
-        };
-        serde_json::from_str(&text)
-            .map_err(|e| format!("recipes: {}: cannot read: {e}", self.recipes.display()))
+        engine::load_recipes(self)
     }
 
     #[cfg(test)]
     pub fn save_recipes(&self, text: &str) -> Result<(), String> {
-        write(&self.recipes, text, "recipes")
+        write(&self.dir.join(RECIPES_FILE_NAME), text, "recipes")
     }
 
     /// The whole home, made consistent; a file that cannot be read stops everything. The recipe
     /// instances are loaded, not started: the caller starts them (`Home::start_recipes`).
     pub fn load_home(&self, now: u64) -> Result<Home, String> {
-        let devices = Devices::from_list(self.load()?);
-        let mut home = Home::from_parts(devices, self.load_zones()?, self.load_equipments()?, now);
-        home.load_recipes(self.load_recipes()?);
-        Ok(home)
+        engine::load_home(self, now)
+    }
+}
+
+impl Storage for FileStore {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        read(&self.dir.join(name), name.trim_end_matches(".json"))
+    }
+
+    fn write(
+        &self,
+        name: &str,
+        next: &mut dyn FnMut() -> std::io::Result<Option<String>>,
+    ) -> Result<(), String> {
+        write_chunks(&self.dir.join(name), next, name.trim_end_matches(".json"))
+    }
+
+    fn locate(&self, name: &str) -> String {
+        self.dir.join(name).display().to_string()
     }
 }
 
@@ -162,114 +145,19 @@ impl DeviceStore for FileStore {
     /// A missing file is an empty list (first run); a file that cannot be read or parsed is an
     /// error, and the file is left as it is.
     fn load(&self) -> Result<Vec<DeviceWithDetails>, String> {
-        let Some(text) = read(&self.path, "devices")? else {
-            return Ok(Vec::new());
-        };
-        parse_list(&text).map_err(|e| self.cannot_read(e))
+        engine::load_devices(self)
     }
 
     fn save(&self, text: &str) -> Result<(), String> {
-        write(&self.path, text, "devices")
-    }
-}
-
-/// The single writer: decides when (`WritePolicy` for the devices; at once for zones and
-/// equipments) and writes, taking the snapshots under the lock and writing them after the lock
-/// is released.
-pub struct Saver {
-    store: FileStore,
-    policy: WritePolicy,
-    /// `pair` writes the devices only: zones and equipments are written by `--serve`.
-    devices_only: bool,
-    /// Not before this time are the zones and equipments tried again after a failure.
-    retry_at: u64,
-}
-
-impl Saver {
-    pub fn new(store: FileStore, now: u64) -> Self {
-        Saver {
-            store,
-            policy: WritePolicy::new(now),
-            devices_only: false,
-            retry_at: 0,
-        }
-    }
-
-    /// A saver that writes `devices.json` only.
-    pub fn devices_only(store: FileStore, now: u64) -> Self {
-        Saver {
-            devices_only: true,
-            ..Saver::new(store, now)
-        }
-    }
-
-    /// Writes what is due. A failure is shown and the write is tried again later, except on stop
-    /// (`stopping`), where it is the error. Each file is written chunk by chunk from a cursor: the
-    /// home is taken for one chunk, then let go, then the chunk is written (memory ceiling, spec
-    /// 010 R7.15).
-    pub fn tick(&mut self, home: &Mutex<Home>, now: u64, stopping: bool) -> Result<(), String> {
-        let devices = self.policy.due_stream(&mut lock(home), now, stopping);
-        if let Some(cursor) = devices
-            && let Err(message) = self.write(home, cursor, &self.store.path)
-        {
-            if stopping {
-                return Err(message);
-            }
-            eprintln!("{message}");
-            self.policy.failed(&mut lock(home).devices, now);
-        }
-        if self.devices_only || !(stopping || now >= self.retry_at) {
-            return Ok(());
-        }
-        let zones = lock(home).take_zones_cursor();
-        if let Some(cursor) = zones
-            && let Err(message) = self.write(home, cursor, &self.store.zones)
-        {
-            if stopping {
-                return Err(message);
-            }
-            eprintln!("{message}");
-            lock(home).mark_zones_changed();
-            self.retry_at = now + RETRY_MS;
-        }
-        let equipments = lock(home).take_equipments_cursor();
-        if let Some(cursor) = equipments
-            && let Err(message) = self.write(home, cursor, &self.store.equipments)
-        {
-            if stopping {
-                return Err(message);
-            }
-            eprintln!("{message}");
-            lock(home).mark_equipments_changed();
-            self.retry_at = now + RETRY_MS;
-        }
-        let recipes = lock(home).take_recipes_cursor();
-        if let Some(cursor) = recipes
-            && let Err(message) = self.write(home, cursor, &self.store.recipes)
-        {
-            if stopping {
-                return Err(message);
-            }
-            eprintln!("{message}");
-            lock(home).mark_recipes_changed();
-            self.retry_at = now + RETRY_MS;
-        }
-        Ok(())
-    }
-
-    fn write(&self, home: &Mutex<Home>, mut cursor: ListCursor, path: &Path) -> Result<(), String> {
-        let what = path
-            .file_stem()
-            .and_then(|n| n.to_str())
-            .unwrap_or("home")
-            .to_string();
-        write_chunks(path, || cursor.next_chunk(&lock(home)), &what)
+        write(&self.dir.join(FILE_NAME), text, "devices")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use solite_core::devices::{Devices, lock};
+    use solite_core::engine::{RETRY_MS, Saver};
 
     fn dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("solite-store-{}-{name}", std::process::id()));

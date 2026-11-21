@@ -23,15 +23,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use solite_core::api::{ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream, order_response};
 use solite_core::devices::lock;
+use solite_core::engine::{self, Clocks, Saver};
 use solite_core::home::Home;
-use solite_core::orders::OrderRunner;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use tiny_http::{Header, Response, Server};
 
 use crate::front::{self, Door};
 use crate::random::SystemRandom;
 use crate::static_files;
-use crate::store::{FileStore, Saver};
+use crate::store::{FileStore, show_on_stderr};
 use crate::ws::{Context, Timing};
 use crate::{backup, clock};
 
@@ -308,7 +308,7 @@ pub fn serve<T: RadioTransport>(
     if !static_files::is_built(ui) {
         println!("{}", static_files::missing_line(ui));
     }
-    let mut saver = Saver::new(store, now_ms());
+    let mut saver = Saver::new(store, now_ms()).with_sink(show_on_stderr);
     let result = radio_loop(
         transport, label, port, verbose, data, stop, &home, &random, &mut saver,
     );
@@ -335,7 +335,7 @@ fn radio_loop<T: RadioTransport>(
     stop: &AtomicBool,
     home: &Mutex<Home>,
     random: &Mutex<SystemRandom>,
-    saver: &mut Saver,
+    saver: &mut Saver<FileStore>,
 ) -> Result<bool, String> {
     let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
     let mut radio = Radio::new(transport, clock());
@@ -349,50 +349,18 @@ fn radio_loop<T: RadioTransport>(
     let foreign = !backup::matches(data, &network);
     println!("{}", network_line(&network, foreign));
     println!("serving: http://127.0.0.1:{port}");
-    // The orders of the API (and of the core) wait in this queue; the radio loop is the only one
-    // that sends them.
-    let orders = lock(home).orders().clone();
-    orders.set_clock(Arc::new(monotonic_ms));
-    let mut runner = OrderRunner::new();
-    while !stop.load(Ordering::SeqCst) {
-        let events = radio.poll().map_err(|e| format!("radio: {e}"))?;
-        let activity = radio.take_activity();
-        let routes = radio.take_routes();
-        let now = now_ms();
-        {
-            let mut guard = lock(home);
-            for item in &activity {
-                guard.devices.apply_activity(item, now);
-            }
-            for update in &routes {
-                guard.devices.set_route(update);
-            }
-            for event in &events {
-                guard.measures(event, now, &mut fill)?;
-            }
-            let status_changed = guard.devices.refresh_status(now);
-            // The zone aggregation (and the motion times) after each batch of measures, and
-            // when silence alone turned a device offline.
-            if status_changed || !events.is_empty() || !activity.is_empty() {
-                guard.recompute(now);
-            }
-            // What goes stale with time alone is seen at least once a minute.
-            guard.tick(now);
-            // The recipes get the events of this batch (and of the API's edits since the last
-            // turn), then the timers that are due fire. Their orders join the queue below.
-            guard.run_recipes(monotonic_ms(), now);
-        }
-        // After the measures: the answer of an order (and the state it makes the device read
-        // back) comes through the same polls.
-        runner.step(&mut radio, &orders, monotonic_ms());
-        if verbose {
-            for event in &events {
-                for line in event.lines() {
-                    println!("{line}");
-                }
-            }
-        }
-        saver.tick(home, now, false)?;
-    }
-    Ok(true)
+    let clocks = Clocks {
+        now: Arc::new(now_ms),
+        monotonic: Arc::new(monotonic_ms),
+    };
+    engine::run(
+        &mut radio,
+        home,
+        saver,
+        &clocks,
+        stop,
+        &mut fill,
+        verbose,
+        &mut |line| println!("{line}"),
+    )
 }

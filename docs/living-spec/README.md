@@ -33,14 +33,26 @@ Each of the three programs starts and says which tool it is, with its version:
   for example `memory: internal 245 KB free (largest block 110 KB), psram 2039 KB free of
   2048 KB`, or `psram none` without PSRAM. It runs on chips of revision 3 and later, like the
   Dongle Max's.
-- **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the same firmware in
-  Espressif's QEMU, with 2 MB of PSRAM, and prints its banner and memory line; it fails, with the
-  last lines of the log, when the firmware panics, reboots, or does not show its memory within
-  60 seconds. `sh scripts/validate.sh` runs it. The image holds the bootloader, the 16 MB
-  partition table of `firmware/partitions.csv` (settings, two application slots of 4 MB, and a
-  data partition of about 7.9 MB) and the application in the first slot, at the offset the built
-  table gives. Allocations above 4 KB go to PSRAM; 64 KB of internal RAM are kept for the network
-  and DMA, and the TLS library takes its buffers from PSRAM.
+  After the memory line, the firmware mounts its data partition (FAT, at `/data`; it formats the
+  partition when it cannot mount it, and logs `storage: formatted (<reason>)`), logs
+  `storage: /data, <used> KB used of <size> KB`, reads its network setting from
+  `/data/network.json` and logs its choice (`network: wifi (setting auto), no link started`),
+  starts no link, and, in the image for the box, logs `radio: none`.
+- **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the firmware in Espressif's
+  QEMU, with 2 MB of PSRAM, and runs the engine in it with the simulated radio and a realistic
+  home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
+  `firmware/fixtures/`); it prints the banner, the memory line, the `storage:` and `network:`
+  lines, then the `engine:` line (counts, heap used and peak, internal RAM and PSRAM free, with
+  their minimum), and fails, with the last lines of the log, when the heap peak is above 350 KB, when a device of the home got no measure into the engine
+  (`50 devices (50 reported)`), when the radio dropped a callback while the scenario played,
+  when the internal RAM minimum free is below 64 KB, when the firmware panics or reboots, or when
+  the `engine:` line does not show within 240 seconds. `sh scripts/validate.sh` runs it. The image
+  holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
+  application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
+  application in the first slot, at the offset the built table gives. Allocations above 4 KB go
+  to PSRAM; 64 KB of internal RAM are kept for the network and DMA, and the TLS library takes its
+  buffers from PSRAM.
+  The box's files are saved through a temporary file (`<name>.tmp`), synced then renamed to `<name>.new`: FatFS refuses a rename onto an existing file, so a save deletes the old one then renames `.new`; a read that finds `<name>` missing and `<name>.new` present recovers it and logs a line, and deletes any `.tmp` (a write that did not end, never promoted).
 - **In the browser**: the home screen (see "Shows the home in the browser"), in Sowel's Hybrid or
   Dark theme as the system asks.
 
@@ -323,7 +335,8 @@ it on `http://localhost:5173` with the API of a host running on port 8080.
 
 `--sim <scenario>` replaces `--radio tcp://<address>:6638` in every command (identify, `--pair`,
 `--listen`, `--serve`): a simulated radio and simulated devices, speaking the same protocols as the real
-ones, play a scenario file; the lines are the same, `radio: sim <scenario>` first.
+ones, play a scenario file; the lines are the same, `radio: sim <scenario>` first. The simulated
+radio runs on the Mac and in the emulated ESP32.
 `--speed <1..100>` runs the scenario's clock faster (the pairing time is not affected).
 
 A scenario (JSON, at most 1 MB) names the radio (EZSP version 13 to 19, stack version, address,
@@ -365,9 +378,12 @@ how the measure is made and what it cannot see. Nothing of the tool runs in the 
 
 ### Stays within a memory budget
 
-The engine stays under 300 KB for a realistic home (50 devices, 10 zones, 50 equipments, 3
-recipe instances with full logs, a live client with a full queue, the largest answer in flight),
-and under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
+The engine stays under 300 KB on the Mac for a realistic home (50 devices, 10 zones, 50 equipments, 3
+recipe instances with full logs, a live client with a full queue, the largest answer in flight).
+In the emulated ESP32 it stays under 350 KB for the realistic home with the fixture scenario
+playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
+fills them). It stays
+under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
 equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
@@ -399,3 +415,4 @@ measures.
 | 013 | Live events on Sowel's WebSocket (`/ws`) |
 | 014 | The interface: the rooms and their equipments, live, served by the host |
 | 015 | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot |
+| 016 | The engine's loop and saver in the core, run by the firmware on its data partition with the simulated radio under QEMU, memory measured |

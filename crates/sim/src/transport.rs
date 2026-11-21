@@ -24,6 +24,9 @@ pub struct SimTransport<C: Clock> {
     /// The clock time the scenario started at: when the host connected.
     start_ms: u64,
     to_read: VecDeque<u8>,
+    /// The scenario's events wait until `release`: the radio answers the host, but nothing is
+    /// played on its own.
+    held: bool,
 }
 
 fn busy() -> TransportError {
@@ -49,7 +52,29 @@ impl<C: Clock> SimTransport<C> {
             waiting_joins: Vec::new(),
             start_ms,
             to_read: VecDeque::new(),
+            held: false,
         }
+    }
+
+    /// The radio's memory file is read already; it is not written again (see
+    /// `Ncp::keep_memory_in_ram`).
+    pub fn keep_memory_in_ram(&mut self) {
+        if let Ok(mut ncp) = self.ncp.try_borrow_mut() {
+            ncp.keep_memory_in_ram();
+        }
+    }
+
+    /// Keeps the scenario's events from playing until `release`, whatever the clock says: the
+    /// host identifies the radio and starts listening first.
+    pub fn hold(&mut self) {
+        self.held = true;
+    }
+
+    /// Starts the scenario's clock now: its time zero is this moment, its first event plays in
+    /// its own time from here.
+    pub fn release(&mut self) {
+        self.held = false;
+        self.start_ms = self.clock.now_ms();
     }
 
     /// The radio and the events of a scenario, with the radio's memory in `memory_file`.
@@ -68,6 +93,13 @@ impl<C: Clock> SimTransport<C> {
         ))
     }
 
+    /// True once the scenario's last event has played and what it made the radio send has been
+    /// read: nothing more will come from the scenario (a scenario without events is finished at
+    /// once).
+    pub fn finished(&self) -> bool {
+        !self.held && self.next_event >= self.events.len() && self.to_read.is_empty()
+    }
+
     /// Plays what is due: the scenario's events, the joins that waited for pairing, the radio's
     /// timed callbacks. The answers go to the bytes waiting to be read.
     fn tick(&mut self) -> Result<(), TransportError> {
@@ -76,6 +108,7 @@ impl<C: Clock> SimTransport<C> {
         let mut ncp = self.ncp.try_borrow_mut().map_err(|_| busy())?;
         ncp.set_now(now);
         while let Some(event) = self.events.get(self.next_event)
+            && !self.held
             && event.at_ms <= scenario_ms
         {
             self.next_event += 1;
@@ -109,6 +142,7 @@ impl<C: Clock> SimTransport<C> {
         let event = self
             .events
             .get(self.next_event)
+            .filter(|_| !self.held)
             .map(|event| (self.start_ms + self.time.clock_ms(event.at_ms)).saturating_sub(now));
         match (callback, event) {
             (Some(a), Some(b)) => Some(a.min(b)),

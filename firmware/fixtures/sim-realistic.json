@@ -1,0 +1,1608 @@
+{
+  "devices": [
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "00563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8192,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "01563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8193,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "02563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8194,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "03563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8195,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "04563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8196,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "05563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8197,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "06563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8198,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "07563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8199,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "08563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8200,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "09563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8201,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
+      "configured": [
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": true,
+      "eui64Wire": "0A563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8202,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "0B563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8203,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "0C563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8204,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "0D563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8205,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "0E563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8206,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "0F563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8207,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "10563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8208,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "11563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8209,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "12563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8210,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "13563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8211,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
+      "configured": [
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": true,
+      "eui64Wire": "14563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8212,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "15563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8213,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "16563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8214,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "17563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8215,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "18563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8216,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "19563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8217,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "1A563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8218,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "1B563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8219,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "1C563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8220,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "1D563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8221,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "563412FEFFB96F8C",
+      "cieWritten": true,
+      "configured": [
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": true,
+      "eui64Wire": "1E563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8222,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "1F563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8223,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "20563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8224,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        1026,
+        1029,
+        1
+      ],
+      "configuredAttributes": [
+        [
+          1026,
+          0
+        ],
+        [
+          1029,
+          0
+        ],
+        [
+          1,
+          33
+        ],
+        [
+          1,
+          32
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "21563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8225,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "22563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8226,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "23563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8227,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "24563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8228,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "25563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8229,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "26563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8230,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "27563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8231,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "28563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8232,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "29563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8233,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2A563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8234,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2B563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8235,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2C563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8236,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2D563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8237,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2E563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8238,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "2F563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8239,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "30563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8240,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    },
+    {
+      "bound": true,
+      "cie": "0000000000000000",
+      "cieWritten": false,
+      "configured": [
+        6
+      ],
+      "configuredAttributes": [
+        [
+          6,
+          0
+        ]
+      ],
+      "enrolled": false,
+      "eui64Wire": "31563412004B1200",
+      "joined": true,
+      "level": 0,
+      "lookupUnknown": false,
+      "nwk": 8241,
+      "relayOn": false,
+      "reportsSent": true,
+      "silent": false
+    }
+  ],
+  "network": {
+    "channel": 15,
+    "extendedPanWire": "5A5A5A5A5A5A5A5A",
+    "networkKey": "0102030405060708090A0B0C0D0E0F10",
+    "nodeType": 1,
+    "panId": 23130,
+    "trustCenterKey": "1112131415161718191A1B1C1D1E1F20"
+  }
+}

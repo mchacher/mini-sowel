@@ -1,12 +1,14 @@
 //! The simulated radio's flash: the network and the devices that joined, kept in a JSON file in
-//! the host's data folder so a second run finds them.
+//! the host's data folder (or the box's data partition) so a second run finds them.
 
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use solite_core::engine::recover_interrupted_save;
 
 use crate::devices::SimDevice;
 use crate::ncp::StoredNetwork;
@@ -163,9 +165,38 @@ impl Memory {
     }
 }
 
+/// The file a save is written to before it replaces `file`: the same name and `.tmp`. It may be
+/// cut short, so it is never recovered.
+fn temporary_path(file: &Path) -> std::path::PathBuf {
+    suffixed(file, ".tmp")
+}
+
+/// The file a complete save waits under until it replaces `file`: the same name and `.new`.
+fn complete_path(file: &Path) -> std::path::PathBuf {
+    suffixed(file, ".new")
+}
+
+fn suffixed(file: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
 /// Reads the memory file: `None` when there is none. A file that cannot be read or parsed is an
 /// error naming it.
 pub fn load(file: &Path) -> Result<Option<Memory>, String> {
+    // A power cut between the delete and the rename of a save leaves only `<file>.new`.
+    let complete = complete_path(file);
+    let temporary = temporary_path(file);
+    recover_interrupted_save(
+        file,
+        complete.as_path(),
+        temporary.as_path(),
+        Path::exists,
+        |from, to| fs::rename(from, to),
+        |stray| fs::remove_file(stray),
+    )
+    .map_err(|e| format!("sim memory: {}: cannot recover: {e}", file.display()))?;
     let text = match fs::read_to_string(file) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -213,17 +244,23 @@ pub fn save(file: &Path, memory: &Memory) -> Result<(), String> {
         fs::create_dir_all(dir).map_err(|e| cannot(&e))?;
     }
     let text = serde_json::to_string_pretty(memory).map_err(|e| cannot(&e))?;
-    let mut temporary = file.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    // Owner only, like the host's own backup.
-    let mut out = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&temporary)
-        .map_err(|e| cannot(&e))?;
+    let temporary = temporary_path(file);
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    // Owner only, like the host's own backup. The ESP32's FAT partition has no permissions: the
+    // file is created with the default mode there.
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut out = options.open(&temporary).map_err(|e| cannot(&e))?;
     out.write_all(text.as_bytes()).map_err(|e| cannot(&e))?;
-    fs::rename(&temporary, file).map_err(|e| cannot(&e))
+    out.sync_all().map_err(|e| cannot(&e))?;
+    drop(out);
+    // The content is complete: it takes the name `.new`. A rename onto an existing file is
+    // refused on the ESP32's FAT partition: the old file goes first.
+    let complete = complete_path(file);
+    let _ = fs::remove_file(&complete);
+    fs::rename(&temporary, &complete).map_err(|e| cannot(&e))?;
+    let _ = fs::remove_file(file);
+    fs::rename(&complete, file).map_err(|e| cannot(&e))?;
+    Ok(())
 }

@@ -19,8 +19,14 @@ opt-level = "s"
 debug = true
 opt-level = "z"
 
+[features]
+# The image QEMU runs: the engine with the simulated radio and the realistic home of
+# `fixtures/` (spec 016, decision D26). Without it, the image is the box's: no radio yet.
+sim = ["dep:solite-sim"]
+
 [dependencies]
 solite-core = { path = "../crates/core" }
+solite-sim = { path = "../crates/sim", optional = true }
 esp-idf-svc = "0.53"
 log = "0.4"
 
