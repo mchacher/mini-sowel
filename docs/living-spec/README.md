@@ -350,7 +350,7 @@ them.
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
   with its values, any other equipment with its name, icon and status badge; a disabled one
   dimmed without control; an "Add equipment" button opens the equipment form with the room chosen.
-  "No room yet: create one in the Topology page" when only the home's root exists; "No equipment
+  "No room yet: create one in the Topology page" when only the home's root exists and it holds no equipment; "No equipment
   in this room".
 - **Devices**: a "Devices" entry under the rooms in the sidebar (and in the phone drawer), at
   `#/devices`. "Add a device" opens pairing for 180 s (a countdown from the route's `remaining`,

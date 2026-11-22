@@ -7,7 +7,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ZoneWithChildren } from "../../types";
 import { flattenZonesWithPath, type ZoneOption } from "../../lib/zone-path";
-import { apiErrorText } from "../../lib/api-error";
+import { formErrorText } from "../../lib/form-error";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_INPUT, FIELD_LABEL, Modal } from "../ui/Modal";
 
 interface ZoneFormProps {
@@ -54,7 +54,7 @@ export function ZoneForm({
       });
       onClose();
     } catch (err) {
-      setError(apiErrorText(err, t));
+      setError(formErrorText(err, t));
     } finally {
       setSaving(false);
     }

@@ -133,6 +133,17 @@ describe("EquipmentsPage", () => {
     expect(screen.queryByText("Cannot delete it")).toBeNull();
   });
 
+  it("reads the list again when an edited equipment was already deleted", async () => {
+    const api = setup([garageLight()], {
+      "PUT /api/v1/equipments/l": { status: 404, body: { error: "Equipment not found" } },
+    });
+    fireEvent.click(within(rowOf("Lumière garage")).getByRole("button", { name: "Edit" }));
+    fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Plafonnier" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Equipment not found")).toBeTruthy();
+    expect(api.count("GET /api/v1/equipments")).toBe(1);
+  });
+
   it("reads the list again when the equipment was already deleted", async () => {
     const api = setup([garageLight()], {
       "DELETE /api/v1/equipments/l": { status: 404, body: { error: "Equipment not found" } },

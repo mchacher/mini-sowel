@@ -88,9 +88,15 @@ export function EquipmentsPage() {
           initial={{ name: editing.name, type: editing.type, zoneId: editing.zoneId }}
           zones={tree}
           onSubmit={async (data) => {
-            await useEquipments
-              .getState()
-              .updateEquipment(editing.id, { name: data.name, zoneId: data.zoneId });
+            try {
+              await useEquipments
+                .getState()
+                .updateEquipment(editing.id, { name: data.name, zoneId: data.zoneId });
+            } catch (err) {
+              // Deleted meanwhile by another browser: the list is read again.
+              if (apiErrorStatus(err) === 404) void useEquipments.getState().fetchEquipments();
+              throw err;
+            }
           }}
           onClose={() => setEditing(null)}
         />

@@ -96,7 +96,13 @@ export function ZonesPage() {
           parentZones={flattenZoneTree(tree, form.zone.id)}
           defaultParentId={form.zone.parentId}
           onSubmit={async (data) => {
-            await useZones.getState().updateZone(form.zone.id, data);
+            try {
+              await useZones.getState().updateZone(form.zone.id, data);
+            } catch (err) {
+              // Deleted meanwhile by another browser: the tree is read again.
+              if (apiErrorStatus(err) === 404) void useZones.getState().fetchZones();
+              throw err;
+            }
           }}
           onClose={close}
         />

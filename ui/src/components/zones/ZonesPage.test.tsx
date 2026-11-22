@@ -120,6 +120,17 @@ describe("ZonesPage", () => {
     expect(screen.queryByText(text)).toBeNull();
   });
 
+  it("reads the tree again when an edited zone was already deleted", async () => {
+    const api = setup({
+      "PUT /api/v1/zones/garage": { status: 404, body: { error: "Zone not found" } },
+    });
+    fireEvent.click(buttonOf("Garage", "Edit")!);
+    fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Atelier" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Zone not found")).toBeTruthy();
+    expect(api.count("GET /api/v1/zones")).toBe(1);
+  });
+
   it("reads the tree again when the zone was already deleted", async () => {
     const api = setup({
       "DELETE /api/v1/zones/garage": { status: 404, body: { error: "Zone not found" } },

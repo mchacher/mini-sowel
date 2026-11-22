@@ -107,6 +107,31 @@ describe("ZoneForm", () => {
     },
   );
 
+  it.each(["Parent zone not found: abc", "Zone not found"])(
+    "shows the server's text for a 404: %s",
+    async (text) => {
+      setup({
+        onSubmit: async () => {
+          throw new ApiError(404, text);
+        },
+      });
+      type(nameInput(), "Attic");
+      fireEvent.click(submit());
+      expect(await screen.findByText(text)).toBeTruthy();
+    },
+  );
+
+  it("keeps the generic text for a 404 with no server message", async () => {
+    setup({
+      onSubmit: async () => {
+        throw new ApiError(404, "HTTP 404", { fromServer: false });
+      },
+    });
+    type(nameInput(), "Attic");
+    fireEvent.click(submit());
+    expect(await screen.findByText("This item does not exist or was deleted.")).toBeTruthy();
+  });
+
   it("closes on Escape, on the cross and on a click outside, sending nothing", () => {
     const { onSubmit, onClose } = setup();
     fireEvent.keyDown(document, { key: "Escape" });

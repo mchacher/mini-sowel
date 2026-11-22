@@ -156,6 +156,20 @@ describe("EquipmentForm", () => {
     );
   });
 
+  it.each(["Zone not found: z1", "Equipment not found"])(
+    "shows the server's text for a 404: %s",
+    async (text) => {
+      setup({
+        onSubmit: async () => {
+          throw new ApiError(404, text);
+        },
+      });
+      await toDevices();
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      expect(await screen.findByText(text)).toBeTruthy();
+    },
+  );
+
   it("stays open with the API's text when it refuses", async () => {
     const { onClose } = setup({
       onSubmit: async () => {

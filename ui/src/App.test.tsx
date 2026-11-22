@@ -93,6 +93,15 @@ describe("App", () => {
     expect(within(nav()).getByText("Home").closest("a")!.getAttribute("aria-current")).toBe("page");
   });
 
+  it("shows the root's equipments, not 'No room yet', when only the root exists", async () => {
+    await boot({
+      zones: [zone("root", "Home")],
+      equipments: [light("l", "Root light", "root", false)],
+    });
+    expect(await screen.findByText("Root light")).toBeTruthy();
+    expect(screen.queryByText("No room yet: create one in the Topology page")).toBeNull();
+  });
+
   it("says there is no room when the API has no zone at all", async () => {
     await boot({ zones: [] });
     expect(await screen.findByText("No room yet: create one in the Topology page")).toBeTruthy();

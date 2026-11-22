@@ -11,7 +11,7 @@ import type { EquipmentType, ZoneWithChildren } from "../../types";
 import { DeviceSelector } from "./DeviceSelector";
 import { SOLITE_EQUIPMENT_TYPES, TYPE_LABELS } from "./equipment-type-meta";
 import { flattenZonesWithPath } from "../../lib/zone-path";
-import { apiErrorText } from "../../lib/api-error";
+import { formErrorText } from "../../lib/form-error";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_INPUT, FIELD_LABEL, Modal } from "../ui/Modal";
 
 interface EquipmentFormProps {
@@ -72,7 +72,7 @@ export function EquipmentForm({
       await onSubmit({ name: name.trim(), type, zoneId, deviceIds });
       onClose();
     } catch (err) {
-      setError(apiErrorText(err, t));
+      setError(formErrorText(err, t));
     } finally {
       setSaving(false);
     }

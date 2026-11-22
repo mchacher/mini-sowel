@@ -83,7 +83,7 @@ export function App() {
               onExecuteOrder={(id, alias, value) =>
                 useEquipments.getState().executeOrder(id, alias, value)
               }
-              empty={onlyRoot}
+              empty={onlyRoot && !equipments.some((e) => e.zoneId === zone.id)}
             />
           ) : (
             loaded && !error && <p className="text-body text-text-secondary">{t("app.noRoom")}</p>
