@@ -60,6 +60,8 @@ describe("App", () => {
       "Workshop",
       "House",
       "Devices",
+      "Equipments",
+      "Topology",
     ]);
     const padding = (name: string) =>
       (within(nav()).getByText(name).closest("a")!.parentElement as HTMLElement).style.paddingLeft;
@@ -87,13 +89,13 @@ describe("App", () => {
   it("selects the root and says there is no room yet when there is only the root zone", async () => {
     await boot({ zones: [zone("root", "Home")] });
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
-    expect(screen.getByText("No room yet: create one from the devices page")).toBeTruthy();
+    expect(screen.getByText("No room yet: create one in the Topology page")).toBeTruthy();
     expect(within(nav()).getByText("Home").closest("a")!.getAttribute("aria-current")).toBe("page");
   });
 
   it("says there is no room when the API has no zone at all", async () => {
     await boot({ zones: [] });
-    expect(await screen.findByText("No room yet: create one from the devices page")).toBeTruthy();
+    expect(await screen.findByText("No room yet: create one in the Topology page")).toBeTruthy();
   });
 
   it("sets the hash when a zone is clicked and follows hashchange", async () => {
@@ -156,7 +158,7 @@ describe("App", () => {
       within(drawer)
         .getAllByRole("link")
         .map((l) => l.textContent),
-    ).toEqual(["Home", "Garage", "Workshop", "House", "Devices"]);
+    ).toEqual(["Home", "Garage", "Workshop", "House", "Devices", "Equipments", "Topology"]);
     fireEvent.click(within(drawer).getByRole("button", { name: "Close the menu" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -237,5 +239,37 @@ describe("App", () => {
     fireEvent.click(within(nav()).getByText("Devices"));
     expect(window.location.hash).toBe("#/devices");
     expect(await screen.findByRole("heading", { level: 1, name: "Devices" })).toBeTruthy();
+  });
+
+  it.each([
+    ["#/zones", "Home Topology", "Topology"],
+    ["#/equipments", "Equipments", "Equipments"],
+  ])(
+    "shows the page at %s with its sidebar entry marked and no room",
+    async (hash, title, entry) => {
+      window.location.hash = hash;
+      await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+      expect(await screen.findByRole("heading", { level: 1, name: title })).toBeTruthy();
+      expect(within(nav()).getByText(entry).closest("a")!.getAttribute("aria-current")).toBe(
+        "page",
+      );
+      const marked = within(nav())
+        .getAllByRole("link")
+        .filter((a) => a.getAttribute("aria-current") === "page");
+      expect(marked).toHaveLength(1);
+    },
+  );
+
+  it("lists Devices, Equipments and Topology in this order in the sidebar", async () => {
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    await screen.findByRole("heading", { level: 1, name: "House" });
+    expect(
+      within(nav())
+        .getAllByRole("link")
+        .slice(-3)
+        .map((l) => l.textContent),
+    ).toEqual(["Devices", "Equipments", "Topology"]);
+    fireEvent.click(within(nav()).getByText("Topology"));
+    expect(window.location.hash).toBe("#/zones");
   });
 });

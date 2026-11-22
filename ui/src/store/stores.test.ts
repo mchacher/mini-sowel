@@ -14,6 +14,7 @@ import { connect } from "./useLive";
 import { useEquipments } from "./useEquipments";
 import { useDevices } from "./useDevices";
 import { useZoneAggregation } from "./useZoneAggregation";
+import { useZones } from "./useZones";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -110,5 +111,63 @@ describe("stores", () => {
     await useDevices.getState().updateDeviceZone("a", null);
     expect(api.calls.map((c) => c.body)).toEqual([{ zoneId: "z" }, { zoneId: null }]);
     expect(useDevices.getState().devices.a.zoneId).toBeNull();
+  });
+
+  it("useZones.createZone posts, then reads the tree again; a refusal throws and leaves the tree", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/zones": [
+        { status: 201, body: zone("g", "Garage", [], "root") },
+        { status: 400, body: { error: "Too many zones (32)" } },
+      ],
+    });
+    useZones.setState({ tree: [zone("root", "Home")] });
+    const created = await useZones.getState().createZone({ name: "Garage", parentId: "root" });
+    expect(created.id).toBe("g");
+    expect(api.count("GET /api/v1/zones")).toBe(1);
+    const tree = useZones.getState().tree;
+    await expect(useZones.getState().createZone({ name: "More" })).rejects.toThrow(
+      "Too many zones (32)",
+    );
+    expect(api.count("GET /api/v1/zones")).toBe(1);
+    expect(useZones.getState().tree).toBe(tree);
+  });
+
+  it("useZones.updateZone and deleteZone read the tree again; a refusal throws", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "PUT /api/v1/zones/g": { body: {} },
+      "DELETE /api/v1/zones/g": {
+        status: 400,
+        body: { error: "Cannot delete zone with 1 equipment. Remove or move them first." },
+      },
+    });
+    await useZones.getState().updateZone("g", { name: "Garage 2" });
+    expect(api.count("GET /api/v1/zones")).toBe(1);
+    await expect(useZones.getState().deleteZone("g")).rejects.toThrow(/Cannot delete zone/);
+    expect(api.count("GET /api/v1/zones")).toBe(1);
+  });
+
+  it("useEquipments create, update and delete read the list again; a refusal throws", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/equipments": [
+        { status: 201, body: light("l", "Light", "root", false) },
+        { status: 400, body: { error: "Too many equipments (64)" } },
+      ],
+      "PUT /api/v1/equipments/l": { body: {} },
+      "DELETE /api/v1/equipments/l": { status: 204 },
+    });
+    const data = { name: "Light", type: "light_onoff" as const, zoneId: "root", deviceIds: ["r"] };
+    await useEquipments.getState().createEquipment(data);
+    expect(api.count("GET /api/v1/equipments")).toBe(1);
+    await useEquipments.getState().updateEquipment("l", { name: "Lamp" });
+    expect(api.count("GET /api/v1/equipments")).toBe(2);
+    await useEquipments.getState().deleteEquipment("l");
+    expect(api.count("GET /api/v1/equipments")).toBe(3);
+    await expect(useEquipments.getState().createEquipment(data)).rejects.toThrow(
+      "Too many equipments (64)",
+    );
+    expect(api.count("GET /api/v1/equipments")).toBe(3);
   });
 });

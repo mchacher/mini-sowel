@@ -1,10 +1,11 @@
 // Ported from Sowel ui/src/api/auth.ts (Sowel commit 5da84dc1, UI 1.87.0), the device functions
 // `getDevices`, `updateDevice` and `deleteDevice`, unchanged. The `data` of each device is
-// dropped by the store: the devices page shows no data (spec 017).
-import type { Device } from "../types";
+// dropped by the store: the devices page shows no data (spec 017); the equipment form's device
+// selector reads it (spec 018).
+import type { Device, DeviceData } from "../types";
 import { fetchJSON, API_BASE } from "./client";
 
-export type DeviceWithData = Device & { data?: unknown[] };
+export type DeviceWithData = Device & { data?: DeviceData[]; orders?: { key: string }[] };
 
 export async function getDevices(): Promise<DeviceWithData[]> {
   return fetchJSON<DeviceWithData[]>(`${API_BASE}/devices`);

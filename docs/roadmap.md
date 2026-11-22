@@ -122,6 +122,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
 | 2026-11-21 | The engine saves `devices.json` (94 KB) once per device when its route changes (at the first contact, then rarely); the write is synchronous in the radio loop: measure the stall it causes on the box (E3) | Spec 016 review |
+| 2026-11-22 | The equipment detail page (Sowel's `EquipmentDetailPage`): its bindings, values, history | Spec 018 |
+| 2026-11-22 | Bindings added and removed one by one from the interface (Sowel's `AddBindingModal`, `MissingBindingsModal`); the routes exist (spec 010) | Spec 018 |
+| 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
+| 2026-11-22 | An equipment enabled or disabled from the interface (`PUT {"enabled"}` exists) | Spec 018 |
 
 ## Sowel issues to open
 

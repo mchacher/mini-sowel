@@ -4,6 +4,7 @@
 # interface): the zone "Garage", the paired devices placed in it (simulated TH01, MS01, or the real SNZB-02 (optional), SNZB-03PR2, ZBMINIR2),
 # their equipments (climate and motion sensors, the light), and the
 # motion-light recipe (spec 012) with a timeout of 20 s. Prints the ids.
+# The same garage is made from the interface's Topology and Equipments pages (spec 018).
 # usage: sh scripts/demo-garage.sh [port]      (port 8080 by default)
 set -eu
 

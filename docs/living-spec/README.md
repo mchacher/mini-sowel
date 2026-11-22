@@ -259,7 +259,8 @@ connection (`Connection: close`).
 ### Organises the home in zones and equipments
 
 As in Sowel, nothing acts on a device directly: a **zone** holds **equipments**, and an equipment
-binds device data and orders under **aliases**.
+binds device data and orders under **aliases**. Zones and equipments are also made from the
+interface (see "Shows the home in the browser").
 
 - **Zones**: a tree under the root zone `Maison` (id `00000000-0000-0000-0000-000000000001`,
   always present). `GET/POST /api/v1/zones`, `GET/PUT/DELETE /api/v1/zones/:id` with Sowel's
@@ -325,7 +326,10 @@ Sowel's 1.1.2), through Sowel's routes:
 - **What survives a restart**: the instances, in `recipes.json` beside the other files, written at
   once; each enabled one is started again (one that no longer validates logs `Failed to restore:
   <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
-  read stops the host; an entry beyond 16, or with an id already seen, is dropped.
+  read stops the host; an entry beyond 16, or with an id already seen, is dropped. A light
+  equipment deleted (from the API or the interface) while an instance uses it: the running instance
+  counts it as off and logs an error for each order to it, the other lights still served; at the
+  next start the instance no longer validates (`Light equipment not found: <id>`) and stays stopped.
 - **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
   waiting for the recipes.
 
@@ -335,16 +339,19 @@ With `--serve`, `http://127.0.0.1:<port>/` opens the interface (built by `npm ru
 `ui/`, served from `ui/dist`, or from the folder given by `--ui <folder>`). Without it, the API
 still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, and the host
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
-it on `http://localhost:5173` with the API of a host running on port 8080.
+it on `http://localhost:5173` with the API of a host running on port 8080. The interface makes the
+rooms (Topology) and the equipments (Equipments, and a room's "Add equipment"), as well as showing
+them.
 
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
-  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree; the room shown is kept in the address
+  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then the entries Devices, Equipments and Topology; the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
   with its values, any other equipment with its name, icon and status badge; a disabled one
-  dimmed without control. "No room yet: create one from the devices page" when only the home's
-  root exists; "No equipment in this room".
+  dimmed without control; an "Add equipment" button opens the equipment form with the room chosen.
+  "No room yet: create one in the Topology page" when only the home's root exists; "No equipment
+  in this room".
 - **Devices**: a "Devices" entry under the rooms in the sidebar (and in the phone drawer), at
   `#/devices`. "Add a device" opens pairing for 180 s (a countdown from the route's `remaining`,
   and "Stop"); the list shows every device, newest first, marked "New" when it was discovered
@@ -352,6 +359,16 @@ it on `http://localhost:5173` with the API of a host running on port 8080.
   ("No room", the rooms, "New room..." which creates one under the home's root) and a delete
   button (confirmed); a refusal shows its text for 5 s. It follows `device.discovered`,
   `device.removed` and `device.status_changed` live.
+- **Topology** (`#/zones`): the tree from `Maison`; add a zone (under the root) or a sub-zone; edit
+  its name, parent (never under itself or a descendant) and description; delete it (confirmed;
+  refused with Sowel's text when it has sub-zones or equipments, shown 5 s; its devices go back to
+  no room). The root is renamed but never deleted or moved.
+- **Equipments** (`#/equipments`): grouped by room, each with its type, status and number of
+  devices; "Add equipment" in two steps: type (light on/off, dimmable light, shutter, sensor,
+  switch, thermostat, button), name and room, then the compatible devices (all on demand), whose
+  data and orders are bound under their key; edit the name and room; delete (confirmed). A refusal
+  keeps the form open with its text. At most 64 devices chosen; a warning when they give more than
+  16 values, of which only 16 are bound.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
@@ -446,3 +463,4 @@ measures.
 | 015 | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot |
 | 016 | The engine's loop and saver in the core, run by the firmware on its data partition with the simulated radio under QEMU, memory measured |
 | 017 | Pairing while serving, from the API and the interface's devices page: new devices appear live, named and placed in a room |
+| 018 | Rooms and equipments made from the interface: the Topology and Equipments pages, Sowel's forms |

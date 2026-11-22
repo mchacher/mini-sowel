@@ -2,20 +2,20 @@
 
 ## Steps
 
-- [ ] 1. Living spec updated (spec, "Living spec delta", History row 018); D29 written; the four
+- [x] 1. Living spec updated (spec, "Living spec delta", History row 018); D29 written; the four
       roadmap inbox lines added; the
       sentences of "No longer true" corrected (messages and their tests come with step 6).
-- [ ] 2. Core: not applicable (no change); `crates/core/tests/interface_flow.rs` written first,
+- [x] 2. Core: not applicable (no change); `crates/core/tests/interface_flow.rs` written first,
       green against today's API.
-- [ ] 3. Adapters (host, firmware): not applicable.
-- [ ] 4. API or WebSocket: not applicable (spec 010 and 013 routes and events, unchanged).
-- [ ] 5. Interface, data: `types.ts` additions, `lib/zone-path.ts` (ported), `api/zones.ts`,
+- [x] 3. Adapters (host, firmware): not applicable.
+- [x] 4. API or WebSocket: not applicable (spec 010 and 013 routes and events, unchanged).
+- [x] 5. Interface, data: `types.ts` additions, `lib/zone-path.ts` (ported), `api/zones.ts`,
       `api/equipments.ts`, `store/useZones.ts`, `store/useEquipments.ts`; their tests.
-- [ ] 6. Interface, screens: `ZoneTree`, `ZoneForm`, `ZonesPage`; `equipment-type-meta`,
+- [x] 6. Interface, screens: `ZoneTree`, `ZoneForm`, `ZonesPage`; `equipment-type-meta`,
       `DeviceSelector`, `EquipmentForm`, `EquipmentsPage`; the room page's button; sidebar entries
       and routes in `App.tsx`; messages; tests beside each file. Screenshots of the two pages, the
       two forms and the room page, for the demo.
-- [ ] 7. `docs/design-system.md` (port table, size), `docs/architecture.md`, the
+- [x] 7. `docs/design-system.md` (port table, size), `docs/architecture.md`, the
       `scripts/demo-garage.sh` comment; `npm run check:bundle`.
 - [ ] 8. `sh scripts/validate.sh` green (bundle budget, QEMU run and memory gates included).
 - [ ] 9. Code review (`code-reviewer`), demo on the simulator, then with the ZBMINIR2.
@@ -110,7 +110,7 @@ pin the contract the interface relies on.
 
 ## Validation
 
-- [ ] `npm run check:bundle` under 170 KB gzip (about 50 KB expected), size written in
+- [x] `npm run check:bundle` under 170 KB gzip (about 50 KB expected), size written in
       `docs/design-system.md`
 - [ ] Validate command green (bundle budget, QEMU run and memory gates included)
 - [ ] Agent review done, blocking findings fixed
