@@ -22,3 +22,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 016 | engine-in-the-firmware | The engine loop moved to the core and run in the ESP32 firmware under QEMU, with the simulated radio, a realistic home and its memory checked | 2026-11-21 | in progress |
 | 017 | add-device-from-interface | Pairing opened while serving, from the API and the interface; new devices announced live, named and placed in a room from a devices page | 2026-11-22 | in progress |
 | 018 | rooms-and-equipments-from-interface | Rooms and equipments made from the interface: Sowel's Topology and Equipments pages and forms ported, the equipment form on a room's page | 2026-11-22 | in progress |
+| 019 | administration-ui | Sowel's Administration section (Devices, Equipments, Topology, Discovery per integration); a device has no room; equipments made from a device's row with at least one device, bound as Sowel's interface binds | 2026-11-22 | in progress |
