@@ -1,6 +1,6 @@
-// Solite's own file: the pairing window as the page sees it (spec 017, R5, R6). The host sends no
-// event for the window: the page counts down from the `remaining` of each answer and reads the
-// state again at 0, one second after a `POST` (to show a refusal), and on every reconnection.
+// Solite's own file: the pairing window as the page sees it (spec 017, R5, R6; its screen is
+// Discovery, spec 019). The host sends no event for the window: the page counts down from the
+// `remaining` of each answer and reads the state again at 0, one second after a `POST` (to show a refusal), and on every reconnection.
 import { create } from "zustand";
 import { getPermitJoin, setPermitJoin } from "../api";
 import { apiErrorText } from "../lib/api-error";
@@ -15,9 +15,9 @@ interface PairingState {
   remaining: number;
   /** The radio's refusal of the last opening, or the failure of the last request. */
   error: string | null;
-  /** The devices discovered since the page was opened, marked "New". At most 64 (the device limit). */
+  /** The devices discovered since the screen was opened, marked "New". At most 64 (the device limit). */
   newIds: string[];
-  /** The devices page is on screen: only then is a discovered device marked "New". */
+  /** The Discovery screen is on screen: only then is a discovered device marked "New". */
   pageOpen: boolean;
 
   refresh: () => Promise<void>;

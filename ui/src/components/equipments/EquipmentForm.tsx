@@ -1,14 +1,18 @@
 // Ported from Sowel ui/src/components/equipments/EquipmentForm.tsx (Sowel commit 5da84dc1, UI 1.87.0).
 // Changes (spec 018): decision D3's seven types; names capped at 64 (the API's bound, Sowel 100);
 // edit is one step with the type locked (Sowel's type change among shutter, awning and door is
-// out of scope); the form returns `deviceIds` only (the core binds them in the one `POST`,
-// decision D29, instead of Sowel's `candidateByDevice` and one request per binding); the pool
-// heat pump rule, `excludeTypes` and the bound keys cut; the modal closes on Escape and on a click
-// outside.
-import { useMemo, useState } from "react";
+// out of scope); the pool heat pump rule, `excludeTypes` and the bound keys cut; the modal closes
+// on Escape and on a click outside. Spec 019 (decision D30): the form returns the devices ticked
+// and the devices read, and `NewEquipmentForm` sends the plan's requests; at least one device, and
+// a device that gives nothing the type uses blocks "Create" (the plan is empty); changing the type
+// keeps the devices ticked; the type, name and devices can be given (a device's "Create
+// equipment"); step 2 reads the devices again every 5 s while the plan is empty.
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { EquipmentType, ZoneWithChildren } from "../../types";
-import { DeviceSelector } from "./DeviceSelector";
+import type { DeviceWithData } from "../../api";
+import { DeviceSelector, pickDevices } from "./DeviceSelector";
+import { computeBindingPlan } from "./bindingUtils";
 import { SOLITE_EQUIPMENT_TYPES, TYPE_LABELS } from "./equipment-type-meta";
 import { flattenZonesWithPath } from "../../lib/zone-path";
 import { formErrorText } from "../../lib/form-error";
@@ -24,12 +28,19 @@ interface EquipmentFormProps {
   };
   /** The zone chosen when the form opens (a room's page). */
   defaultZoneId?: string;
+  /** The type, name and devices the form opens with (a device's "Create equipment"). */
+  initialType?: EquipmentType;
+  initialName?: string;
+  initialDeviceIds?: string[];
   zones: ZoneWithChildren[];
   onSubmit: (data: {
     name: string;
     type: EquipmentType;
     zoneId: string;
+    /** The devices ticked, in the order they were ticked (empty when editing). */
     deviceIds: string[];
+    /** The same devices as last read, with their data and orders (empty when editing). */
+    devices: DeviceWithData[];
   }) => Promise<void>;
   onClose: () => void;
 }
@@ -41,17 +52,24 @@ export function EquipmentForm({
   title,
   initial,
   defaultZoneId,
+  initialType,
+  initialName,
+  initialDeviceIds,
   zones,
   onSubmit,
   onClose,
 }: EquipmentFormProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<"info" | "devices">("info");
-  const [name, setName] = useState(initial?.name ?? "");
-  const [type, setType] = useState<EquipmentType>(initial?.type ?? "light_onoff");
+  const [name, setName] = useState(initial?.name ?? initialName ?? "");
+  const [type, setType] = useState<EquipmentType>(initial?.type ?? initialType ?? "light_onoff");
   const [zoneId, setZoneId] = useState(initial?.zoneId ?? defaultZoneId ?? "");
-  const [deviceIds, setDeviceIds] = useState<string[]>([]);
+  const [deviceIds, setDeviceIds] = useState<string[]>(initialDeviceIds ?? []);
+  // `null` until the first read of the devices.
+  const [devicesRead, setDevicesRead] = useState<DeviceWithData[] | null>(null);
   const [saving, setSaving] = useState(false);
+  // A second click before the first one's render must not send a second request.
+  const busy = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const flatZones = useMemo(() => flattenZonesWithPath(zones), [zones]);
@@ -63,17 +81,29 @@ export function EquipmentForm({
     [t],
   );
 
-  const handleCreate = async () => {
-    if (!name.trim() || !zoneId || saving) return;
+  // What the type would bind from the devices ticked, as last read.
+  const ticked = useMemo(() => pickDevices(devicesRead ?? [], deviceIds), [devicesRead, deviceIds]);
+  const planEmpty = useMemo(() => computeBindingPlan(ticked, type).length === 0, [ticked, type]);
+  const noDevice = deviceIds.length === 0;
+  const blocked = !initial && (noDevice || planEmpty);
 
+  const handleCreate = async () => {
+    if (!name.trim() || !zoneId || busy.current || (step === "devices" && blocked)) return;
+
+    busy.current = true;
     setSaving(true);
     setError(null);
     try {
-      await onSubmit({ name: name.trim(), type, zoneId, deviceIds });
+      await onSubmit(
+        initial
+          ? { name: name.trim(), type, zoneId, deviceIds: [], devices: [] }
+          : { name: name.trim(), type, zoneId, deviceIds, devices: ticked },
+      );
       onClose();
     } catch (err) {
       setError(formErrorText(err, t));
     } finally {
+      busy.current = false;
       setSaving(false);
     }
   };
@@ -100,7 +130,6 @@ export function EquipmentForm({
                   value={type}
                   onChange={(e) => {
                     setType((e.target as HTMLSelectElement).value as EquipmentType);
-                    setDeviceIds([]);
                   }}
                   className={SELECT}
                   disabled={initial !== undefined}
@@ -162,7 +191,19 @@ export function EquipmentForm({
                 equipmentType={type}
                 selectedDeviceIds={deviceIds}
                 onSelectionChange={setDeviceIds}
+                onDevicesRead={setDevicesRead}
+                reread={!noDevice && planEmpty}
               />
+              {noDevice && (
+                <p className="text-small text-text-secondary">
+                  {t("equipments.form.deviceRequired")}
+                </p>
+              )}
+              {!noDevice && planEmpty && devicesRead !== null && (
+                <p className="text-small text-text-secondary">
+                  {t("equipments.form.nothingToBind")}
+                </p>
+              )}
             </>
           )}
 
@@ -180,7 +221,7 @@ export function EquipmentForm({
               <button
                 type="button"
                 onClick={() => void handleCreate()}
-                disabled={!name.trim() || !zoneId || saving}
+                disabled={!name.trim() || !zoneId || saving || blocked}
                 className={BUTTON_PRIMARY}
               >
                 {saving ? t("common.creating") : t("common.create")}

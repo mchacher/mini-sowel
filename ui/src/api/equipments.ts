@@ -1,5 +1,11 @@
-// Ported from Sowel ui/src/api/equipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: everything but `getEquipments`, `createEquipment`, `updateEquipment`, `deleteEquipment` and `executeEquipmentOrder`.
-import type { Equipment, EquipmentType, EquipmentWithDetails } from "../types";
+// Ported from Sowel ui/src/api/equipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: everything but `getEquipments`, `createEquipment`, `addDataBinding`, `addOrderBinding`, `updateEquipment`, `deleteEquipment` and `executeEquipmentOrder`.
+import type {
+  DataBinding,
+  Equipment,
+  EquipmentType,
+  EquipmentWithDetails,
+  OrderBinding,
+} from "../types";
 import { fetchJSON, API_BASE } from "./client";
 
 // ============================================================
@@ -10,15 +16,35 @@ export async function getEquipments(): Promise<EquipmentWithDetails[]> {
   return fetchJSON<EquipmentWithDetails[]>(`${API_BASE}/equipments`);
 }
 
-// Solite creates the bindings in the same request: `deviceIds` are bound under their key as alias
-// (decision D29; Sowel's interface sends one request per binding).
+// The bindings are created one by one from the plan computed in the browser, as Sowel's interface
+// does (decision D30): `addDataBinding` and `addOrderBinding`, after `createEquipment`. The API's
+// `deviceIds` (every key bound) is for its other clients.
 export async function createEquipment(data: {
   name: string;
   type: EquipmentType;
   zoneId: string;
-  deviceIds?: string[];
 }): Promise<EquipmentWithDetails> {
   return fetchJSON<EquipmentWithDetails>(`${API_BASE}/equipments`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addDataBinding(
+  equipmentId: string,
+  data: { deviceDataId: string; alias: string },
+): Promise<DataBinding> {
+  return fetchJSON<DataBinding>(`${API_BASE}/equipments/${equipmentId}/data-bindings`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function addOrderBinding(
+  equipmentId: string,
+  data: { deviceOrderId: string; alias: string },
+): Promise<OrderBinding> {
+  return fetchJSON<OrderBinding>(`${API_BASE}/equipments/${equipmentId}/order-bindings`, {
     method: "POST",
     body: JSON.stringify(data),
   });

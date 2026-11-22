@@ -175,7 +175,7 @@ describe("live store", () => {
     expect(useDevices.getState().devices).toEqual({});
   });
 
-  it("marks no device new while the devices page is not open", () => {
+  it("marks no device new while the Discovery screen is not open", () => {
     connect();
     FakeWebSocket.last.open();
     FakeWebSocket.last.receive({ type: "device.discovered", device: device("a", "A") });

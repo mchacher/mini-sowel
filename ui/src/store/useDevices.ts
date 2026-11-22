@@ -1,6 +1,6 @@
 // Ported from Sowel ui/src/store/useDevices.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: the device
 // data and heartbeat (the devices page shows none, spec 017) and `updateDeviceName`'s siblings.
-// Added: `updateDeviceZone` (same optimistic update and rollback as the rename), `deleteDevice`.
+// Added: `deleteDevice`. A device has no room of its own: nothing here writes `zoneId` (spec 019).
 import { create } from "zustand";
 import type { Device, DeviceStatus } from "../types";
 import { getDevices, updateDevice, deleteDevice as apiDeleteDevice } from "../api";
@@ -17,7 +17,6 @@ interface DevicesState {
   removeDevice: (deviceId: string) => void;
   updateDeviceStatus: (deviceId: string, status: DeviceStatus) => void;
   updateDeviceName: (deviceId: string, name: string) => Promise<void>;
-  updateDeviceZone: (deviceId: string, zoneId: string | null) => Promise<void>;
   deleteDevice: (deviceId: string) => Promise<void>;
 }
 
@@ -72,10 +71,6 @@ export const useDevices = create<DevicesState>((set, get) => ({
     await change(set, get, deviceId, { name });
   },
 
-  updateDeviceZone: async (deviceId, zoneId) => {
-    await change(set, get, deviceId, { zoneId });
-  },
-
   deleteDevice: async (deviceId) => {
     await apiDeleteDevice(deviceId);
     get().removeDevice(deviceId);
@@ -87,7 +82,7 @@ async function change(
   set: (partial: Partial<DevicesState> | ((s: DevicesState) => Partial<DevicesState>)) => void,
   get: () => DevicesState,
   deviceId: string,
-  patch: { name?: string; zoneId?: string | null },
+  patch: { name: string },
 ): Promise<void> {
   const device = get().devices[deviceId];
   if (!device) return;

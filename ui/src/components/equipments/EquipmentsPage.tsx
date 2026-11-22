@@ -1,8 +1,8 @@
 // Ported from Sowel ui/src/pages/EquipmentsPage.tsx (Sowel commit 5da84dc1, UI 1.87.0). Changes (spec
 // 018): no auth, no `useWsSubscription`, no search, no singleton types; the header is written out;
 // Sowel's `EquipmentCard` (its detail page, 1288 lines, is out of scope) is a row: name, type,
-// status badge, number of devices, "Edit" and "Delete"; the form sends one request with
-// `deviceIds` (decision D29).
+// status badge, number of devices, "Edit" and "Delete"; the form sends the plan's requests
+// (decision D30).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Box, Loader2, Pencil, Plus, Trash2 } from "lucide-react";

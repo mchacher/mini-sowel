@@ -1,11 +1,14 @@
-import { Box, Map, Menu, Radio, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, Menu, Shield, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FlatZone } from "../../zones";
+import { ADMIN_NAV_ITEMS, type AdminPage } from "./admin-nav-items";
+import { SidebarItem } from "./SidebarItem";
 import { SoliteLogo } from "./SoliteLogo";
 import { ZoneTree } from "./ZoneTree";
 
-/** The pages under the rooms: their hash, as shown in the address. */
-export type Page = "devices" | "equipments" | "zones";
+/** The page shown: an administration page, or `null` for a room's page. */
+export type Page = AdminPage;
 
 type Zones = { zones: FlatZone[]; activeId: string | null; page?: Page | null };
 
@@ -13,46 +16,61 @@ function Brand() {
   return <SoliteLogo size={36} showWordmark className="min-w-0" />;
 }
 
-const PAGES: { page: Page; icon: typeof Radio; labelKey: string }[] = [
-  { page: "devices", icon: Radio, labelKey: "app.devices" },
-  { page: "equipments", icon: Box, labelKey: "nav.equipments" },
-  { page: "zones", icon: Map, labelKey: "nav.zones" },
-];
+/**
+ * The Administration block of Sowel's sidebar: its title (Shield, chevron) toggles the list of
+ * entries; the list is open whenever an administration page is shown, and closed on a room's page
+ * until the title is pressed.
+ */
+function AdminSection({ page, onPick }: { page: Page | null; onPick?: () => void }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(page !== null);
+  useEffect(() => {
+    if (page !== null) setExpanded(true);
+  }, [page]);
+  return (
+    <div className="mt-3 pt-3 border-t border-border-light">
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        className={`flex items-center gap-3 w-full px-3 py-1.5 rounded-sm text-left transition-colors duration-150 ease-out ${
+          page !== null && !expanded
+            ? "text-primary"
+            : "text-text-secondary hover:bg-background hover:text-text"
+        }`}
+      >
+        <Shield size={16} strokeWidth={1.5} className="flex-shrink-0" />
+        <span className="flex-1 text-small font-medium truncate">{t("nav.administration")}</span>
+        {expanded ? (
+          <ChevronDown size={14} strokeWidth={1.5} className="flex-shrink-0" />
+        ) : (
+          <ChevronRight size={14} strokeWidth={1.5} className="flex-shrink-0" />
+        )}
+      </button>
+      {expanded && (
+        <div className="mt-0.5 ml-3 space-y-0.5">
+          {ADMIN_NAV_ITEMS.map(({ to, page: entry, labelKey, icon: Icon }) => (
+            <SidebarItem
+              key={entry}
+              to={to}
+              label={t(labelKey)}
+              icon={<Icon size={16} strokeWidth={1.5} />}
+              active={page === entry}
+              onClick={onPick}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function Nav({ zones, activeId, page, onPick }: Zones & { onPick?: () => void }) {
   const { t } = useTranslation();
   return (
     <nav aria-label={t("app.mainNav")} className="flex-1 overflow-y-auto py-3 px-2">
       <ZoneTree zones={zones} activeId={page ? null : activeId} onPick={onPick} />
-      <div className="mt-3 space-y-0.5">
-        {PAGES.map(({ page: entry, icon: Icon, labelKey }) => {
-          const active = page === entry;
-          return (
-            <a
-              key={entry}
-              href={`#/${entry}`}
-              onClick={(e) => {
-                e.preventDefault();
-                window.location.hash = `#/${entry}`;
-                onPick?.();
-              }}
-              aria-current={active ? "page" : undefined}
-              className={`flex items-center gap-2 px-3 py-1.5 mx-1 min-w-0 rounded-sm group transition-colors duration-150 ${active ? "bg-primary-light" : ""}`}
-            >
-              <Icon
-                size={14}
-                strokeWidth={1.5}
-                className={`flex-shrink-0 transition-colors ${active ? "text-primary" : "text-text group-hover:text-primary"}`}
-              />
-              <span
-                className={`text-body font-medium transition-colors truncate ${active ? "text-primary" : "text-text group-hover:text-primary"}`}
-              >
-                {t(labelKey)}
-              </span>
-            </a>
-          );
-        })}
-      </div>
+      <AdminSection page={page ?? null} onPick={onPick} />
     </nav>
   );
 }

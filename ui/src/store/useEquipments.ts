@@ -1,5 +1,5 @@
 // Ported from Sowel ui/src/store/useEquipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: the actions
-// that edit bindings (one request creates them, decision D29); the order timing (`useOrderTiming`, which only feeds Sowel's
+// that edit bindings (`createWithBindings` creates them from the plan, decision D30); the order timing (`useOrderTiming`, which only feeds Sowel's
 // pending-order spinners).
 import { create } from "zustand";
 import type { EquipmentStatus, EquipmentType, EquipmentWithDetails } from "../types";
@@ -10,6 +10,7 @@ import {
   deleteEquipment as apiDeleteEquipment,
   executeEquipmentOrder as apiExecuteOrder,
 } from "../api";
+import { applyBindingPlan, type PlannedBinding } from "../components/equipments/bindingUtils";
 import { coalesceCalls } from "../lib/coalesce-calls";
 import { apiErrorText } from "../lib/api-error";
 
@@ -24,8 +25,12 @@ interface EquipmentsState {
     name: string;
     type: EquipmentType;
     zoneId: string;
-    deviceIds?: string[];
   }) => Promise<EquipmentWithDetails>;
+  /** Creates the equipment, then its bindings one by one; a refusal deletes the equipment again. */
+  createWithBindings: (
+    data: { name: string; type: EquipmentType; zoneId: string },
+    plan: readonly PlannedBinding[],
+  ) => Promise<EquipmentWithDetails>;
   updateEquipment: (id: string, data: { name?: string; zoneId?: string }) => Promise<void>;
   deleteEquipment: (id: string) => Promise<void>;
   executeOrder: (equipmentId: string, alias: string, value: unknown) => Promise<void>;
@@ -63,6 +68,22 @@ export const useEquipments = create<EquipmentsState>((set, get) => ({
   // The page reads the list again at once after its own request, it does not wait for the event.
   createEquipment: async (data) => {
     const equipment = await apiCreateEquipment(data);
+    await get().fetchEquipments();
+    return equipment;
+  },
+
+  // One request for the equipment, then one per binding of the plan (Sowel's interface does the
+  // same). The equipment is deleted again, best effort, when a binding is refused; the stores read
+  // the list again either way, so a half-made equipment (the delete refused too) shows.
+  createWithBindings: async (data, plan) => {
+    const equipment = await apiCreateEquipment(data);
+    try {
+      await applyBindingPlan(equipment.id, plan);
+    } catch (err) {
+      await apiDeleteEquipment(equipment.id).catch(() => undefined);
+      await get().fetchEquipments();
+      throw err;
+    }
     await get().fetchEquipments();
     return equipment;
   },

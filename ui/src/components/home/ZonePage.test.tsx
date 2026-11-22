@@ -1,6 +1,15 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { aggregate, equipment, light, mockApi, resetStores, sensor, zone } from "../../test-utils";
+import {
+  aggregate,
+  equipment,
+  fixtures,
+  light,
+  mockApi,
+  resetStores,
+  sensor,
+  zone,
+} from "../../test-utils";
 import { useZones } from "../../store/useZones";
 import { ZonePage } from "./ZonePage";
 
@@ -134,5 +143,22 @@ describe("ZonePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add equipment" }));
     expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
     expect((screen.getByLabelText("Zone") as HTMLSelectElement).value).toBe("garage");
+  });
+
+  it("keeps Create disabled until a device is ticked, from Add equipment", async () => {
+    mockApi({ "GET /api/v1/devices": { body: [fixtures.zbminir2()] } });
+    useZones.setState({ tree: [zone("root", "Home", [garage])] });
+    render(
+      <ZonePage zone={garage} aggregate={undefined} equipments={[]} onExecuteOrder={noOrder} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add equipment" }));
+    fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Lumière" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: Select devices" }));
+    await waitFor(() => expect(screen.queryByText("Loading devices...")).toBeNull());
+    const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getByText("Choose at least one device")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("ZBMINIR2"));
+    expect(create.disabled).toBe(false);
   });
 });

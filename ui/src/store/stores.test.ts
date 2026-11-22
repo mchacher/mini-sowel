@@ -6,11 +6,13 @@ import {
   installFakeWebSocket,
   light,
   device,
+  fixtures,
   mockApi,
   resetStores,
   zone,
 } from "../test-utils";
 import { connect } from "./useLive";
+import { computeBindingPlan } from "../components/equipments/bindingUtils";
 import { useEquipments } from "./useEquipments";
 import { useDevices } from "./useDevices";
 import { useZoneAggregation } from "./useZoneAggregation";
@@ -95,22 +97,18 @@ describe("stores", () => {
     expect(Object.keys(useDevices.getState().devices)).toEqual(["b"]);
   });
 
-  it("useDevices.updateDeviceZone puts the old zone back and throws when refused", async () => {
-    mockApi({ "PUT /api/v1/devices/a": { status: 404, body: { error: "Device not found" } } });
-    useDevices.getState().addDevice(device("a", "A", { zoneId: "old" }));
-    await expect(useDevices.getState().updateDeviceZone("a", "new")).rejects.toThrow(
+  it("useDevices.updateDeviceName sends the name only, and puts the old one back when refused", async () => {
+    const api = mockApi({
+      "PUT /api/v1/devices/a": [{ body: {} }, { status: 404, body: { error: "Device not found" } }],
+    });
+    useDevices.getState().addDevice(device("a", "A"));
+    await useDevices.getState().updateDeviceName("a", "B");
+    expect(api.calls.map((c) => c.body)).toEqual([{ name: "B" }]);
+    await expect(useDevices.getState().updateDeviceName("a", "C")).rejects.toThrow(
       "Device not found",
     );
-    expect(useDevices.getState().devices.a.zoneId).toBe("old");
-  });
-
-  it("useDevices.updateDeviceZone sends the zone, and null for no room", async () => {
-    const api = mockApi({ "PUT /api/v1/devices/a": { body: {} } });
-    useDevices.getState().addDevice(device("a", "A"));
-    await useDevices.getState().updateDeviceZone("a", "z");
-    await useDevices.getState().updateDeviceZone("a", null);
-    expect(api.calls.map((c) => c.body)).toEqual([{ zoneId: "z" }, { zoneId: null }]);
-    expect(useDevices.getState().devices.a.zoneId).toBeNull();
+    expect(useDevices.getState().devices.a.name).toBe("B");
+    expect("updateDeviceZone" in useDevices.getState()).toBe(false);
   });
 
   it("useZones.createZone posts, then reads the tree again; a refusal throws and leaves the tree", async () => {
@@ -158,7 +156,7 @@ describe("stores", () => {
       "PUT /api/v1/equipments/l": { body: {} },
       "DELETE /api/v1/equipments/l": { status: 204 },
     });
-    const data = { name: "Light", type: "light_onoff" as const, zoneId: "root", deviceIds: ["r"] };
+    const data = { name: "Light", type: "light_onoff" as const, zoneId: "root" };
     await useEquipments.getState().createEquipment(data);
     expect(api.count("GET /api/v1/equipments")).toBe(1);
     await useEquipments.getState().updateEquipment("l", { name: "Lamp" });
@@ -169,5 +167,60 @@ describe("stores", () => {
       "Too many equipments (64)",
     );
     expect(api.count("GET /api/v1/equipments")).toBe(3);
+  });
+
+  it("useEquipments.createWithBindings sends the plan after the equipment, then reads the list", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/equipments": { status: 201, body: light("l", "Light", "root", false) },
+      "POST /api/v1/equipments/l/data-bindings": { status: 201, body: {} },
+      "POST /api/v1/equipments/l/order-bindings": { status: 201, body: {} },
+    });
+    const plan = computeBindingPlan([fixtures.zbminir2()], "light_onoff");
+    await useEquipments
+      .getState()
+      .createWithBindings({ name: "Light", type: "light_onoff", zoneId: "root" }, plan);
+    expect(api.calls.map((c) => c.key)).toEqual([
+      "POST /api/v1/equipments",
+      "POST /api/v1/equipments/l/data-bindings",
+      "POST /api/v1/equipments/l/order-bindings",
+      "GET /api/v1/equipments",
+    ]);
+  });
+
+  it("useEquipments.createWithBindings deletes the equipment when a binding is refused", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/equipments": { status: 201, body: light("l", "Light", "root", false) },
+      "POST /api/v1/equipments/l/data-bindings": {
+        status: 404,
+        body: { error: "DeviceData not found: zb-state" },
+      },
+      "DELETE /api/v1/equipments/l": { status: 204 },
+    });
+    const plan = computeBindingPlan([fixtures.zbminir2()], "light_onoff");
+    await expect(
+      useEquipments
+        .getState()
+        .createWithBindings({ name: "Light", type: "light_onoff", zoneId: "root" }, plan),
+    ).rejects.toThrow("DeviceData not found: zb-state");
+    expect(api.count("DELETE /api/v1/equipments/l")).toBe(1);
+    expect(api.count("POST /api/v1/equipments/l/order-bindings")).toBe(0);
+  });
+
+  it("useEquipments.createWithBindings throws the binding's text when the delete is refused too", async () => {
+    const api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/equipments": { status: 201, body: light("l", "Light", "root", false) },
+      "POST /api/v1/equipments/l/data-bindings": { status: 503, body: { error: "Busy" } },
+      "DELETE /api/v1/equipments/l": { status: 500, body: { error: "disk error" } },
+    });
+    const plan = computeBindingPlan([fixtures.zbminir2()], "light_onoff");
+    await expect(
+      useEquipments
+        .getState()
+        .createWithBindings({ name: "Light", type: "light_onoff", zoneId: "root" }, plan),
+    ).rejects.toThrow("Busy");
+    expect(api.count("GET /api/v1/equipments")).toBe(1);
   });
 });

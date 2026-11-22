@@ -5,6 +5,12 @@
 // is Lucide's `Blinds`.
 import { Blinds, CircleDot, Gauge, Lightbulb, SunDim, Thermometer, ToggleLeft } from "lucide-react";
 import type { DataCategory, EquipmentType } from "../../types";
+import type { DeviceWithData } from "../../api/devices";
+import {
+  CANDIDATE_BASED_TYPES,
+  computeBindingCandidates,
+  isThermostatDevice,
+} from "../../lib/binding-candidates";
 
 /** The equipment types Solite makes (decision D3). */
 export const SOLITE_EQUIPMENT_TYPES: EquipmentType[] = [
@@ -37,8 +43,7 @@ export const EQUIPMENT_TYPE_CATEGORIES: Partial<Record<EquipmentType, DataCatego
     "smoke",
   ],
   button: ["action"],
-  // Sowel matches a thermostat by its contract (spec 177 in Sowel); Solite matches the `setpoint`
-  // category, which no Solite device has yet: the list is empty and "All devices" remains.
+  // Sowel matches a thermostat by its contract (spec 177 in Sowel): see `isCompatible`.
   thermostat: ["setpoint"],
 };
 
@@ -55,3 +60,32 @@ export const TYPE_ICONS: Partial<Record<EquipmentType, React.ReactNode>> = {
 export const TYPE_LABELS: Partial<Record<EquipmentType, string>> = Object.fromEntries(
   SOLITE_EQUIPMENT_TYPES.map((type) => [type, `equipments.type.${type}`]),
 );
+
+/**
+ * Whether a device fits an equipment type, as Sowel's `DeviceSelector` decides it for D3's types
+ * (spec 019): lights, switches and shutters by their binding candidates, a thermostat by its
+ * contract (a `setpoint` data or a `set_setpoint` order), a sensor or a button by a data of the
+ * type's categories.
+ */
+export function isCompatible(type: EquipmentType, device: DeviceWithData): boolean {
+  const data = device.data ?? [];
+  const orders = device.orders ?? [];
+  if (CANDIDATE_BASED_TYPES.has(type))
+    return computeBindingCandidates(type, data, orders).length > 0;
+  if (type === "thermostat") return isThermostatDevice(data, orders);
+  const categories = EQUIPMENT_TYPE_CATEGORIES[type];
+  if (!categories || categories.length === 0) return true;
+  return data.some((d) => categories.includes(d.category));
+}
+
+/** The type to offer for a device (spec 019, R4): the first that fits, else `null`. */
+export function deduceType(device: DeviceWithData): EquipmentType | null {
+  const dimmable =
+    isCompatible("light_dimmable", device) &&
+    (device.data ?? []).some((d) => d.category === "light_brightness");
+  if (dimmable) return "light_dimmable";
+  for (const type of ["light_onoff", "shutter", "thermostat", "button", "sensor"] as const) {
+    if (isCompatible(type, device)) return type;
+  }
+  return null;
+}

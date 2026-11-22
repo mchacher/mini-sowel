@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Banner } from "./components/layout/Banner";
-import { MobileDrawer, MobileTopBar, Sidebar, type Page } from "./components/layout/Sidebar";
+import { MobileDrawer, MobileTopBar, Sidebar } from "./components/layout/Sidebar";
 import { ZonePage } from "./components/home/ZonePage";
 import { DevicesPage } from "./components/devices/DevicesPage";
+import { DiscoveryPage } from "./components/discovery/DiscoveryPage";
+import { adminPageFromHash } from "./components/layout/admin-nav-items";
 import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
 import { ZonesPage } from "./components/zones/ZonesPage";
 import { useTranslation } from "react-i18next";
@@ -23,12 +25,6 @@ function useHash(): string {
   return hash;
 }
 
-const PAGES: Record<string, Page> = {
-  "#/devices": "devices",
-  "#/equipments": "equipments",
-  "#/zones": "zones",
-};
-
 /** The home screen: the sidebar of rooms and devices, and the page of the selected one. */
 export function App() {
   const { t } = useTranslation();
@@ -42,7 +38,7 @@ export function App() {
   const live = useLive((s) => s.status);
   const hash = useHash();
   const hashId = zoneIdFromHash(hash);
-  const page = PAGES[hash] ?? null;
+  const page = adminPageFromHash(hash);
   const [menuOpen, setMenuOpen] = useState(false);
 
   // The stores fetch when the socket opens, the first time and after each reconnection.
@@ -75,6 +71,8 @@ export function App() {
             <EquipmentsPage />
           ) : page === "zones" ? (
             <ZonesPage />
+          ) : page === "discovery" ? (
+            <DiscoveryPage hash={hash} />
           ) : zone ? (
             <ZonePage
               zone={zone}

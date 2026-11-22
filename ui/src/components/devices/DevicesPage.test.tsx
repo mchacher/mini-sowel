@@ -4,17 +4,19 @@ import { App } from "../../App";
 import {
   FakeWebSocket,
   advance,
+  dataBinding,
   device,
+  fixtures,
   homeRoutes,
   installFakeWebSocket,
+  light,
   mockApi,
   resetStores,
   zone,
   type Route,
 } from "../../test-utils";
-import type { Device } from "../../types";
+import type { Device, EquipmentWithDetails } from "../../types";
 
-const PERMIT = "/api/v1/integrations/solite/permit-join";
 const tree = () => [
   zone("root", "Home", [zone("garage", "Garage", [zone("bench", "Bench", [], "garage")], "root")]),
 ];
@@ -38,9 +40,9 @@ afterEach(async () => {
 async function boot(
   devices: Device[] = [],
   extra: Record<string, Route | Route[]> = {},
-  zones = tree(),
+  equipments: EquipmentWithDetails[] = [],
 ) {
-  const api = mockApi({ ...homeRoutes({ zones, devices }), ...extra });
+  const api = mockApi({ ...homeRoutes({ zones: tree(), devices, equipments }), ...extra });
   render(<App />);
   act(() => FakeWebSocket.last.open());
   await screen.findByRole("heading", { level: 1, name: "Devices" });
@@ -48,80 +50,94 @@ async function boot(
   return api;
 }
 
-const select = (name: string) =>
-  within(screen.getByText(name).closest("li")!).getByRole("combobox") as HTMLSelectElement;
+const row = (name: string) => screen.getByText(name).closest("tr")!;
+
+/** A light in the garage that binds the device `relay`. */
+function lamp(): EquipmentWithDetails {
+  const eq = light("l", "Lumière", "garage", false);
+  eq.dataBindings = [
+    dataBinding("state", "light_state", false, { equipmentId: "l", deviceId: "relay" }),
+  ];
+  return eq;
+}
 
 describe("devices page", () => {
-  it("says there is no device and what to do", async () => {
-    await boot();
-    expect(screen.getByText("No devices discovered")).toBeTruthy();
-    expect(
-      screen.getByText("Press Add a device, then put the device in pairing mode."),
-    ).toBeTruthy();
+  it("lists the devices sorted by name, with the room and equipment of the one that is bound", async () => {
+    await boot([device("relay", "Relay"), device("b", "Alpha"), device("c", "Zeta")], {}, [lamp()]);
+    const names = screen
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => within(r).getAllByRole("cell")[1].textContent);
+    expect(names).toEqual(["Alpha", "Relay", "Zeta"]);
+    const cell = within(row("Relay")).getAllByRole("cell")[4];
+    expect(cell.textContent).toBe("Garage›Lumière");
+    expect(within(cell).getByRole("link", { name: "Garage" }).getAttribute("href")).toBe(
+      "#/zone/garage",
+    );
+    expect(within(row("Alpha")).getAllByRole("cell")[4].textContent).toBe("—");
+    expect(within(row("Alpha")).getByRole("button", { name: "Create equipment" })).toBeTruthy();
+    expect(within(row("Relay")).queryByRole("button", { name: "Create equipment" })).toBeNull();
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   });
 
-  it("lists the devices newest first with maker, model and status", async () => {
+  it("shows maker, model and the status of each device, and the subtitle", async () => {
     await boot([device("a", "Old one"), device("b", "Newer one", { status: "offline" })]);
-    const rows = screen.getAllByRole("listitem");
-    expect(rows[0].textContent).toContain("Newer one");
-    expect(rows[0].textContent).toContain("SONOFF ZBMINIR2");
-    expect(rows[0].textContent).toContain("Offline");
-    expect(rows[1].textContent).toContain("Old one");
+    expect(within(row("Newer one")).getByRole("img", { name: "Offline" })).toBeTruthy();
+    expect(row("Newer one").textContent).toContain("SONOFF");
+    expect(row("Newer one").textContent).toContain("ZBMINIR2");
     expect(screen.getByText("2 devices · 1 online")).toBeTruthy();
   });
 
-  it("Add a device posts 180, shows the countdown and Stop", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+  it("changes the column and takes the button away when the equipment is made", async () => {
+    await boot([device("relay", "Relay")], {
+      "GET /api/v1/equipments": [{ body: [] }, { body: [lamp()] }],
+    });
+    expect(within(row("Relay")).getByRole("button", { name: "Create equipment" })).toBeTruthy();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    act(() => FakeWebSocket.last.receive({ type: "equipment.created" }));
+    await advance(0);
+    expect(within(row("Relay")).getAllByRole("cell")[4].textContent).toBe("Garage›Lumière");
+    expect(within(row("Relay")).queryByRole("button", { name: "Create equipment" })).toBeNull();
+  });
+
+  it("says there is no device and where to pair one", async () => {
+    await boot();
+    expect(screen.getByText("No devices discovered")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Pair one in Discovery." });
+    expect(link.getAttribute("href")).toBe("#/discovery/solite");
+  });
+
+  it("shows the error state when the devices cannot be read, and Retry reads again", async () => {
     const api = await boot([], {
-      [`POST ${PERMIT}`]: { status: 202, body: { permitJoin: true, remaining: 180 } },
-      [`GET ${PERMIT}`]: [
-        { body: { permitJoin: false, remaining: 0 } },
-        { body: { permitJoin: true, remaining: 179 } },
+      "GET /api/v1/devices": [
+        { status: 400, body: { error: "disk error" } },
+        { body: [device("a", "Relay")] },
       ],
     });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Add a device" }));
-    });
-    expect(api.calls.find((c) => c.key === `POST ${PERMIT}`)!.body).toEqual({ time: 180 });
-    await advance(0);
-    expect(screen.getByText(/Pairing open: put the device in pairing mode/)).toBeTruthy();
-    expect(screen.getByText("180 s")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-    await advance(1000);
-    expect(screen.getByText("179 s")).toBeTruthy();
+    expect(await screen.findByText("Connection error")).toBeTruthy();
+    expect(screen.getByText("disk error")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Relay");
+    expect(api.count("GET /api/v1/devices")).toBe(2);
   });
 
-  it("shows the radio's refusal", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
-    await boot([], {
-      [`POST ${PERMIT}`]: { status: 202, body: { permitJoin: true, remaining: 180 } },
-      [`GET ${PERMIT}`]: { body: { permitJoin: false, remaining: 0, error: "the radio refused" } },
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Add a device" }));
-    });
-    await advance(1000);
-    expect(screen.getByText("the radio refused")).toBeTruthy();
+  it("Add devices opens Discovery", async () => {
+    await boot([device("a", "Relay")]);
+    fireEvent.click(screen.getByRole("button", { name: "Add devices" }));
+    expect(window.location.hash).toBe("#/discovery/solite");
   });
 
-  it("a discovered device appears first, marked New; a status change adds no mark", async () => {
-    await boot([device("a", "Known")]);
-    act(() =>
-      FakeWebSocket.last.receive({ type: "device.discovered", device: device("b", "Fresh") }),
-    );
-    const rows = screen.getAllByRole("listitem");
-    expect(rows[0].textContent).toContain("Fresh");
-    expect(within(rows[0]).getByText("New")).toBeTruthy();
-    act(() =>
-      FakeWebSocket.last.receive({
-        type: "device.status_changed",
-        deviceId: "a",
-        deviceName: "Known",
-        status: "offline",
-      }),
-    );
-    expect(within(screen.getAllByRole("listitem")[1]).queryByText("New")).toBeNull();
-    expect(screen.getAllByRole("listitem")[1].textContent).toContain("Offline");
+  it("shows integration tabs only when the devices come from more than one integration", async () => {
+    await boot([device("a", "Relay"), device("b", "Other", { integrationId: "other" })]);
+    expect(screen.getByRole("button", { name: /^All/ })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Zigbee/ }));
+    expect(screen.queryByText("Other")).toBeNull();
+    expect(screen.getByText("Relay")).toBeTruthy();
+  });
+
+  it("shows no tabs for one integration", async () => {
+    await boot([device("a", "Relay")]);
+    expect(screen.queryByRole("button", { name: /^All/ })).toBeNull();
   });
 
   it("renames; a refusal shows its text", async () => {
@@ -145,89 +161,6 @@ describe("devices page", () => {
     expect(await screen.findByText("Invalid field: name")).toBeTruthy();
   });
 
-  it("offers No room, the zones but the root indented, and New room", async () => {
-    await boot([device("a", "Relay")]);
-    const options = Array.from(select("Relay").options).map((o) => o.textContent);
-    expect(options).toEqual(["No room", "Garage", "  Bench", "New room…"]);
-  });
-
-  it("offers only No room and New room when there is only the root zone", async () => {
-    await boot([device("a", "Relay")], {}, [zone("root", "Home")]);
-    expect(Array.from(select("Relay").options).map((o) => o.textContent)).toEqual([
-      "No room",
-      "New room…",
-    ]);
-  });
-
-  it("places the device in a room, and back to No room", async () => {
-    const api = await boot([device("a", "Relay")], { "PUT /api/v1/devices/a": { body: {} } });
-    fireEvent.change(select("Relay"), { target: { value: "garage" } });
-    await waitFor(() => expect(select("Relay").value).toBe("garage"));
-    fireEvent.change(select("Relay"), { target: { value: "" } });
-    await waitFor(() => expect(select("Relay").value).toBe(""));
-    expect(api.calls.filter((c) => c.key === "PUT /api/v1/devices/a").map((c) => c.body)).toEqual([
-      { zoneId: "garage" },
-      { zoneId: null },
-    ]);
-  });
-
-  it("shows the refusal of a room change for 5 s and the old zone", async () => {
-    await boot([device("a", "Relay", { zoneId: "garage" })], {
-      "PUT /api/v1/devices/a": { status: 404, body: { error: "Zone not found" } },
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    await act(async () => {
-      fireEvent.change(select("Relay"), { target: { value: "bench" } });
-    });
-    await advance(0);
-    expect(screen.getByText("This item does not exist or was deleted.")).toBeTruthy();
-    expect(select("Relay").value).toBe("garage");
-    await advance(5000);
-    expect(screen.queryByText("This item does not exist or was deleted.")).toBeNull();
-  });
-
-  it("New room: makes the zone then places the device; nothing is sent with an empty name", async () => {
-    const api = await boot([device("a", "Relay")], {
-      "POST /api/v1/zones": { status: 201, body: zone("new", "Cellar", [], "root") },
-      "PUT /api/v1/devices/a": { body: {} },
-    });
-    fireEvent.change(select("Relay"), { target: { value: "__new__" } });
-    const name = screen.getByLabelText("Name of the new room");
-    fireEvent.keyDown(name, { key: "Enter" });
-    expect(api.count("POST /api/v1/zones")).toBe(0);
-    fireEvent.input(name, { target: { value: "Cellar" } });
-    fireEvent.keyDown(name, { key: "Enter" });
-    await waitFor(() => expect(api.count("PUT /api/v1/devices/a")).toBe(1));
-    expect(api.calls.find((c) => c.key === "POST /api/v1/zones")!.body).toEqual({ name: "Cellar" });
-    expect(api.calls.find((c) => c.key === "PUT /api/v1/devices/a")!.body).toEqual({
-      zoneId: "new",
-    });
-  });
-
-  it("New room refused by the zone limit: its text, no PUT", async () => {
-    const api = await boot([device("a", "Relay")], {
-      "POST /api/v1/zones": { status: 409, body: { error: "Zone limit reached (32)" } },
-    });
-    fireEvent.change(select("Relay"), { target: { value: "__new__" } });
-    fireEvent.input(screen.getByLabelText("Name of the new room"), { target: { value: "Cellar" } });
-    fireEvent.keyDown(screen.getByLabelText("Name of the new room"), { key: "Enter" });
-    expect(await screen.findByText("Zone limit reached (32)")).toBeTruthy();
-    expect(api.count("PUT /api/v1/devices/a")).toBe(0);
-  });
-
-  it("New room made, PUT refused: the new zone is deleted and the PUT's text shown", async () => {
-    const api = await boot([device("a", "Relay")], {
-      "POST /api/v1/zones": { status: 201, body: zone("new", "Cellar", [], "root") },
-      "PUT /api/v1/devices/a": { status: 400, body: { error: "Invalid field: zoneId" } },
-      "DELETE /api/v1/zones/new": { status: 204 },
-    });
-    fireEvent.change(select("Relay"), { target: { value: "__new__" } });
-    fireEvent.input(screen.getByLabelText("Name of the new room"), { target: { value: "Cellar" } });
-    fireEvent.keyDown(screen.getByLabelText("Name of the new room"), { key: "Enter" });
-    expect(await screen.findByText("Invalid field: zoneId")).toBeTruthy();
-    expect(api.count("DELETE /api/v1/zones/new")).toBe(1);
-  });
-
   it("deletes after confirmation, and sends nothing when cancelled", async () => {
     const api = await boot([device("a", "Relay")], {
       "DELETE /api/v1/devices/a": { status: 204 },
@@ -241,13 +174,19 @@ describe("devices page", () => {
     expect(api.count("DELETE /api/v1/devices/a")).toBe(1);
   });
 
-  it("keeps the row and shows the text when the device is being paired (409)", async () => {
+  it("keeps the row and shows the text for 5 s when the device is being paired (409)", async () => {
     await boot([device("a", "Relay")], {
       "DELETE /api/v1/devices/a": { status: 409, body: { error: "Device is being paired" } },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(await screen.findByText("Device is being paired")).toBeTruthy();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    });
+    await advance(0);
+    expect(screen.getByText("Device is being paired")).toBeTruthy();
     expect(screen.getByText("Relay")).toBeTruthy();
+    await advance(5000);
+    expect(screen.queryByText("Device is being paired")).toBeNull();
   });
 
   it("removes the row when the device is already gone (404)", async () => {
@@ -258,31 +197,85 @@ describe("devices page", () => {
     await waitFor(() => expect(screen.queryByText("Relay")).toBeNull());
   });
 
-  it("goes on counting while the connection is lost, and reads the state and devices on reconnection", async () => {
-    vi.useFakeTimers({
-      toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
+  it("never sends a zoneId for a device", async () => {
+    const api = await boot([device("a", "Relay")], {
+      "PUT /api/v1/devices/a": { body: {} },
+      "DELETE /api/v1/devices/a": { status: 204 },
     });
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const api = await boot([], {
-      [`POST ${PERMIT}`]: { status: 202, body: { permitJoin: true, remaining: 180 } },
-      [`GET ${PERMIT}`]: [
-        { body: { permitJoin: false, remaining: 0 } },
-        { body: { permitJoin: true, remaining: 170 } },
-        { body: { permitJoin: true, remaining: 170 } },
-      ],
+    fireEvent.click(screen.getByTitle("Edit name"));
+    fireEvent.input(screen.getByRole("textbox"), { target: { value: "Other" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
+    await screen.findByText("Other");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(screen.queryByText("Other")).toBeNull());
+    for (const call of api.calls) {
+      expect(JSON.stringify(call.body ?? {})).not.toContain("zoneId");
+    }
+  });
+});
+
+describe("Create equipment, from a row", () => {
+  const nextButton = () => screen.getByRole("button", { name: "Next: Select devices" });
+
+  it("opens the form with the device's type and name, the room to choose, the device ticked", async () => {
+    const relay = fixtures.zbminir2("relay");
+    await boot([device("relay", "ZBMINIR2 567A")], {
+      "GET /api/v1/devices/relay": { body: { ...relay, name: "ZBMINIR2 567A" } },
+      "GET /api/v1/devices": { body: [{ ...relay, name: "ZBMINIR2 567A" }] },
     });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Add a device" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
+    const form = await screen.findByRole("dialog");
+    expect((within(form).getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
+    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("ZBMINIR2 567A");
+    expect((within(form).getByLabelText("Zone") as HTMLSelectElement).value).toBe("");
+    expect((nextButton() as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(form).getByLabelText("Zone"), { target: { value: "garage" } });
+    fireEvent.click(nextButton());
+    const box = await within(form).findByLabelText("ZBMINIR2 567A");
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(
+      (within(form).getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("shows the server's text under the row and removes it when the device is gone (404)", async () => {
+    await boot([device("a", "Relay")], {
+      "GET /api/v1/devices/a": { status: 404, body: { error: "Device not found: a" } },
     });
-    act(() => FakeWebSocket.last.drop());
-    await advance(500);
-    expect(screen.getByText("180 s")).toBeTruthy();
-    expect(api.count("GET /api/v1/devices")).toBe(1);
-    await advance(1500);
-    const before = api.count("GET /api/v1/devices");
-    act(() => FakeWebSocket.last.open());
-    await advance(0);
-    expect(api.count("GET /api/v1/devices")).toBe(before + 1);
-    expect(screen.getByText("170 s")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Relay")).toBeNull());
+  });
+
+  it("opens the form with light_onoff for a device with only a voltage, Create disabled", async () => {
+    const volt = fixtures.voltageOnly("a");
+    await boot([device("a", "Voltage only")], {
+      "GET /api/v1/devices/a": { body: volt },
+      "GET /api/v1/devices": { body: [volt] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
+    const form = await screen.findByRole("dialog");
+    expect((within(form).getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
+    fireEvent.change(within(form).getByLabelText("Zone"), { target: { value: "garage" } });
+    fireEvent.click(nextButton());
+    const box = await within(form).findByLabelText("Voltage only");
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(
+      (within(form).getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(within(form).getByText(/give nothing this type uses yet/)).toBeTruthy();
+  });
+
+  it("reads the device once and opens one form when the button is clicked twice", async () => {
+    const relay = fixtures.zbminir2("relay");
+    const api = await boot([device("relay", "Relay")], {
+      "GET /api/v1/devices/relay": { body: relay },
+    });
+    const button = screen.getByRole("button", { name: "Create equipment" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await screen.findByRole("dialog");
+    expect(api.count("GET /api/v1/devices/relay")).toBe(1);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 });
