@@ -61,7 +61,7 @@ sh scripts/e2e-sim.sh                             # the simulated path driven in
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
 sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log, wifi; --image box|sim|radio)
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
-sh scripts/validate.sh                            # every check: must be green before a commit
+sh scripts/validate.sh                            # every check, the slow tests and QEMU included: must be green before a commit
 ```
 
 The firmware is flashed only through `sh scripts/box.sh flash`, with the user's yes for each write: the

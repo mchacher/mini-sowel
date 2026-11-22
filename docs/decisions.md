@@ -128,7 +128,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Choice**: remote `origin` on GitHub, `https://github.com/mchacher/solite.git` (renamed from mini-sowel on 2026-11-21), beside
   Sowel. CI: GitHub Actions, `.github/workflows/ci.yml`, runs `sh scripts/validate.sh` (cut on 2026-11-21 into three parallel jobs, `--only rust`,
   `--only ui`, `--only firmware`, so the slowest sets the time) on every
-  pull request and on every push to `main`, with the Rust version of `rust-toolchain.toml`, Node
+  pull request and on every push to `main` (without the slow checks, which run every night: D34), with the Rust version of `rust-toolchain.toml`, Node
   24, and the ESP32 toolchain (espup v0.19.0, ldproxy); ESP-IDF's download is cached. Pull
   requests are made with `gh pr create`; merges stay squash merges after the user's yes.
 - **Why**: a backup and a public home for the open-source project (D5), and a CI that checks
@@ -554,3 +554,20 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   forwarded to it. The guards are the Mac host's (Host check against DNS rebinding, JSON-only
   bodies against forms, Origin on `/ws`), and the pairing route stays off. The settings file
   survives a flash with `--keep-storage`, which NVS would not.
+
+## D34: The slow checks run every night and on the Mac, not on each pull request
+
+- **Date**: 2026-11-22
+- **Choice**: the slow checks are the Rust tests marked `#[ignore = "slow ..."]` (each waits a
+  production delay: an order's 12 s deadline, the 10 s wait for the network, the 10 s limit of
+  `measure-api.sh`, a minute of the garage at speed 10) and the engine's run in QEMU. No test is
+  ignored for another reason. `sh scripts/validate.sh` runs them (`cargo test -- --include-ignored`
+  and `scripts/qemu.sh`), so the Mac has the full verdict;
+  `--skip-slow` leaves them out, and Claude's commit hook runs it. The CI (`.github/workflows/ci.yml`, D9) runs `--skip-slow` on
+  pull requests and pushes to `main`, and the full verdict every night at 02:00 UTC on `main` and
+  by hand (Run workflow). The git pre-commit hook stays `--fast`. The firmware job caches the Xtensa
+  toolchain espup installs, keyed by espup's version and `firmware/rust-toolchain.toml`. The tests
+  of `serve.rs` and `ws.rs` pair the garage once per file and copy its folder into each test.
+- **Why**: the pull-request CI took about 8 minutes, most of it waiting (real pairing windows,
+  production timeouts, QEMU's run); the user chose (2026-11-22) a fast verdict on each pull
+  request and the slow checks every night and on the Mac, where each one still runs.

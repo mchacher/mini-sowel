@@ -62,7 +62,7 @@ cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # 
 sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
 sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
-cargo test --workspace                           # Rust tests (core, host)
+cargo test --workspace [-- --include-ignored]     # Rust tests (core, host); the ignored ones are the slow ones
 cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.tsx   # one Rust, one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
@@ -70,7 +70,7 @@ sh scripts/box.sh identify|log                   # the Dongle Max over USB, read
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
-sh scripts/validate.sh --only rust|ui|firmware|e2e  # a third of the verdict (CI jobs); e2e (opt-in, no CI): sh scripts/e2e-sim.sh
+sh scripts/validate.sh [--skip-slow] --only rust|ui|firmware|e2e  # a third (CI jobs); e2e: opt-in, no CI; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, the four
@@ -100,7 +100,7 @@ over TCP for development (decision D6).
 - **Git**: never commit to `main` except trivial fixes (the hook asks the user to confirm);
   branches `feat/`, `fix/`, `docs/`, `chore/`; conventional commits in English, scopes in
   `.claude/skills/solite-feature/reference.md`; remote `origin` on GitHub, pull requests
-  with `gh pr create`, CI runs `sh scripts/validate.sh` (decision D9); **no AI attribution line** (no
+  with `gh pr create`, CI runs `sh scripts/validate.sh`, `--skip-slow` on pull requests, in full every night (D9, D34); **no AI attribution line** (no
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
 - **Agents (strict, read [docs/agents.md](docs/agents.md))**: Sonnet in the session, Opus only for
