@@ -14,9 +14,8 @@ export async function getZoneAggregation(): Promise<Record<string, ZoneAggregate
   return fetchJSON<Record<string, ZoneAggregatedData>>(`${API_BASE}/zones/aggregation`);
 }
 
-// `createZone` and `deleteZone` were added by Solite for the devices page (spec 017: a room under
-// the root, undone when the device cannot be placed in it); `createZone` takes Sowel's full body
-// and `updateZone` is added with the Topology page (spec 018). Same routes and bodies as Sowel's.
+// `createZone`, `deleteZone` and `updateZone` are used by the Topology page (spec 018); `createZone`
+// takes Sowel's full body. Same routes and bodies as Sowel's.
 export interface ZoneInput {
   name: string;
   parentId?: string | null;

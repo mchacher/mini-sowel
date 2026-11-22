@@ -509,7 +509,22 @@ export interface DeviceData {
   category: DataCategory;
   value: unknown;
   unit?: string;
+  enumValues?: string[];
   lastUpdated: string | null;
+}
+
+/** Sowel's `DeviceOrder` (src/shared/types.ts, commit 5da84dc1), the fields Solite's API gives; read
+ *  by the binding plan (spec 019). */
+export interface DeviceOrder {
+  id: string;
+  deviceId: string;
+  key: string;
+  type: DataType;
+  category?: OrderCategory;
+  min?: number;
+  max?: number;
+  enumValues?: string[];
+  unit?: string;
 }
 
 /** The state of the pairing window (spec 017, `GET /integrations/solite/permit-join`). */

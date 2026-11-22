@@ -12,9 +12,12 @@ import type {
   DataBindingWithValue,
   DataCategory,
   Device,
+  DataType,
   DeviceData,
+  DeviceOrder,
   EquipmentWithDetails,
   OrderBindingWithDetails,
+  OrderCategory,
   ZoneAggregatedData,
   ZoneWithChildren,
 } from "./types";
@@ -303,24 +306,82 @@ export async function advance(ms: number): Promise<void> {
   });
 }
 
-/** A device as `GET /api/v1/devices` gives it, with its data given as `[key, category]`. */
+/** An order of a device, as the tests write it. */
+export interface OrderSpec {
+  key: string;
+  category?: OrderCategory;
+  type?: DataType;
+  enumValues?: string[];
+}
+
+/**
+ * A device as `GET /api/v1/devices` gives it, with its data given as `[key, category, type?]`
+ * (type `number` by default) and its orders.
+ */
 export function deviceWithData(
   id: string,
   name: string,
-  data: [string, DataCategory][],
+  data: [string, DataCategory, DataType?][],
   extra: Partial<Device> = {},
-): Device & { data: DeviceData[]; orders: { key: string }[] } {
+  orders: OrderSpec[] = [],
+): Device & { data: DeviceData[]; orders: DeviceOrder[] } {
   return {
     ...device(id, name, extra),
-    data: data.map(([key, category]) => ({
+    data: data.map(([key, category, type]) => ({
       id: `${id}-${key}`,
       deviceId: id,
       key,
-      type: "number",
+      type: type ?? "number",
       category,
       value: 1,
       lastUpdated: null,
     })),
-    orders: [],
+    orders: orders.map((o) => ({
+      id: `${id}-o-${o.key}`,
+      deviceId: id,
+      key: o.key,
+      type: o.type ?? "boolean",
+      ...(o.category ? { category: o.category } : {}),
+      ...(o.enumValues ? { enumValues: o.enumValues } : {}),
+    })),
   };
 }
+
+/** Solite's real device shapes (`catalog.rs`), as the interface reads them. */
+export const fixtures = {
+  /** The relay: data `state` (light_state), order `state` (light_toggle). */
+  zbminir2: (id = "zb") =>
+    deviceWithData(id, "ZBMINIR2", [["state", "light_state", "boolean"]], {}, [
+      { key: "state", category: "light_toggle" },
+    ]),
+  th01: (id = "th") =>
+    deviceWithData(id, "TH01", [
+      ["temperature", "temperature"],
+      ["humidity", "humidity"],
+      ["battery", "battery"],
+      ["voltage", "voltage"],
+    ]),
+  ms01: (id = "ms") =>
+    deviceWithData(id, "MS01", [
+      ["occupancy", "motion", "boolean"],
+      ["battery", "battery"],
+      ["voltage", "voltage"],
+    ]),
+  /** A dimmable bulb. */
+  bulb: (id = "bulb") =>
+    deviceWithData(
+      id,
+      "Bulb",
+      [
+        ["state", "light_state", "boolean"],
+        ["brightness", "light_brightness"],
+      ],
+      {},
+      [
+        { key: "state", category: "light_toggle" },
+        { key: "brightness", category: "set_brightness", type: "number" },
+      ],
+    ),
+  /** A device with only `voltage`: nothing any type uses. */
+  voltageOnly: (id = "volt") => deviceWithData(id, "Voltage only", [["voltage", "voltage"]]),
+};

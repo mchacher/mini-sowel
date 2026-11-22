@@ -1,5 +1,15 @@
 # Spec 018: rooms and equipments from the interface
 
+> **Superseded in part by spec 019** (the text below stays as the record of what was built): R1's
+> "three entries in this order ... under the rooms" (now the Administration section); R2's "The
+> devices of a deleted zone go back to 'No room'"; R4's "Changing the type clears the devices
+> chosen", "Create, the request" (one `POST` with `deviceIds`, decision D29), "Binding cap" and "A
+> key given by two devices ... is bound once"; the delta's "whose data and orders are bound under
+> their key", "its devices go back to no room" and D29's binding sentence; the edge cases "creating
+> with no device is allowed (status `offline`)", "Two devices with the same data key" and "the
+> equipment is created without its bindings"; Decided in autonomy "One `POST` with `deviceIds`
+> (D29)... Aliases are the data keys". The form now needs a device and binds from a plan (D30).
+
 ## Context
 
 Increment J2 of the roadmap (milestone J, the autonomous box): rooms (Sowel's zones) and

@@ -1,42 +1,50 @@
 // Ported from Sowel ui/src/components/equipments/DeviceSelector.tsx (Sowel commit 5da84dc1, UI
-// 1.87.0). Cut (spec 018): the candidate channels, contracts (thermostat, charger, car), water-valve
-// and pool rules, `boundDeviceIds` and the bound keys. Added: real check boxes, at most 64
-// devices chosen (the API's bound on `deviceIds`), the warning when the chosen devices give more
-// than 16 values (only 16 are bound, spec 010 R7.5), the error text when the devices cannot be read.
+// 1.87.0). Cut (spec 018): the candidate channel picker, the contracts of chargers and cars,
+// water-valve and pool rules, `boundDeviceIds` and the bound keys. Added: real check boxes, at most
+// 64 devices chosen (the API's bound on the form's devices), the warning when the chosen devices
+// give more than 16 values (only 16 are bound, spec 010 R7.5), the error text when the devices
+// cannot be read. Spec 019: the candidates for lights, switches and shutters and the thermostat
+// contract are ported (`isCompatible`); the devices ticked are listed first, compatible or not; the
+// warning counts the binding plan; the devices read are given back to the form, and read again
+// every 5 s while the form says its plan is empty.
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Radio, ChevronDown, ChevronUp, Search } from "lucide-react";
 import type { EquipmentType } from "../../types";
 import { getDevices, type DeviceWithData } from "../../api";
 import { apiErrorText } from "../../lib/api-error";
-import { EQUIPMENT_TYPE_CATEGORIES } from "./equipment-type-meta";
+import { MAX_BINDINGS, countPlanned } from "./bindingUtils";
+import { isCompatible } from "./equipment-type-meta";
 
-/** The API's bound on `deviceIds`. */
+/** The API's bound on the devices of one creation (spec 018). */
 export const MAX_DEVICES = 64;
-/** The API's bound on the data bindings (and on the order bindings) of one equipment. */
-export const MAX_BINDINGS = 16;
+/** How often the devices are read again while the plan is empty. */
+export const REREAD_MS = 5000;
 
-/** Distinct data keys, and distinct order keys, of these devices: the most the core would bind. */
-export function bindableCount(devices: DeviceWithData[]): number {
-  const data = new Set<string>();
-  const orders = new Set<string>();
-  for (const d of devices) {
-    for (const x of d.data ?? []) data.add(x.key);
-    for (const o of d.orders ?? []) orders.add(o.key);
-  }
-  return Math.max(data.size, orders.size);
+/** The devices ticked, in the order they were ticked, among the devices read. */
+export function pickDevices(
+  all: readonly DeviceWithData[],
+  ids: readonly string[],
+): DeviceWithData[] {
+  return ids.flatMap((id) => all.find((d) => d.id === id) ?? []);
 }
 
 interface DeviceSelectorProps {
   equipmentType: EquipmentType;
   selectedDeviceIds: string[];
   onSelectionChange: (deviceIds: string[]) => void;
+  /** Called with every read of the devices: the form computes its plan from the last one. */
+  onDevicesRead?: (devices: DeviceWithData[]) => void;
+  /** Read the devices again every `REREAD_MS` while true. */
+  reread?: boolean;
 }
 
 export function DeviceSelector({
   equipmentType,
   selectedDeviceIds,
   onSelectionChange,
+  onDevicesRead,
+  reread = false,
 }: DeviceSelectorProps) {
   const { t } = useTranslation();
   const [allDevices, setAllDevices] = useState<DeviceWithData[]>([]);
@@ -46,33 +54,56 @@ export function DeviceSelector({
   const [showAll, setShowAll] = useState(false);
   const [filter, setFilter] = useState("");
 
+  // Read when the step opens.
   useEffect(() => {
+    let alive = true;
     setLoading(true);
     getDevices()
       .then((all) => {
+        if (!alive) return;
         setAllDevices(all);
+        onDevicesRead?.(all);
         setLoading(false);
       })
       .catch((err) => {
+        if (!alive) return;
         setLoadError(apiErrorText(err, t));
         setLoading(false);
       });
-    // Read once, when the step opens.
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const categories = EQUIPMENT_TYPE_CATEGORIES[equipmentType];
-  const compatible: DeviceWithData[] =
-    categories && categories.length > 0
-      ? allDevices.filter((device) =>
-          (device.data ?? []).some((d) => categories.includes(d.category)),
-        )
-      : allDevices;
+  // Read again while the form's plan is empty; a failed read is tried again at the next tick.
+  useEffect(() => {
+    if (!reread) return;
+    let alive = true;
+    const timer = setInterval(() => {
+      getDevices()
+        .then((all) => {
+          if (!alive) return;
+          setAllDevices(all);
+          onDevicesRead?.(all);
+        })
+        .catch(() => undefined);
+    }, REREAD_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [reread]);
 
+  const compatible: DeviceWithData[] = allDevices.filter((d) => isCompatible(equipmentType, d));
+
+  // The devices ticked come first, compatible or not, then the others.
+  const ticked = pickDevices(allDevices, selectedDeviceIds);
   const baseDevices = showAll ? allDevices : compatible;
+  const rest = baseDevices.filter((d) => !selectedDeviceIds.includes(d.id));
   const filterLower = filter.toLowerCase();
-  const devices = filterLower
-    ? baseDevices.filter((d) => d.name.toLowerCase().includes(filterLower))
-    : baseDevices;
+  const devices = [...ticked, ...rest].filter(
+    (d) => !filterLower || d.name.toLowerCase().includes(filterLower),
+  );
 
   const atMax = selectedDeviceIds.length >= MAX_DEVICES;
   const toggleDevice = (deviceId: string) => {
@@ -83,7 +114,8 @@ export function DeviceSelector({
     }
   };
 
-  const bindable = bindableCount(allDevices.filter((d) => selectedDeviceIds.includes(d.id)));
+  const planned = countPlanned(ticked, equipmentType);
+  const bindable = Math.max(planned.data, planned.orders);
 
   if (loading) {
     return <p className="text-small text-text-tertiary py-4">{t("deviceSelector.loading")}</p>;
@@ -143,7 +175,7 @@ export function DeviceSelector({
           {devices.map((device) => {
             const isSelected = selectedDeviceIds.includes(device.id);
             const isExpanded = expandedDevice === device.id;
-            const isCompatible = compatible.includes(device);
+            const fits = compatible.includes(device);
 
             return (
               <div key={device.id}>
@@ -170,7 +202,7 @@ export function DeviceSelector({
                     />
                     <span className="flex-1 min-w-0">
                       <span
-                        className={`text-small font-medium ${isCompatible ? "text-text" : "text-text-secondary"}`}
+                        className={`text-small font-medium ${fits ? "text-text" : "text-text-secondary"}`}
                       >
                         {device.name}
                       </span>

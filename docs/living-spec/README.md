@@ -17,7 +17,7 @@ modes) with the same names, types and JSON as Sowel's API.
 - **Its author**, for their own annexes and their family's homes.
 - **Sowel users** who flash their own Dongle Max from a public release.
 
-They pair Zigbee devices, choose the room, accept the proposed recipes, and look at the box from
+They pair Zigbee devices, make each one an equipment in its room, accept the proposed recipes, and look at the box from
 its web interface or from Sowel.
 
 ## What the tool does
@@ -172,7 +172,7 @@ every 30 s and at least every hour; its battery every few hours.
 A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (UUID), `name`
 (`TH01 5678` by default: the model and the end of the address; `Zigbee 5678` without a model),
 `manufacturer` and `model` as sent, `ieeeAddress` and `sourceDeviceId` (`0x` + 16 lowercase hex
-digits), `source` and `integrationId` `solite`, `zoneId` (its zone, `null` until placed), `powerSource` (`mains`,
+digits), `source` and `integrationId` `solite`, `zoneId` (`null`; an API client may set it, nothing reads it), `powerSource` (`mains`,
 `battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
 minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
 `lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds).
@@ -204,7 +204,7 @@ from another site is refused by a `Host` check, and by an `Origin` check on `/ws
 | ----- | ------ |
 | `GET /api/v1/devices` | the devices with their data and orders, in pairing order |
 | `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
-| `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters) and/or places it in a zone (an id, or `null`; 404 `Zone not found`) |
+| `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters); `zoneId` (an id, or `null`; 404 `Zone not found`) is kept as in Sowel's format, read by nothing: a device is in a room only through its equipments |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `GET /api/v1/integrations/solite/permit-join` | 200 `{"permitJoin": <bool>, "remaining": <seconds>}`, plus `"error"` when the radio refused the last opening |
 | `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
@@ -259,18 +259,19 @@ connection (`Connection: close`).
 ### Organises the home in zones and equipments
 
 As in Sowel, nothing acts on a device directly: a **zone** holds **equipments**, and an equipment
-binds device data and orders under **aliases**. Zones and equipments are also made from the
-interface (see "Shows the home in the browser").
+binds device data and orders under **aliases**. A device has no room of its own: it is in the
+rooms of the equipments that bind it. Zones and equipments are also made from the interface (see
+"Shows the home in the browser").
 
 - **Zones**: a tree under the root zone `Maison` (id `00000000-0000-0000-0000-000000000001`,
   always present). `GET/POST /api/v1/zones`, `GET/PUT/DELETE /api/v1/zones/:id` with Sowel's
   rules and messages: the root cannot be deleted, nor a zone with child zones or equipments; a
   zone cannot move under itself or a descendant. Deleting a zone returns its devices to no zone.
-  At most 32 zones (the root included). A device is placed with `PUT /api/v1/devices/:id
-  {"zoneId": ...}`.
+  At most 32 zones (the root included).
 - **Equipments**: types `light_onoff`, `light_dimmable`, `shutter`, `sensor`, `switch`,
   `thermostat`, `button`. `POST /api/v1/equipments {name, type, zoneId, deviceIds}` binds every
-  data and order of the given devices under their key as alias (`temperature`, `state`...);
+  data and order of the given devices under their key as alias (`temperature`, `state`...) (the
+  interface binds otherwise: see "Shows the home in the browser");
   bindings are added or removed one by one under `.../data-bindings` and `.../order-bindings`.
   Each equipment shows its bindings with their values, `lastChanged`, `stale` (a temperature,
   humidity, pressure or luminosity silent for 65 minutes), and its `status`: `online`,
@@ -339,12 +340,13 @@ With `--serve`, `http://127.0.0.1:<port>/` opens the interface (built by `npm ru
 `ui/`, served from `ui/dist`, or from the folder given by `--ui <folder>`). Without it, the API
 still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, and the host
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
-it on `http://localhost:5173` with the API of a host running on port 8080. The interface makes the
-rooms (Topology) and the equipments (Equipments, and a room's "Add equipment"), as well as showing
-them.
+it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
+the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
+equipment", a device's "Create equipment"), as well as showing them.
 
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
-  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then the entries Devices, Equipments and Topology; the room shown is kept in the address
+  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
+  Topology, Discovery; open on an administration page, opened or closed by its title; the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
@@ -352,22 +354,28 @@ them.
   dimmed without control; an "Add equipment" button opens the equipment form with the room chosen.
   "No room yet: create one in the Topology page" when only the home's root exists and it holds no equipment; "No equipment
   in this room".
-- **Devices**: a "Devices" entry under the rooms in the sidebar (and in the phone drawer), at
-  `#/devices`. "Add a device" opens pairing for 180 s (a countdown from the route's `remaining`,
-  and "Stop"); the list shows every device, newest first, marked "New" when it was discovered
-  since the page opened, with its name (editable), manufacturer and model, status, a room select
-  ("No room", the rooms, "New room..." which creates one under the home's root) and a delete
-  button (confirmed); a refusal shows its text for 5 s. It follows `device.discovered`,
-  `device.removed` and `device.status_changed` live.
+- **Devices**: `#/devices`: every device by name, with its status, name (editable), manufacturer,
+  model and Equipment column ("Room › Equipment" for each equipment that binds it, the room a link
+  to its page; "—" when none); "Create equipment" on a device with none; delete (confirmed; a
+  refusal shows its text for 5 s); "Add devices" opens Discovery. A device has no room select.
+- **Discovery** (`#/discovery/<integration>`, Zigbee's is `#/discovery/solite`): the integration's
+  name as a heading (Zigbee), a tab bar only past one integration; "Add a device" opens pairing for 180 s (a countdown from the route's
+  `remaining`, and "Stop"); the devices discovered while the screen is open appear first, marked
+  "New", as rows of the Devices list; leaving the screen empties it. It follows
+  `device.discovered`, `device.removed` and `device.status_changed` live.
 - **Topology** (`#/zones`): the tree from `Maison`; add a zone (under the root) or a sub-zone; edit
   its name, parent (never under itself or a descendant) and description; delete it (confirmed;
-  refused with Sowel's text when it has sub-zones or equipments, shown 5 s; its devices go back to
-  no room). The root is renamed but never deleted or moved.
+  refused with Sowel's text when it has sub-zones or equipments, shown 5 s). The root is renamed but never deleted or moved.
 - **Equipments** (`#/equipments`): grouped by room, each with its type, status and number of
   devices; "Add equipment" in two steps: type (light on/off, dimmable light, shutter, sensor,
-  switch, thermostat, button), name and room, then the compatible devices (all on demand), whose
-  data and orders are bound under their key; edit the name and room; delete (confirmed). A refusal
-  keeps the form open with its text. At most 64 devices chosen; a warning when they give more than
+  switch, thermostat, button), name and room, then the devices (at least one; those ticked first,
+  then the compatible ones, all on demand); only what the type uses is bound, under Sowel's names
+  (`state`, `brightness`, `position`, `battery`; `battery_2` for a second one), one request per
+  binding after the equipment's; if one is refused the equipment is deleted again and the form
+  shows the text; edit the name and room; delete (confirmed). A device's "Create equipment" opens
+  the form with the device ticked, its type guessed (dimmable light, light, shutter, thermostat,
+  button, sensor) and its name; the room is chosen there. A refusal keeps the form open with its
+  text. At most 64 devices chosen; a warning when they give more than
   16 values, of which only 16 are bound.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
@@ -462,5 +470,6 @@ measures.
 | 014 | The interface: the rooms and their equipments, live, served by the host |
 | 015 | The Dongle Max's hardware sheet, the memory budget and its worst-case test, the partition table and memory placement, the network choice at boot |
 | 016 | The engine's loop and saver in the core, run by the firmware on its data partition with the simulated radio under QEMU, memory measured |
-| 017 | Pairing while serving, from the API and the interface's devices page: new devices appear live, named and placed in a room |
+| 017 | Pairing while serving, from the API and the interface's devices page: new devices appear live and named |
 | 018 | Rooms and equipments made from the interface: the Topology and Equipments pages, Sowel's forms |
+| 019 | The Administration section (Devices, Equipments, Topology, Discovery per integration); a device has no room; equipments made from a device's row, bound as Sowel's interface binds |

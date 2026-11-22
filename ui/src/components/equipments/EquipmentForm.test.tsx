@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
-import { deviceWithData, mockApi, zone } from "../../test-utils";
+import { fixtures, mockApi, zone } from "../../test-utils";
 import { EquipmentForm } from "./EquipmentForm";
 
 afterEach(() => {
@@ -10,21 +10,16 @@ afterEach(() => {
 });
 
 const tree = [zone("root", "Home", [zone("garage", "Garage", [], "root")])];
-const TH01 = deviceWithData("th", "TH01", [
-  ["temperature", "temperature"],
-  ["battery", "battery"],
-]);
-const MS01 = deviceWithData("ms", "MS01", [
-  ["occupancy", "motion"],
-  ["battery", "battery"],
-]);
-const ZBMINIR2 = deviceWithData("zb", "ZBMINIR2", [["state", "light_state"]]);
+const TH01 = fixtures.th01();
+const MS01 = fixtures.ms01();
+const ZBMINIR2 = fixtures.zbminir2();
+const VOLTAGE = fixtures.voltageOnly();
 
 function setup(
   extra: Partial<Parameters<typeof EquipmentForm>[0]> = {},
-  devices: unknown[] = [TH01, MS01, ZBMINIR2],
+  devices: unknown[] = [TH01, MS01, ZBMINIR2, VOLTAGE],
 ) {
-  mockApi({ "GET /api/v1/devices": { body: devices } });
+  const api = mockApi({ "GET /api/v1/devices": { body: devices } });
   const onSubmit = vi.fn(async () => {});
   const onClose = vi.fn();
   render(
@@ -36,7 +31,7 @@ function setup(
       {...extra}
     />,
   );
-  return { onSubmit, onClose };
+  return { onSubmit, onClose, api };
 }
 
 const type = (label: string, value: string) =>
@@ -83,47 +78,47 @@ describe("EquipmentForm", () => {
     expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
   });
 
-  it("creates a light from the relay with one request and closes", async () => {
+  it("gives the devices ticked and read to onSubmit, and closes", async () => {
     const { onSubmit, onClose } = setup();
     await toDevices();
     fireEvent.click(screen.getByLabelText("ZBMINIR2"));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(onSubmit).toHaveBeenCalledWith({
-      name: "Lumière garage",
-      type: "light_onoff",
-      zoneId: "garage",
-      deviceIds: ["zb"],
-    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const sent = (onSubmit.mock.calls as unknown as unknown[][])[0][0] as {
+      devices: { id: string; orders: unknown[] }[];
+    };
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Lumière garage",
+        type: "light_onoff",
+        zoneId: "garage",
+        deviceIds: ["zb"],
+      }),
+    );
+    expect(sent.devices.map((d) => d.id)).toEqual(["zb"]);
+    expect(sent.devices[0].orders).toHaveLength(1);
   });
 
-  it("creates with no device chosen: an empty deviceIds", async () => {
+  it("keeps Create disabled with no device ticked, and says to choose one", async () => {
     const { onSubmit } = setup();
     await toDevices("Empty");
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ deviceIds: [] }));
+    const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(screen.getByText("Choose at least one device")).toBeTruthy();
+    fireEvent.click(create);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("warns for 17 distinct data keys on a sensor", async () => {
-    const big = deviceWithData(
-      "big",
-      "Big",
-      Array.from({ length: 17 }, (_, i): [string, "temperature"] => [`k${i}`, "temperature"]),
-    );
-    const { onSubmit } = setup({}, [big, TH01]);
-    type("Name", "Sensors");
-    choose("Type", "sensor");
-    choose("Zone", "garage");
-    fireEvent.click(next());
-    await loaded();
-    fireEvent.click(screen.getByLabelText("Big"));
-    expect(screen.getByText("These devices give 17 values; only 16 are bound")).toBeTruthy();
-    const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
-    expect(create.disabled).toBe(false);
+  it("sends Create once when it is clicked twice", async () => {
+    const onSubmit = vi.fn(() => new Promise<void>(() => undefined));
+    setup({ onSubmit });
+    await toDevices();
+    fireEvent.click(screen.getByLabelText("ZBMINIR2"));
+    const create = screen.getByRole("button", { name: "Create" });
     fireEvent.click(create);
-    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ deviceIds: ["big"] }));
+    fireEvent.click(create);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("shows no warning for TH01 and MS01, whose battery is given twice", async () => {
@@ -136,24 +131,163 @@ describe("EquipmentForm", () => {
     fireEvent.click(screen.getByLabelText("TH01"));
     fireEvent.click(screen.getByLabelText("MS01"));
     expect(screen.queryByText(/only 16 are bound/)).toBeNull();
+    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
-  it("clears the devices when the type changes, and keeps the fields on Back", async () => {
+  it("keeps the devices ticked, listed first, when the type is changed, and the fields on Back", async () => {
     const { onSubmit } = setup();
     await toDevices();
     fireEvent.click(screen.getByLabelText("ZBMINIR2"));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Lumière garage");
     expect((screen.getByLabelText("Zone") as HTMLSelectElement).value).toBe("garage");
-    choose("Type", "switch");
+    choose("Type", "sensor");
     fireEvent.click(next());
     await loaded();
-    expect((screen.getByLabelText("ZBMINIR2") as HTMLInputElement).checked).toBe(false);
+    const boxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes[0].getAttribute("aria-label")).toBe("ZBMINIR2");
+    expect(boxes[0].checked).toBe(true);
+    // The relay gives a sensor nothing: Create waits for a device that does.
+    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    fireEvent.click(screen.getByLabelText("TH01"));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
     expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "switch", deviceIds: [] }),
+      expect.objectContaining({ type: "sensor", deviceIds: ["zb", "th"] }),
     );
+  });
+
+  it("opens with the type, name and device it is given, the room still to choose", async () => {
+    const { onSubmit } = setup({
+      initialType: "sensor",
+      initialName: "TH01",
+      initialDeviceIds: ["th"],
+    });
+    expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("sensor");
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("TH01");
+    expect((screen.getByLabelText("Zone") as HTMLSelectElement).value).toBe("");
+    expect(next().disabled).toBe(true);
+    choose("Zone", "garage");
+    fireEvent.click(next());
+    await loaded();
+    expect((screen.getByLabelText("TH01") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  });
+
+  describe("a ticked device that gives nothing yet", () => {
+    afterEach(() => vi.useRealTimers());
+
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    it("waits, reading again every 5 s, until the device gives what the type uses", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const fresh = { ...fixtures.zbminir2(), data: [], orders: [] };
+      const api = mockApi({
+        "GET /api/v1/devices": [{ body: [fresh] }, { body: [fixtures.zbminir2()] }],
+      });
+      render(
+        <EquipmentForm
+          title="Create equipment"
+          zones={tree}
+          initialType="light_onoff"
+          initialName="ZBMINIR2"
+          initialDeviceIds={["zb"]}
+          defaultZoneId="garage"
+          onSubmit={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+      fireEvent.click(next());
+      await advance(0);
+      const create = () => screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+      expect(create().disabled).toBe(true);
+      expect(screen.getByText(/These devices give nothing this type uses yet/)).toBeTruthy();
+      expect(api.count("GET /api/v1/devices")).toBe(1);
+      await advance(5000);
+      expect(api.count("GET /api/v1/devices")).toBe(2);
+      expect(create().disabled).toBe(false);
+      expect(screen.queryByText(/give nothing this type uses yet/)).toBeNull();
+      await advance(20000);
+      expect(api.count("GET /api/v1/devices")).toBe(2);
+    });
+
+    it("guesses the type again from a read that brings the data, until the user picks one", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const fresh = { ...fixtures.th01(), data: [], orders: [] };
+      mockApi({ "GET /api/v1/devices": [{ body: [fresh] }, { body: [fixtures.th01()] }] });
+      render(
+        <EquipmentForm
+          title="Create equipment"
+          zones={tree}
+          initialType="light_onoff"
+          typeIsGuess
+          initialName="TH01"
+          initialDeviceIds={[fresh.id]}
+          defaultZoneId="garage"
+          onSubmit={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+      fireEvent.click(next());
+      await advance(0);
+      const create = () => screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+      expect(create().disabled).toBe(true);
+      await advance(5000);
+      expect(create().disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("sensor");
+    });
+
+    it("reads once, not every 5 s, when the plan is not empty", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const api = mockApi({ "GET /api/v1/devices": { body: [ZBMINIR2] } });
+      render(
+        <EquipmentForm
+          title="Create equipment"
+          zones={tree}
+          initialDeviceIds={["zb"]}
+          defaultZoneId="garage"
+          initialName="x"
+          onSubmit={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+      fireEvent.click(next());
+      await advance(0);
+      await advance(30000);
+      expect(api.count("GET /api/v1/devices")).toBe(1);
+    });
+
+    it("stops reading when step 2 is left", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const api = mockApi({ "GET /api/v1/devices": { body: [VOLTAGE] } });
+      render(
+        <EquipmentForm
+          title="Create equipment"
+          zones={tree}
+          initialDeviceIds={["volt"]}
+          defaultZoneId="garage"
+          initialName="x"
+          onSubmit={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+      fireEvent.click(next());
+      await advance(0);
+      await advance(5000);
+      expect(api.count("GET /api/v1/devices")).toBe(2);
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      await advance(30000);
+      expect(api.count("GET /api/v1/devices")).toBe(2);
+    });
   });
 
   it.each(["Zone not found: z1", "Equipment not found"])(
@@ -165,6 +299,7 @@ describe("EquipmentForm", () => {
         },
       });
       await toDevices();
+      fireEvent.click(screen.getByLabelText("ZBMINIR2"));
       fireEvent.click(screen.getByRole("button", { name: "Create" }));
       expect(await screen.findByText(text)).toBeTruthy();
     },
@@ -177,6 +312,7 @@ describe("EquipmentForm", () => {
       },
     });
     await toDevices();
+    fireEvent.click(screen.getByLabelText("ZBMINIR2"));
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByText("Too many equipments (64)")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
@@ -199,6 +335,7 @@ describe("EquipmentForm", () => {
       type: "light_onoff",
       zoneId: "root",
       deviceIds: [],
+      devices: [],
     });
   });
 

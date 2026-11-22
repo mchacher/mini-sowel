@@ -1,9 +1,11 @@
-//! The requests the interface's Topology and Equipments pages send, in their order (spec 018):
+//! The requests the interface's Topology and Equipments pages send, in their order (spec 018),
+//! then the equipment form's sequence of spec 019 (create, then one binding request at a time):
 //! the API is unchanged, these tests pin the contract the screens rely on.
 
 mod support;
 
 use serde_json::{Value, json};
+use solite_core::api::{Reply, Request, handle_stream};
 use support::*;
 
 const UNKNOWN: &str = "11111111-1111-4111-8111-111111111111";
@@ -316,4 +318,252 @@ fn the_devices_list_carries_the_data_the_selector_filters_on() {
         .map(|d| text(&d["category"]))
         .collect();
     assert!(categories.contains(&"temperature") && categories.contains(&"humidity"));
+}
+
+// ---- The equipment form of spec 019: create, then one binding request at a time ----
+
+/// The id of data (or order) number `i` of a device, read as the form does (`GET /devices/:id`).
+fn part_id(rig: &mut Rig, device: &str, list: &str, i: usize) -> String {
+    let (status, body) = rig.get(&format!("/api/v1/devices/{device}"));
+    assert_eq!(status, 200, "{body}");
+    text(&body[list][i]["id"]).to_string()
+}
+
+fn data_of(rig: &mut Rig, device: &str, key: &str) -> String {
+    let (_, body) = rig.get(&format!("/api/v1/devices/{device}"));
+    let found = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == key)
+        .unwrap_or_else(|| panic!("no data {key}"));
+    text(&found["id"]).to_string()
+}
+
+fn create(rig: &mut Rig, name: &str, kind: &str, zone: &str) -> String {
+    let (status, body) = rig.post(
+        "/api/v1/equipments",
+        json!({"name": name, "type": kind, "zoneId": zone}),
+    );
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["dataBindings"], json!([]));
+    text(&body["id"]).to_string()
+}
+
+fn bind_data(rig: &mut Rig, equipment: &str, data: &str, alias: &str) -> (u16, Value) {
+    rig.post(
+        &format!("/api/v1/equipments/{equipment}/data-bindings"),
+        json!({"deviceDataId": data, "alias": alias}),
+    )
+}
+
+fn bind_order(rig: &mut Rig, equipment: &str, order: &str, alias: &str) -> (u16, Value) {
+    rig.post(
+        &format!("/api/v1/equipments/{equipment}/order-bindings"),
+        json!({"deviceOrderId": order, "alias": alias}),
+    )
+}
+
+#[test]
+fn a_light_is_made_by_the_forms_sequence_and_switches_the_relay() {
+    let mut rig = Rig::new();
+    let relay = rig.relay(3);
+    let garage = zone(&mut rig, "Garage", ROOT);
+    let light = create(&mut rig, "Lumière garage", "light_onoff", &garage);
+    let data = data_of(&mut rig, &relay, "state");
+    let order = part_id(&mut rig, &relay, "orders", 0);
+    assert_eq!(bind_data(&mut rig, &light, &data, "state").0, 201);
+    assert_eq!(bind_order(&mut rig, &light, &order, "state").0, 201);
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{light}"));
+    assert_eq!(aliases(&equipment["dataBindings"]), ["state"]);
+    assert_eq!(aliases(&equipment["orderBindings"]), ["state"]);
+    assert_eq!(equipment["dataBindings"][0]["deviceId"], relay.as_str());
+    // The status follows the relay.
+    assert_eq!(equipment["status"], "online");
+    rig.measure(&state(3, true));
+    let (_, aggregation) = rig.get("/api/v1/zones/aggregation");
+    assert_eq!(aggregation[garage.as_str()]["lightsOn"], 1);
+    // The order is accepted and queued for the relay.
+    let reply = handle_stream(
+        &mut rig.home,
+        &Request {
+            method: "POST",
+            path: &format!("/api/v1/equipments/{light}/orders/state"),
+            host: Some(HOST),
+            port: PORT,
+            content_type: Some("application/json"),
+            body: br#"{"value":true}"#,
+        },
+        rig.now,
+        &mut *rig.random,
+    );
+    assert!(matches!(reply, Reply::Order(_)), "{reply:?}");
+    assert!(rig.home.orders().take(rig.now).is_some());
+    // Nothing in the sequence wrote the device's room.
+    assert_eq!(
+        rig.get(&format!("/api/v1/devices/{relay}")).1["zoneId"],
+        Value::Null
+    );
+}
+
+#[test]
+fn a_sensor_is_made_from_two_devices_by_the_forms_sequence() {
+    let mut rig = Rig::new();
+    let th = rig.sensor(1);
+    let pir = rig.motion_sensor(2);
+    let garage = zone(&mut rig, "Garage", ROOT);
+    let sensor = create(&mut rig, "Capteurs garage", "sensor", &garage);
+    let plan = [
+        (&th, "temperature", "temperature"),
+        (&th, "humidity", "humidity"),
+        (&th, "battery", "battery"),
+        (&pir, "occupancy", "occupancy"),
+        // The simulated MS01 has no battery data: any data takes the suffixed alias.
+        (&th, "voltage", "battery_2"),
+    ];
+    for (device, key, alias) in plan {
+        let data = data_of(&mut rig, device, key);
+        assert_eq!(bind_data(&mut rig, &sensor, &data, alias).0, 201, "{alias}");
+    }
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{sensor}"));
+    assert_eq!(
+        aliases(&equipment["dataBindings"]),
+        [
+            "temperature",
+            "humidity",
+            "battery",
+            "occupancy",
+            "battery_2"
+        ]
+    );
+    assert_eq!(equipment["orderBindings"], json!([]));
+    rig.measure(&temperature(1, 19.6));
+    let (_, aggregation) = rig.get("/api/v1/zones/aggregation");
+    assert_eq!(aggregation[garage.as_str()]["temperature"], json!(19.6));
+    assert_eq!(aggregation[garage.as_str()]["motionSensors"], 1);
+    // Every binding carries the deviceId of its device (the Equipment column's source).
+    let (_, list) = rig.get("/api/v1/equipments");
+    let owners: Vec<&str> = list[0]["dataBindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| text(&b["deviceId"]))
+        .collect();
+    assert_eq!(owners, [&th, &th, &th, &pir, &th]);
+    // No room written on the devices.
+    for device in [&th, &pir] {
+        assert_eq!(
+            rig.get(&format!("/api/v1/devices/{device}")).1["zoneId"],
+            Value::Null
+        );
+    }
+}
+
+#[test]
+fn a_binding_to_a_deleted_data_is_refused_and_the_rollback_leaves_the_list_as_before() {
+    let mut rig = Rig::new();
+    let relay = rig.relay(3);
+    let garage = zone(&mut rig, "Garage", ROOT);
+    let before = rig.get("/api/v1/equipments").1;
+    let light = create(&mut rig, "Lumière", "light_onoff", &garage);
+    let data = data_of(&mut rig, &relay, "state");
+    assert_eq!(rig.delete(&format!("/api/v1/devices/{relay}")).0, 204);
+    assert_eq!(
+        rig.refused(
+            "POST",
+            &format!("/api/v1/equipments/{light}/data-bindings"),
+            &json!({"deviceDataId": data, "alias": "state"}).to_string()
+        ),
+        (404, format!("DeviceData not found: {data}"))
+    );
+    assert_eq!(rig.delete(&format!("/api/v1/equipments/{light}")).0, 204);
+    assert_eq!(rig.get("/api/v1/equipments").1, before);
+}
+
+/// Five devices of four data and four orders each: 20 of each kind (a device holds at most 4
+/// orders). The ids of the data, then of the orders, in device order.
+fn twenty_and_twenty(rig: &mut Rig) -> (Vec<String>, Vec<String>) {
+    let (mut data, mut orders) = (Vec::new(), Vec::new());
+    for n in 1..=5u8 {
+        let mut device = many_data(n, &format!("D{n}"), usize::from(n) * 4, 4);
+        let id = device["id"].clone();
+        device["orders"] = Value::Array(
+            (0..4)
+                .map(|i| {
+                    json!({
+                        "id": format!("ee{n:02x}{i:02x}00-0000-4000-8000-000000000000"),
+                        "deviceId": id,
+                        "key": format!("o{}", usize::from(n) * 4 + i),
+                        "type": "boolean",
+                    })
+                })
+                .collect(),
+        );
+        for i in 0..4 {
+            data.push(data_id(&device, i));
+            orders.push(text(&device["orders"][i]["id"]).to_string());
+        }
+        rig.add_devices(vec![device]);
+    }
+    (data, orders)
+}
+
+#[test]
+fn the_largest_creation_is_33_requests_one_after_another_all_answered_201() {
+    let mut rig = Rig::new();
+    let (data, orders) = twenty_and_twenty(&mut rig);
+    let room = zone(&mut rig, "Z", ROOT);
+    let thermostat = create(&mut rig, "Thermostat", "thermostat", &room);
+    let mut answers = 1;
+    for (i, id) in data.iter().take(16).enumerate() {
+        let (status, body) = bind_data(&mut rig, &thermostat, id, &format!("d{i}"));
+        assert_eq!(status, 201, "data {i}: {body}");
+        answers += 1;
+    }
+    for (i, id) in orders.iter().take(16).enumerate() {
+        let (status, body) = bind_order(&mut rig, &thermostat, id, &format!("o{i}"));
+        assert_eq!(status, 201, "order {i}: {body}");
+        answers += 1;
+    }
+    assert_eq!(answers, 33);
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{thermostat}"));
+    assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 16);
+    assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 16);
+    // A 17th of either kind is refused: the plan never sends one.
+    assert_eq!(
+        rig.refused(
+            "POST",
+            &format!("/api/v1/equipments/{thermostat}/data-bindings"),
+            &json!({"deviceDataId": data[16], "alias": "d16"}).to_string()
+        ),
+        (400, "Too many bindings (16)".to_string())
+    );
+    assert_eq!(
+        rig.refused(
+            "POST",
+            &format!("/api/v1/equipments/{thermostat}/order-bindings"),
+            &json!({"deviceOrderId": orders[16], "alias": "o16"}).to_string()
+        ),
+        (400, "Too many bindings (16)".to_string())
+    );
+}
+
+#[test]
+fn an_alias_of_33_characters_is_refused() {
+    let mut rig = Rig::new();
+    let relay = rig.relay(3);
+    let room = zone(&mut rig, "Z", ROOT);
+    let light = create(&mut rig, "L", "light_onoff", &room);
+    let data = data_of(&mut rig, &relay, "state");
+    let long = "k".repeat(33);
+    assert_eq!(
+        rig.refused(
+            "POST",
+            &format!("/api/v1/equipments/{light}/data-bindings"),
+            &json!({"deviceDataId": data, "alias": long}).to_string()
+        ),
+        (400, "Invalid alias".to_string())
+    );
+    let ok = "k".repeat(32);
+    assert_eq!(bind_data(&mut rig, &light, &data, &ok).0, 201);
 }

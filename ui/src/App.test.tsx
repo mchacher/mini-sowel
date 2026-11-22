@@ -54,15 +54,7 @@ describe("App", () => {
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Garage" })).toBeTruthy();
     const links = screen.getAllByRole("link");
-    expect(links.map((l) => l.textContent)).toEqual([
-      "Home",
-      "Garage",
-      "Workshop",
-      "House",
-      "Devices",
-      "Equipments",
-      "Topology",
-    ]);
+    expect(links.map((l) => l.textContent)).toEqual(["Home", "Garage", "Workshop", "House"]);
     const padding = (name: string) =>
       (within(nav()).getByText(name).closest("a")!.parentElement as HTMLElement).style.paddingLeft;
     expect(padding("Garage")).toBe("20px");
@@ -167,7 +159,7 @@ describe("App", () => {
       within(drawer)
         .getAllByRole("link")
         .map((l) => l.textContent),
-    ).toEqual(["Home", "Garage", "Workshop", "House", "Devices", "Equipments", "Topology"]);
+    ).toEqual(["Home", "Garage", "Workshop", "House"]);
     fireEvent.click(within(drawer).getByRole("button", { name: "Close the menu" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -229,23 +221,26 @@ describe("App", () => {
     expect(await screen.findByText("1 light on")).toBeTruthy();
   });
 
-  it("shows the devices page at #/devices, with its entry in the sidebar and the drawer", async () => {
+  it("shows the devices page at #/devices, with the Administration section open and Devices marked", async () => {
     window.location.hash = "#/devices";
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     expect(await screen.findByRole("heading", { level: 1, name: "Devices" })).toBeTruthy();
-    const entry = within(nav()).getByText("Devices").closest("a")!;
+    const entry = within(nav()).getByRole("link", { name: "Devices" });
     expect(entry.getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("House light")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Menu" }));
-    expect(within(screen.getByRole("dialog")).getByText("Devices")).toBeTruthy();
-    fireEvent.click(within(screen.getByRole("dialog")).getByText("Garage"));
+    const drawer = screen.getByRole("dialog");
+    expect(within(drawer).getByRole("link", { name: "Devices" })).toBeTruthy();
+    fireEvent.click(within(drawer).getByText("Garage"));
     expect(window.location.hash).toBe("#/zone/garage");
   });
 
-  it("opens the devices page from the sidebar entry, and the room pages are unchanged", async () => {
+  it("opens the devices page from the Administration section, and the room pages are unchanged", async () => {
     await boot({ zones: tree(), equipments: [light("l", "Garage light", "garage", false)] });
     await screen.findByRole("heading", { level: 1, name: "Garage" });
-    fireEvent.click(within(nav()).getByText("Devices"));
+    expect(within(nav()).queryByRole("link", { name: "Devices" })).toBeNull();
+    fireEvent.click(within(nav()).getByRole("button", { name: "Administration" }));
+    fireEvent.click(within(nav()).getByRole("link", { name: "Devices" }));
     expect(window.location.hash).toBe("#/devices");
     expect(await screen.findByRole("heading", { level: 1, name: "Devices" })).toBeTruthy();
   });
@@ -253,13 +248,15 @@ describe("App", () => {
   it.each([
     ["#/zones", "Home Topology", "Topology"],
     ["#/equipments", "Equipments", "Equipments"],
+    ["#/devices", "Devices", "Devices"],
+    ["#/discovery/solite", "Discovery", "Discovery"],
   ])(
     "shows the page at %s with its sidebar entry marked and no room",
     async (hash, title, entry) => {
       window.location.hash = hash;
       await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
       expect(await screen.findByRole("heading", { level: 1, name: title })).toBeTruthy();
-      expect(within(nav()).getByText(entry).closest("a")!.getAttribute("aria-current")).toBe(
+      expect(within(nav()).getByRole("link", { name: entry }).getAttribute("aria-current")).toBe(
         "page",
       );
       const marked = within(nav())
@@ -269,16 +266,38 @@ describe("App", () => {
     },
   );
 
-  it("lists Devices, Equipments and Topology in this order in the sidebar", async () => {
+  it.each(["#/discovery", "#/discovery/unknown"])(
+    "shows Zigbee's Discovery at %s",
+    async (hash) => {
+      window.location.hash = hash;
+      await boot({ zones: tree() });
+      expect(await screen.findByRole("heading", { level: 1, name: "Discovery" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Add a device" })).toBeTruthy();
+      expect(
+        within(nav()).getByRole("link", { name: "Discovery" }).getAttribute("aria-current"),
+      ).toBe("page");
+    },
+  );
+
+  it("lists Devices, Equipments, Topology and Discovery in this order in the section", async () => {
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     await screen.findByRole("heading", { level: 1, name: "House" });
+    fireEvent.click(within(nav()).getByRole("button", { name: "Administration" }));
     expect(
       within(nav())
         .getAllByRole("link")
-        .slice(-3)
+        .slice(-4)
         .map((l) => l.textContent),
-    ).toEqual(["Devices", "Equipments", "Topology"]);
+    ).toEqual(["Devices", "Equipments", "Topology", "Discovery"]);
     fireEvent.click(within(nav()).getByText("Topology"));
     expect(window.location.hash).toBe("#/zones");
+  });
+
+  it("has no loose Devices, Equipments or Topology entry under the rooms", async () => {
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    await screen.findByRole("heading", { level: 1, name: "House" });
+    for (const name of ["Devices", "Equipments", "Topology", "Discovery"]) {
+      expect(within(nav()).queryByRole("link", { name })).toBeNull();
+    }
   });
 });

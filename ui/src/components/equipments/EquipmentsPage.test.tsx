@@ -86,10 +86,18 @@ describe("EquipmentsPage", () => {
     expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
   });
 
-  it("opens the create form from Add equipment", () => {
+  it("opens the create form from Add equipment, Create needing a device", async () => {
     setup([garageLight()]);
     fireEvent.click(screen.getByRole("button", { name: "Add equipment" }));
     expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
+    fireEvent.input(screen.getByLabelText("Name"), { target: { value: "Lumière" } });
+    fireEvent.change(screen.getByLabelText("Zone"), { target: { value: "root" } });
+    fireEvent.click(screen.getByRole("button", { name: "Next: Select devices" }));
+    await waitFor(() => expect(screen.queryByText("Loading devices...")).toBeNull());
+    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(screen.getByText("Choose at least one device")).toBeTruthy();
   });
 
   it("edits the name and the room with a PUT", async () => {

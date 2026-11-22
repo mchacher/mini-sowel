@@ -3,7 +3,7 @@
 // expand/collapse, as the sidebar); the node's name opens the room page in the hash instead of
 // Sowel's zone detail page, whose edit and delete move into the row ("Edit", "Delete"); the
 // buttons are always visible (a phone has no hover); a refusal of the delete shows under the row
-// for 5 s, as the devices page's rows.
+// for 5 s, as the Devices list's rows.
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Building2, DoorOpen, Home, Layers, Pencil, Plus, Trash2 } from "lucide-react";
