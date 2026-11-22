@@ -143,7 +143,7 @@ radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
    or the radio image with the command in the README), then
    `sh scripts/box.sh flash --image box|sim|radio --backup <backup file>`. It refuses without the backup,
    when the build is not the image asked for or does not fit the `ota_0` slot, erases `nvs`, `otadata`
-   and `storage` (the original firmware's settings, which may hold Wi-Fi credentials, are in the backup),
+   and `storage` (unless `--keep-storage`, radio image only; the original firmware's settings, which may hold Wi-Fi credentials, are in the backup),
    writes the bootloader, the table of `firmware/partitions.csv` (decision D25) and the application, then
    resets the box; the radio image is read from `firmware/target/radio` and leaves the box unreset
    (`--after no_reset`), so that its first boot, and its pairing window, are the ones of `log`.

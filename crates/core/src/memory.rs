@@ -95,13 +95,26 @@ pub struct HeapStats {
     pub stack_unused: usize,
     /// The engine thread's whole stack.
     pub stack_total: usize,
+    /// The HTTP workers' stack, `(unused, total)` in bytes: the smallest high-water mark of the
+    /// workers. `None` when the image serves no HTTP (spec 022).
+    pub http_stack: Option<(usize, usize)>,
 }
 
 /// The line the radio image logs every few minutes: `heap: internal 120 KB free (min 90 KB), psram
-/// 1700 KB free (min 1650 KB), engine stack 20 KB unused of 32 KB`. Sizes in KiB, rounded down.
+/// 1700 KB free (min 1650 KB), engine stack 20 KB unused of 32 KB`, followed by `, http stack 6 KB
+/// unused of 10 KB` when the image serves HTTP. Sizes in KiB, rounded down.
 pub fn heap_line(stats: &HeapStats) -> String {
+    let http = stats
+        .http_stack
+        .map_or_else(String::new, |(unused, total)| {
+            format!(
+                ", http stack {} KB unused of {} KB",
+                kib(unused),
+                kib(total)
+            )
+        });
     format!(
-        "heap: internal {} KB free (min {} KB), psram {} KB free (min {} KB), engine stack {} KB unused of {} KB",
+        "heap: internal {} KB free (min {} KB), psram {} KB free (min {} KB), engine stack {} KB unused of {} KB{http}",
         kib(stats.internal_free),
         kib(stats.internal_min),
         kib(stats.psram_free),

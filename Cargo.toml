@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/host", "crates/sim"]
+members = ["crates/core", "crates/host", "crates/sim", "crates/ui-embed"]
 # The ESP32 firmware has its own toolchain (Xtensa) and target: built from firmware/.
 exclude = ["firmware"]
 

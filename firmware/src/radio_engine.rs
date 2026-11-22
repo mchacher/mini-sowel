@@ -93,6 +93,7 @@ fn heap_stats() -> HeapStats {
         psram_min,
         stack_unused: stack_unused as usize,
         stack_total: STACK_BYTES,
+        http_stack: None,
     }
 }
 

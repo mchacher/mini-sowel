@@ -13,26 +13,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use solite_core::api::host_allowed;
+use solite_core::api::{Reach, host_allowed};
+use solite_core::live::session::{
+    MAX_INCOMING_BYTES, PING_SECONDS, SILENCE_SECONDS, TICK_MS, WRITE_TIMEOUT_SECONDS,
+    close_reason, origin_allowed, pick_subprotocol,
+};
 use solite_core::live::{ClientId, LiveHandle};
 use tungstenite::protocol::frame::coding::{CloseCode, Data, OpCode};
 use tungstenite::protocol::frame::{CloseFrame, Frame};
 use tungstenite::protocol::{Role, WebSocket, WebSocketConfig};
 use tungstenite::{Bytes, Error, Message};
 
-/// A client's thread wakes at least this often, in milliseconds: the read timeout of its socket,
-/// and the interval of its flushes.
-pub const TICK_MS: u64 = 200;
-/// A write that takes longer drops the client, in seconds.
-pub const WRITE_TIMEOUT_SECONDS: u64 = 5;
-/// Pings are sent this often, in seconds, unless `SOLITE_WS_PING_SECONDS` says otherwise (for
-/// the tests).
-pub const PING_SECONDS: u64 = 30;
-/// A client from which nothing arrived for this long is dropped, in seconds, unless
-/// `SOLITE_WS_SILENCE_SECONDS` says otherwise (for the tests).
-pub const SILENCE_SECONDS: u64 = 60;
-/// Incoming messages and frames are refused (close 1009) past this many bytes.
-pub const MAX_INCOMING_BYTES: usize = 1024;
 /// The send buffer of a client's socket, so that a client that does not read is noticed within
 /// a few batches and the kernel keeps little for it.
 const SEND_BUFFER_BYTES: usize = 16 * 1024;
@@ -47,8 +38,6 @@ const FRAGMENT_BYTES: usize = 1024;
 const MAX_WRITE_BUFFER_BYTES: usize = 4 * 1024;
 /// How long a closing client is given to answer the close frame, in milliseconds.
 const CLOSE_GRACE_MS: u64 = 1000;
-/// The development server of the interface (B8), accepted as an origin besides the host's own.
-const DEV_ORIGINS: [&str; 2] = ["http://localhost:5173", "http://127.0.0.1:5173"];
 const WELCOME: &str =
     r#"{"type":"connected","message":"Connected to Sowel engine","version":"0.1.0"}"#;
 
@@ -155,36 +144,9 @@ pub fn refuse(stream: &mut TcpStream, status: u16, reason: &str, message: &str, 
     let _ = stream.shutdown(Shutdown::Both);
 }
 
-/// Sowel's origin rule (`src/api/websocket.ts` W:48-68): the `Origin` is absent, or its
-/// `host:port` is the `Host` header's; the interface's development server is accepted too.
-pub fn origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
-    let Some(origin) = origin else {
-        return true;
-    };
-    let origin = origin.trim();
-    if DEV_ORIGINS.contains(&origin) {
-        return true;
-    }
-    let Some(authority) = origin
-        .strip_prefix("http://")
-        .or_else(|| origin.strip_prefix("https://"))
-    else {
-        return false;
-    };
-    let authority = authority.trim_end_matches('/');
-    !authority.is_empty()
-        && !authority.contains('/')
-        && host.is_some_and(|h| h.trim().eq_ignore_ascii_case(authority))
-}
-
-/// The subprotocol to echo: the first offered that starts with `bearer.` (the browser drops the
-/// socket if it is not echoed; the token itself is not checked, decision D13).
+/// The subprotocol to echo (the core's rule, `live::session::pick_subprotocol`).
 pub fn subprotocol(head: &Head) -> Option<String> {
-    head.all("Sec-WebSocket-Protocol")
-        .flat_map(|line| line.split(','))
-        .map(str::trim)
-        .find(|p| p.starts_with("bearer."))
-        .map(str::to_string)
+    pick_subprotocol(head.all("Sec-WebSocket-Protocol"))
 }
 
 /// True when the header's comma-separated value has this token (without case).
@@ -196,7 +158,7 @@ fn has_token(value: Option<&str>, token: &str) -> bool {
 /// upgrade and the client's session, run in this thread until the client is gone. `rest` is what
 /// was read after the head.
 pub fn serve_request(mut stream: TcpStream, head: &Head, rest: Vec<u8>, ctx: &Context) {
-    if !host_allowed(head.header("Host"), ctx.port) {
+    if !host_allowed(head.header("Host"), ctx.port, Reach::Loopback) {
         return refuse(&mut stream, 403, "Forbidden", "Forbidden host", "");
     }
     if head.method != "GET" {
@@ -321,17 +283,6 @@ fn session(mut socket: WebSocket<TcpStream>, guard: &Session<'_>, origin_ok: boo
         End::Drop => {}
     }
     let _ = socket.get_ref().shutdown(Shutdown::Both);
-}
-
-fn close_reason(code: u16) -> &'static str {
-    match code {
-        1001 => "Going away",
-        1002 => "Protocol error",
-        1007 => "Invalid payload",
-        1009 => "Message too big",
-        1013 => "Try again later",
-        _ => "",
-    }
 }
 
 /// The loop; returns when the client must be closed or dropped.

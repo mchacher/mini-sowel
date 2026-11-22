@@ -10,6 +10,7 @@
 //! the home.
 
 mod events;
+pub mod session;
 mod topics;
 
 pub use events::EngineEvent;

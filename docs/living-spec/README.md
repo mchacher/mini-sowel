@@ -459,6 +459,17 @@ apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
 relay).
 
+`sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API: a
+number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing
+listening: `demo-garage: no host answers at <address>:<port> ...`, exit 1.
+`sh scripts/measure-api.sh <address>[:<port>] [--keep]` sends, one after the other, the 33 requests
+of an equipment with 16 data and 16 order bindings (the same data and order under 16 aliases),
+times each one, and prints `measure: 33 requests, <k> answered 201, <b> Busy, total <s> s, slowest
+<t> s (request <i>)`; it exits 0 only when the 33 answered 201, none was 503 and the total is at
+most 10 s, else 1 with the first answer that was not 201. It needs a device with an order (`no
+device with an order: pair a relay first`, exit 1), refuses when a zone `Measure 33` exists, and
+deletes its zone and equipment afterwards (kept with `--keep`).
+
 ### Flashes the box and brings it back
 
 `sh scripts/box.sh <command> [--port <device>] [--baud <rate>]` works on the Dongle Max over USB,
@@ -478,7 +489,8 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   its name is the connected box's.
 - `flash --image box|sim|radio --backup <file>` refuses without a backup whose SHA-256 is in the backup
   table of `docs/hardware.md` with a restore date; it checks the built image is the one asked for
-  and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage`, writes the bootloader, the table
+  and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage` (unless `--keep-storage`, radio
+  image only), writes the bootloader, the table
   of `firmware/partitions.csv` and the application, and resets the box. The radio image is read
   from `firmware/target/radio`, a build without the marker `radio: uart ` is refused with the
   build command, and the box and sim images refuse a radio build; the box is not reset at the end
@@ -494,6 +506,28 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   `pairing: open for` or `pairing: not opened`, and the `serial:` and `heap:` lines; it fails on
   `no answer at any baud rate`, `radio: stopped after`, `pairing: failed:` (named), `task_wdt`, a
   panic, a second banner (a reboot) and a `heap:` internal minimum below 64 KB.
+- `flash --image radio --keep-storage --backup <file>` erases `nvs` and `otadata` only and keeps
+  `storage` (the home, the network's backup and the Wi-Fi settings); its plan says `keep storage
+  (the home, the network's backup and the Wi-Fi settings)`, then `WARNING: keep it only over a radio
+  image: a sim image's /data is a test home`, and the radio image's warning about the
+  erase of `zigbee.json` is not printed. Without it, the plan is as above and the warning ends
+  `(use --keep-storage to keep them)`. With `--image box` or `sim` it is refused (`--keep-storage is
+  for the radio image: the sim image seeds /data`, exit 2). The radio image's plan also prints
+  `the box drives this radio's network itself: never start a Mac host with this network's backup on
+  another radio while the box runs`: one network, one coordinator at a time.
+- `wifi [--forget]` asks on the terminal (`/dev/tty`, never standard input; no terminal: `box: no
+  terminal to ask for the Wi-Fi settings, nothing done`, exit 1) for the network's name (shown as
+  typed) and its password (echo off, restored on any exit, Ctrl-C included, nothing sent then). It
+  sends one line, `wifi-set <JSON>`, to the firmware's serial console without resetting the box,
+  and reads the answer: `wifi: settings saved` then, within 60 s, `wifi: connected, address <IPv4>`
+  (printed as `box: Wi-Fi connected, address <IPv4>, name <host name>; open http://<IPv4>/`, exit
+  0, else the last `wifi:` line and exit 1); `wifi: settings refused (<reason>)` (printed, exit 1);
+  no answer within 5 s: `box: no answer from Solite's console on <port>: is the radio image
+  running?`, exit 4 (an image without the console, such as the box's original firmware, answers
+  nothing and nothing changes on the box). The JSON is built from the two lines read on standard
+  input: the password is never in a process list, a file, a log or the output; the name is not
+  printed either. `wifi --forget` sends `wifi-forget` and reads `wifi: settings removed` (exit 0, or
+  exit 4 with no answer).
 - `backup`, `restore` and `flash` print what they will do, then ask, on the terminal (never on
   standard input), for the last 6 hex digits of the box's MAC address; anything else, or no
   terminal, writes nothing. `--dry-run` prints the plan only. No command writes an eFuse.
@@ -573,3 +607,4 @@ interface.
 | 019 | The Administration section (Devices, Equipments, Topology, Discovery per integration); a device has no room; equipments made from a device's row, bound as Sowel's interface binds |
 | 020 | `scripts/box.sh` identifies the Dongle Max, saves and restores its original firmware, flashes Solite's images with the user's typed confirmation and checks their boot log; the measuring image times the saves on the box |
 | 021 | The firmware's radio image drives the radio over the serial link, runs the engine on the box, and pairs a device at boot |
+| 022 | The rules for serving on the local network in the core, the interface packed for the flash, the scripts on an address, the 33 requests measured |

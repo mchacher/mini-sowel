@@ -4,7 +4,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use solite_core::api::{Reply, Request, handle_stream};
+use solite_core::api::{Reach, Reply, Request, handle_stream};
 use solite_core::home::Home;
 use solite_core::orders::{
     DEADLINE_MS, DeviceCommand, OrderQueue, OrderRequest, OrderRunner, commands_for,
@@ -29,6 +29,7 @@ fn commands(
             path: &path,
             host: Some(HOST),
             port: PORT,
+            reach: Reach::Loopback,
             content_type: Some("application/json"),
             body: body.as_bytes(),
         },
@@ -523,6 +524,7 @@ fn a_third_order_over_the_route_is_a_503_busy_and_the_queue_frees_as_orders_are_
                 path: &path,
                 host: Some(HOST),
                 port: PORT,
+                reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 body: br#"{"value":true}"#,
             },
@@ -681,6 +683,7 @@ fn post_order_typed(
         path,
         host: Some(HOST),
         port: PORT,
+        reach: Reach::Loopback,
         content_type,
         body: br#"{"value":true}"#,
     };
@@ -921,6 +924,7 @@ fn api_order(rig: &mut Rig, equipment: &str, body: &str) -> solite_core::orders:
             path: &path,
             host: Some(HOST),
             port: PORT,
+            reach: Reach::Loopback,
             content_type: Some("application/json"),
             body: body.as_bytes(),
         },

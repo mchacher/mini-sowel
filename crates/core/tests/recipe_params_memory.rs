@@ -4,7 +4,7 @@
 //! so the counting allocator sees nothing else.
 
 use peak_alloc::PeakAlloc;
-use solite_core::api::{Reply, Request, handle, handle_stream};
+use solite_core::api::{Reach, Reply, Request, handle, handle_stream};
 use solite_core::devices::Devices;
 use solite_core::home::Home;
 
@@ -23,6 +23,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
         path,
         host: Some("127.0.0.1:8080"),
         port: 8080,
+        reach: Reach::Loopback,
         content_type: Some("application/json"),
         body,
     }

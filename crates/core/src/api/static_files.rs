@@ -20,6 +20,31 @@ impl StaticFile {
 }
 
 const INDEX: &str = "index.html";
+
+/// Another site framing the page could make the user switch a light.
+pub const STATIC_HEADERS: [(&str, &str); 3] = [
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+    ("X-Content-Type-Options", "nosniff"),
+];
+
+/// `index.html` is looked at again by the browser each time; a file of `assets/` has a hash in
+/// its name (Vite's) and never changes under it.
+pub fn cache_control(file: &StaticFile) -> &'static str {
+    if file.is_index() {
+        "no-cache"
+    } else {
+        "public, max-age=31536000, immutable"
+    }
+}
+
+/// A file of a table sorted by path (`index.html`, `assets/<name>`): a binary search.
+pub fn find<'a>(table: &'a [(&str, &'a [u8])], path: &str) -> Option<&'a [u8]> {
+    table
+        .binary_search_by(|(name, _)| (*name).cmp(path))
+        .ok()
+        .map(|i| table[i].1)
+}
 const ASSETS: &str = "/assets/";
 
 /// The content type of a file name, by its extension.

@@ -1,6 +1,6 @@
 //! Sowel's device routes as a pure function.
 
-use solite_core::api::{MAX_BODY_BYTES, Request, Response, handle};
+use solite_core::api::{MAX_BODY_BYTES, Reach, Request, Response, handle};
 use solite_core::devices::Devices;
 use solite_core::home::Home;
 
@@ -61,6 +61,7 @@ fn call(home: &mut Home, method: &str, path: &str, host: Option<&str>, body: &[u
             path,
             host,
             port: PORT,
+            reach: Reach::Loopback,
             content_type: Some("application/json"),
             body,
         },
@@ -284,6 +285,7 @@ fn a_post_or_put_without_a_json_content_type_is_a_415_whatever_the_route() {
                     path: &path,
                     host: Some("127.0.0.1:8080"),
                     port: PORT,
+                    reach: Reach::Loopback,
                     content_type,
                     body: br#"{"name":"x"}"#,
                 },

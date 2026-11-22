@@ -1,0 +1,323 @@
+//! `scripts/measure-api.sh` (spec 022 R10.2-3): the 33 requests of an equipment with 16 + 16
+//! bindings, against the Mac host and against small test servers for the 503 and slow cases.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+
+const GARAGE: &str = "../../scenarios/garage.json";
+const ONE_SENSOR: &str = "../../scenarios/snzb02.json";
+const SCRIPT: &str = "../../scripts/measure-api.sh";
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+struct Reaped(Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct TempDir(PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn host() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_solite-host"))
+}
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Pairs the scenario's devices, then serves; returns once the host says `serving:`.
+fn serving(scenario: &str) -> (Reaped, u16, TempDir) {
+    let dir = std::env::temp_dir().join(format!(
+        "solite-measure-script-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = TempDir(dir);
+    let output = host()
+        .env("SOLITE_CLOSE_GRACE_SECONDS", "1")
+        .args(["--sim", scenario, "--pair", "2", "--speed", "100", "--data"])
+        .arg(&data.0)
+        .output()
+        .expect("the host program starts");
+    assert!(output.status.success(), "{output:?}");
+    let port = free_port();
+    let mut child = Reaped(
+        host()
+            .args([
+                "--sim",
+                scenario,
+                "--serve",
+                &port.to_string(),
+                "--speed",
+                "100",
+                "--data",
+            ])
+            .arg(&data.0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the host program starts"),
+    );
+    let stdout = BufReader::new(child.0.stdout.take().unwrap());
+    let (sender, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    while let Ok(line) = lines.recv_timeout(Duration::from_secs(20)) {
+        if line.starts_with("serving:") {
+            return (child, port, data);
+        }
+    }
+    panic!("the host stopped or stayed silent");
+}
+
+/// (success, standard output, standard error).
+fn run(args: &[&str]) -> (bool, String, String) {
+    let output = Command::new("sh")
+        .arg(SCRIPT)
+        .args(args)
+        .output()
+        .expect("sh runs the script");
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+fn get(port: u16, path: &str) -> String {
+    let output = Command::new("curl")
+        .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/{path}")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn measure_zone_count(port: u16) -> usize {
+    get(port, "zones").matches("\"Measure 33\"").count()
+}
+
+#[test]
+fn against_a_host_the_33_requests_all_answer_201_and_nothing_is_left_behind() {
+    let (_host, port, _data) = serving(GARAGE);
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(ok, "{out}\n{err}");
+    assert!(
+        out.contains("measure: 33 requests, 33 answered 201, 0 Busy, total "),
+        "{out}"
+    );
+    assert!(
+        out.contains("slowest ") && out.contains("(request "),
+        "{out}"
+    );
+    assert_eq!(measure_zone_count(port), 0);
+    assert!(!get(port, "equipments").contains("Measure 33"));
+}
+
+#[test]
+fn keep_leaves_the_zone_and_the_equipment_with_16_and_16_bindings() {
+    let (_host, port, _data) = serving(GARAGE);
+    let (ok, out, err) = run(&[&format!("127.0.0.1:{port}"), "--keep"]);
+    assert!(ok, "{out}\n{err}");
+    assert_eq!(measure_zone_count(port), 1);
+    let equipments: serde_json::Value = serde_json::from_str(&get(port, "equipments")).unwrap();
+    let kept = equipments
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Measure 33")
+        .expect("the equipment is kept");
+    assert_eq!(kept["dataBindings"].as_array().unwrap().len(), 16);
+    assert_eq!(kept["orderBindings"].as_array().unwrap().len(), 16);
+}
+
+#[test]
+fn an_existing_zone_measure_33_is_refused_and_nothing_is_created() {
+    let (_host, port, _data) = serving(GARAGE);
+    let (ok, _, _) = run(&[&port.to_string(), "--keep"]);
+    assert!(ok);
+    let equipments_before = get(port, "equipments");
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(!ok, "{out}");
+    assert!(
+        err.contains("a zone named Measure 33 exists already"),
+        "{err}"
+    );
+    assert_eq!(measure_zone_count(port), 1, "no second zone");
+    assert_eq!(get(port, "equipments"), equipments_before);
+}
+
+#[test]
+fn with_no_device_with_an_order_it_refuses_before_creating_anything() {
+    let (_host, port, _data) = serving(ONE_SENSOR);
+    let (ok, _, err) = run(&[&port.to_string()]);
+    assert!(!ok);
+    assert!(
+        err.contains("no device with an order: pair a relay first"),
+        "{err}"
+    );
+    assert_eq!(measure_zone_count(port), 0);
+}
+
+#[test]
+fn with_no_api_answering_it_says_so() {
+    let (ok, _, err) = run(&[&format!("127.0.0.1:{}", free_port())]);
+    assert!(!ok);
+    assert!(
+        err.contains("measure-api: no API answers at 127.0.0.1:"),
+        "{err}"
+    );
+}
+
+/// What a test server saw and does.
+struct Fake {
+    /// The creation request (equipment and bindings, counted from 1) that is answered 503.
+    busy_at: Option<usize>,
+    /// Each answer waits this long.
+    delay: Duration,
+    /// "METHOD path" of every request received.
+    seen: Mutex<Vec<String>>,
+}
+
+/// A test server for the script's calls: an empty list of zones, one device with a data and an
+/// order, 201 for the creations, 204 for the deletions. Returns its port.
+fn fake_api(fake: Arc<Fake>) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let fake = Arc::clone(&fake);
+            thread::spawn(move || answer(stream, &fake));
+        }
+    });
+    port
+}
+
+fn answer(mut stream: TcpStream, fake: &Fake) {
+    let mut raw = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut buffer).unwrap_or(0);
+        if n == 0 {
+            return;
+        }
+        raw.extend_from_slice(&buffer[..n]);
+        let text = String::from_utf8_lossy(&raw).into_owned();
+        if let Some((head, body)) = text.split_once("\r\n\r\n") {
+            let length = head
+                .lines()
+                .find_map(|l| {
+                    l.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                })
+                .unwrap_or(0);
+            if body.len() >= length {
+                break;
+            }
+        }
+    }
+    let head = String::from_utf8_lossy(&raw).into_owned();
+    let mut words = head.lines().next().unwrap_or("").split(' ');
+    let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+    let creations;
+    {
+        let mut seen = fake.seen.lock().unwrap();
+        seen.push(format!("{method} {path}"));
+        creations = seen
+            .iter()
+            .filter(|s| s.starts_with("POST /api/v1/equipments"))
+            .count();
+    }
+    thread::sleep(fake.delay);
+    let (status, body) = match (method, path) {
+        ("GET", "/api/v1/zones") => ("200 OK", "[]".to_string()),
+        ("GET", "/api/v1/devices") => (
+            "200 OK",
+            r#"[{"id":"d1","data":[{"id":"data-1","key":"state"}],"orders":[{"id":"order-1","key":"state"}]}]"#.to_string(),
+        ),
+        ("POST", "/api/v1/zones") => ("201 Created", r#"{"id":"zone-1"}"#.to_string()),
+        ("POST", _) if fake.busy_at == Some(creations) => {
+            ("503 Service Unavailable", r#"{"error":"Busy"}"#.to_string())
+        }
+        ("POST", "/api/v1/equipments") => ("201 Created", r#"{"id":"eq-1"}"#.to_string()),
+        ("POST", _) => ("201 Created", r#"{"id":"binding"}"#.to_string()),
+        ("DELETE", _) => ("204 No Content", String::new()),
+        _ => ("404 Not Found", r#"{"error":"Not found"}"#.to_string()),
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+}
+
+fn fake(busy_at: Option<usize>, delay_ms: u64) -> (u16, Arc<Fake>) {
+    let fake = Arc::new(Fake {
+        busy_at,
+        delay: Duration::from_millis(delay_ms),
+        seen: Mutex::new(Vec::new()),
+    });
+    (fake_api(Arc::clone(&fake)), fake)
+}
+
+#[test]
+fn a_503_busy_is_counted_the_first_bad_answer_is_shown_and_everything_is_deleted() {
+    let (port, fake) = fake(Some(10), 0);
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("32 answered 201, 1 Busy"), "{out}");
+    assert!(
+        err.contains("first answer that was not 201: request 10: status 503"),
+        "{err}"
+    );
+    assert!(err.contains("Busy"), "{err}");
+    let seen = fake.seen.lock().unwrap();
+    assert!(
+        seen.contains(&"DELETE /api/v1/equipments/eq-1".to_string()),
+        "{seen:?}"
+    );
+    assert!(
+        seen.contains(&"DELETE /api/v1/zones/zone-1".to_string()),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_total_over_10_seconds_fails_and_prints_the_time() {
+    // 33 answers of 400 ms: about 13 s.
+    let (port, fake) = fake(None, 400);
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(!ok, "{out}");
+    assert!(out.contains("33 answered 201, 0 Busy, total "), "{out}");
+    assert!(err.contains("over 10 s"), "{err}");
+    let seen = fake.seen.lock().unwrap();
+    assert!(
+        seen.contains(&"DELETE /api/v1/zones/zone-1".to_string()),
+        "{seen:?}"
+    );
+}

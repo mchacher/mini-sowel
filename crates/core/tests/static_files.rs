@@ -1,7 +1,8 @@
 //! The interface's files, as the core routes them: the path checks and the content types. The
 //! host opens and streams the files (`crates/host/tests/static_files.rs`).
 
-use solite_core::api::{Reply, Request, StaticFile, handle_stream};
+use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
+use solite_core::api::{Reach, Reply, Request, StaticFile, handle_stream};
 use solite_core::home::Home;
 
 const PORT: u16 = 8080;
@@ -20,6 +21,7 @@ fn route(method: &str, path: &str, host: Option<&str>) -> Reply {
             path,
             host,
             port: PORT,
+            reach: Reach::Loopback,
             content_type: None,
             body: b"",
         },
@@ -91,4 +93,36 @@ fn another_method_is_405_and_another_host_is_403() {
     assert_eq!(status(route("DELETE", "/assets/x.js", Some(HOST))), 405);
     assert_eq!(status(route("GET", "/", Some("evil.example"))), 403);
     assert_eq!(status(route("GET", "/", None)), 403);
+}
+
+#[test]
+fn the_security_headers_and_the_cache_rule_are_the_hosts() {
+    assert_eq!(
+        STATIC_HEADERS,
+        [
+            ("X-Frame-Options", "DENY"),
+            ("Content-Security-Policy", "frame-ancestors 'none'"),
+            ("X-Content-Type-Options", "nosniff"),
+        ]
+    );
+    let index = file(route("GET", "/", Some(HOST)));
+    let asset = file(route("GET", "/assets/index-abc123.js", Some(HOST)));
+    assert_eq!(cache_control(&index), "no-cache");
+    assert_eq!(cache_control(&asset), "public, max-age=31536000, immutable");
+}
+
+#[test]
+fn find_looks_a_path_up_in_a_sorted_table() {
+    let table: [(&str, &[u8]); 4] = [
+        ("assets/a.css", b"css"),
+        ("assets/b.js", b"js"),
+        ("assets/c.js", b"js2"),
+        ("index.html", b"html"),
+    ];
+    assert_eq!(find(&table, "assets/b.js"), Some(&b"js"[..]));
+    assert_eq!(find(&table, "index.html"), Some(&b"html"[..]));
+    assert_eq!(find(&table, "assets/missing.js"), None);
+    for unsafe_path in ["../index.html", "assets/%2e%2e", "assets/sub/b.js", ""] {
+        assert_eq!(find(&table, unsafe_path), None, "{unsafe_path}");
+    }
 }

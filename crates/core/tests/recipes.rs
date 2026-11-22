@@ -5,7 +5,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use solite_core::api::{Reply, Request, handle_stream};
+use solite_core::api::{Reach, Reply, Request, handle_stream};
 use solite_core::devices::Id;
 use solite_core::home::Home;
 use solite_core::radio::zcl::Command;
@@ -616,6 +616,7 @@ fn a_recipe_switching_three_lights_never_makes_the_api_answer_busy() {
                 path: &path,
                 host: Some(HOST),
                 port: PORT,
+                reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 body: br#"{"value":true}"#,
             },
