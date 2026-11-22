@@ -1,0 +1,16 @@
+{
+  "name": "solite-e2e",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node src/e2e.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "playwright": "1.63.0",
+    "prettier": "^3.10.1"
+  }
+}

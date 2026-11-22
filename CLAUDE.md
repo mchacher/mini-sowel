@@ -52,7 +52,7 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 
 ```
 cd ui && npm ci                                  # once, after a clone
-cd tools/z2m-coverage && npm ci                  # once, after a clone
+cd tools/z2m-coverage && npm ci                  # once, after a clone (same in tools/e2e, the browser test)
 cargo run -p solite-host                     # the host program (Mac)
 cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
 cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
@@ -70,7 +70,7 @@ sh scripts/qemu.sh                               # the engine run in the firmwar
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
-sh scripts/validate.sh --only rust|ui|firmware   # one third of the verdict (the CI's three jobs)
+sh scripts/validate.sh --only rust|ui|firmware|e2e  # a third of the verdict (CI jobs); e2e (opt-in, no CI): sh scripts/e2e-sim.sh
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, the two

@@ -7,6 +7,9 @@
 #   sh scripts/validate.sh --only rust|ui|firmware
 #                                   one third of the verdict, for the CI's parallel jobs: the three
 #                                   together are exactly the full run
+#   sh scripts/validate.sh --only e2e
+#                                   opt-in, in no other run and not in the CI (it needs a browser):
+#                                   the simulated path driven in headless Chromium
 #
 # Green only when every step is. Never weaken a step to get green: fix the cause.
 set -e
@@ -21,7 +24,7 @@ case "$1" in
   --fast) fast=true ;;
   --only)
     only="$2"
-    case "$only" in rust | ui | firmware) ;; *) echo "validate: --only takes rust, ui or firmware" >&2; exit 2 ;; esac
+    case "$only" in rust | ui | firmware | e2e) ;; *) echo "validate: --only takes rust, ui, firmware or e2e" >&2; exit 2 ;; esac
     ;;
 esac
 # True when the group is part of this run (all of them, unless --only names one).
@@ -91,6 +94,13 @@ if want firmware; then
 
   step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"
   sh scripts/qemu.sh
+fi
+
+if [ "$only" = "e2e" ]; then
+  step "End to end: the simulated path in headless Chromium"
+  [ -d tools/e2e/node_modules ] || { echo "validate: tools/e2e/node_modules is missing. Run: cd tools/e2e && npm ci" >&2; exit 1; }
+  (cd tools/e2e && npm run -s format:check)
+  sh scripts/e2e-sim.sh
 fi
 
 printf '\nvalidate: OK\n'
