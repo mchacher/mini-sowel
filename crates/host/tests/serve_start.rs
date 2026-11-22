@@ -103,6 +103,7 @@ fn a_radio_that_is_not_a_coordinator_stops_serve_with_the_error_and_exit_1() {
 }
 
 #[test]
+#[ignore = "slow (10 s, the production wait for the network): sh scripts/validate.sh runs it"]
 fn a_network_that_does_not_come_up_stops_serve_with_the_error_and_exit_1() {
     let mut ncp = Ncp::recording();
     ncp.no_network_up = true;

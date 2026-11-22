@@ -2,7 +2,7 @@
 # The verdict, one command: docs, format, lint, types, tests, UI budget, the four ESP32 firmware
 # images (the box's, the one QEMU runs, the measuring one, the radio one) and the engine's run in QEMU.
 #
-#   sh scripts/validate.sh          everything (before a commit, in CI)
+#   sh scripts/validate.sh          everything (before a commit, in the nightly CI)
 #   sh scripts/validate.sh --fast   the quick checks only (the pre-commit hook): docs, format, lint
 #   sh scripts/validate.sh --only rust|ui|firmware
 #                                   one third of the verdict, for the CI's parallel jobs: the three
@@ -10,6 +10,10 @@
 #   sh scripts/validate.sh --only e2e
 #                                   opt-in, in no other run and not in the CI (it needs a browser):
 #                                   the simulated path driven in headless Chromium
+#   sh scripts/validate.sh --skip-slow [--only rust|ui|firmware]
+#                                   the same without the slow checks: the Rust tests marked
+#                                   `#[ignore = "slow: ..."]` and the engine's run in QEMU (the
+#                                   pull-request CI); the full run (the Mac, the nightly CI) has them
 #
 # Green only when every step is. Never weaken a step to get green: fix the cause.
 set -e
@@ -19,14 +23,20 @@ cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
 fast=false
+slow=true
 only=""
-case "$1" in
-  --fast) fast=true ;;
-  --only)
-    only="$2"
-    case "$only" in rust | ui | firmware | e2e) ;; *) echo "validate: --only takes rust, ui, firmware or e2e" >&2; exit 2 ;; esac
-    ;;
-esac
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --fast) fast=true; shift ;;
+    --skip-slow) slow=false; shift ;;
+    --only)
+      only="$2"
+      case "$only" in rust | ui | firmware | e2e) ;; *) echo "validate: --only takes rust, ui, firmware or e2e" >&2; exit 2 ;; esac
+      shift 2
+      ;;
+    *) echo "validate: unknown option $1 (--fast, --skip-slow, --only <group>)" >&2; exit 2 ;;
+  esac
+done
 # True when the group is part of this run (all of them, unless --only names one).
 want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
 
@@ -66,8 +76,14 @@ if $fast; then
 fi
 
 if want rust; then
-  step "Rust: tests (core, host)"
-  cargo test --workspace --quiet
+  if $slow; then
+    # The slow tests are the ignored ones: no test is ignored for any other reason.
+    step "Rust: tests (core, host), the slow ones included"
+    cargo test --workspace --quiet -- --include-ignored
+  else
+    step "Rust: tests (core, host), without the slow ones"
+    cargo test --workspace --quiet
+  fi
 fi
 
 if want ui; then
@@ -103,8 +119,12 @@ if want firmware; then
       || { echo "validate: the other images' build holds CONFIG_UART_ISR_IN_IRAM=y: they must keep their settings" >&2; exit 1; }
   )
 
-  step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"
-  sh scripts/qemu.sh
+  if $slow; then
+    step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"
+    sh scripts/qemu.sh
+  else
+    step "Firmware: the engine's run in QEMU is skipped (--skip-slow)"
+  fi
 fi
 
 if [ "$only" = "e2e" ]; then
@@ -114,4 +134,8 @@ if [ "$only" = "e2e" ]; then
   sh scripts/e2e-sim.sh
 fi
 
-printf '\nvalidate: OK\n'
+if $slow; then
+  printf '\nvalidate: OK\n'
+else
+  printf '\nvalidate --skip-slow: OK (the slow tests and QEMU did not run)\n'
+fi

@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -63,9 +64,42 @@ fn host() -> Command {
     Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
+/// The pairing time of the tests, in seconds. The pairing window runs in real time (the speed
+/// scales the scenario, not the window): at speed 100, eight seconds play 13 minutes 20 of the
+/// scenario, so the whole garage (its last report at 10 minutes, its last motion cleared at
+/// 4 minutes) is played and stored, as a longer window would leave it.
+const PAIR_SECONDS: &str = "8";
+
+/// `--pair` on the garage scenario. The pairing runs once for the whole file (it takes
+/// `PAIR_SECONDS` of real time); each test gets a copy of the folder it wrote, the same files a
+/// pairing of its own would leave.
 fn pair(dir: &Path) {
+    static PAIRED: OnceLock<PathBuf> = OnceLock::new();
+    let paired = PAIRED.get_or_init(|| {
+        let paired = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("ws-paired-garage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&paired);
+        pair_once(&paired);
+        paired
+    });
+    std::fs::create_dir_all(dir).unwrap();
+    for entry in std::fs::read_dir(paired).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
+    }
+}
+
+fn pair_once(dir: &Path) {
     let output = host()
-        .args(["--sim", GARAGE, "--pair", "30", "--speed", "100", "--data"])
+        .args([
+            "--sim",
+            GARAGE,
+            "--pair",
+            PAIR_SECONDS,
+            "--speed",
+            "100",
+            "--data",
+        ])
         .arg(dir)
         .output()
         .expect("the host program starts");
@@ -539,6 +573,7 @@ fn a_subscribed_client_gets_arrays_of_events_within_a_moment_and_one_that_is_not
 }
 
 #[test]
+#[ignore = "slow (a minute of the garage at speed 10): sh scripts/validate.sh runs it"]
 fn the_garage_and_its_motion_light_are_seen_live_as_the_scenario_plays() {
     let dir = data_dir();
     pair(&dir);
