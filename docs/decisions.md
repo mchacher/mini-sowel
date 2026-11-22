@@ -262,7 +262,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   of at most 1 KB (1009); a client's queue bounded (256 events, 8 KB), closed 1013 past it;
   pings every 30 s, a client silent for 60 s or unwritable for 5 s dropped; the token not
   checked (D13); the interface's development server accepted as an origin; not sent:
-  `device.discovered` (no pairing while serving), `device.heartbeat`,
+  `device.heartbeat`,
   `equipment.order.outcome|unconfirmed`, `equipment.timed_action.*`, `system.*`, `mode.*`,
   `activity.*`, and the optional `sourceTimestamp` and `startedAt`; deleting a device sends no
   `equipment.updated` for the bindings it drops; the aggregate is also recomputed every 60 s
@@ -420,3 +420,23 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   at 107 KB free at the lowest, above the 64 KB floor. The measured run differs from the box: its
   saves are dropped (the last one written to flash), the simulator's memory is kept in RAM, and the
   scenario is clocked by its waits, so no File buffer or wear-levelling write is in the figure.
+
+## D28: Pairing while serving
+
+- **Date**: 2026-11-22
+- **Choice**: pairing opens and closes while serving (spec 017), through
+  `GET` and `POST /api/v1/integrations/solite/permit-join`, under Sowel's integration namespace
+  (Sowel has no pairing route: in Sowel, Zigbee2MQTT pairs). The body takes Zigbee2MQTT's `time`
+  (seconds, 0 closes, 180 when missing); `POST` answers 202 with the state asked for
+  (`permitJoin`, `remaining`, and `error` when the radio refused the last opening), the radio
+  loop applies it at its next turn. One window at a time; a new `POST` restarts it. No live event
+  for the window (only Sowel's events, D18: the interface reads the state with `GET`). `--serve`
+  starts the network as `--pair` does, forming one on a radio that has none, so a fresh box or
+  simulator is set up from the browser alone; D18's `device.discovered` is sent. The window is in
+  the core (`home/pairing.rs`, `engine::run`), so the box gets it with the API it serves.
+  **Constraint**: the route has no authentication (D13): on the box (E3) it stays disabled
+  (404) until the password of J4 exists.
+- **Why**: J1 of the roadmap: add a device from the interface with no terminal, where `--pair`
+  could not run together with `--serve`. The route under `/integrations/solite` follows Sowel's
+  grouping of what an integration does; 202 with the state asked for avoids a new wait mechanism
+  for a rare action whose refusal is read with `GET`.

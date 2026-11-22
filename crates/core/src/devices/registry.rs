@@ -28,6 +28,8 @@ const MAX_ANNOUNCES: usize = 16;
 /// Devices refused for lack of room, remembered to say so once each; the oldest is dropped past
 /// this.
 const MAX_REFUSED: usize = 16;
+/// Deleted devices remembered (see `Devices::deleted`); the oldest is dropped past it.
+const MAX_DELETED: usize = 16;
 /// A mains device silent this long is offline, in milliseconds (Zigbee2MQTT's availability).
 const MAINS_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// A battery device, or one of unknown power, silent this long is offline.
@@ -78,6 +80,9 @@ pub struct Devices {
     announces: Vec<([u8; 8], u8)>,
     /// At most `MAX_REFUSED`.
     refused: Vec<[u8; 8]>,
+    /// Devices deleted, so a setup still running for one does not bring it back; a new
+    /// identification clears it. At most `MAX_DELETED`.
+    deleted: Vec<Box<str>>,
     /// Where `device.status_changed` goes (spec 013), when the host listens.
     live: Option<LiveHandle>,
 }
@@ -280,7 +285,15 @@ impl Devices {
         });
         self.definitions = true;
         self.refused.retain(|e| *e != eui64);
-        Ok(Some(self.items.len() - 1))
+        let index = self.items.len() - 1;
+        // Sowel's `device.discovered`, on first discovery only; built when a client listens.
+        if let Some(live) = &self.live {
+            let device = &self.items[index].device;
+            live.emit(Topic::Devices, || EngineEvent::DeviceDiscovered {
+                device: device.clone(),
+            });
+        }
+        Ok(Some(index))
     }
 
     /// A device was identified: added if new (named `<model> <last 4 digits>`), else its
@@ -294,6 +307,7 @@ impl Devices {
         random: Random,
     ) -> Result<Vec<String>, String> {
         let mut notes = Vec::new();
+        self.deleted.retain(|d| **d != *eui_string(&eui64));
         let existed = self.index_of(&eui64).is_some();
         let Some(index) = self.ensure(eui64, manufacturer, model, now, random, &mut notes)? else {
             return Ok(notes);
@@ -328,6 +342,9 @@ impl Devices {
         random: Random,
     ) -> Result<Vec<String>, String> {
         let mut notes = Vec::new();
+        if self.was_deleted(&eui64) {
+            return Ok(notes);
+        }
         let Some(index) = self.ensure(eui64, None, None, now, random, &mut notes)? else {
             return Ok(notes);
         };
@@ -374,6 +391,9 @@ impl Devices {
         else {
             return Ok(notes);
         };
+        if self.was_deleted(&eui64) {
+            return Ok(notes);
+        }
         let Some(index) = self.ensure(eui64, None, None, now, random, &mut notes)? else {
             return Ok(notes);
         };
@@ -694,9 +714,19 @@ impl Devices {
         else {
             return false;
         };
-        self.items.remove(index);
+        let removed = self.items.remove(index);
+        if self.deleted.len() >= MAX_DELETED {
+            self.deleted.remove(0);
+        }
+        self.deleted.push(removed.device.source_device_id);
         self.definitions = true;
         true
+    }
+
+    /// True for a device deleted and not identified again since.
+    fn was_deleted(&self, eui64: &[u8; 8]) -> bool {
+        let text = eui_string(eui64);
+        self.deleted.iter().any(|d| **d == *text)
     }
 }
 

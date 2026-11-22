@@ -18,9 +18,8 @@ use std::time::{Duration, Instant};
 
 use std::sync::Mutex;
 
-use solite_core::radio::{
-    NetworkSettings, Radio, RadioError, RadioTransport, identity_lines, network_line,
-};
+use solite_core::engine::CLOSE_GRACE_MS;
+use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use solite_sim::{RealClock, Scenario, SimTransport};
 
 use radio_tcp::TcpTransport;
@@ -38,17 +37,13 @@ const DEFAULT_SERVE_PORT: u16 = 8080;
 const DEFAULT_DATA_DIR: &str = "solite-data";
 /// Under `--sim` the data folder is another one, so the real radio's backup is never touched.
 const DEFAULT_SIM_DATA_DIR: &str = "solite-data/sim";
-/// After the pairing time is over, identifications and reporting setups in progress may go on
-/// this long, in seconds.
-const CLOSE_GRACE_SECONDS: u64 = 70;
-/// The grace after the pairing time: `CLOSE_GRACE_SECONDS`, or the number of seconds the
-/// variable `SOLITE_CLOSE_GRACE_SECONDS` gives (for the tests).
+/// The grace after the pairing time: the core's `CLOSE_GRACE_MS`, or the number of seconds the
+/// variable `SOLITE_CLOSE_GRACE_SECONDS` gives (for the tests). `--pair` and `--serve` use it.
 fn close_grace() -> Duration {
-    let seconds = std::env::var("SOLITE_CLOSE_GRACE_SECONDS")
+    std::env::var("SOLITE_CLOSE_GRACE_SECONDS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(CLOSE_GRACE_SECONDS);
-    Duration::from_secs(seconds)
+        .map_or(Duration::from_millis(CLOSE_GRACE_MS), Duration::from_secs)
 }
 /// What a shell reports for a program stopped by Ctrl-C.
 const EXIT_INTERRUPTED: u8 = 130;
@@ -222,23 +217,7 @@ fn pair<T: RadioTransport>(
         println!("{line}");
     }
 
-    let network = radio
-        .start_network(
-            &NetworkSettings::default(),
-            &mut fill,
-            // The backup is written the moment the radio accepts the network, before any
-            // later step that can fail: the keys must not be lost.
-            &mut |network| match &network.keys {
-                Some(keys) => backup::write(data, network, keys),
-                None => Ok(()),
-            },
-        )
-        .map_err(|e| match e {
-            // The backup's own message, as it is.
-            RadioError::OnFormed(message) => message,
-            other => format!("radio: {other}"),
-        })?;
-    let foreign = network.keys.is_none() && !backup::matches(data, &network);
+    let (network, foreign) = backup::start(&mut radio, data, &mut fill)?;
     println!("{}", network_line(&network, foreign));
 
     // Ctrl-C during the start: joining is never opened.

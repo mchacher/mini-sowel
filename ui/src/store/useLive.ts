@@ -3,13 +3,15 @@
 // imports 11 stores; this one keeps its behaviour (subprotocol, batched events, reconnection with
 // backoff and jitter, refetch on every open, reconnection when the page comes back) and nothing else.
 import { create } from "zustand";
-import type { EquipmentStatus, Zone, ZoneAggregatedData } from "../types";
+import type { Device, DeviceStatus, EquipmentStatus, Zone, ZoneAggregatedData } from "../types";
+import { useDevices } from "./useDevices";
+import { usePairing } from "./usePairing";
 import { useEquipments } from "./useEquipments";
 import { useZoneAggregation } from "./useZoneAggregation";
 import { useZones } from "./useZones";
 
 /** What the screen is subscribed to. */
-const TOPICS = ["zones", "equipments"];
+const TOPICS = ["zones", "equipments", "devices"];
 /** The host takes no token (decision D13); the subprotocol is still sent, as Sowel's client does. */
 const SUBPROTOCOL = "bearer.none";
 const MAX_RECONNECT_DELAY = 30_000;
@@ -27,7 +29,10 @@ type LiveEvent =
   | { type: "zone.data.changed"; zoneId: string; aggregatedData: ZoneAggregatedData }
   | { type: "equipment.created" | "equipment.updated" | "equipment.removed" }
   | { type: "equipment.data.changed"; equipmentId: string; alias: string; value: unknown }
-  | { type: "equipment.status.changed"; equipmentId: string; newStatus: EquipmentStatus };
+  | { type: "equipment.status.changed"; equipmentId: string; newStatus: EquipmentStatus }
+  | { type: "device.discovered"; device: Device }
+  | { type: "device.removed"; deviceId: string }
+  | { type: "device.status_changed"; deviceId: string; status: DeviceStatus };
 
 export const useLive = create<LiveState>(() => ({ status: "connecting" }));
 
@@ -55,6 +60,8 @@ function refetchAll(): void {
   void useZones.getState().fetchZones();
   void useEquipments.getState().fetchEquipments();
   void useZoneAggregation.getState().fetchAggregation();
+  void useDevices.getState().fetchDevices();
+  void usePairing.getState().refresh();
 }
 
 function apply(event: LiveEvent): void {
@@ -87,6 +94,16 @@ function apply(event: LiveEvent): void {
       break;
     case "equipment.status.changed":
       useEquipments.getState().handleEquipmentStatusChanged(event.equipmentId, event.newStatus);
+      break;
+    case "device.discovered":
+      useDevices.getState().addDevice(event.device);
+      usePairing.getState().markNew(event.device.id);
+      break;
+    case "device.removed":
+      useDevices.getState().removeDevice(event.deviceId);
+      break;
+    case "device.status_changed":
+      useDevices.getState().updateDeviceStatus(event.deviceId, event.status);
       break;
   }
 }

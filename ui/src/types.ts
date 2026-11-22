@@ -468,3 +468,40 @@ export interface EquipmentWithDetails extends Equipment {
   /** Spec 174 — present only while a timed window is running. */
   timedAction?: TimedAction;
 }
+
+// ============================================================
+// Device (mirrors src/shared/types.ts; Sowel ui/src/types.ts, same commit)
+// ============================================================
+
+/** Open union as in Sowel (issue #937): the box's devices say "solite" or the source of the scenario. */
+export type DeviceSource = string;
+
+export type DeviceStatus = "online" | "offline" | "unknown";
+
+/** How a device is powered, as declared by its integration (spec 143). */
+export type PowerSource = "battery" | "mains" | "dc" | "unknown";
+
+export interface Device {
+  id: string;
+  integrationId: string;
+  sourceDeviceId: string;
+  name: string;
+  manufacturer?: string;
+  model?: string;
+  ieeeAddress?: string;
+  zoneId: string | null;
+  source: DeviceSource;
+  status: DeviceStatus;
+  powerSource?: PowerSource;
+  lastSeen: string | null;
+  rawExpose?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The state of the pairing window (spec 017, `GET /integrations/solite/permit-join`). */
+export interface PermitJoinState {
+  permitJoin: boolean;
+  remaining: number;
+  error?: string;
+}

@@ -13,7 +13,7 @@ use solite_core::live::{
     MAX_QUEUED_EVENTS, Topic, topic_of_type,
 };
 use solite_core::orders::OrderSource;
-use support::{Rig, T0, motion, temperature};
+use support::{Rig, T0, eui, motion, temperature};
 
 /// A client of the hub, subscribed to these topics.
 fn client(hub: &LiveHandle, topics: &[&str]) -> ClientId {
@@ -238,6 +238,7 @@ fn each_event_is_serialized_as_sowels_types_write_it() {
 #[test]
 fn the_topic_of_each_event_type_is_the_one_of_sowels_reference() {
     for (name, topic) in [
+        ("device.discovered", Topic::Devices),
         ("device.data.updated", Topic::Devices),
         ("device.status_changed", Topic::Devices),
         ("zone.created", Topic::Zones),
@@ -1012,4 +1013,102 @@ fn the_five_dedup_keys_each_keep_only_the_last_event_of_a_key() {
     assert_eq!(events[1]["status"], "online");
     assert_eq!(events[2]["value"], 2);
     assert_eq!(events[3]["newStatus"], "offline");
+}
+
+// ---- device.discovered (spec 017) ----
+
+fn identify(rig: &mut Rig, last: u8) {
+    let mut random = support::counter();
+    rig.home
+        .devices
+        .identified(eui(last), Some("SONOFF"), Some("ZBMINIR2"), T0, &mut random)
+        .unwrap();
+}
+
+#[test]
+fn a_new_device_is_one_device_discovered_with_the_device_as_the_api_gives_it_without_data_or_orders()
+ {
+    let mut rig = Rig::new();
+    let (hub, c) = listening(&rig);
+    identify(&mut rig, 0x31);
+    let events = batch(&hub, c);
+    let found = of_type(&events, "device.discovered");
+    assert_eq!(found.len(), 1, "{events:?}");
+    let device = &found[0]["device"];
+    for field in [
+        "id",
+        "integrationId",
+        "sourceDeviceId",
+        "name",
+        "manufacturer",
+        "model",
+        "ieeeAddress",
+        "zoneId",
+        "source",
+        "status",
+        "powerSource",
+        "lastSeen",
+        "createdAt",
+        "updatedAt",
+    ] {
+        assert!(device.get(field).is_some(), "{field}: {device}");
+    }
+    assert_eq!(device["integrationId"], "solite");
+    assert_eq!(device["source"], "solite");
+    assert!(device.get("data").is_none() && device.get("orders").is_none());
+    // The same fields as `GET /devices/:id`, minus data and orders.
+    let (status, listed) = rig.get(&format!(
+        "/api/v1/devices/{}",
+        device["id"].as_str().unwrap()
+    ));
+    assert_eq!(status, 200);
+    let mut expected = listed.clone();
+    expected.as_object_mut().unwrap().remove("data");
+    expected.as_object_mut().unwrap().remove("orders");
+    // The API's read brings the status up to date with the time: the rest is the same.
+    expected["status"] = device["status"].clone();
+    assert_eq!(device, &expected);
+}
+
+#[test]
+fn a_known_device_identified_again_is_not_discovered_again() {
+    let mut rig = Rig::new();
+    identify(&mut rig, 0x32);
+    let (hub, c) = listening(&rig);
+    identify(&mut rig, 0x32);
+    assert!(of_type(&batch(&hub, c), "device.discovered").is_empty());
+}
+
+#[test]
+fn with_no_client_on_devices_no_discovered_event_is_built() {
+    let mut rig = Rig::new();
+    let hub = rig.home.live();
+    let c = client(&hub, &["zones"]);
+    identify(&mut rig, 0x33);
+    assert!(batch(&hub, c).is_empty());
+}
+
+#[test]
+fn devices_discovered_in_a_batch_are_each_kept_without_dedup() {
+    let mut rig = Rig::new();
+    let hub = rig.home.live();
+    let c = client(&hub, &["devices"]);
+    for last in 0..8u8 {
+        identify(&mut rig, last);
+    }
+    assert_eq!(of_type(&batch(&hub, c), "device.discovered").len(), 8);
+}
+
+#[test]
+fn sixty_four_devices_discovered_at_once_close_a_client_that_never_reads_and_not_the_others() {
+    let mut rig = Rig::new();
+    let hub = rig.home.live();
+    let slow = client(&hub, &["devices"]);
+    let other = client(&hub, &["zones"]);
+    for last in 0..64u8 {
+        identify(&mut rig, last);
+    }
+    // 64 devices of about 400 bytes are past the 8 KB of a client that does not read.
+    assert_eq!(hub.close_request(slow), Some(CLOSE_TRY_AGAIN_LATER));
+    assert_eq!(hub.close_request(other), None);
 }

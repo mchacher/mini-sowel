@@ -2093,3 +2093,130 @@ fn more_commands_than_the_bound_are_refused_and_the_bound_is_8() {
     );
     assert_eq!(h.radio.commands_in_flight(), 8);
 }
+
+// Spec 017: pairing while serving. After `listen` the devices are not followed; `set_following`
+// turns it on for a window and off again, `forget_finished` lets go of the devices done.
+
+/// A radio that resumed a network, listening, with these devices that join by themselves when
+/// joining opens.
+fn listening_with(ncp_devices: Vec<SimDevice>, crowd: usize) -> Harness {
+    let mut ncp = Ncp::recording();
+    ncp.network = Some(StoredNetwork {
+        extended_pan_wire: [1, 2, 3, 4, 5, 6, 7, 8],
+        pan_id: 0x4321,
+        channel: 20,
+        node_type: 1,
+    });
+    ncp.devices = ncp_devices;
+    ncp.crowd = crowd;
+    let mut h = harness(ncp);
+    h.radio.identify().unwrap();
+    h.radio.listen().unwrap();
+    h
+}
+
+fn kinds(events: &[PairingEvent]) -> Vec<&'static str> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            PairingEvent::Joined { .. } => Some("joined"),
+            PairingEvent::Identified { .. } => Some("identified"),
+            PairingEvent::ReportingConfigured { .. } => Some("reporting"),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_device_that_joins_while_only_listening_is_not_followed() {
+    let mut h = listening_with(vec![SimDevice::sensor()], 0);
+    h.radio.permit_join(30).unwrap();
+    let events = poll_for(&mut h, 5_000);
+    assert!(kinds(&events).is_empty(), "{events:?}");
+    assert!(!h.radio.pairing_busy());
+}
+
+#[test]
+fn following_turned_on_follows_the_join_as_pairing_does_and_off_it_stops() {
+    let mut h = listening_with(vec![SimDevice::sensor()], 0);
+    h.radio.set_following(true);
+    h.radio.permit_join(30).unwrap();
+    let events = poll_until_idle(&mut h);
+    let seen = kinds(&events);
+    assert!(seen.contains(&"joined"), "{seen:?}");
+    assert!(seen.contains(&"identified"), "{seen:?}");
+    assert!(seen.contains(&"reporting"), "{seen:?}");
+    assert!(h.radio.busy_devices().is_empty());
+    // Off again: another announce of the same device is not followed.
+    h.radio.set_following(false);
+    h.radio.forget_finished();
+    h.ncp.borrow_mut().devices = vec![another_device()];
+    h.radio.permit_join(30).unwrap();
+    let events = poll_for(&mut h, 5_000);
+    assert!(kinds(&events).is_empty(), "{events:?}");
+}
+
+/// A sensor with an address of its own, that joins by itself when joining opens.
+fn another_device() -> SimDevice {
+    let mut device = SimDevice::sensor();
+    device.eui_wire = [0x99, 0x34, 0x56, 0x78, 0x00, 0x4B, 0x12, 0x00];
+    device.nwk = 0x7777;
+    device.auto_join = true;
+    device
+}
+
+#[test]
+fn forgetting_the_finished_devices_makes_room_for_the_next_window() {
+    let mut device = SimDevice::sensor();
+    device.announce = false;
+    let mut h = listening_with(vec![device], 31);
+    h.radio.set_following(true);
+    h.radio.permit_join(30).unwrap();
+    let events = poll_for(&mut h, 5_000);
+    assert_eq!(joined_count(&events), 32);
+    // Let every identification and setup finish.
+    poll_for(&mut h, 120_000);
+    assert!(!h.radio.pairing_busy());
+    h.radio.close_joining().unwrap();
+    h.radio.forget_finished();
+    // A 33rd device joins: followed, no `TooManyDevices`.
+    {
+        let mut ncp = h.ncp.borrow_mut();
+        let mut extra = another_device();
+        extra.announce = false;
+        ncp.devices = vec![extra];
+        ncp.crowd = 0;
+    }
+    h.radio.permit_join(30).unwrap();
+    let events = poll_for(&mut h, 5_000);
+    assert_eq!(joined_count(&events), 1, "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, PairingEvent::TooManyDevices { .. })),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn devices_still_being_identified_count_against_the_limit_and_are_kept_by_forget_finished() {
+    let mut device = SimDevice::sensor();
+    device.announce = false;
+    let mut h = listening_with(vec![device], 32);
+    h.radio.set_following(true);
+    h.radio.permit_join(30).unwrap();
+    let events = poll_for(&mut h, 3_000);
+    assert_eq!(joined_count(&events), 32);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, PairingEvent::TooManyDevices { .. })),
+        "the 33rd is refused while the 32 are being identified"
+    );
+    // Mid-setup devices are kept.
+    assert!(h.radio.pairing_busy());
+    let before = h.radio.busy_devices().len();
+    assert!(before > 0);
+    h.radio.forget_finished();
+    assert_eq!(h.radio.busy_devices().len(), before);
+}

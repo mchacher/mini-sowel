@@ -54,7 +54,13 @@ describe("App", () => {
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Garage" })).toBeTruthy();
     const links = screen.getAllByRole("link");
-    expect(links.map((l) => l.textContent)).toEqual(["Home", "Garage", "Workshop", "House"]);
+    expect(links.map((l) => l.textContent)).toEqual([
+      "Home",
+      "Garage",
+      "Workshop",
+      "House",
+      "Devices",
+    ]);
     const padding = (name: string) =>
       (within(nav()).getByText(name).closest("a")!.parentElement as HTMLElement).style.paddingLeft;
     expect(padding("Garage")).toBe("20px");
@@ -81,13 +87,13 @@ describe("App", () => {
   it("selects the root and says there is no room yet when there is only the root zone", async () => {
     await boot({ zones: [zone("root", "Home")] });
     expect(await screen.findByRole("heading", { level: 1, name: "Home" })).toBeTruthy();
-    expect(screen.getByText("No room yet: create one with the API")).toBeTruthy();
+    expect(screen.getByText("No room yet: create one from the devices page")).toBeTruthy();
     expect(within(nav()).getByText("Home").closest("a")!.getAttribute("aria-current")).toBe("page");
   });
 
   it("says there is no room when the API has no zone at all", async () => {
     await boot({ zones: [] });
-    expect(await screen.findByText("No room yet: create one with the API")).toBeTruthy();
+    expect(await screen.findByText("No room yet: create one from the devices page")).toBeTruthy();
   });
 
   it("sets the hash when a zone is clicked and follows hashchange", async () => {
@@ -150,7 +156,7 @@ describe("App", () => {
       within(drawer)
         .getAllByRole("link")
         .map((l) => l.textContent),
-    ).toEqual(["Home", "Garage", "Workshop", "House"]);
+    ).toEqual(["Home", "Garage", "Workshop", "House", "Devices"]);
     fireEvent.click(within(drawer).getByRole("button", { name: "Close the menu" }));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -210,5 +216,26 @@ describe("App", () => {
       ]),
     );
     expect(await screen.findByText("1 light on")).toBeTruthy();
+  });
+
+  it("shows the devices page at #/devices, with its entry in the sidebar and the drawer", async () => {
+    window.location.hash = "#/devices";
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    expect(await screen.findByRole("heading", { level: 1, name: "Devices" })).toBeTruthy();
+    const entry = within(nav()).getByText("Devices").closest("a")!;
+    expect(entry.getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByText("House light")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Menu" }));
+    expect(within(screen.getByRole("dialog")).getByText("Devices")).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("dialog")).getByText("Garage"));
+    expect(window.location.hash).toBe("#/zone/garage");
+  });
+
+  it("opens the devices page from the sidebar entry, and the room pages are unchanged", async () => {
+    await boot({ zones: tree(), equipments: [light("l", "Garage light", "garage", false)] });
+    await screen.findByRole("heading", { level: 1, name: "Garage" });
+    fireEvent.click(within(nav()).getByText("Devices"));
+    expect(window.location.hash).toBe("#/devices");
+    expect(await screen.findByRole("heading", { level: 1, name: "Devices" })).toBeTruthy();
   });
 });

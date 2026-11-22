@@ -36,7 +36,7 @@ describe("t()", () => {
     setLanguage(detectLanguage());
     expect(i18n.language).toBe("fr");
     expect(document.documentElement.lang).toBe("fr");
-    expect(t("app.noRoom")).toBe("Aucune pièce : créez-en une avec l'API");
+    expect(t("app.noRoom")).toBe("Aucune pièce : créez-en une depuis la page des appareils");
     vi.spyOn(navigator, "language", "get").mockReturnValue("de-DE");
     expect(detectLanguage()).toBe("en");
   });

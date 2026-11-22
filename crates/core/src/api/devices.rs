@@ -29,6 +29,14 @@ fn get(home: &Home, id: &str) -> Response {
 }
 
 fn delete(home: &mut Home, id: &str) -> Response {
+    // The engine is still identifying or setting up this device: it would come back at once.
+    if home
+        .devices
+        .get(id)
+        .is_some_and(|item| home.pairing().is_busy_source(&item.device.source_device_id))
+    {
+        return error(409, "Device is being paired");
+    }
     if home.remove_device(id) {
         no_content()
     } else {

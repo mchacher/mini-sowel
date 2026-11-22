@@ -1,12 +1,12 @@
 //! Sowel's `EngineEvent`s that Solite sends over the WebSocket, with Sowel's names and
 //! fields (`src/shared/types.ts` T:1819-1974). The events of what Solite does not have
-//! (`device.discovered`, modes, activity, energy, system...) are not here: see decision D18.
+//! (modes, activity, energy, system...) are not here: see decision D18.
 
 use serde::Serialize;
 use serde_json::Value;
 
 use super::topics::{Topic, topic_of_type};
-use crate::devices::{DeviceStatus, Id};
+use crate::devices::{Device, DeviceStatus, Id};
 use crate::equipments::{Equipment, EquipmentStatus};
 use crate::orders::OrderSource;
 use crate::zones::Zone;
@@ -17,6 +17,10 @@ use crate::zones::aggregate::ZoneAggregatedData;
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all_fields = "camelCase")]
 pub enum EngineEvent {
+    /// A device the home did not have: Sowel's `device.discovered`, the `Device` without its
+    /// data and orders (`Device` serialises as `GET /devices/:id` gives it, minus those two).
+    #[serde(rename = "device.discovered")]
+    DeviceDiscovered { device: Device },
     #[serde(rename = "device.removed")]
     DeviceRemoved { device_id: Id, device_name: String },
     #[serde(rename = "device.status_changed")]
@@ -110,6 +114,7 @@ impl EngineEvent {
     /// The `type` field.
     pub fn type_name(&self) -> &'static str {
         match self {
+            EngineEvent::DeviceDiscovered { .. } => "device.discovered",
             EngineEvent::DeviceRemoved { .. } => "device.removed",
             EngineEvent::DeviceStatusChanged { .. } => "device.status_changed",
             EngineEvent::DeviceDataUpdated { .. } => "device.data.updated",

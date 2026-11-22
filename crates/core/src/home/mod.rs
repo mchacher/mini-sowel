@@ -7,9 +7,11 @@
 mod cursor;
 mod equipment_ops;
 pub mod events;
+pub mod pairing;
 mod recipe_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
+pub use pairing::{CLOSE_GRACE_MS, PairingWindow, Phase};
 
 use std::io::{self, Write};
 
@@ -102,6 +104,8 @@ pub struct Home {
     tracker: StatusTracker,
     /// When the zones and statuses were last recomputed, for the periodic check (`tick`).
     recomputed_at: u64,
+    /// The pairing window (spec 017): what the API asked, what the radio loop did.
+    pairing: PairingWindow,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -191,7 +195,17 @@ impl Home {
             live,
             tracker: StatusTracker::new(),
             recomputed_at: now,
+            pairing: PairingWindow::new(),
         }
+    }
+
+    /// The pairing window.
+    pub fn pairing(&self) -> &PairingWindow {
+        &self.pairing
+    }
+
+    pub fn pairing_mut(&mut self) -> &mut PairingWindow {
+        &mut self.pairing
     }
 
     /// The hub the WebSocket's clients are connected to.

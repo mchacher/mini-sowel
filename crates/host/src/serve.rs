@@ -1,4 +1,4 @@
-//! `--serve`: resume the network, keep the devices up to date from what they send, and serve
+//! `--serve`: start the network, keep the devices up to date from what they send, and serve
 //! Sowel's device, zone, equipment and recipe API, and its live events (`/ws`), on 127.0.0.1. The
 //! radio loop runs in the calling thread and is the only writer of the files; HTTP workers answer
 //! requests, with the home behind a lock that is never held during radio I/O, a file write, or the
@@ -270,6 +270,9 @@ pub fn serve<T: RadioTransport>(
         // first moment, API calls included.
         let mut guard = lock(&home);
         guard.orders().set_clock(Arc::new(monotonic_ms));
+        guard
+            .pairing_mut()
+            .set_grace_ms(u64::try_from(crate::close_grace().as_millis()).unwrap_or(u64::MAX));
         // The recipe instances start once the home is loaded: their start sync queues its
         // orders, which wait for the radio.
         guard.start_recipes(monotonic_ms(), now_ms());
@@ -345,8 +348,10 @@ fn radio_loop<T: RadioTransport>(
     for line in &lines[..3] {
         println!("{line}");
     }
-    let network = radio.listen().map_err(|e| format!("radio: {e}"))?;
-    let foreign = !backup::matches(data, &network);
+    // The network is resumed, or formed on a radio that has none; joining stays closed until the
+    // API opens it, and the devices are only followed while it is open (spec 017).
+    let (network, foreign) = backup::start(&mut radio, data, &mut fill)?;
+    radio.set_following(false);
     println!("{}", network_line(&network, foreign));
     println!("serving: http://127.0.0.1:{port}");
     let clocks = Clocks {
