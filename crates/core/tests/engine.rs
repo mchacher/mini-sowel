@@ -650,7 +650,7 @@ fn a_setup_still_running_at_the_cap_is_cut_short_and_the_coordinator_listens_aga
     let mut window = Window::new(vec![stuck]);
     lock(&window.home).pairing_mut().set_grace_ms(3_000);
     window.ask(10);
-    window.run(30_000, &[]);
+    window.run(14_000, &[]);
     assert!(
         window
             .lines
@@ -660,6 +660,10 @@ fn a_setup_still_running_at_the_cap_is_cut_short_and_the_coordinator_listens_aga
         window.lines
     );
     assert_eq!(lock(&window.home).pairing().phase(), Phase::Closed);
+    assert!(
+        window.bench.radio.setups_in_progress().is_empty(),
+        "the line is only printed for a setup really abandoned"
+    );
 }
 
 #[test]

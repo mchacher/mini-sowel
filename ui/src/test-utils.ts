@@ -254,7 +254,7 @@ export function resetStores(): void {
   useLive.setState({ status: "connecting" });
   resetPairingTimers();
   useDevices.setState({ devices: {}, loading: false, error: null });
-  usePairing.setState({ open: false, remaining: 0, error: null, newIds: [] });
+  usePairing.setState({ open: false, remaining: 0, error: null, newIds: [], pageOpen: false });
 }
 
 /** A device as `GET /api/v1/devices` gives it, without its data. */

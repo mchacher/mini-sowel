@@ -981,3 +981,24 @@ fn last_changed_is_not_in_the_device_api_json() {
     // The file has it.
     assert!(rig.home.devices.to_json().unwrap().contains("lastChanged"));
 }
+
+#[test]
+fn a_deleted_device_does_not_come_back_from_a_late_setup_but_a_new_identification_adds_it() {
+    let mut devices = Devices::new();
+    let mut random = counter();
+    snzb02(&mut devices, &mut random);
+    let id = devices.list()[0].device.id.to_string();
+    assert!(devices.remove(&id));
+    devices
+        .reporting_configured(EUI, &[0x0402], T0 + 1, &mut random)
+        .unwrap();
+    assert!(devices.list().is_empty());
+    devices
+        .identified(EUI, Some("eWeLink"), Some("TH01"), T0 + 2, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[0x0402], T0 + 2, &mut random)
+        .unwrap();
+    assert_eq!(devices.list().len(), 1);
+    assert_ne!(devices.list()[0].device.id.to_string(), id);
+}

@@ -20,8 +20,11 @@ export function DevicesPage() {
   const pairingError = usePairing((s) => s.error);
   const newIds = usePairing((s) => s.newIds);
 
-  // The "New" marks last until the page is left.
-  useEffect(() => () => usePairing.getState().clearNew(), []);
+  // The "New" marks cover the time the page is open, and last until it is left.
+  useEffect(() => {
+    usePairing.getState().setPageOpen(true);
+    return () => usePairing.getState().setPageOpen(false);
+  }, []);
 
   // Newest first: the pairing order reversed.
   const list = Object.values(devices).reverse();

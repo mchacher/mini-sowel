@@ -17,10 +17,13 @@ interface PairingState {
   error: string | null;
   /** The devices discovered since the page was opened, marked "New". At most 64 (the device limit). */
   newIds: string[];
+  /** The devices page is on screen: only then is a discovered device marked "New". */
+  pageOpen: boolean;
 
   refresh: () => Promise<void>;
   start: () => Promise<void>;
   stop: () => Promise<void>;
+  setPageOpen: (open: boolean) => void;
   markNew: (deviceId: string) => void;
   clearNew: () => void;
 }
@@ -68,6 +71,7 @@ export const usePairing = create<PairingState>((set) => ({
   remaining: 0,
   error: null,
   newIds: [],
+  pageOpen: false,
 
   refresh: async () => {
     try {
@@ -94,8 +98,15 @@ export const usePairing = create<PairingState>((set) => ({
     }
   },
 
+  // Opening or leaving the page starts a new "since the page opened".
+  setPageOpen: (pageOpen) => set({ pageOpen, newIds: [] }),
+
   markNew: (deviceId) => {
-    set((s) => (s.newIds.includes(deviceId) ? s : { newIds: [...s.newIds, deviceId].slice(-64) }));
+    set((s) =>
+      !s.pageOpen || s.newIds.includes(deviceId)
+        ? s
+        : { newIds: [...s.newIds, deviceId].slice(-64) },
+    );
   },
 
   clearNew: () => set({ newIds: [] }),

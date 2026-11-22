@@ -951,6 +951,17 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             .collect()
     }
 
+    /// Gives up the setups and enrollments still going on (the window's time cap): the devices
+    /// keep what was already set up and are not followed any more.
+    pub fn abandon_setups(&mut self) {
+        for device in &mut self.pairing.devices {
+            if device.setup.take().is_some() {
+                device.retry.clear();
+                device.retry_enroll = false;
+            }
+        }
+    }
+
     /// True while a device that joined is still being identified.
     pub fn pairing_busy(&self) -> bool {
         self.pairing

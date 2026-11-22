@@ -232,7 +232,8 @@ without `--verbose`: `pairing: open for <n> s`, `joined:`, `device:`, `reporting
 closed`, `pairing: device store full (64), <address> ignored`, and `pairing: failed: <reason>`
 when the radio refuses the opening (kept in `error` until the next `POST`; the window stays
 closed and the engine goes on). A device deleted from the home that announces itself during a
-window comes back as a new device. The route has no authentication (decision D28).
+window comes back as a new device; a setup still running at its deletion does not bring it back,
+and a setup cut short at the cap is abandoned. The route has no authentication (decision D28).
 
 #### Live events
 

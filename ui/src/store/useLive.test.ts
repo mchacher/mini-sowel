@@ -141,6 +141,7 @@ describe("live store", () => {
   it("applies device.discovered, device.status_changed and device.removed, and marks the new one", () => {
     connect();
     FakeWebSocket.last.open();
+    usePairing.getState().setPageOpen(true);
     FakeWebSocket.last.receive({ type: "device.discovered", device: device("a", "A") });
     expect(Object.keys(useDevices.getState().devices)).toEqual(["a"]);
     expect(usePairing.getState().newIds).toEqual(["a"]);
@@ -154,6 +155,18 @@ describe("live store", () => {
     expect(usePairing.getState().newIds).toEqual(["a"]);
     FakeWebSocket.last.receive({ type: "device.removed", deviceId: "a", deviceName: "A" });
     expect(useDevices.getState().devices).toEqual({});
+  });
+
+  it("marks no device new while the devices page is not open", () => {
+    connect();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.receive({ type: "device.discovered", device: device("a", "A") });
+    expect(Object.keys(useDevices.getState().devices)).toEqual(["a"]);
+    expect(usePairing.getState().newIds).toEqual([]);
+    usePairing.getState().setPageOpen(true);
+    usePairing.getState().setPageOpen(false);
+    FakeWebSocket.last.receive({ type: "device.discovered", device: device("b", "B") });
+    expect(usePairing.getState().newIds).toEqual([]);
   });
 
   it("reads the devices and the pairing state again on every open", () => {

@@ -183,6 +183,7 @@ fn pairing_step<T: RadioTransport, C: FnMut() -> u64>(
                 for eui64 in radio.setups_in_progress() {
                     sink(&cut_short_line(&eui64));
                 }
+                radio.abandon_setups();
                 radio.set_following(false);
                 lock(home).pairing_mut().finished();
             }

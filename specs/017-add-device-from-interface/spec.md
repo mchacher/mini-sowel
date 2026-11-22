@@ -79,7 +79,7 @@ Zigbee2MQTT's bridge request `permit_join` (`time` in seconds, 0 to close):
   coordinator follows the devices: a device that joins or announces itself is identified, its
   reporting set up, an alarm device enrolled, exactly as with `--pair` (spec 005, 006, 009).
   After that it only listens again, as today. A setup still running at the cap prints
-  `reporting: <address> cut short`.
+  `reporting: <address> cut short`; the setup is then abandoned.
 - Each pairing event is applied to the home (`Devices::apply`): a new device is added with its
   default name (`ZBMINIR2 567A`), its data and orders; one already known keeps its id, name and
   zone. The lines `--pair` prints (`joined:`, `device:`, `reporting:`, notes such as `pairing:
@@ -105,6 +105,7 @@ Zigbee2MQTT's bridge request `permit_join` (`time` in seconds, 0 to close):
 - **A device deleted from the home but still in the Zigbee network** that announces itself during
   a window is followed like any other and comes back as a new device (new id, default name,
   `device.discovered`); outside a window it is not followed and its messages are ignored, as today.
+  A setup still running when it is deleted never brings it back: only a new identification does.
 
 ### R3: `--serve` starts the network
 
