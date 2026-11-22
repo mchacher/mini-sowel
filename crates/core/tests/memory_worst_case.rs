@@ -46,6 +46,8 @@
 //!   transport); their bytes are an estimate by arithmetic, `RADIO_ESTIMATE_BYTES`, added to the
 //!   peak.
 //! - `radio/ash.rs::MAX_TIMEOUTS`: a count of attempts, no memory.
+//! - `radio/serial.rs::MAX_RADIO_RESTARTS`: at most 3 restart times kept (24 bytes), no memory
+//!   worth driving here.
 //! - `radio/ezsp.rs::MAX_PROTOCOL_VERSION`: a protocol version number, no memory.
 //! - `network.rs::MAX_SETTING_BYTES`: the network setting is read from 256 bytes at most; one
 //!   short-lived text at boot, far below the rest, not part of the running engine.

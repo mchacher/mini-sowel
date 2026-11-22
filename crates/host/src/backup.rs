@@ -9,6 +9,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use solite_core::radio::backup::{is_network, pan_label, text as backup_text};
 use solite_core::radio::{
     Network, NetworkKeys, NetworkSettings, Radio, RadioError, RadioTransport,
 };
@@ -23,10 +24,6 @@ fn cannot_write(dir: &Path) -> String {
     format!("cannot write {}", dir.display())
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02X}")).collect()
-}
-
 /// Makes sure the data folder exists and can be written, before the radio is touched.
 pub fn check_writable(dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|_| cannot_write(dir))?;
@@ -38,15 +35,7 @@ pub fn check_writable(dir: &Path) -> Result<(), String> {
 /// Writes `network.json` (mode 0600) for a network just formed. The file is written under a
 /// temporary name, then renamed, so a stop in the middle never leaves half a file.
 pub fn write(dir: &Path, network: &Network, keys: &NetworkKeys) -> Result<(), String> {
-    let text = format!(
-        "{{\n  \"panId\": \"0x{:04X}\",\n  \"extendedPanId\": \"0x{}\",\n  \"channel\": {},\n  \
-         \"networkKey\": \"{}\",\n  \"trustCenterKey\": \"{}\"\n}}\n",
-        network.pan_id,
-        hex(&network.extended_pan_id),
-        network.channel,
-        hex(&keys.network_key),
-        hex(&keys.trust_center_key)
-    );
+    let text = backup_text(network, keys);
     let target = path(dir);
     keep_other_backup(dir, network);
     let temporary = dir.join(format!("{FILE_NAME}.tmp"));
@@ -76,21 +65,8 @@ fn keep_other_backup(dir: &Path, network: &Network) {
     if is_network(&text, network) {
         return;
     }
-    let pan = field(&text, "panId")
-        .map(|p| p.trim_start_matches("0x").to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    let pan = pan_label(&text);
     let _ = fs::rename(path(dir), dir.join(format!("network-{pan}.json")));
-}
-
-fn is_network(text: &str, network: &Network) -> bool {
-    field(text, "panId") == Some(format!("0x{:04X}", network.pan_id))
-        && field(text, "extendedPanId") == Some(format!("0x{}", hex(&network.extended_pan_id)))
-}
-
-/// The value of `"name": "value"` in the file's text.
-fn field(text: &str, name: &str) -> Option<String> {
-    let after = text.split(&format!("\"{name}\": \"")).nth(1)?;
-    Some(after.split('"').next()?.to_string())
 }
 
 /// True when the backup holds this network (same PAN id and extended PAN id).

@@ -13,3 +13,7 @@ build-std = ["std", "panic_abort"]
 MCU = "esp32"
 # Pinned: an ESP-IDF upgrade is a decision, not a side effect of a crate update.
 ESP_IDF_VERSION = "v5.5.5"
+
+# The folder `sdkconfig.defaults` and the other relative ESP-IDF paths are read from: `firmware/`
+# whatever the target folder is (the radio image builds into `target/radio`, spec 021).
+CARGO_WORKSPACE_DIR = { value = "", relative = true }

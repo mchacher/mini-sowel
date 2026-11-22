@@ -21,12 +21,16 @@ opt-level = "z"
 
 [features]
 # The image QEMU runs: the engine with the simulated radio and the realistic home of
-# `fixtures/` (spec 016, decision D26). Without it, the image is the box's: no radio yet.
+# `fixtures/` (spec 016, decision D26). Without it (and without `radio`), the image is the box's:
+# it starts no radio.
 sim = ["dep:solite-sim"]
 # The measuring image for the box (spec 020): `sim`, but every save goes to the flash, timed, and
 # the run logs the `saves:` line. QEMU's flash takes a quarter of an hour for those saves, so only
 # the box runs it.
 flash-saves = ["sim"]
+# The radio image (spec 021, decision D32): drives the EFR32 over UART1 and runs the engine on it.
+# Built in its own target folder with `sdkconfig.radio.defaults`; never with `sim`.
+radio = []
 
 [dependencies]
 solite-core = { path = "../crates/core" }

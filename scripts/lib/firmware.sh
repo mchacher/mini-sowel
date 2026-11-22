@@ -109,11 +109,39 @@ fw_missing_line() {
   grep -aq 'memory: internal' "$1" || { echo "the memory line (memory: internal ...)"; return; }
   grep -aq 'storage: /data, ' "$1" || { echo "the storage line (storage: /data, ...)"; return; }
   grep -aq 'network: .* no link started' "$1" || { echo "the network line (network: ...)"; return; }
-  if [ "$2" = sim ]; then
-    grep -aq 'engine: ' "$1" || echo "the engine line (engine: ...)"
-  else
-    grep -aq 'radio: none' "$1" || echo "the radio line (radio: none)"
-  fi
+  case "$2" in
+    sim) grep -aq 'engine: ' "$1" || echo "the engine line (engine: ...)" ;;
+    radio) fw_missing_radio_line "$1" ;;
+    *) grep -aq 'radio: none' "$1" || echo "the radio line (radio: none)" ;;
+  esac
+}
+
+# The first line of the radio image that is missing, named ($1 the log); empty when all show.
+fw_missing_radio_line() {
+  grep -aq 'radio: uart [0-9]* baud' "$1" || { echo "the radio line (radio: uart <baud> baud)"; return; }
+  grep -aq 'ezsp: ' "$1" || { echo "the ezsp line (ezsp: ...)"; return; }
+  grep -aqE 'network: (formed|resumed)' "$1" || { echo "the network line (network: formed or resumed)"; return; }
+  grep -aqE 'pairing: (open for|not opened)' "$1" || { echo "the pairing line (pairing: open for ... or pairing: not opened ...)"; return; }
+  grep -aq 'serial: [0-9]* baud' "$1" || { echo "the serial line (serial: ... baud, due 240 s after the radio starts: run again with a larger --seconds)"; return; }
+  grep -aq 'heap: internal' "$1" || echo "the heap line (heap: internal ..., due with the serial line: run again with a larger --seconds)"
+}
+
+# The radio image's log against its checks ($1 the log). Prints the reason and returns 1 when one
+# fails; returns 0 when all hold. The banner counts a reboot even when the ROM's `rst:` lines are
+# silenced (GPIO15 held low at reset).
+fw_check_radio() {
+  grep -aq 'no answer at any baud rate' "$1" && { echo "the radio answers at no speed (115200, 460800, 921600): see the failure ladder of spec 021 R8.3."; return 1; }
+  grep -aq 'radio: stopped after' "$1" && { echo "the radio was restarted too often: $(grep -a 'radio: stopped after' "$1" | tail -n 1)"; return 1; }
+  failed=$(grep -a 'pairing: failed:' "$1" | tail -n 1)
+  [ -z "$failed" ] || { echo "the radio refused to open joining: $failed"; return 1; }
+  grep -aq 'task_wdt' "$1" && { echo "a task watchdog fired (task_wdt)."; return 1; }
+  [ "$(grep -acF "solite $(fw_version)" "$1")" -le 1 ] || { echo "the box rebooted (the banner shows more than once)."; return 1; }
+  heap=$(grep -a 'heap: internal' "$1" | tail -n 1)
+  [ -n "$heap" ] || return 0
+  min=$(echo "$heap" | sed -n 's/.*heap: internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
+  [ -n "$min" ] || { echo "cannot read the internal minimum from the heap line: $heap"; return 1; }
+  [ "$min" -ge "$INTERNAL_MIN_KB" ] || { echo "the internal RAM minimum free is $min KB, below the $INTERNAL_MIN_KB KB reserve of decision D23."; return 1; }
+  return 0
 }
 
 # The engine's line against its limits ($1 the log). Prints the reason and returns 1 when a limit

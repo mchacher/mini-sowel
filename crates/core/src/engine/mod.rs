@@ -6,6 +6,7 @@
 mod saver;
 mod storage;
 
+use std::fmt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,11 +31,48 @@ pub struct Clocks {
     pub monotonic: Clock,
 }
 
+/// Why the loop ended: the radio failed (a firmware can reset it and run again) or anything else
+/// did (storage, the home's data), which a reset of the radio would not mend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunError {
+    Radio(RadioError),
+    Other(String),
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunError::Radio(e) => write!(f, "radio: {e}"),
+            RunError::Other(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for RunError {}
+
+impl From<String> for RunError {
+    fn from(message: String) -> Self {
+        RunError::Other(message)
+    }
+}
+
+impl From<RadioError> for RunError {
+    fn from(e: RadioError) -> Self {
+        RunError::Radio(e)
+    }
+}
+
+impl From<RunError> for String {
+    fn from(e: RunError) -> Self {
+        e.to_string()
+    }
+}
+
 /// Runs the loop until `stop` is set; `Ok(true)` then. The radio's network is started and the
 /// radio only listens: the caller did it, and shows what it wants of it. `fill` is the random
 /// source. With `verbose`, the lines of the measures received go to `sink`, one call per line; the
 /// lines of pairing (`pairing: open for 30 s`, `joined:`, `device:`, `reporting:`...) always do.
-/// A radio or storage error ends the loop. The files due are written each turn, and by the caller
+/// A radio or storage error ends the loop (`RunError::Radio` or `RunError::Other`). The files due are written each turn, and by the caller
 /// on stop (`Saver::tick` with `stopping`).
 ///
 /// The pairing window (spec 017) lives in the home: the API records a request, this loop takes
@@ -50,7 +88,7 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
     fill: &mut dyn FnMut(&mut [u8]) -> Result<(), String>,
     verbose: bool,
     sink: &mut dyn FnMut(&str),
-) -> Result<bool, String> {
+) -> Result<bool, RunError> {
     // The orders of the API (and of the core) wait in this queue; the radio loop is the only one
     // that sends them.
     let orders = lock(home).orders().clone();
@@ -59,7 +97,7 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
     let mut runner = OrderRunner::new();
     while !stop.load(Ordering::SeqCst) {
         pairing_step(radio, home, clocks, sink)?;
-        let events = radio.poll_pairing().map_err(|e| format!("radio: {e}"))?;
+        let events = radio.poll_pairing()?;
         let activity = radio.take_activity();
         let routes = radio.take_routes();
         let now = (clocks.now)();
@@ -129,7 +167,7 @@ fn pairing_step<T: RadioTransport, C: FnMut() -> u64>(
     home: &Mutex<Home>,
     clocks: &Clocks,
     sink: &mut dyn FnMut(&str),
-) -> Result<(), String> {
+) -> Result<(), RunError> {
     let now = (clocks.monotonic)();
     let (request, phase, grace) = {
         let mut guard = lock(home);
@@ -168,7 +206,7 @@ fn pairing_step<T: RadioTransport, C: FnMut() -> u64>(
                         radio.set_following(false);
                     }
                 }
-                Err(other) => return Err(format!("radio: {other}")),
+                Err(other) => return Err(other.into()),
             }
             phase = lock(home).pairing().phase();
         }

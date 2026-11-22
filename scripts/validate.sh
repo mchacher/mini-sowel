@@ -1,6 +1,6 @@
 #!/bin/sh
-# The verdict, one command: docs, format, lint, types, tests, UI budget, the three ESP32 firmware
-# images (the box's, the one QEMU runs, the measuring one) and the engine's run in QEMU.
+# The verdict, one command: docs, format, lint, types, tests, UI budget, the four ESP32 firmware
+# images (the box's, the one QEMU runs, the measuring one, the radio one) and the engine's run in QEMU.
 #
 #   sh scripts/validate.sh          everything (before a commit, in CI)
 #   sh scripts/validate.sh --fast   the quick checks only (the pre-commit hook): docs, format, lint
@@ -79,7 +79,7 @@ if want ui; then
 fi
 
 if want firmware; then
-  step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim, the measuring image with feature flash-saves)"
+  step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim, the measuring image with feature flash-saves, the radio image with feature radio)"
   if [ -f "$HOME/export-esp.sh" ]; then
     . "$HOME/export-esp.sh"
   else
@@ -91,6 +91,16 @@ if want firmware; then
     cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings
     cargo build --release --features sim --quiet && cargo clippy --release --features sim --quiet -- -D warnings
     cargo build --release --features flash-saves --quiet && cargo clippy --release --features flash-saves --quiet -- -D warnings
+    # The radio image has its own target folder and its own ESP-IDF settings (spec 021 R1.1): the
+    # other images keep theirs.
+    export CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults"
+    cargo build --release --features radio --quiet && cargo clippy --release --features radio --quiet -- -D warnings
+    # The settings file was read: the UART interrupt is in internal RAM in the radio build, and
+    # in none of the others.
+    grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the radio build lacks CONFIG_UART_ISR_IN_IRAM=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
+    ! grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the other images' build holds CONFIG_UART_ISR_IN_IRAM=y: they must keep their settings" >&2; exit 1; }
   )
 
   step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"

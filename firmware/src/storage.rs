@@ -179,9 +179,9 @@ impl Storage for FatStorage {
     }
 }
 
-/// Writes a whole file (the seed of the QEMU image) in chunks of 4 KB, so that no copy of it is
-/// made; errors name the file.
-#[cfg(feature = "sim")]
+/// Writes a whole file (the seed of the QEMU image, the radio image's Zigbee backup) in chunks of
+/// 4 KB, so that no copy of it is made; errors name the file.
+#[cfg(any(feature = "sim", feature = "radio"))]
 pub fn write_text(name: &str, text: &str) -> Result<(), String> {
     const CHUNK: usize = 4096;
     let mut position = 0;
@@ -197,4 +197,14 @@ pub fn write_text(name: &str, text: &str) -> Result<(), String> {
         position = end;
         Ok(Some(chunk))
     })
+}
+
+/// Renames a file of the data partition; FAT refuses a rename onto an existing file, so the
+/// target goes first.
+#[cfg(feature = "radio")]
+pub fn rename(from: &str, to: &str) -> Result<(), String> {
+    let (from_path, to_path) = (Path::new(BASE).join(from), Path::new(BASE).join(to));
+    let _ = fs::remove_file(&to_path);
+    fs::rename(&from_path, &to_path)
+        .map_err(|e| format!("{}: cannot rename to {}: {e}", from_path.display(), to))
 }

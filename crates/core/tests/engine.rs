@@ -170,6 +170,7 @@ fn run_engine(
         verbose,
         &mut |line| lines.push(line.to_string()),
     )
+    .map_err(String::from)
 }
 
 fn json_of(home: &mut Home, path: &str) -> serde_json::Value {
@@ -787,5 +788,55 @@ fn a_full_device_store_gives_a_note_and_no_device() {
         1,
         "{:?}",
         window.lines
+    );
+}
+
+/// A transport that fails on every read.
+struct Broken;
+
+impl RadioTransport for Broken {
+    fn read(&mut self, _buf: &mut [u8], _timeout_ms: u64) -> Result<usize, TransportError> {
+        Err(TransportError::Io("uart read failed".into()))
+    }
+
+    fn write(&mut self, _bytes: &[u8]) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_radio_error_in_a_poll_is_a_radio_run_error_with_the_text_of_before() {
+    let mut radio = Radio::new(Broken, || 0u64);
+    let home = home_with_a_zone();
+    let storage = MemStorage::default();
+    let mut saver = Saver::new(&storage, T0);
+    let stop = AtomicBool::new(false);
+    let error = engine::run(
+        &mut radio,
+        &home,
+        &mut saver,
+        &clocks(),
+        &stop,
+        &mut scripted(),
+        false,
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(matches!(error, engine::RunError::Radio(_)), "{error:?}");
+    // The text of today: `radio: ` and the radio's error (here, a radio never identified).
+    assert_eq!(error.to_string(), "radio: the radio was not identified");
+    assert_eq!(String::from(error), "radio: the radio was not identified");
+}
+
+#[test]
+fn a_storage_error_is_an_other_run_error_that_no_radio_restart_mends() {
+    // A storage error reaches the loop as the saver's text: it is `Other`, with its text as it
+    // is, never `Radio`.
+    let error =
+        engine::RunError::from("zones: memory://zones.json: cannot write: full".to_string());
+    assert!(matches!(error, engine::RunError::Other(_)));
+    assert_eq!(
+        error.to_string(),
+        "zones: memory://zones.json: cannot write: full"
     );
 }

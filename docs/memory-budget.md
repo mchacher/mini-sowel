@@ -54,6 +54,7 @@ never taken by an allocation that may go to PSRAM.
 | Network stack of the larger of Wi-Fi and Ethernet: Wi-Fi station and lwIP, default buffers | 70 KB (50 to 70 KB documented) | E, ESP-IDF |
 | Ethernet: EMAC DMA buffers (10 receive and 10 transmit buffers of about 1.6 KB) and driver | about 40 KB, **not added**: only one link is active, the budget takes the larger (Wi-Fi) | E, ESP-IDF defaults |
 | Task stacks: main (8 KB, `CONFIG_ESP_MAIN_TASK_STACK_SIZE`), 4 HTTP workers, the radio loop, the WebSocket writer | 64 KB | E, usual ESP-IDF stack sizes; the firmware sets only the main task's stack |
+| The radio image: the engine thread's stack (32 KB) and the UART's two rings (4 KB receive, 1 KB transmit), all internal RAM | 37 KB, inside the 64 KB of task stacks above for the stack; measured on the box: engine stack 27 KB unused of 32 KB, receive ring highest use 262 B of 4096 B | E (set in `firmware/src/radio_engine.rs` and `radio_uart.rs`), M for the use (2026-11-22) |
 | mbedTLS, its small internal allocations | 8 KB | E |
 | Left for the engine's small allocations and the rest, before the reserve | 359 − 70 − 64 − 8 = 217 KB | |
 | Reserve kept for DMA and the network stack | 64 KB | settings |
@@ -67,7 +68,7 @@ fallback above), which has room. Consequences, to read again with the box's own 
 the firmware under QEMU, then on the Dongle Max, "On the box" below):
 
 - the stack, TLS and network figures are estimates: the box's figures ("On the box", below) cover the
-  boot and the engine; the network rows need Wi-Fi (E3c), the radio's buffers the radio (E3b);
+  boot and the engine; the network rows need Wi-Fi (E3c); the serial link's rings and the engine thread's stack are the radio image's (spec 021), their figures come from its run on the box (below);
 - lowering `SPIRAM_MALLOC_ALWAYSINTERNAL` (for example to 512 bytes) moves more of the engine to
   PSRAM at the price of slower access: the knob to turn if the internal RAM runs short;
 - the internal RAM left after the network is what the firmware's memory line shows at boot.
@@ -147,4 +148,5 @@ and becomes a line of the roadmap's inbox (or a decision for the ceiling): the l
 | Save stall: the longest save (file, KB) and the total | Longest save 3770 ms (`devices.json`, 98 KB); 51 saves in 172 s in all; 3945 ms for the one save of a second boot (2026-11-22). Above the 1 s limit: a line of the roadmap inbox | `sh scripts/box.sh log --image sim` (the `saves:` line) |
 | Internal RAM with Wi-Fi up | needs Wi-Fi (E3c) | |
 | The 33 requests of an equipment with 16 + 16 bindings | needs Wi-Fi (E3c) | |
-| The serial link's buffers | needs the radio (E3b) | |
+| The serial link's buffers | 115200 baud, receive ring 4096 B, highest use 262 B, full 0 times, in 4 minutes with one device (2026-11-22) | `sh scripts/box.sh log --image radio` (the `serial:` line, every 240 s) |
+| The radio image's internal RAM: minimum free and the engine stack's high-water mark | Boot of the radio image: internal 352 KB free (largest block 160 KB), PSRAM 2046 KB free. After 4 minutes with one device: internal 303 KB free (minimum 234 KB), PSRAM 2020 KB free (minimum 2016 KB), engine stack 27 KB unused of 32 KB. Nothing against D27: the home holds one device (2026-11-22) | `sh scripts/box.sh log --image radio` (the `heap:` line) |
