@@ -539,8 +539,11 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the box's name `solite-<6 hex>` (alone or with `.local`, `.lan`, `.home`, `.home.arpa`); the
   pairing route answers 404 (D28). ESP-IDF's HTTP server through `esp-idf-svc`, 4 workers by its
   asynchronous requests (their stacks and 16 KB body buffers in PSRAM), at most 12 connections in
-  a socket table of 24, TCP keep-alive; on `/ws` the refusals are close
-  codes after the upgrade (4003, 1013), only `bearer.none` is echoed, and a dead client is found by
+  a socket table of 16, TCP keep-alive; on `/ws` the refusals are close
+  codes after the upgrade (4003, 1013), the development origins of `live::session::origin_allowed`
+  (`http://localhost:5173`, `http://127.0.0.1:5173`) are accepted as the host does (decided by the
+  user, 2026-11-22: a development page on a machine of the home's network can open the live events),
+  only `bearer.none` is echoed, and a dead client is found by
   TCP keep-alive instead of 60 s of silence; a client that cannot be written to holds the server's
   task up to 5 s. The interface is embedded at build time, gzip only, from flash. Wi-Fi power save
   off; SNTP with `pool.ntp.org`; the engine's saves wait at most 20 s for the clock, the radio and
@@ -554,3 +557,18 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   forwarded to it. The guards are the Mac host's (Host check against DNS rebinding, JSON-only
   bodies against forms, Origin on `/ws`), and the pairing route stays off. The settings file
   survives a flash with `--keep-storage`, which NVS would not.
+
+## D34: The backup of the original firmware is optional for `flash`
+
+- **Date**: 2026-11-22
+- **Choice**: replaces, for `box.sh flash`, the mandatory backup and the MAC confirmation that
+  followed D6 (spec 020, D31's "refuses to flash without a backup that was restored once").
+  `flash` takes `--backup <file>` as an option: a backup given is still checked (16 MB, the name
+  holds this box's MAC, its SHA-256 in a row of `docs/hardware.md`'s backup table with a restore
+  date); without it the plan says the way back is Sonoff's own reflash. `flash` asks no question
+  beyond the command itself; `backup` and `restore` keep the question of the MAC's last 6 hex
+  digits. D6's rule that the box is not flashed without the user's yes stays, as a rule for Claude
+  in `CLAUDE.md`.
+- **Why**: the user does not need the original firmware's backup: Sonoff supplies its own reflash
+  (its web flasher, or its Home Assistant add-on), which brings the box back to its original
+  firmware. The backup and its proven restore stay available for whoever wants them.

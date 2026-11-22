@@ -36,8 +36,9 @@ Each of the three programs starts and says which tool it is, with its version:
   After the memory line, the firmware mounts its data partition (FAT, at `/data`; it formats the
   partition when it cannot mount it, and logs `storage: formatted (<reason>)`), logs
   `storage: /data, <used> KB used of <size> KB`, reads its network setting from
-  `/data/network.json` and logs its choice (`network: wifi (setting auto), no link started`),
-  starts no link, and, in the image for the box, logs `radio: none`. The image runs on the Dongle
+  `/data/network.json` and logs its choice (`network: wifi (setting auto), no link started` in the
+  box, sim and measuring images, which start no link; the radio image logs `network: wifi (setting
+  auto)` and starts the link), and, in the image for the box, logs `radio: none`. The image runs on the Dongle
   Max as in QEMU; the measuring image (cargo feature `flash-saves`, which turns on `sim`) is built to
   run the realistic home on the box with every save written to the flash, and logs, instead of the count of
   saves run without the emulator's flash, `saves: <n> written to flash, longest <ms> ms (<file>,
@@ -45,14 +46,21 @@ Each of the three programs starts and says which tool it is, with its version:
   `storage-after: /data, <used> KB used of <size> KB`, the use of the FAT partition by the home.
   The radio image (cargo feature `radio`, never with `sim`: `radio and sim are two images`) is built
   in its own target folder with its own ESP-IDF settings (`firmware/sdkconfig.radio.defaults`,
-  which puts the UART interrupt in internal RAM); the other images keep theirs. After the
-  `network:` line it starts one thread, `engine`, on core 1 with 32 KB of stack, which resets the
-  radio, finds its serial speed, starts the radio's network and runs the engine's loop with the
-  home read from `/data`, showing the measures and the pairing lines on the serial log. A boot
+  which also puts the UART interrupt in internal RAM, turns on the WebSocket, sets the server's
+  limits and the lwIP socket table, puts the workers' stacks and buffers in PSRAM and sets lwIP's core and
+  SNTP's settings); the other images keep theirs. After the `network:` line the radio image reads
+  `/data/wifi.json`, starts the Wi-Fi station (or logs why not) and SNTP, then starts one thread,
+  `engine`, on core 1 with 32 KB of stack, which resets the radio, finds its serial speed, starts
+  the radio's network and runs the engine's loop with the home read from `/data` (radio, network
+  and the power-on pairing window at once; the engine's saves are held until the clock is set, 20 s
+  at most), showing the measures and the pairing lines on the serial log. Once the home is loaded it
+  serves Sowel's API, `/ws` and the interface on port 80 (see "Serves Sowel's API from the box").
+  New lines: `solite-ui <n> files, <KB> KB`, `console: ready`, `wifi: ...`, `clock: ...`,
+  `serving: ...`, `memory-network: ...`. A boot
   with a power-on reset opens pairing for 180 seconds (see "Pairs a device"). Every 240 seconds it
   logs `serial: <baud> baud, rx buffer 4096 B, highest <n> B, full <k> times` and `heap: internal
-  <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB`.
-  The radio image has no network and no HTTP server; it is a development image.
+  <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB, http stack <s> KB unused of <t> KB`.
+  The radio image is a development image: its API is open on the local network (decision D33).
 - **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the firmware in Espressif's
   QEMU, with 2 MB of PSRAM, and runs the engine in it with the simulated radio and a realistic
   home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
@@ -79,7 +87,10 @@ setting a missing, empty, over-long (more than 256 bytes), invalid or unknown on
 with a one-line reason for the log, for example `network: setting unknown "WiFi", auto`. With
 `auto`, a cable at boot means Ethernet, else Wi-Fi; `wifi` and `ethernet` hold whatever the
 cable says. The choice is made once and holds until the next start. The core makes this choice
-(`solite_core::network`); the firmware starts no link.
+(`solite_core::network`). The radio image starts the Wi-Fi link when the choice is Wi-Fi and
+`/data/wifi.json` is valid; the choice `ethernet` starts no link in this image, and the other
+images start none. The Wi-Fi settings are a name and a password (bounded), the connection is
+retried forever (1 s doubling to 60 s), and each failure names its reason.
 
 ### Talks to the radio
 
@@ -247,7 +258,7 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, starts the network as `--pair`
 does (it forms one, with its backup, on a radio that has none; the errors and the `network:` line
-are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
+are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the box serves in its own section below; the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
 from another site is refused by a `Host` check, and by an `Origin` check on `/ws`):
 
 | Route | Answer |
@@ -305,6 +316,30 @@ other than the API's own address or the interface's development server closes it
 closes each client with 1001. The host accepts at most 64 connections at once (a 65th is closed
 without an answer); a request must arrive within 10 s of opening its connection, and each answer closes its
 connection (`Connection: close`).
+
+### Serves Sowel's API from the box
+
+The radio image serves on port 80 of the local network, over IPv4. The box is kept on the home's
+own network (not a guest network) with no router port forwarded to it (decided by the user,
+2026-11-22, decision D33). The `Host` rule accepts private IPv4 addresses, the box's name
+(`solite-<6 hex digits>`) and its suffixes. The routes and errors are those of the Mac host,
+except:
+
+- `GET` and `POST /api/v1/integrations/solite/permit-join` answer 404 `Pairing from the API is off
+  on the box`; the pairing window of a power-on boot is unchanged.
+- On `/ws` the refusals come after the upgrade, as close codes: 4003 for a wrong host, 4003 for an
+  origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
+  `http://127.0.0.1:5173`) are accepted as on the Mac. Only the subprotocol `bearer.none` is echoed.
+  A dead client is found by TCP keep-alive (about 45 s) instead of 60 s of silence.
+- A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413; a body
+  that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 1024 bytes,
+  431. A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
+- At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
+  are answered at once; a 5th gets 503 `{"error":"Busy"}`.
+
+The interface is served from the firmware: every file is gzip (`Content-Encoding: gzip`), with the
+cache headers of the Mac. The engine never waits for the network: a lost link is retried while the
+garage runs.
 
 ### Organises the home in zones and equipments
 
@@ -392,7 +427,9 @@ still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, 
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
 it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
 the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
-equipment", a device's "Create equipment"), as well as showing them.
+equipment", a device's "Create equipment"), as well as showing them. The interface also opens at
+`http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
+copy embedded in the radio image at build time.
 
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
@@ -487,13 +524,17 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   and not one repeated byte, and prints the row for `docs/hardware.md`.
 - `restore <file>` writes the backup back, after checking its size, its SHA-256 and that the MAC of
   its name is the connected box's.
-- `flash --image box|sim|radio --backup <file>` refuses without a backup whose SHA-256 is in the backup
-  table of `docs/hardware.md` with a restore date; it checks the built image is the one asked for
+- `flash --image box|sim|radio [--backup <file>]` takes the backup as an option (decision D34: the
+  way back to the original firmware is Sonoff's own reflash, and the plan says so when no backup is
+  given); a backup given is refused unless it is 16 MB, its name holds this box's MAC and its
+  SHA-256 is in the backup table of `docs/hardware.md` with a restore date. It checks the built
+  image is the one asked for
   and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage` (unless `--keep-storage`, radio
   image only), writes the bootloader, the table
   of `firmware/partitions.csv` and the application, and resets the box. The radio image is read
   from `firmware/target/radio`, a build without the marker `radio: uart ` is refused with the
-  build command, and the box and sim images refuse a radio build; the box is not reset at the end
+  build command, a radio build without the embedded interface (its ELF lacks the marker
+  `solite-ui `) is refused with the build command, and the box and sim images refuse a radio build; the box is not reset at the end
   (`--after no_reset`): the first boot, and its pairing window, is the one `log --image radio`
   captures.
 - `log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]` resets the box, captures its
@@ -505,8 +546,14 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   `storage:` and `network:` lines, then `radio: uart`, `ezsp:`, a `network: formed|resumed` line,
   `pairing: open for` or `pairing: not opened`, and the `serial:` and `heap:` lines; it fails on
   `no answer at any baud rate`, `radio: stopped after`, `pairing: failed:` (named), `task_wdt`, a
-  panic, a second banner (a reboot) and a `heap:` internal minimum below 64 KB.
-- `flash --image radio --keep-storage --backup <file>` erases `nvs` and `otadata` only and keeps
+  panic, a second banner (a reboot), `wifi: settings refused` (named) and a `heap:` internal minimum
+  below 64 KB. Its `network:` line is `network: wifi (setting <s>)` (or `network: ethernet (setting
+  <s>), not in this image, no link started`), without `no link started` when Wi-Fi is the choice;
+  after it, a `wifi:` line (none is required when the choice is `ethernet`), and, once `wifi:
+  connected` shows, a `serving: http://` line; it prints the last `wifi:`, `clock:`, `serving:` and
+  `memory-network:` lines. A box with no Wi-Fi settings passes. The box and sim images' checks
+  still require `no link started`.
+- `flash --image radio --keep-storage` erases `nvs` and `otadata` only and keeps
   `storage` (the home, the network's backup and the Wi-Fi settings); its plan says `keep storage
   (the home, the network's backup and the Wi-Fi settings)`, then `WARNING: keep it only over a radio
   image: a sim image's /data is a test home`, and the radio image's warning about the
@@ -518,19 +565,21 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
 - `wifi [--forget]` asks on the terminal (`/dev/tty`, never standard input; no terminal: `box: no
   terminal to ask for the Wi-Fi settings, nothing done`, exit 1) for the network's name (shown as
   typed) and its password (echo off, restored on any exit, Ctrl-C included, nothing sent then). It
-  sends one line, `wifi-set <JSON>`, to the firmware's serial console without resetting the box,
-  and reads the answer: `wifi: settings saved` then, within 60 s, `wifi: connected, address <IPv4>`
+  opens the serial port, which resets the box (the DTR and RTS lines of the USB-serial chip), waits
+  for the console's `console: ready` line (12 s at most), sends one line, `wifi-set <JSON>`, to the
+  firmware's serial console, and reads the answer: `wifi: settings saved` (the box then saves its files and restarts) then, within 60 s, `wifi: connected, address <IPv4>`
   (printed as `box: Wi-Fi connected, address <IPv4>, name <host name>; open http://<IPv4>/`, exit
   0, else the last `wifi:` line and exit 1); `wifi: settings refused (<reason>)` (printed, exit 1);
-  no answer within 5 s: `box: no answer from Solite's console on <port>: is the radio image
+  no answer within 15 s: `box: no answer from Solite's console on <port>: is the radio image
   running?`, exit 4 (an image without the console, such as the box's original firmware, answers
   nothing and nothing changes on the box). The JSON is built from the two lines read on standard
   input: the password is never in a process list, a file, a log or the output; the name is not
   printed either. `wifi --forget` sends `wifi-forget` and reads `wifi: settings removed` (exit 0, or
   exit 4 with no answer).
-- `backup`, `restore` and `flash` print what they will do, then ask, on the terminal (never on
-  standard input), for the last 6 hex digits of the box's MAC address; anything else, or no
-  terminal, writes nothing. `--dry-run` prints the plan only. No command writes an eFuse.
+- `backup`, `restore` and `flash` print what they will do; `backup` and `restore` then ask, on the
+  terminal (never on standard input), for the last 6 hex digits of the box's MAC address; anything
+  else, or no terminal, writes nothing. `flash` asks nothing beyond the command itself (D34).
+  `--dry-run` prints the plan only. No command writes an eFuse.
 - Only `firmware/src/radio_uart.rs` names GPIO12 and GPIO15 (the radio's bootloader and reset
   lines, both strapping pins of the ESP32), GPIO13 and GPIO17 (the UART): a test checks it. The box
   and measuring images leave the radio untouched.
@@ -569,9 +618,14 @@ full queues, the orders queues full). Both are checked by tests on the Mac, whos
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
 measuring image; they are written in `docs/memory-budget.md`, "On the box". The radio image logs
-its own `heap:` line (the minimums since boot, the engine stack's high-water mark), and `box.sh
+its own `heap:` line (the minimums since boot, the engine stack's and the workers' stack's
+high-water marks) and, once, `memory-network:` (a snapshot with the server idle, for information),
+and `box.sh
 log --image radio` fails when its internal RAM minimum is below the 64 KB reserve.
-`docs/memory-budget.md` shares the box's 2 MB
+`docs/memory-budget.md` has a row for the internal RAM with Wi-Fi up (the `memory-network:`
+snapshot measured on the box; the network's cost as a difference of two `heap:` minima and the
+projection for the realistic home are not computed) and one for the 33 requests' time on the box,
+not measured (it needs a relay paired). It shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
 wiring and its risks.
 
@@ -579,8 +633,8 @@ No mode exists in the tool, and `motion-light` is its only recipe; the host keep
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
-measures; the firmware's radio image does the same over the serial link, with no network and no
-interface.
+measures; the firmware's radio image does the same over the serial link and serves the API, the
+live events and the interface over Wi-Fi, without the pairing route.
 
 ## History
 
@@ -608,3 +662,4 @@ interface.
 | 020 | `scripts/box.sh` identifies the Dongle Max, saves and restores its original firmware, flashes Solite's images with the user's typed confirmation and checks their boot log; the measuring image times the saves on the box |
 | 021 | The firmware's radio image drives the radio over the serial link, runs the engine on the box, and pairs a device at boot |
 | 022 | The rules for serving on the local network in the core, the interface packed for the flash, the scripts on an address, the 33 requests measured |
+| 023 | The radio image joins Wi-Fi and serves Sowel's API, its live events and the interface from its flash |

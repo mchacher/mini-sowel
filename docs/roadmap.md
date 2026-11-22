@@ -24,8 +24,9 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 | E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21, merged (pull requests 1 and 2); `setValue` defect open |
 | E3a | The box's first flash (spec 020): `scripts/box.sh` identifies the Dongle Max, saves its original firmware, restores it once, flashes the box's image and a measuring image (the realistic home, saves written to the flash and timed), checks their boot log; the free memory at boot, the engine's peak, the FAT partition and the save stall measured on the box | The backup restored and the radio seen again over TCP; both images boot; the figures are in `docs/memory-budget.md` | script and tests built (spec 020); the run on the box needs the user's yes for each write |
 | E3b | The radio over the serial link (UART): the engine on the real radio in the box; the serial link's buffers measured | A motion sensor paired and its measures seen, the radio driven by the box | done on the box 2026-11-22 (spec 021): radio at 115200 baud, network resumed, SNZB-03PR2 paired and its measures read. Not run: the 10-minute capture (4 minutes), a second boot, the booting-marker and power-cut cases, the restart ladder, a forming of a network, the ZBMINIR2 |
-| E3c | The network (Wi-Fi first, then Ethernet, as E1 settled), the HTTP and WebSocket API, the interface served by the box (precompressed), configured by `scripts/demo-garage.sh`; the internal RAM with Wi-Fi up and the 33 requests of an equipment with 16 + 16 bindings measured | The interface of the box opened from the Mac, the garage set up through the API | cut into two specs: 022 done 2026-11-22 (the Mac-testable part: the serving rules in the core, `crates/ui-embed`, the scripts on an address, `measure-api.sh`; 840 tests, 33 requests in 0.066 s on the simulated host, nothing run on the box), then 023 (the firmware's Wi-Fi, server and console, the run and the measures on the box; depends on 022) |
-| E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings can also be written to flash when flashing); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) stays disabled in the box (404) until J4's password exists | The garage runs in the box for a day, Mac off | |
+| E3c | The network (Wi-Fi; Ethernet is E3e), the HTTP and WebSocket API, the interface served by the box (precompressed), configured by `scripts/demo-garage.sh`; the internal RAM with Wi-Fi up and the 33 requests of an equipment with 16 + 16 bindings measured | The interface of the box opened from the Mac, the garage set up through the API | done 2026-11-22 (box run partial: see spec 023) |
+| E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings also written through the serial console, `box.sh wifi`, specs 022 and 023); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) stays disabled in the box (404) until J4's password exists | The garage runs in the box for a day, Mac off | |
+| E3e | Ethernet (the IP101, RMII, pins of `docs/hardware.md`): a cable at boot under `auto` means Ethernet, the same server; the Ethernet memory figure measured | The box's interface opened over a cable, Wi-Fi settings absent | |
 
 ## Next milestone
 
@@ -128,6 +129,11 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | Bindings added and removed one by one from the interface (Sowel's `AddBindingModal`, `MissingBindingsModal`); the routes exist (spec 010) | Spec 018 |
 | 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
 | 2026-11-22 | An equipment enabled or disabled from the interface (`PUT {"enabled"}` exists) | Spec 018 |
+| 2026-11-22 | mDNS on the box (`solite-xxxxxx.local` without the router's help) | Spec 023 |
+| 2026-11-22 | The server in QEMU through `open_eth`, so the serving path is tested without the box | Spec 023 |
+| 2026-11-22 | Sowel's bearer token on the box's `/ws` (only `bearer.none` is echoed until J4) | Spec 023 |
+| 2026-11-22 | The `wifi` sub-command restarts the box by software only (no pairing window): pairing a device still needs a power-on | Spec 023 |
+| 2026-11-22 | The realistic home measured on the radio image with Wi-Fi and the server up (the radio image seeded from `firmware/fixtures/`), so the "Internal RAM with Wi-Fi up" row stops being a subtraction for it | Spec 023 |
 | 2026-11-22 | Measure on the box (E3c) the creation of an equipment with 16 data and 16 order bindings (33 sequential requests): time, and no 503 `Busy` | Spec 019 |
 | 2026-11-22 | Investigate on the box the `devices.json` save (98 KB): it blocks the radio loop 3.8 s, 51 saves in 172 s in the realistic home. Accepted: a message may be lost while a save runs; what counts is the performance in normal running. Leads: one file per device, the radio on its own core, apart from the engine and the writer (a flash write stalls both cores for tens of ms, and the serial chip holds 128 bytes: about 11 ms at 115200 baud, so a large buffer is needed), where the time goes (erase, write, rename); UART interrupt in internal RAM (E3b) | Spec 020 |
 | 2026-11-22 | `box.sh backup` prints `tr: stdout: Broken pipe` after a valid backup (cosmetic); the radio and the Wi-Fi of E3 settle the original firmware version, unread in E3a | Spec 020 |
@@ -135,11 +141,13 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
 | 2026-11-22 | Replace the pairing window opened at boot (180 s after a power-on boot, no input path) by the button or the authenticated route (J4) | Spec 021 |
 | 2026-11-22 | A device removal in the API: an unwanted device that joined during a window stays in the store | Spec 021 |
-| 2026-11-22 | The user does not need the Dongle Max's original firmware (Sonoff supplies a way to reflash it): drop the mandatory backup of `box.sh flash` (or make it optional), and revisit D6 and the backup table of `docs/hardware.md`; the Mac host's `--radio tcp://` path needs that firmware, so decide it too | Spec 022 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
 | 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
 | 2026-11-22 | The binding plan in the core (Rust), when the box makes equipments itself (milestone C's proposals); the interface's plan (spec 019) is its reference | Spec 019 |
 | 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
+| 2026-11-22 | Spec 023 review: move the /ws welcome text into the core's live::session (the host and the firmware each write it today) | Spec 023 |
+| 2026-11-22 | A software restart opens no pairing window and a power-on within 10 min of a boot neither: pairing the ZBMINIR2 needs a power-on after 10 min | Spec 023 |
+| 2026-11-22 | Run the pending box checks of spec 023 (garage, 33 requests, lost link, clock line, error cases) when a relay is paired | Spec 023 |
 
 ## Sowel issues to open
 
@@ -251,3 +259,8 @@ Every change to this roadmap: date, what changed, why.
   boot, the booting-marker and power-cut cases, the restart ladder, a forming, the ZBMINIR2. `RADIO_BAUD` stays
   115200 (its inbox line removed). The box stays on the radio image.
 - 2026-11-22: spec 022 done (serving rules in the core, `crates/ui-embed`, scripts on an address, `measure-api.sh`); E3c continues with spec 023 (firmware). New need in the inbox: drop the mandatory backup of the original firmware. The inbox holds more than five items: a full review (`/solite-roadmap`) is due.
+- 2026-11-22: spec 023 (E3c, firmware) specified: E3c reads Wi-Fi only, Ethernet moves to the new E3e after E3d; E3d's settings route is the serial console. Five inbox lines added from the spec (mDNS, the server in QEMU, the bearer token on `/ws`, the pairing window after `wifi`, the realistic home measured with Wi-Fi up).
+- 2026-11-22: spec 023 done (E3c done, box run partial): the box joined Wi-Fi and served the API and the
+  interface; the garage, the 33 requests, the lost link, the clock line and the error cases not run (inbox).
+  Decision D34: the backup is optional for `box.sh flash` (its inbox line removed). The living spec's
+  sentence saying `box.sh wifi` does not reset the box is corrected in the same change.

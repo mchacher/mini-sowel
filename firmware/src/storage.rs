@@ -208,3 +208,15 @@ pub fn rename(from: &str, to: &str) -> Result<(), String> {
     fs::rename(&from_path, &to_path)
         .map_err(|e| format!("{}: cannot rename to {}: {e}", from_path.display(), to))
 }
+
+/// Removes a file of the data partition (the console's `wifi-forget`); a file already absent is
+/// removed too.
+#[cfg(feature = "radio")]
+pub fn remove(name: &str) -> Result<(), String> {
+    let path = Path::new(BASE).join(name);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+    }
+}

@@ -78,6 +78,17 @@ jobs:
       - name: Rust, at the version pinned in rust-toolchain.toml
         run: rustup toolchain install
 
+      # The radio image embeds the built interface (spec 023 R7.4): validate builds ui/dist first.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Interface packages
+        working-directory: ui
+        run: npm ci
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |

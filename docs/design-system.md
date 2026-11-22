@@ -17,7 +17,7 @@ The Sowel repository (`github.com/mchacher/sowel`, usually cloned as `../sowel`)
 | `ui/src/lib/logo.ts` (commit `5da84dc1`, Sowel spec 210: the revised mark, a master and a small weight) | `ui/src/lib/logo.ts` | derived: the house, eyes, wink and smile number for number; plus Solite's antenna (a mast from the ridge, a ball, one wave per side) in each weight |
 | `ui/src/components/layout/SowelLogo.tsx` (commit `5da84dc1`) | `ui/src/components/layout/SoliteLogo.tsx` | derived: renders `logo.ts`, the weight chosen by size (small below 32 px), the same wink; the wordmark is an option |
 | Nunito Bold (700), SIL Open Font License | `ui/src/lib/wordmark.ts` | the word "solite", lowercase, outlined into one SVG path; licence in `ui/src/lib/NUNITO-OFL.txt` |
-| `ui/public/favicon.svg` (commit `5da84dc1`) | `ui/src/assets/favicon.svg` | derived: the small weight with the antenna; Vite publishes it as `/assets/favicon-<hash>.svg`, which the host serves; `logo-sync.test.ts` checks it against `logo.ts` |
+| `ui/public/favicon.svg` (commit `5da84dc1`) | `ui/src/assets/favicon.svg` | derived: the small weight with the antenna; Vite publishes it as `/assets/favicon-<hash>.svg`, which the host and the box's radio image both serve; `logo-sync.test.ts` checks it against `logo.ts` |
 
 The Solite mark (Sowel's smiling house with an antenna and a radio wave on each side of the roof)
 is the one the sidebar, the mobile top bar, the drawer and the browser tab show. The house is the

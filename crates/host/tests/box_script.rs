@@ -406,8 +406,10 @@ enum Build {
     Box,
     Sim,
     Measuring,
-    /// The radio image: its application holds the marker `radio: uart `.
+    /// The radio image: its application holds the markers `radio: uart ` and `solite-ui `.
     Radio,
+    /// A radio build without the embedded interface (spec 023 R7.3).
+    RadioWithoutUi,
 }
 
 impl Build {
@@ -416,7 +418,8 @@ impl Build {
             Build::Box => "solite-firmware: storage\n",
             Build::Sim => "solite-firmware: scenario: started\n",
             Build::Measuring => "solite-firmware: scenario: started saves: written to flash\n",
-            Build::Radio => "solite-firmware: radio: uart  baud\n",
+            Build::Radio => "solite-firmware: radio: uart  baud solite-ui 4 files, 54 KB\n",
+            Build::RadioWithoutUi => "solite-firmware: radio: uart  baud\n",
         }
     }
 }
@@ -869,11 +872,14 @@ fn flash_erases_the_settings_and_writes_the_three_parts() {
 
 #[test]
 fn flash_refuses_a_backup_that_is_not_proven() {
-    // No --backup.
+    // No --backup: allowed (the backup is optional), the plan says so.
     let (env, _, _) = ready("box");
-    let out = env.go(&args_of(&env.port(), &["flash", "--image", "box"]));
-    assert_eq!(out.code, 1, "{}", out.text);
-    assert!(!out.text.contains("to go on:") && !env.wrote());
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--dry-run"],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("no backup given") && !env.wrote());
 
     // Its SHA-256 is in no row.
     let (env, f, _) = ready("box");
@@ -1010,16 +1016,16 @@ fn flash_refuses_a_missing_application_or_one_larger_than_the_slot() {
 }
 
 #[test]
-fn flash_stops_on_a_wrong_answer() {
+fn flash_asks_no_question_and_writes_at_once() {
+    // Decision of the user, 2026-11-22: `flash` asks nothing more than the command itself.
     let (env, f, _) = ready("box");
-    let out = env.run(
-        &args_of(&env.port(), &["flash", "--image", "box", "--backup", &f]),
-        Tty::Pty,
-        "abcdef",
-    );
-    assert_eq!(out.code, 1, "{}", out.text);
-    assert!(out.text.contains("box: not confirmed, nothing done"));
-    assert!(!env.wrote());
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(!out.text.contains("to go on:"), "{}", out.text);
+    assert!(env.wrote());
 }
 
 // ---- log ---------------------------------------------------------------------------------
@@ -1233,7 +1239,7 @@ fn log_fails_on_a_missing_line_and_names_it() {
 const RADIO_BUILD_TEXT: &str = "--features radio";
 
 #[test]
-fn flash_radio_reads_the_radio_build_leaves_the_box_unreset_and_still_asks() {
+fn flash_radio_reads_the_radio_build_and_leaves_the_box_unreset() {
     let (env, f, _) = ready("radio");
     // The box's own folder holds a box image: the radio image is read from its own folder.
     env.set_build(Build::Box);
@@ -1242,7 +1248,6 @@ fn flash_radio_reads_the_radio_build_leaves_the_box_unreset_and_still_asks() {
         &["flash", "--image", "radio", "--backup", &f],
     ));
     assert_eq!(out.code, 0, "{}", out.text);
-    assert!(out.text.contains("to go on:"), "the prompt is still asked");
     assert!(out.text.contains("log --image radio"));
     let log = env.fake_log();
     let write = log
@@ -1334,11 +1339,7 @@ fn flash_radio_says_before_the_prompt_that_it_erases_storage_and_the_dry_run_too
         &["flash", "--image", "radio", "--backup", &f],
     ));
     assert_eq!(out.code, 0, "{}", out.text);
-    assert!(
-        out.text.find("destroys").unwrap() < out.text.find("to go on:").unwrap(),
-        "{}",
-        out.text
-    );
+    assert!(out.text.contains("destroys"), "{}", out.text);
     // The box image does not carry that warning.
     let (env, f, _) = ready("box");
     let out = env.go(&args_of(
@@ -1377,14 +1378,25 @@ fn an_image_other_than_box_sim_or_radio_is_a_usage_error_naming_the_three() {
     assert!(!env.wrote());
 }
 
+/// A radio image's log with Wi-Fi (spec 023): its `network:` line has no `no link started`.
 fn radio_log() -> String {
     box_log().replace(
-        "I (431) solite: radio: none\n",
-        "I (440) solite: radio: uart 115200 baud\n\
+        "I (430) solite: network: wifi (setting auto), no link started\n\
+         I (431) solite: radio: none\n",
+        "I (430) solite: network: wifi (setting auto)\n\
+         I (431) solite: solite-ui 4 files, 54 KB\n\
+         I (432) solite: console: ready\n\
+         I (433) solite: wifi: settings read, password: 12 characters\n\
+         I (434) solite: wifi: connecting\n\
+         I (440) solite: radio: uart 115200 baud\n\
          I (460) solite: ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0\n\
          I (461) solite: radio address: 0x8C6FB9FFFE123456\n\
          I (900) solite: network: resumed (made by another program), channel 15, PAN 0x1A2B, extended PAN 0xDDDDDDDDDDDDDDDD\n\
          I (901) solite: pairing: open for 180 s\n\
+         I (3200) solite: wifi: connected, address 192.168.1.20, name solite-3abcde, channel 6, rssi -61 dBm\n\
+         I (3300) solite: serving: http://192.168.1.20/\n\
+         I (3900) solite: clock: synced, 2026-11-22T10:00:00.000Z\n\
+         I (13300) solite: memory-network: internal 150 KB free (largest block 80 KB), psram 1800 KB free of 2048 KB\n\
          I (240500) solite: serial: 115200 baud, rx buffer 4096 B, highest 212 B, full 0 times\n\
          I (240501) solite: heap: internal 120 KB free (min 95 KB), psram 1900 KB free (min 1850 KB), engine stack 20 KB unused of 32 KB\n",
     )
@@ -1798,6 +1810,7 @@ env >> "$FAKE_CONSOLE_ENV"
 read -r line
 printf '%s\n' "$line" >> "$FAKE_CONSOLE_LINES"
 [ -n "$FAKE_CONSOLE_SILENT" ] && { sleep 8; exit 0; }
+sleep "${FAKE_CONSOLE_DELAY:-0}"
 cat "$FAKE_CONSOLE_ANSWER"
 sleep "${FAKE_CONSOLE_STAY:-0}"
 "#;
@@ -1815,9 +1828,21 @@ if pid == 0:
 buf = b""
 stage = 0
 echo_off = None
+status = None
+ctrlc_sent = 0
 while True:
-    ready, _, _ = select.select([fd], [], [], 30)
+    ready, _, _ = select.select([fd], [], [], 0.5 if stage == 2 and mode == "ctrlc" else 30)
     if not ready:
+        if stage == 2 and mode == "ctrlc" and ctrlc_sent < 40:
+            done, st = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = st
+                break
+            # A Ctrl-C that lands before the script's `read` starts is held by the shell until
+            # `read` ends (on a loaded machine the first one may): press it again.
+            os.write(fd, b"\x03")
+            ctrlc_sent += 1
+            continue
         break
     try:
         data = os.read(fd, 4096)
@@ -1841,7 +1866,17 @@ while True:
         else:
             os.write(fd, (password + "\n").encode())
         stage = 2
-_, status = os.waitpid(pid, 0)
+# A bounded wait: a script that never ends fails the test instead of holding it forever.
+deadline = time.time() + 20
+while status is None:
+    done, st = os.waitpid(pid, os.WNOHANG)
+    if done:
+        status = st
+    elif time.time() > deadline:
+        os.kill(pid, 9)
+        _, status = os.waitpid(pid, 0)
+    else:
+        time.sleep(0.1)
 try:
     after = "on" if termios.tcgetattr(fd)[3] & termios.ECHO else "off"
 except Exception:
@@ -2061,7 +2096,16 @@ fn wifi_prints_a_refusal_and_exits_1() {
 #[test]
 fn wifi_with_a_silent_console_says_so_and_exits_4() {
     let env = Env::new();
-    let run = env.wifi(&[], "", "typed", &[("FAKE_CONSOLE_SILENT", "1")]);
+    // The answer window is 15 s; 1 s here keeps the test fast.
+    let run = env.wifi(
+        &[],
+        "",
+        "typed",
+        &[
+            ("FAKE_CONSOLE_SILENT", "1"),
+            ("SOLITE_WIFI_ANSWER_SECONDS", "1"),
+        ],
+    );
     assert_eq!(run.code, 4, "{}", run.text);
     assert!(
         run.text
@@ -2096,6 +2140,174 @@ fn wifi_forget_sends_wifi_forget_and_exits_0() {
     assert!(
         !run.text.contains("network name"),
         "no prompt for --forget: {}",
+        run.text
+    );
+}
+
+// ---- The radio image with Wi-Fi (spec 023) ------------------------------------------------
+
+#[test]
+fn flash_radio_refuses_a_build_without_the_embedded_interface() {
+    let (env, f, _) = ready("radio");
+    env.set_radio_build(Build::RadioWithoutUi);
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("solite-ui"), "{}", out.text);
+    assert!(out.text.contains(RADIO_BUILD_TEXT), "{}", out.text);
+    assert!(out.text.contains("npm run build"), "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+/// The radio log without the lines that contain any of `drop`.
+fn radio_log_without(drop: &[&str]) -> String {
+    radio_log()
+        .lines()
+        .filter(|l| !drop.iter().any(|d| l.contains(d)))
+        .map(|l| format!("{l}\n"))
+        .collect()
+}
+
+#[test]
+fn log_radio_with_wifi_passes_and_prints_its_four_network_lines() {
+    let env = Env::new();
+    let out = log_from(&env, &radio_log(), &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    for line in [
+        "network: wifi (setting auto)",
+        "wifi: connected, address 192.168.1.20, name solite-3abcde, channel 6, rssi -61 dBm",
+        "serving: http://192.168.1.20/",
+        "clock: synced, 2026-11-22T10:00:00.000Z",
+        "memory-network: internal 150 KB free",
+    ] {
+        assert!(out.text.contains(line), "{line} missing in {}", out.text);
+    }
+}
+
+#[test]
+fn log_radio_with_the_ethernet_setting_needs_no_wifi_line() {
+    let env = Env::new();
+    let text = radio_log_without(&["wifi:", "serving:", "clock:", "memory-network:"]).replace(
+        "network: wifi (setting auto)\n",
+        "network: ethernet (setting ethernet), not in this image, no link started\n",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text
+            .contains("network: ethernet (setting ethernet), not in this image, no link started"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_radio_without_settings_passes_and_prints_the_wifi_line() {
+    let env = Env::new();
+    let text = radio_log_without(&["wifi:", "serving:", "clock:", "memory-network:"]).replace(
+        "I (432) solite: console: ready\n",
+        "I (432) solite: console: ready\n\
+         W (433) solite: wifi: no settings (/data/wifi.json missing), no link started: sh scripts/box.sh wifi\n",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text
+            .contains("wifi: no settings (/data/wifi.json missing), no link started"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_radio_fails_when_no_serving_line_follows_the_connection() {
+    let env = Env::new();
+    let out = log_from(
+        &env,
+        &radio_log_without(&["serving:"]),
+        &["--image", "radio"],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("the log is missing the serving line (serving: http://...)"),
+        "{}",
+        out.text
+    );
+    // A serving line before the connection does not count.
+    let early = radio_log_without(&["serving:"]).replace(
+        "I (434) solite: wifi: connecting\n",
+        "I (434) solite: wifi: connecting\nI (435) solite: serving: http://192.168.1.20/\n",
+    );
+    let out = log_from(&env, &early, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_and_names_refused_settings() {
+    let env = Env::new();
+    let text = radio_log_without(&["wifi:", "serving:", "clock:", "memory-network:"]).replace(
+        "I (432) solite: console: ready\n",
+        "I (432) solite: console: ready\n\
+         W (433) solite: wifi: settings refused (invalid), no link started\n",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text.contains(
+            "box: the Wi-Fi settings were refused: W (433) solite: wifi: settings refused (invalid)"
+        ),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_radio_fails_when_the_wifi_line_is_missing() {
+    let env = Env::new();
+    let text = radio_log_without(&["wifi:", "serving:", "clock:", "memory-network:"]);
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text.contains("the Wi-Fi line (wifi: ...)"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_box_and_sim_still_need_no_link_started() {
+    let env = Env::new();
+    let started = box_log().replace(
+        "network: wifi (setting auto), no link started",
+        "network: wifi (setting auto)",
+    );
+    let out = log_from(&env, &started, &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("the network line"), "{}", out.text);
+    let sim = sim_log(170, 100, 50, true).replace(
+        "network: wifi (setting auto), no link started",
+        "network: wifi (setting auto)",
+    );
+    let out = log_from(&env, &sim, &["--image", "sim"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("the network line"), "{}", out.text);
+}
+
+#[test]
+fn wifi_waits_15_s_for_the_console_and_reads_its_log_lines() {
+    let env = Env::new();
+    // The console's lines come through ESP-IDF's log, with its prefix.
+    let answer = "I (52340) solite_firmware::console: wifi: settings saved\n\
+                  I (4100) solite_firmware::wifi: wifi: connected, address 192.168.1.20, name solite-a1b2c3, channel 6, rssi -61 dBm\n";
+    let run = env.wifi(&[], answer, "typed", &[("FAKE_CONSOLE_DELAY", "6")]);
+    assert_eq!(run.code, 0, "{}", run.text);
+    assert!(
+        run.text
+            .contains("box: Wi-Fi connected, address 192.168.1.20, name solite-a1b2c3"),
+        "{}",
         run.text
     );
 }

@@ -18,7 +18,11 @@ and `wifi_reason`, the console's line rules (`parse_console_line`), `Reach` and 
 session rules (`live::session`), the heap line's http stack, `crates/ui-embed`, `box.sh flash
 --keep-storage`, `box.sh wifi`'s script side, `demo-garage.sh` on an address and
 `scripts/measure-api.sh`; and wrote decision D33. This spec builds the firmware on them, flashes the
-box with the user's yes (D6) and runs the demo and the measures on it.
+box with the user's yes (D6) and runs the demo and the measures on it. It also adds what the
+firmware needs from the core and the scripts and spec 022 did not give, each tested on the Mac:
+in the core, `api::static_reply` (R4.6), the saver's gate (R3.2) and `WifiSettings::to_json`
+(R6.2); in the scripts, the radio image's `network:` line in `scripts/lib/firmware.sh` (R1.2) and
+the 15 s answer window of `box.sh wifi` (R6.2).
 
 The roadmap asks two measures here: the internal RAM with Wi-Fi up, and the 33 sequential requests
 that the interface sends to create an equipment with 16 data and 16 order bindings (spec 019's risk,
@@ -62,7 +66,9 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 - What spec 022 built and tested on the Mac (`specs/022-serve-core-and-ui-embed/`): the core's rules,
   `crates/ui-embed`, `--keep-storage`, `box.sh wifi`'s script side, `demo-garage.sh` on an address,
-  `measure-api.sh`, D33's text. This spec uses them unchanged.
+  `measure-api.sh`, D33's text. This spec uses them unchanged, but for the additions named in the
+  context (three to the core, two to the scripts) and one sentence added to D33 (the development
+  origins, decided by the user).
 - Ethernet (the IP101 PHY): its own increment, E3e (roadmap note below). In this image a setting
   `ethernet` starts no link.
 - The access point `Solite-XXXX` and its page to pick the network, the fallback to it after a few
@@ -82,15 +88,20 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 1. The radio image reads `network.json` as today and logs the choice with the core's
    `boot_lines_radio` (spec 022). Then:
-   - choice `wifi` (the setting `wifi`, or `auto` with no cable: the image detects no cable): it
-     reads `wifi.json`, parses it with the core's `wifi_settings` (spec 022) and starts the Wi-Fi
-     station when the settings are valid;
+   - choice `wifi` (the setting `wifi`, or `auto`): this image detects no cable, so it passes
+     `cable` = `false` to `boot_lines_radio` and `auto` always means Wi-Fi (a plugged cable is
+     ignored until E3e). It reads `wifi.json`, parses it with the core's `wifi_settings` (spec 022)
+     and starts the Wi-Fi station when the settings are valid;
    - choice `ethernet` (the setting `ethernet`): `network: ethernet (setting ethernet), not in this
      image, no link started`; no Wi-Fi either (D24: one link, the one chosen).
-2. The `network:` line of the radio image becomes `network: wifi (setting <s>)` (no longer
-   `no link started` when Wi-Fi starts); the box, sim and measuring images keep
-   `network: wifi (setting auto), no link started` byte for byte (their checks in
-   `scripts/lib/firmware.sh` and `scripts/qemu.sh` are unchanged).
+2. The `network:` line of the radio image becomes `network: wifi (setting <s>)` (the core's
+   `boot_lines_radio`: no `no link started`, Wi-Fi settings present or not); the box, sim and
+   measuring images keep `network: wifi (setting auto), no link started` byte for byte. Today
+   `fw_missing_line` (`scripts/lib/firmware.sh` l.111) requires `network: .* no link started` for
+   every image, the radio image included; it keeps that rule for the box and sim images and, for
+   the radio image, accepts `network: wifi (setting <s>)` or `network: ethernet (setting <s>), not
+   in this image, no link started` (the pattern `network: (wifi|ethernet) \(setting `).
+   `fw_lines_ok` (l.100-104, used by `scripts/qemu.sh` only) and `scripts/qemu.sh` are unchanged.
 3. Settings missing: `wifi: no settings (/data/wifi.json missing), no link started: sh scripts/box.sh
    wifi`. Settings refused: `wifi: settings refused (<reason>), no link started`. A read error of the
    file: `wifi: <file>: cannot read: <reason>, no link started`. In all three cases the engine runs
@@ -98,7 +109,11 @@ through the running firmware's console and the box is flashed with `--keep-stora
 4. Wi-Fi station, WPA2-Personal at least (WPA3 accepted by the access point's choice; WEP and open
    networks refused unless the password is empty, which asks for an open network and logs
    `wifi: open network, no encryption`). The DHCP host name is `solite-<6 hex digits>`, the last
-   three bytes of the station's MAC address in lower case: the box's name.
+   three bytes of the station's MAC address in lower case: the box's name. `EspWifi` is built with
+   no NVS partition (`None`, so ESP-IDF's `wifi_init_config_t.nvs_enable` is 0, `esp-idf-svc`
+   0.53 `wifi.rs` l.546-566) and the firmware also calls `esp_wifi_set_storage(WIFI_STORAGE_RAM)`
+   before setting the configuration: the SSID and the password are held in RAM only and never
+   written to NVS (D33: "never NVS"); the file `/data/wifi.json` is their only copy.
 5. Power save is off (`WIFI_PS_NONE`): the box is powered by USB or mains, and the modem sleep of
    the default mode delays every packet by up to a beacon interval (about 100 ms, more with a large
    DTIM), which would slow each of the 33 requests and the live batches. No software coexistence
@@ -106,7 +121,11 @@ through the running firmware's console and the box is flashed with `--keep-stora
    shows the Wi-Fi channel and the `network:` line of the radio the Zigbee channel, so an overlap is
    seen in the log (Zigbee 15 lies between Wi-Fi channels 1 and 6, 20 between 6 and 11, 25 above 11).
 6. ESP-IDF's own `wifi` log tag is set to warnings only, so its info lines (which name the SSID) do
-   not reach the serial log.
+   not reach the serial log. On the Rust side, `esp-idf-svc` 0.53 logs
+   `debug!("Setting STA configuration: {conf:?}")` (`wifi.rs` l.1257), which prints the password:
+   the `esp_idf_svc::wifi` log target stays at info or above (the firmware's log level is ESP-IDF's
+   default, info; no `set_target_level` lowers it), and a comment beside the logger's start says
+   why.
 7. Lines: `wifi: connecting` once at start; `wifi: connected, address <IPv4>, name <host name>,
    channel <n>, rssi <dBm> dBm` (the core's `connected_line`) at each connection; `serving:
    http://<IPv4>/` after it.
@@ -135,6 +154,17 @@ through the running firmware's console and the box is flashed with `--keep-stora
    whichever comes first, then the files due are saved; a normal boot thus writes no 1970 date to
    the flash. The line, once: `clock: synced, <ISO 8601 UTC>` or `clock: not synced after 20 s,
    dates count from 1970 until it is`. Without Wi-Fi settings nothing is held.
+   **The hold is in the core**, because `Saver::tick` runs inside the core's `engine::run`
+   (`crates/core/src/engine/mod.rs` l.151) and a `Storage` that failed on purpose would push the
+   zones, equipments and recipes back by `RETRY_MS` (60 s) and count the devices' write as failed
+   (`crates/core/src/engine/saver.rs` l.57-104). The `Saver` gains a gate,
+   `Saver::with_gate(gate: impl Fn() -> bool + 'static)`: while the gate answers `false` and the
+   engine is not stopping, `tick` writes nothing and changes nothing (every file stays due, no
+   failure is shown or counted, no `RETRY_MS` delay, the devices' policy untouched); at the first
+   tick after it answers `true`, the files due are written as usual. A stop writes whatever the gate
+   answers (the forced save of R6.3; its dates may then be 1970). A `Saver` without a gate behaves
+   as today. The firmware's gate reads an `AtomicBool` set by the SNTP callback or by the 20 s
+   timer, whichever comes first (set at once without Wi-Fi settings). Tested on the Mac (plan).
 3. A later sync logs `clock: synced, <ISO 8601 UTC>` once. The dates taken before it are from
    1970 (`lastSeen`, recipe log, data timestamps, in memory during the wait, on the flash when the
    clock never synced); the core's rules apply unchanged after the jump (spec 022 R6.2 pins that the
@@ -146,16 +176,23 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 ### R4: The server
 
-1. **Threads and cores.** The engine thread stays on core 1 (spec 021). ESP-IDF's Wi-Fi task, its
-   HTTP server task, the API's workers, the live thread and the console thread are pinned to core 0.
+1. **Threads and cores.** The engine thread stays on core 1 (spec 021). ESP-IDF's Wi-Fi task (on
+   core 0 by ESP-IDF's default, `CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0`), lwIP's tcpip task (no
+   core by default: `CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y` is added to
+   `sdkconfig.radio.defaults`), the HTTP server task (`esp-idf-svc`'s `Configuration.core`), the
+   API's workers, the live thread and the console thread are pinned to core 0.
    The engine thread loads the home, then hands the shared home and its live hub to `main`, which
    starts the server; the server never starts without a home (a home that cannot be read stops the
    engine as in spec 021, and no server starts: `serving: none (<reason>)`).
-2. **Port and limits.** Port 80, IPv4. At most 12 open connections (`max_open_sockets`; ESP-IDF
-   closes the least recently used one beyond it), in an lwIP socket table of 24
-   (`CONFIG_LWIP_MAX_SOCKETS`: the 12, the listener, the server's control socket, DNS, SNTP, DHCP's,
-   and room left so that the closing of the least recently used connection is reached long before
-   the table is full and never meets an internal socket), request head at most 1024 bytes
+2. **Port and limits.** Port 80, IPv4. At most 12 open connections (`max_open_sockets` 12, with
+   `lru_purge_enable` true, `esp-idf-svc` 0.53's default kept and written out in the configuration:
+   when 12 are open, ESP-IDF closes the least recently used one before it accepts the new one,
+   `httpd_main.c` l.52-75), in an lwIP socket table of 16 (`CONFIG_LWIP_MAX_SOCKETS`, 10 by default
+   in ESP-IDF 5.5). The size is ESP-IDF's own rule: its server uses `max_open_sockets` + 3 sockets
+   (the listener and its two UDP control sockets) and `httpd_start` refuses a smaller table
+   (`httpd_main.c` l.495-507), so 15, plus one spare; DHCP, DNS and SNTP use lwIP's raw API, no
+   socket. The check is ESP-IDF's refusal at the server's start, which the box would log as
+   `serving: none (<reason>)`. Request head at most 1024 bytes
    (`CONFIG_HTTPD_MAX_REQ_HDR_LEN`; a longer one is answered 431 by ESP-IDF), receive and send
    timeouts 5 s, TCP keep-alive on every connection (idle 30 s, interval 5 s, 3 probes).
 3. **The API.** Every request other than `/ws`, `/` and `/assets/*` goes through
@@ -176,12 +213,20 @@ through the running firmware's console and the box is flashed with `--keep-stora
    answer and sends `order_response`, as the host does. At most 2 orders from the API at once
    (`solite_core::orders::MAX_ORDERS` = 2, `crates/core/src/orders/queue.rs`; not
    `devices::MAX_ORDERS`, the 4 orders a device may hold), 503 `Busy` beyond, unchanged.
-6. **The interface.** `/` and `/assets/<name>` are answered by the core's `static_files::route`, then
-   from the table embedded in the firmware (R7) through the core's `find`: the file's gzip bytes are
-   sent from flash with `Content-Encoding: gzip`, `Vary: Accept-Encoding`, its content type, the
-   core's `cache_control` and `STATIC_HEADERS` (spec 022). A name not in the table: 404
-   `{"error":"Not found"}` with the security headers. These are served by the server's task (short,
-   from flash), not by the workers.
+6. **The interface.** `/` and `/assets/*` are registered for GET, POST, PUT and DELETE, so that
+   the core decides every answer. They are answered by a new core function,
+   `solite_core::api::static_reply(request: &Request) -> Option<Reply>`: `None` when the path is
+   not the interface's; else, in the order of the Mac's `dispatch` (`crates/core/src/api/mod.rs`
+   l.231-244), the `Host` check (`host_allowed`, l.152; 403 `{"error":"Forbidden host"}`), then
+   `static_files::route` (`static_files.rs` l.67, which stays `pub(super)`: 405 for a method other
+   than GET, 404 for an unsafe name, else the file to send). `dispatch` itself is unchanged; the
+   firmware cannot call `route`, and calling it alone would skip the `Host` check and serve `/`
+   to any `Host`. A file to send is looked up in the table embedded in the firmware (R7) with the
+   core's `find` (`static_files.rs` l.42): its gzip bytes are sent from flash with
+   `Content-Encoding: gzip`, `Vary: Accept-Encoding`, its content type, the core's `cache_control`
+   and `STATIC_HEADERS` (spec 022). A name not in the table: 404 `{"error":"Not found"}` with the
+   security headers. These are served by the server's task (short, from flash), not by the
+   workers.
 7. **The pairing route.** On the box, `GET` and `POST /api/v1/integrations/solite/permit-join`
    answer 404 `{"error":"Pairing from the API is off on the box"}` (D28), decided in the core under
    `Reach::Lan` (spec 022 R4.3). The boot window of spec 021 is unchanged.
@@ -192,9 +237,13 @@ through the running firmware's console and the box is flashed with `--keep-stora
 1. `GET /ws` is registered as ESP-IDF's WebSocket handler with the subprotocol `bearer.none` (the
    one the interface sends, `ui/src/store/useLive.ts`). ESP-IDF answers the handshake itself; then
    the firmware checks, in this order: the `Host` (spec 022 R4.2), else closes with 4003 `Forbidden
-   host`; the `Origin` (the core's `live::session::origin_allowed`), else 4003 `Origin not
-   allowed`; a slot in the hub (`LiveHub::connect`), else 1013 `Try again later` (the 5th client).
-   Then it sends the welcome message of spec 013.
+   host`; the `Origin` (the core's `live::session::origin_allowed`, its development origins
+   included, decided by the user), else 4003 `Origin not allowed`; a slot in the hub (`LiveHub::connect`), else 1013 `Try again later` (the 5th client).
+   Then it sends the welcome message of spec 013. `esp-idf-svc` 0.53 exposes no header of a
+   WebSocket request: `Host` and `Origin` are read from the raw `httpd_req_t` of
+   `EspHttpWsConnection::New` (`http/server.rs` l.1330-1334) with ESP-IDF's
+   `httpd_req_get_hdr_value_len` / `httpd_req_get_hdr_value_str`, in one small `unsafe` function
+   with its `SAFETY` comment (D11), each header bounded by the 1024-byte head of R4.2.
 2. The live thread (core 0) every 200 ms (`TICK_MS`) sends each client its batch as one text
    message in fragments (`[`, each event, `]`) taken with `begin_batch` and `pop`, no batch string
    built, through `esp-idf-svc`'s detached sender (which hands each frame to the server's task); a
@@ -215,9 +264,20 @@ through the running firmware's console and the box is flashed with `--keep-stora
    discards the rest up to the next `\n`, and hands each line to the core's `parse_console_line`
    (spec 022 R3). `TooLong` is logged `console: line over 512 bytes, ignored`; `Unknown` is logged
    `console: unknown command`; `Empty` is ignored with no log. The line itself is never logged.
-2. `WifiSet`: written to `/data/wifi.json` through the storage's save (temporary file, sync,
-   rename), then `wifi: settings saved`. `Refused(<reason>)`: `wifi: settings refused (<reason>)`,
-   nothing changed. `WifiForget`: removes the file, `wifi: settings removed`.
+2. `WifiSet`: the settings are written to `/data/wifi.json` through the storage's save (temporary
+   file, sync, rename), then `wifi: settings saved`. The text written is the core's
+   `WifiSettings::to_json()` (new, `crates/core/src/network.rs`): the object
+   `{"ssid":<string>,"password":<string>}` serialized by `serde_json`, which `wifi_settings` reads
+   back to the same settings (a round-trip test, plan); the received line is not stored as is
+   (`ConsoleCommand::WifiSet` holds the parsed settings, not the text). `Refused(<reason>)`:
+   `wifi: settings refused (<reason>)`, nothing changed. `WifiForget`: removes the file,
+   `wifi: settings removed`.
+   The FAT partition is shared with the engine, whose save of a file may be running: the console's
+   write then waits for it, at most one save (the longest measured on the box: 3945 ms,
+   `docs/memory-budget.md` l.151), so `wifi: settings saved` may come about 4 s after the line.
+   `box.sh wifi` waited 5 s for that answer (`scripts/box.sh` l.628); the window becomes 15 s
+   (`SOLITE_WIFI_ANSWER_SECONDS`, 15 by default, for the tests), and the living spec's "no answer
+   within 5 s" becomes 15 s.
 3. After a save or a removal, the engine is asked to stop (its stop flag), saves its files (forced
    save, as the host's Ctrl-C does), and the ESP32 restarts by software (no pairing window: not a
    power-on, spec 021); if the engine has not stopped within 10 s, it restarts anyway. After a
@@ -229,15 +289,17 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 1. `firmware/build.rs` calls spec 022's `crates/ui-embed` (a build dependency) only with the feature
    `radio`, from `../ui/dist` (or `SOLITE_UI_DIST`), writing `ui_files.rs` into `OUT_DIR`; the other
-   images embed nothing and build without `ui/dist`. `cargo:rerun-if-changed` covers `ui/dist`. A
+   images embed nothing and build without `ui/dist`. `cargo:rerun-if-changed` covers `ui/dist`, and
+   `cargo:rerun-if-env-changed=SOLITE_UI_DIST` a change of the folder. A
    missing `ui/dist` fails the build with `ui-embed`'s message (`interface: ui/dist not built: cd ui
    && npm ci && npm run build`).
 2. The radio image logs the table's marker `solite-ui <n> files, <gzip KB> KB` at boot.
 3. `box.sh flash --image radio` refuses a radio build without the embedded interface (its ELF lacks
    the marker `solite-ui `), with the build command, nothing written.
-4. `validate.sh --only firmware` builds `ui/dist` first when missing (`ui/node_modules` needed,
-   `cd ui && npm ci` named otherwise), checks the radio ELF holds `solite-ui ` and the name of
-   `ui/dist`'s hashed script (the embed is the current build), and that `CONFIG_HTTPD_WS_SUPPORT=y`
+4. `validate.sh --only firmware` always builds `ui/dist` first (`npm run build`, even when a
+   `ui/dist` exists: an old one would be embedded and still pass the checks; `ui/node_modules`
+   needed, `cd ui && npm ci` named otherwise), checks the radio ELF holds `solite-ui ` and the name
+   of `ui/dist`'s hashed script (the embed is the current build), and that `CONFIG_HTTPD_WS_SUPPORT=y`
    is in the radio build's `sdkconfig` and in no other. CI's firmware job installs Node and `ui/`'s
    packages.
 5. The radio application, interface included, fits the 4 MB `ota_0` slot (4096 KB,
@@ -253,11 +315,13 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 ### R8: `scripts/box.sh` on a radio image with Wi-Fi
 
-1. `log --image radio` checks the lines of spec 021, plus: a `wifi:` line; when a `wifi: connected`
-   line shows, a `serving: http://` line after it; and prints the last `wifi:`, `clock:`,
-   `serving:` and `memory-network:` lines. It fails on `wifi: settings refused` (named). A box with
-   no settings passes (its `wifi: no settings` line is printed). The box and sim images' checks are
-   unchanged (`no link started` still required).
+1. `log --image radio` checks the lines of spec 021, with the radio image's `network:` line of
+   R1.2 in place of `no link started`, plus: a `wifi:` line (none is required when the network
+   line is `network: ethernet ...`, which starts no link, R1.1); when a `wifi: connected` line shows, a
+   `serving: http://` line after it; and prints the last `wifi:`, `clock:`, `serving:` and
+   `memory-network:` lines. It fails on `wifi: settings refused` (named). A box with no settings
+   passes (its `wifi: no settings` line is printed). The box and sim images' checks are unchanged
+   (`no link started` still required).
 2. `backup` warns, as today, that a backup may hold Wi-Fi credentials: once `wifi.json` exists it
    does (in plain text, as `zigbee.json`'s keys).
 
@@ -265,59 +329,75 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 1. At boot the `memory:` line is unchanged (before Wi-Fi). Ten seconds after the first `serving:
    http://` line the image logs once `memory-network: internal <n> KB free (largest block <m> KB),
-   psram <p> KB free of 2048 KB`: the cost of Wi-Fi and the server is the difference.
+   psram <p> KB free of 2048 KB`: a snapshot with the server idle, printed for information. It is
+   not the network's cost: between the boot `memory:` line and it, the engine's stack, the UART
+   rings, the loaded home and the server's stacks are allocated too (the engine's 32 KB stack and
+   the UART rings are not Wi-Fi's), and an idle snapshot misses the peaks.
+   **The network's cost** is a difference of two minima taken the same way: spec 021's `heap:`
+   internal minimum with one device and no Wi-Fi, **234 KB** (`docs/memory-budget.md` l.155, the
+   radio image after 4 minutes), minus this run's internal minimum on its first `heap:` line (240 s
+   after the radio starts: the home of the devices paired, no equipment yet, Wi-Fi and the server
+   up). The engine's stack, the UART rings and the loaded home are in both and cancel; what is left
+   is Wi-Fi, lwIP, the server's internal stacks, the live thread and the console. This run's home
+   holds two devices (the SNZB-03PR2 and the ZBMINIR2) where spec 021's held one: the second device
+   is counted in the cost, pessimistic by about 1 to 2 KB (**estimate**).
 2. The `heap:` line every 240 s (spec 021) gains `, http stack <s> KB unused of <t> KB` (the core's
    `heap_line`, spec 022 R6.1, fed with the smallest high-water mark among the 4 workers,
    `WORKER_STACK_BYTES` = 10 KB each, in PSRAM: R9.4).
 3. Pass criteria, written with the figures in `docs/memory-budget.md` ("On the box"):
    - the `heap:` internal minimum stays at or above 64 KB (the reserve, D23) through the whole run:
      boot, Wi-Fi up, the interface open with one live client for 2 minutes, the garage set up, the 33
-     requests (`box.sh log --image radio` fails below it);
-   - the projection for the realistic home, written beside: the measuring image's internal minimum
-     on the box (107 KB, spec 020) minus the cost of R9.1. When it is below 64 KB, or the run's
-     minimum is, **the work stops and the figures are reported to the user**: the limit is not
-     lowered, no further setting is turned on the quiet. The knobs left, in the order they would be
-     proposed, as a decision of the user: `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` from 4096 down to
-     2048 or 512 (more of the engine in PSRAM, slower; spec 016 measured its effect), then streaming
-     the home's loading (roadmap inbox). The first knob, the workers' stacks in PSRAM, is on from the
-     start (R9.4);
+     requests, the lost link (`box.sh log --image radio` fails below it);
+   - the projection for the realistic home, written beside, marked E: the measuring image's
+     internal minimum on the box (107 KB, spec 020, `docs/memory-budget.md` l.149) minus the
+     network's cost of R9.1;
+   - **when the run's minimum or the projection is below 64 KB**, the next knob is applied, approved
+     in advance by the user (2026-11-22): `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` from 4096 to 2048 in
+     `firmware/sdkconfig.radio.defaults` only (the other images keep `sdkconfig.defaults`' 4096 and
+     their measured figures); the radio image is rebuilt, flashed again with the user's yes (D6),
+     and the run's minimum and the projection are measured again the same way. The 234 KB of R9.1
+     was read at 4096, so the setting's saving on the small home lowers the measured cost; the
+     realistic home's larger saving is not credited, so the projection stays pessimistic. **Only if
+     a figure is still below 64 KB, the work stops and the figures are reported to the user**: the
+     limit is not lowered, no further setting is turned on the quiet. The knobs left, in the order
+     they would be proposed, as a decision of the user: `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` 512
+     (spec 016 measured its effect), then streaming the home's loading (roadmap inbox). The
+     workers' stacks in PSRAM are on from the start (R9.4);
    - the 33 requests: R10.
 4. **Expected outcome, and the workers' stacks in PSRAM from the start.** The budget's figures give
-   the projection before any run: 107 KB (the measuring image's internal minimum) minus the 70 KB the
-   budget sets for Wi-Fi leaves about **37 KB, under the 64 KB floor**, before any stack of the
-   server is counted. The first knob is therefore on from the start, not left to the run:
+   the projection before any run. The network's cost by the budget: 70 KB for Wi-Fi
+   (`docs/memory-budget.md` l.57) plus the stacks that stay in internal RAM, 16 KB: about 86 KB, so
+   107 − 86 = about **21 KB, under the 64 KB floor**. Without the workers' stacks in PSRAM it would
+   be 40 KB lower still; they are therefore in PSRAM from the start, not left to the run:
    `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y` in `sdkconfig.radio.defaults`, and the 4 workers'
    stacks (4 × 10 KB) allocated in PSRAM (`esp_pthread_cfg_t.stack_alloc_caps` =
    `MALLOC_CAP_SPIRAM`); the workers never write the flash, which a task with its stack in PSRAM must
    not do. Their 16 KB body buffers are in PSRAM too (R4.4). What stays in internal RAM: the
    server's task (8 KB), the console (4 KB, it writes the flash), the live thread (4 KB), lwIP's
-   sockets (R9.5) and Wi-Fi's own internal part. The projection becomes 107 − 70 − 16 = about
-   **21 KB** with the budget's 70 KB, still under the floor; it reaches 64 KB only if Wi-Fi's real
-   internal cost is about 27 KB or less, which `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` (Wi-Fi's and
-   lwIP's dynamic buffers in PSRAM) makes possible but not certain. The likely first run: the run's
-   own minimum passes with room (the radio image held 234 KB at its lowest with one device, spec 021,
-   so about 150 to 190 KB with Wi-Fi up), and the projection for the realistic home falls under
-   64 KB, which stops the work and reports the figures with the next knob (R9.3). The subtraction is
-   pessimistic: Wi-Fi's internal allocations draw partly from the 64 KB reserve, counted twice, as
-   `docs/memory-budget.md` says of its own table.
-5. **The lwIP socket table.** `CONFIG_LWIP_MAX_SOCKETS` is 24 rather than 16 (R4.2). Its cost, an
-   **estimate** from lwIP's structures on ESP-IDF 5: about 40 bytes of table per slot whether used
-   or not (8 more slots: about 0.3 KB, static), and about 0.4 KB per socket while it is open (its
-   `netconn`, its TCP control block and its mailboxes, from lwIP's heap in internal RAM); the 8 extra
-   slots all open at once: about 3.5 KB at most. Counted inside Wi-Fi's figure of R9.1, not apart.
+   sockets (R9.5) and Wi-Fi's own internal part. The projection reaches 64 KB only if the measured
+   cost is about 43 KB or less (Wi-Fi's own part about 27 KB), which
+   `CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP` (Wi-Fi's and lwIP's dynamic buffers in PSRAM) makes
+   possible but not certain. The likely first run: the run's own minimum passes with room (about
+   234 − 86 = 150 KB), the projection falls under 64 KB, the knob of R9.3 is applied and measured
+   again, and the work stops with the figures only if the projection is still under.
+5. **The lwIP socket table.** `CONFIG_LWIP_MAX_SOCKETS` is 16 rather than ESP-IDF's 10 (R4.2). Its
+   cost, an **estimate** from lwIP's structures on ESP-IDF 5: about 40 bytes of table per slot
+   whether used or not (6 more slots: about 0.25 KB, static), and about 0.4 KB per socket while it
+   is open (its `netconn`, its TCP control block and its mailboxes, from lwIP's heap in internal
+   RAM). Counted inside the network's cost of R9.1, not apart.
 6. **The realistic home stays a projection.** The "Internal RAM with Wi-Fi up" row of
-   `docs/memory-budget.md` is measured for the home the run holds (one or two devices); for the
-   realistic home it stays an **estimate**, a subtraction (R9.3), marked E. The realistic home is
-   measured on the radio image with Wi-Fi up later, by a roadmap inbox line (roadmap notes): the
-   radio image seeded with the realistic home of `firmware/fixtures/` (as the measuring image is),
-   Wi-Fi and the server up, its `heap:` minimum read.
+   `docs/memory-budget.md` is measured for the home the run holds (two devices); for the realistic
+   home it stays an **estimate**, a subtraction (R9.3), marked E. The realistic home is measured on
+   the radio image with Wi-Fi up later, by a roadmap inbox line (roadmap notes): the radio image
+   seeded with the realistic home of `firmware/fixtures/` (as the measuring image is), Wi-Fi and
+   the server up, its `heap:` minimum read.
 
 ### R10: The 33 requests on the box
 
 1. `sh scripts/measure-api.sh <box address>` (spec 022 R10.2-3) is run against the box, with the
    SNZB-03PR2 and the ZBMINIR2 paired; pass: 33 answered 201, none 503, total at most 10 s.
 2. The time is written in `docs/memory-budget.md` whatever the verdict; a failure stops the work and
-   reports the figures (as R9.3).
+   reports the figures to the user.
 
 ### R11: No TCP relay of the radio on the box
 
@@ -348,7 +428,8 @@ through the running firmware's console and the box is flashed with `--keep-stora
   2026-11-22, D33); the `Host` rule (private IPv4 addresses, the box's name and its suffixes), the
   same routes and errors as the Mac host except: the pairing route 404 `Pairing from the API is off
   on the box`; on `/ws` the refusals come after the upgrade as close codes (4003 host, 4003 origin,
-  1013 for a 5th client), only `bearer.none` is echoed, a dead client is found by TCP keep-alive
+  1013 for a 5th client), the development origins (`http://localhost:5173`,
+  `http://127.0.0.1:5173`) accepted as on the Mac, only `bearer.none` is echoed, a dead client is found by TCP keep-alive
   instead of 60 s of silence; 411 for a body without length; 431 for a head over 1024 bytes; at most
   12 open connections, the least recently used closed beyond; 503 `Busy` beyond 4 requests at once.
   The interface is served from the firmware, gzip always (`Content-Encoding: gzip`), cache headers as
@@ -358,12 +439,15 @@ through the running firmware's console and the box is flashed with `--keep-stora
   image at build time.
 - Changed, "Flashes the box and brings it back": `wifi` ends with the box saving the settings,
   restarting and its address printed, `wifi --forget` removes them (spec 022's sentence "an image
-  without the console answers nothing" kept for the original firmware and the other images); the
-  radio build refused without the embedded interface; `log --image radio`'s new lines and checks.
-- Changed, "Stays within a memory budget": the radio image logs `memory-network:` and the workers'
-  stack; `docs/memory-budget.md` holds the internal RAM with Wi-Fi up, the projection for the
+  without the console answers nothing" kept for the original firmware and the other images); "no
+  answer within 5 s" becomes "no answer within 15 s" (R6.2); the radio build refused without the
+  embedded interface; `log --image radio`'s new lines and checks (its `network:` line without
+  `no link started`).
+- Changed, "Stays within a memory budget": the radio image logs `memory-network:` (a snapshot, for
+  information) and the workers' stack; `docs/memory-budget.md` holds the internal RAM with Wi-Fi
+  up, the network's cost as a difference of two `heap:` minima (R9.1), the projection for the
   realistic home and the 33 requests' time on the box.
-- Changed, the closing paragraph: "the firmware's radio image does the same over the serial link,
+- Changed, the closing paragraph (l.582-583): "the firmware's radio image does the same over the serial link,
   with no network and no interface" → "the firmware's radio image does the same over the serial link
   and serves the API, the live events and the interface over Wi-Fi, without the pairing route".
 - History: `| 023 | The radio image joins Wi-Fi and serves Sowel's API, its live events and the
@@ -371,18 +455,26 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 ### Other docs (applied in the same change)
 
-- `docs/architecture.md`: the Firmware row (Wi-Fi, SNTP, the server, the live thread, the console,
-  the embedded interface), the Live events row (the box's sessions in `firmware/src/live_ws.rs`),
-  Builds (`build.rs` embeds `ui/dist` for `radio` through `crates/ui-embed`, the new settings of
-  `sdkconfig.radio.defaults`, the UI built before the radio image), Data (`/data/wifi.json`).
+- `docs/architecture.md`: the diagram (l.24), the Firmware row (Wi-Fi, SNTP, the server, the live
+  thread, the console, the embedded interface), the Live events row (the box's sessions in
+  `firmware/src/live_ws.rs`), the API row (`static_reply`), Builds (`build.rs` embeds `ui/dist` for
+  `radio` through `crates/ui-embed`, the new settings of `sdkconfig.radio.defaults`, the UI built
+  before the radio image), the Interface line, Data (`/data/wifi.json`).
 - `docs/memory-budget.md`: "On the box" rows "Internal RAM with Wi-Fi up" and "The 33 requests" filled;
-  the internal RAM table gains the measured network cost beside its estimate; the transport row
+  the internal RAM table gains the measured network cost (R9.1's difference) beside its estimate;
+  if the knob of R9.3 was applied, the radio image's `SPIRAM_MALLOC_ALWAYSINTERNAL` and the figures
+  before and after it; the transport row
   (no tungstenite buffers on the box); the PSRAM rows of the workers' stacks and body buffers (added
   as estimates with E3c's spec) checked against the `heap:` line's PSRAM figures.
 - `docs/hardware.md`: the Wi-Fi antenna risk row: settled by the run (RSSI and channel seen; the box's
   position not recorded).
-- `docs/decisions.md`: D33 (written by spec 022) checked against what is built; any difference is
-  raised to the user, not rewritten on the quiet.
+- `docs/decisions.md` D33: two sentences changed in this change. Added, decided by the user
+  (2026-11-22): "On `/ws` the box accepts, as the host does, the development origins of
+  `live::session::origin_allowed` (`http://localhost:5173`, `http://127.0.0.1:5173`): a
+  development page on a machine of the home's network can open the live events." Changed, found by
+  this spec's review and shown to the user with the spec: "a socket table of 24" becomes "a socket
+  table of 16" (R4.2). If the knob of R9.3 is applied, D33 records it. D33 is otherwise checked
+  against what is built; any other difference is raised to the user, not rewritten on the quiet.
 - `docs/roadmap.md` (roadmap notes): E3c's status after the run; E3c's line reads "Wi-Fi" only
   (Ethernet left to E3e); a new line after E3d: **E3e** "Ethernet (the IP101, RMII, pins of
   `docs/hardware.md`): a cable at boot under `auto` means Ethernet, the same server; the Ethernet
@@ -397,8 +489,8 @@ through the running firmware's console and the box is flashed with `--keep-stora
   image seeded from `firmware/fixtures/`), so the "Internal RAM with Wi-Fi up" row stops being a
   subtraction for it (R9.6).
 - `README.md`: the radio image's build needs `ui/dist` first (`cd ui && npm run build`); the box line
-  lists `wifi`.
-- `CLAUDE.md`: the box line becomes `sh scripts/box.sh identify|log|wifi`.
+  (l.62) already lists `wifi` and is unchanged. `CLAUDE.md` is unchanged: its `identify|log` line
+  is the read-only one, and `wifi` is already among the commands the user runs.
 - `.github/workflows/ci.yml`: the firmware job installs Node and `ui/` packages (the radio image
   embeds the built interface).
 
@@ -406,55 +498,100 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 Found by searching `no link started`, `starts no link`, `no network`, `no HTTP server`, `does not
 serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the box's HTTP server`,
-`needs Wi-Fi (E3c)`, `Not needed before Wi-Fi is built`, `answers nothing`:
+`needs Wi-Fi (E3c)`, `need Wi-Fi (E3c)`, `Not needed before Wi-Fi is built`, `answers nothing`,
+`within 5 s`, `UART interrupt in internal RAM`, `which the host serves`, `no link is started`
+(line numbers read on `main` at c9373df):
 
 - `docs/living-spec/README.md` l.39-40: "logs its choice (`network: wifi (setting auto), no link
   started`), starts no link" → true for the box, sim and measuring images; the radio image logs
   `network: wifi (setting auto)` and starts the link.
+- `docs/living-spec/README.md` l.46-48: "(`firmware/sdkconfig.radio.defaults`, which puts the UART
+  interrupt in internal RAM)" → which also turns on the WebSocket, the server's limits, the socket
+  table, the PSRAM stacks and buffers, lwIP's core and SNTP's settings.
 - `docs/living-spec/README.md` l.55: "The radio image has no network and no HTTP server; it is a
   development image." → rewritten (above).
 - `docs/living-spec/README.md` l.82: "the firmware starts no link." → "the radio image starts the
   Wi-Fi link; the other images start none."
-- `docs/living-spec/README.md` l.248-251, "Serves Sowel's device API": "serves on `127.0.0.1` only"
-  → true of the host; the box is in its own section.
-- `docs/living-spec/README.md` l.545-547: "the firmware's radio image does the same over the serial
+- `docs/living-spec/README.md` l.250, "Serves Sowel's device API": "serves on `127.0.0.1` only" →
+  true of the host; the box is in its own section.
+- `docs/living-spec/README.md` l.525: "no answer within 5 s" → 15 s (R6.2). The sentence after it
+  (l.526-527, "an image without the console, such as the box's original firmware, answers
+  nothing") names the original firmware and stays true.
+- `docs/living-spec/README.md` l.582-583: "the firmware's radio image does the same over the serial
   link, with no network and no interface" → rewritten (above).
-- `docs/living-spec/README.md`, "Flashes the box and brings it back": spec 022's "a radio image
-  before spec 023 answers nothing" (or its wording) → the radio image answers.
+- `docs/architecture.md` l.24 (diagram): "served from ui/dist by the host's --serve" → also from
+  the radio image's flash.
 - `docs/architecture.md` l.31: "which the host's `--serve` serves; the box does not serve it." →
   "which the host's `--serve` serves from disk and the radio image embeds, compressed, in its flash."
-- `docs/architecture.md`, Firmware row: "the network setting read from `/data/network.json`" → adds
-  the Wi-Fi link, SNTP, the server and the console of the radio image.
-- `docs/memory-budget.md`: "the network rows need Wi-Fi (E3c)" and the two "needs Wi-Fi (E3c)" cells
-  → the figures of the run.
-- `docs/memory-budget.md`, QEMU section: "the margin that decides is the box's, with the network up
-  (needs Wi-Fi, E3c)" → the measured figure.
-- `docs/hardware.md`, risks: "The Wi-Fi antenna | Not described by Sonoff's pages found. | Not needed
-  before Wi-Fi is built." → settled by the run.
-- `docs/decisions.md` D18: "The box will use its own server (E)" stays as the record of 2026-11-21
-  (decisions are dated history, not rewritten); D33 says what the box uses.
-- `crates/core/src/network.rs` doc comment of `boot_lines`: "(the firmware starts no link and detects
-  no cable ...)" → for the images without a link.
-- `firmware/src/main.rs` module comment: "reads its network setting" → adds the Wi-Fi and the server
-  of the radio image.
+- `docs/architecture.md` l.45, Firmware row: "the network setting read from `/data/network.json`"
+  → adds the Wi-Fi link, SNTP, the server and the console of the radio image.
+- `docs/architecture.md` l.64-65: "`firmware/sdkconfig.radio.defaults` read after
+  `sdkconfig.defaults` (the UART interrupt in internal RAM)" → adds the network's settings.
+- `docs/architecture.md` l.79: "Vite builds `ui/dist/`, which the host serves" → "which the host
+  serves and the radio image embeds".
+- `docs/memory-budget.md` l.73: "the network rows need Wi-Fi (E3c)" and l.152-153, the two
+  "needs Wi-Fi (E3c)" cells → the figures of the run.
+- `docs/memory-budget.md` l.108-110, QEMU section: "the margin that decides is the box's, with the
+  network up (needs Wi-Fi, E3c)" → the measured figure.
+- `docs/hardware.md` l.98, risks: "The Wi-Fi antenna | Not described by Sonoff's pages found. | Not
+  needed before Wi-Fi is built." → settled by the run.
+- `docs/decisions.md` D18 (l.273): "The box will use its own server" stays as the record of
+  2026-11-21 (decisions are dated history, not rewritten); D33 says what the box uses.
+- `crates/core/src/network.rs` l.114-116, doc comment of `boot_lines`: "(the firmware starts no
+  link and detects no cable ...)" → for the images without a link.
+- From decision D34 (the backup optional for `flash`, no MAC question for `flash`):
+  `docs/living-spec/README.md`, "Flashes the box and brings it back" (the `flash` bullet "refuses
+  without a backup", the prompt bullet "`backup`, `restore` and `flash` ... ask", the `--keep-storage`
+  bullet's `--backup <file>`, and the `wifi` bullet's "without resetting the box": opening the port
+  resets it); `docs/hardware.md`, Procedures (the opening paragraph, step 3 "before any other
+  write", step 5 "once the backup's row has its restore date" and "refuses without the backup", step
+  6 "restore the backup"); `README.md` (the flashing paragraph); `scripts/box.sh` (the header
+  comment and the comment of `console_exchange`: "DTR and RTS stay low, so that opening the port
+  does not reset the box"); D31's "refuses to flash without a backup that was restored once" stays
+  as dated history, D34 replaces it. `CLAUDE.md` (its `box.sh` line: the user runs `flash`) and
+  `.claude/` (no mention of the backup found) stay true.
+- `firmware/src/main.rs` l.1-2, module comment: "reads its network setting" → adds the Wi-Fi and
+  the server of the radio image; l.41, doc comment of `log_network`: "no link is started" → for
+  the images without a link (the radio image's path starts Wi-Fi).
 
 ## Acceptance criteria
 
 - [ ] `sh scripts/box.sh wifi` on the box: the password typed is never shown; the script prints the
       box's address; `/data/wifi.json` exists on the box (the next `log` shows `wifi: connected`).
+      Partly seen (2026-11-22): `wifi: connected, address 192.168.0.46, ...` and `serving:` in the
+      log after `box.sh wifi`; the script's own output was not recorded.
+- [ ] The SSID is in no serial log of the run: the user runs `grep -c '<SSID>' <log file>` on the
+      Mac on each log file `box.sh log` printed (the SSID is never written in the repository or
+      in a report), and it prints 0. NOT RUN.
 - [ ] `http://<box address>/` opens the interface from the Mac's browser, with the rooms and the
-      live state (one live client), served by the box (the Mac host not running).
+      live state (one live client), served by the box (the Mac host not running). Partly seen
+      (2026-11-22): the interface answered 200 and `GET /api/v1/devices` 200 from the box; the live
+      state in a browser was not recorded.
 - [ ] `sh scripts/demo-garage.sh <box address>` sets the garage up on the box; the motion before the
-      sensor switches the ZBMINIR2, and the interface shows it live.
+      sensor switches the ZBMINIR2, and the interface shows it live. NOT RUN (no relay paired).
 - [ ] `sh scripts/measure-api.sh <box address>` prints 33 answered 201, 0 Busy, and its total time;
-      the figure is in `docs/memory-budget.md`.
-- [ ] The `memory-network:` line, the `heap:` minimum through the run and the projection for the
-      realistic home are in `docs/memory-budget.md`; the minimum is at or above 64 KB, or the run
-      stopped and the figures were reported (R9.3).
-- [ ] With the access point switched off, the log shows `wifi: lost (...)`, then retries; back on,
-      `wifi: connected` again and the interface reconnects by itself; the garage kept working.
-- [ ] `sh scripts/validate.sh` green: the script tests below; the four firmware images built (the
-      radio one with the interface embedded); QEMU unchanged.
+      the figure is in `docs/memory-budget.md`. NOT RUN (`no device with an order`: no relay
+      paired).
+- [ ] The `memory-network:` line, the `heap:` minimum through the run, the network's cost (234 KB
+      minus the first `heap:` minimum, R9.1) and the projection for the realistic home are in
+      `docs/memory-budget.md`; the minimum and the projection are at or above 64 KB, with or
+      without the knob of R9.3 (said which), or the run stopped after the knob and the figures were
+      reported. Partly: the `memory-network:` line is in `docs/memory-budget.md`; the `heap:`
+      minimum through a run, R9.1's difference and the projection are NOT computed.
+- [ ] With the access point switched off: the log shows `wifi: lost (...)`, then retries; a motion
+      before the sensor while it is off still switches the ZBMINIR2 (seen on the relay and in the
+      log); back on, `wifi: connected` again and the interface reconnects by itself. NOT RUN.
+- [ ] No 1970 date written to the flash by a boot with the access point on: after that boot has
+      saved (a `clock: synced` line, then a pairing or an edit), the box is unplugged and plugged
+      back with the access point off; once the access point is on again and the box answers,
+      `GET /api/v1/devices` before any device has spoken since that boot (no measure line of it in
+      the log): every `lastSeen` is of the day, none in 1970. NOT RUN (no `clock:` line seen in
+      the 20 s capture).
+- [ ] After `sh scripts/box.sh wifi --forget` and the box's restart, the log shows `wifi: no
+      settings ...`, no `wifi: connected` and no `serving:`: the settings were in the file only,
+      none kept in NVS. NOT RUN.
+- [x] `sh scripts/validate.sh` green: the core and script tests below; the four firmware images built
+      (the radio one with the interface embedded); QEMU unchanged.
 
 ## Edge cases
 
@@ -467,7 +604,8 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
   start, its saves held 20 s, then written with 1970 dates (R2, R3.2).
 - Link lost while running: `wifi: lost (...)`, retried; the live clients drop and reconnect; the
   engine and recipes go on (R2.3).
-- The setting `ethernet`: no link in this image (R1.1).
+- The setting `ethernet`: no link in this image (R1.1). The setting `auto` with a cable or PoE
+  plugged: Wi-Fi, as with no cable (this image detects no cable, R1.1).
 - The clock never synced (no Internet behind the Wi-Fi): dates from 1970, the line says so, the engine
   works (R3.2); synced late: one `clock: synced` line, statuses follow the core's silence rules (R3.3).
 - A 5th live client: closed 1013 after the upgrade, the 4 others unaffected (R5.1).
@@ -495,7 +633,13 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
 - The built `app.bin` larger than the `ota_0` slot: refused by the build checks; the work stops and
   the figures are reported (R7.5).
 - A Mac host pointed at the box's port 6638: connection refused (R11.1).
-- The internal RAM minimum below 64 KB: `box.sh log` fails, the run stops, figures reported (R9.3).
+- The internal RAM minimum or the projection below 64 KB: `box.sh log` fails on the minimum; the
+  knob of R9.3 (`SPIRAM_MALLOC_ALWAYSINTERNAL` 2048, radio image only) is applied and measured
+  again; still below, the run stops and the figures are reported (R9.3).
+- `Host` of `evil.example` on `/`: 403 `Forbidden host`; `POST /`: 405 (R4.6, the core's
+  `static_reply`).
+- `wifi-set` while the engine is saving a file: `wifi: settings saved` up to about 4 s later, within
+  `box.sh wifi`'s 15 s (R6.2).
 - An order sent while the radio restarts (spec 021's restart ladder): answered `device did not answer`
   after 12 s, as on the Mac.
 
@@ -519,22 +663,37 @@ and 431 from ESP-IDF.
    the router is forwarded to it (the `Host` rule refuses public names and addresses, but a
    forwarded port reached by a private address would pass). The pairing route stays off (404), so
    nobody on the network can add a device.
-
-## Points to decide, from spec 022's review
-
-- Setting `auto` with an Ethernet cable or PoE plugged: the radio image starts no Wi-Fi (`network:
-  ethernet (setting auto), not in this image, no link started`), so the box is unreachable. This
-  is decided on purpose, and a test pins the decision.
-- The live session's `DEV_ORIGINS` (`http://localhost:5173`, `http://127.0.0.1:5173`) are accepted
-  by the box once it uses `origin_allowed`: a development page on any machine of the network can
-  open `/ws`. D33 decides it.
-- The rows of `docs/memory-budget.md` for the HTTP buffers and the worker stacks are estimates
-  (marked E): they are re-checked against the real figures on the box.
+3. **The development origins on `/ws`.** The box accepts, as the host does, the development origins
+   of `live::session::origin_allowed` (`DEV_ORIGINS`: `http://localhost:5173`,
+   `http://127.0.0.1:5173`) on `/ws` (R5.1): a development page on a machine of the home's network
+   can open the live events, within the open API of item 2. D33's text gets that sentence in this
+   change (other docs delta).
+4. **The next memory knob, approved in advance.** When the run's internal minimum or the
+   projection falls under the 64 KB floor, `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` goes from 4096 to
+   2048 in `sdkconfig.radio.defaults` only, and both are measured again; only if a figure is still
+   under, the work stops and the figures are reported (R9.3). The flash it needs still asks the
+   user's yes (D6).
+5. **The backup of the original firmware is optional for `box.sh flash`** (2026-11-22, decision
+   D34): `flash` no longer requires `--backup` (a backup given is still checked: 16 MB, this box,
+   a proven row in `docs/hardware.md`) and asks no MAC question any more; `backup` and `restore`
+   keep theirs. The way back to the original firmware is Sonoff's own reflash. Claude still never
+   flashes without the user's yes (`CLAUDE.md`).
+6. **The spec closed with a partial box run** (2026-11-22): the user chose to move on to features;
+   the box checks not run are listed in "Result of the run" and in the roadmap's inbox.
 
 ## Decided in autonomy
 
 - ESP-IDF's asynchronous requests and a pool of 4 workers: one server task would be held 12 s by an
   order, stopping the interface and the live events.
+- `cable` is `false` in this image: it has no cable detection, so `auto` always means Wi-Fi, and a
+  box with a cable or PoE plugged still starts Wi-Fi (R1.1). Cable detection and Ethernet are E3e.
+- Three small core additions, tested on the Mac, where the review found the firmware could not
+  reach or hold the core's rules: `api::static_reply` (the `Host` check and the 405 before the
+  interface's files, as `dispatch` does), the saver's gate (the clock wait without fake storage
+  failures), `WifiSettings::to_json` (the text written to `wifi.json`). `dispatch`, the host and
+  the saver without a gate behave as before.
+- `box.sh wifi`'s answer window 15 s instead of 5 s: the console's write can wait behind an engine
+  save (3.9 s measured).
 - WebSocket refusals after the upgrade (ESP-IDF answers the handshake itself; its pre-handshake hook
   is a Kconfig option `esp-idf-svc` does not expose), TCP keep-alive in place of the silence rule.
 - Power save off; ESP-IDF's `wifi` tag at warnings (its info lines name the SSID).
@@ -546,15 +705,74 @@ and 431 from ESP-IDF.
   would eat into the 180 s window of spec 021.
 - The workers' stacks (4 × 10 KB) and their body buffers (4 × 16 KB) in PSRAM from the start: the
   budget's own figures put the projection under 64 KB without it (R9.4).
-- `CONFIG_LWIP_MAX_SOCKETS` 24: room above the 12 connections so the least recently used close
-  never meets an internal socket (DNS, SNTP, DHCP, the server's control socket); about 0.3 KB static
-  (R9.5).
-- The memory plan: the run's minimum against 64 KB, plus a projection for the realistic home from the
-  measured network cost; below it, stop and report, the knobs proposed in order.
+- `CONFIG_LWIP_MAX_SOCKETS` 16: ESP-IDF's server needs the 12 connections plus its 3 own sockets
+  and refuses to start with fewer (ESP-IDF's default is 10); one spare; DHCP, DNS and SNTP take no
+  socket; about 0.25 KB static (R4.2, R9.5). D33's "24" is changed with it.
+- `CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0`: lwIP's task on core 0 with Wi-Fi and the server, off the
+  engine's core (R4.1).
+- The memory plan: the run's minimum against 64 KB, plus a projection for the realistic home from
+  the network's cost measured as a difference of two `heap:` minima (R9.1); below it, the knob
+  approved by the user, then stop and report.
 - What QEMU cannot run (Wi-Fi, the server) is covered by the Mac tests of every piece of logic
-  (spec 022's core, `ui-embed` and script tests, and this spec's script tests), by building and
+  (spec 022's core, `ui-embed` and script tests, and this spec's core and script tests), by building and
   linting the radio image in `validate.sh`, and by the run on the box.
-- D33 was written by spec 022; this spec checks it against what is built.
+- D33 was written by spec 022; this spec changes two of its sentences (the development origins,
+  the socket table of 16) and checks the rest against what is built.
+- From the code review (2026-11-22): the SNTP callback runs on lwIP's task, whose stack is small, so
+  it only stores the sync's time and sets the flags; `wifi::run`'s loop logs `clock: synced, <ISO>`.
+  The console thread's stack (4 KB, it writes the flash) has no measured margin: its high-water
+  mark is logged on the `console: restarting` line and read on the box (plan, "Checked on the box
+  only").
+- A fragmented incoming `/ws` message is accepted as no concern: ESP-IDF's server never sets
+  `fragmented` on a received frame, and a client's message is a small `subscribe` (1009 past 1 KB).
+- A synchronous handler that answers without reading a declared body (`/`, 503 `Busy`, a failed
+  asynchronous copy) returns `ESP_FAIL`, so ESP-IDF closes the connection rather than read and
+  discard the body on the server's task.
+
+Decided during the run on the box (2026-11-22):
+
+- The console thread reads UART0 with a 100 ms wait in a loop (`READ_WAIT_MS` in
+  `firmware/src/console.rs`): `uart_read_bytes(..., TickType_t::MAX)` never returned (the driver's
+  deadline arithmetic overflows), so `box.sh wifi` got no answer.
+- The time of the clock's sync is an `AtomicU32` of seconds (`CLOCK_SYNCED_SECS` in
+  `firmware/src/wifi.rs`): the ESP32 has no `AtomicU64`, and `wifi.rs` did not compile for it.
+- `box.sh wifi` waits for `console: ready` (12 s at most) before it sends its line: opening the
+  serial port resets the box (the DTR and RTS lines of the USB-serial chip), and a line sent before
+  the console exists is lost.
+- Lesson: the build agent's "validate green" came before the last edit of `wifi.rs` and missed the
+  `AtomicU64`; the radio image's build is run again after the last edit of the firmware.
+- The test of Ctrl-C at `box.sh wifi`'s password prompt presses Ctrl-C again every 0.5 s until the
+  script ends, and bounds its wait (20 s): on a loaded Mac the first Ctrl-C landed before `read`
+  started, the shell held it, and the test hung a `validate.sh` run.
+
+Decided while building (plan steps 1 to 4, 2026-11-22):
+
+- `box.sh wifi` reads the console's answers through ESP-IDF's log prefix (`I (<ms>) <module>:`,
+  colours included), which it drops before matching `wifi: ...`: the firmware answers with log
+  lines, and spec 022's script matched only lines starting with `wifi:`. Tested with prefixed lines
+  (the 15 s window test).
+- `box.sh log --image radio` prints the link's choice (`network: wifi (setting <s>)` or the
+  `ethernet` line) in place of the last `network:` line, which is the radio's own line, printed
+  below it anyway.
+- SNTP is given `pool.ntp.org` in both of its two places: lwIP writes the DHCP server's time server
+  (option 42) over the first, so `pool.ntp.org` stays in the second.
+- A request body that stops for 5 s (ESP-IDF's receive timeout) is answered 408
+  `{"error":"Request timeout"}` and its connection closed, so a stalled client frees its worker.
+- The API's handler is registered on `/*` for GET, POST, PUT, DELETE and PATCH; any other method is
+  answered by ESP-IDF itself (405, its own text). `/` and `/assets/*` take GET, POST, PUT and
+  DELETE, as R4.6 says.
+- A `/ws` message sent in fragments is put together up to `MAX_INCOMING_BYTES` before it is a
+  subscribe; past it, 1009.
+- The welcome message of `/ws` is the host's text, repeated in `firmware/src/live_ws.rs` (the host is
+  unchanged by this spec).
+- `memory-network:` prints the PSRAM heap's own total (as the `memory:` line does), not a fixed
+  2048.
+- The server keeps at most 10 response headers (`max_resp_headers`, 8 by default): the interface's
+  answers carry 6 besides the content type.
+- The plan's count says 12 script scenarios; its table holds 11 script rows (one of them, the box
+  and sim logs, is one test). 11 script tests and 8 core tests are written.
+- D33 says "SNTP with `pool.ntp.org`"; R3.1 adds the DHCP server's time server. Not rewritten (D33 is
+  checked, not rewritten on the quiet): raised to the user.
 
 ## How the user will check it
 
@@ -562,22 +780,54 @@ The demo, on the Dongle Max on USB, with the SNZB-03PR2 and the ZBMINIR2 paired 
 the window of a power-on boot), the Mac host not running:
 
 1. Build the interface and the radio image; flash it with the user's yes and MAC:
-   `sh scripts/box.sh flash --image radio --keep-storage --backup <file>`.
-2. `sh scripts/box.sh wifi`: type the network's name and password; the script prints the address.
-3. In a second terminal, `sh scripts/box.sh log --image radio --seconds 900` (the box restarts; its
-   `wifi:`, `clock:`, `serving:`, `memory-network:` and `heap:` lines show).
-4. Open `http://<address>/` in the Mac's browser; `sh scripts/demo-garage.sh <address>`; move before
+   `sh scripts/box.sh flash --image radio --keep-storage --backup <file>`. The flash ends with
+   `--after no_reset`: the box is not running yet.
+2. Boot it: `sh scripts/box.sh log --image radio --seconds 60` (resets the box; `console: ready`
+   and `wifi: no settings ...` show). Without this step `box.sh wifi` gets no answer (exit 4).
+3. `sh scripts/box.sh wifi`: type the network's name and password; the script prints the address.
+4. `sh scripts/box.sh log --image radio --seconds 1200` in a second terminal, kept for the whole run
+   (it resets the box once; its `wifi:`, `clock:`, `serving:`, `memory-network:` and `heap:` lines
+   show). The capture must end at least 240 s after the access point is back on (step 8), so that a
+   `heap:` line follows the lost link; if the steps run late, a longer `--seconds` is chosen before
+   starting, since a second capture resets the box and its minimum.
+5. Open `http://<address>/` in the Mac's browser; `sh scripts/demo-garage.sh <address>`; move before
    the sensor: the light switches and the interface shows it.
-5. `sh scripts/measure-api.sh <address>`.
-6. Switch the access point off for a minute, then on: the log shows `wifi: lost`, the retries, then
-   `wifi: connected`; the interface reconnects.
+6. `sh scripts/measure-api.sh <address>`.
+7. The checks on the box of the plan ("Checked on the box only") that need no restart.
+8. Switch the access point off for a minute; move before the sensor while it is off (the light
+   switches); switch it on: the log shows `wifi: lost`, the retries, then `wifi: connected`; the
+   interface reconnects.
+9. After the capture: `grep -c '<SSID>' <log file>` on the Mac prints 0. Then the checks that need a
+   restart (the power-ons, the 1970 check, `box.sh wifi --forget` then a boot with no connection),
+   each with its own `box.sh log` capture.
 
-Result of the run (filled after the run on the box):
+Result of the run (2026-11-22, the radio image flashed three more times, debug builds, with
+`--keep-storage`; the spec is closed as done, box run partial, by the user's choice to move on to
+features):
 
-- [ ] `box.sh wifi`, the address printed, the password never shown: ...
-- [ ] the interface served by the box, live: ...
-- [ ] the garage set up through the API, the motion switching the light: ...
-- [ ] the 33 requests: ... answered 201, ... Busy, total ... s
-- [ ] the internal RAM: `memory-network:` ..., `heap:` minimum ..., projection for the realistic
-      home ...
-- [ ] the lost link and its return: ...
+- [ ] `box.sh wifi`, the address printed, the password never shown, the SSID in no log: the first
+      tries got no answer (the console's read never returned, and opening the port resets the box:
+      both fixed, "Decided during the run on the box"); then the box joined: `wifi: connected,
+      address 192.168.0.46, name solite-b5a42c, channel 6, rssi -56 dBm`, then `serving:
+      http://192.168.0.46/`. The SSID grep, a wrong password and `wifi --forget`: NOT RUN.
+- [ ] the interface served by the box, live: `/` answered 200, `GET /api/v1/devices` 200, `POST
+      /api/v1/integrations/solite/permit-join` 404 with its message, `Host: evil.example` 403. The
+      live state in a browser, a 5th live client, 413, 411, 431, 13 connections, 1009: NOT RUN.
+- [ ] the garage set up through the API, the motion switching the light: NOT RUN (no ZBMINIR2
+      paired).
+- [ ] the 33 requests: NOT RUN (`measure-api.sh` stops on `no device with an order`: it needs a
+      relay).
+- [ ] the internal RAM: `memory-network: internal 171 KB free (largest block 62 KB), psram 1904 KB
+      free of 2048 KB`, 10 s after `serving:`, one device known; the boot's `memory:` line showed
+      289 KB internal free, so Wi-Fi, the server and the engine's start together took about 118 KB
+      of internal RAM (a difference of two snapshots, not R9.1's difference of two `heap:` minima).
+      The `heap:` minimum of a run, R9.1's network cost and the projection for the realistic home
+      are NOT computed; the knob of R9.3 was not applied.
+- [ ] the lost link and its return, the garage working meanwhile: NOT RUN.
+- [ ] no 1970 date on the flash; `--forget` leaves no connection: NOT RUN (no `clock:` line was seen
+      in the 20 s capture).
+- [x] the radio `app.bin`: 1774 KB (1816560 bytes) of 4096 KB (the release build of the last source, 2026-11-22; the box ran debug builds).
+
+Not run either: the power-on pairing with the access point on or off, the console's stack
+high-water mark, the Mac host refused on port 6638. Pairing the ZBMINIR2 needs a power-on more than
+10 minutes after a boot (a software restart opens no pairing window): roadmap inbox.

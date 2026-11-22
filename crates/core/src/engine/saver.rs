@@ -22,6 +22,9 @@ pub struct Saver<S: Storage> {
     retry_at: u64,
     /// Where a write failure is shown; the log until the caller gives its own.
     sink: Box<dyn FnMut(&str)>,
+    /// While it answers `false`, nothing is written but on stop (the box's clock wait, spec 023
+    /// R3.2); `None`: always open.
+    gate: Option<Box<dyn Fn() -> bool>>,
 }
 
 impl<S: Storage> Saver<S> {
@@ -32,6 +35,7 @@ impl<S: Storage> Saver<S> {
             devices_only: false,
             retry_at: 0,
             sink: Box::new(|message| log::warn!("{message}")),
+            gate: None,
         }
     }
 
@@ -50,11 +54,23 @@ impl<S: Storage> Saver<S> {
         self
     }
 
+    /// Holds the writes while `gate` answers `false`: every file stays due, nothing is shown or
+    /// counted as failed and no retry delay starts; the first tick after it answers `true` writes
+    /// what is due. A stop writes whatever it answers.
+    #[must_use]
+    pub fn with_gate(mut self, gate: impl Fn() -> bool + 'static) -> Self {
+        self.gate = Some(Box::new(gate));
+        self
+    }
+
     /// Writes what is due. A failure is shown and the write is tried again later, except on stop
     /// (`stopping`), where it is the error. Each file is written chunk by chunk from a cursor: the
     /// home is taken for one chunk, then let go, then the chunk is written (memory ceiling, spec
     /// 010 R7.15).
     pub fn tick(&mut self, home: &Mutex<Home>, now: u64, stopping: bool) -> Result<(), String> {
+        if !stopping && self.gate.as_ref().is_some_and(|open| !open()) {
+            return Ok(());
+        }
         let devices = self.policy.due_stream(&mut lock(home), now, stopping);
         if let Some(cursor) = devices
             && let Err(message) = self.write(home, cursor, DEVICES_FILE)

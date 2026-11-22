@@ -3,11 +3,14 @@
 //! them on the Mac without HTTP. It resets the radio, finds its serial speed, starts its network
 //! (backup in `/data/zigbee.json`), opens pairing for a few minutes after a power-on boot, runs
 //! the loop, restarts a wedged radio, and logs the serial buffer and the heap every few minutes.
-//! The logic (probe, reset steps, boot window, restart, report timing and lines) is in the core,
+//! With Wi-Fi (spec 023) it hands the loaded home and its live hub to `main`, which serves them;
+//! its saves wait for the clock (the saver's gate), and a stop asked by the console saves the
+//! files before the ESP32 restarts. The logic (probe, reset steps, boot window, restart, report timing and lines) is in the core,
 //! tested on the Mac; this file gives it the hardware.
 
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -28,6 +31,8 @@ use solite_core::HeapStats;
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, RunError, Saver, Storage, load_home};
 use solite_core::heap_line;
+use solite_core::home::Home;
+use solite_core::live::LiveHandle;
 use solite_core::radio::backup;
 use solite_core::radio::serial::{
     BootPairing, RADIO_BAUD, ResetReason, RestartSteps, Restarted, Restarts, marker_wait_ms,
@@ -38,9 +43,11 @@ use solite_core::radio::{
 };
 use solite_core::radio::{identity_lines, network_line};
 
+use crate::http_server;
 use crate::memory;
 use crate::radio_uart::{UartTransport, reset_radio};
 use crate::storage::{self, BASE, FatStorage};
+use crate::wifi::{CLOCK_SET, Event, WIFI_STARTED};
 
 /// The engine thread's stack, in bytes, in internal RAM (spec 021 R1.2).
 pub const STACK_BYTES: usize = 32 * 1024;
@@ -48,6 +55,17 @@ pub const STACK_BYTES: usize = 32 * 1024;
 const BACKUP_FILE: &str = "zigbee.json";
 /// The marker written at each boot and removed after `STABLE_MS` of running.
 const MARKER_FILE: &str = "booting";
+
+/// Set by the console to stop the engine (its files are then saved) before a restart.
+pub static STOP: AtomicBool = AtomicBool::new(false);
+/// Set when the engine thread has ended, stopped or not.
+pub static STOPPED: AtomicBool = AtomicBool::new(false);
+
+/// What the engine hands to `main` once the home is loaded: the server shares both.
+pub struct Shared {
+    pub home: Arc<Mutex<Home>>,
+    pub hub: LiveHandle,
+}
 
 type Clock = Box<dyn FnMut() -> u64 + Send>;
 type Wired = Radio<Link, Clock>;
@@ -57,7 +75,8 @@ fn clock(start: Instant) -> Clock {
     Box::new(move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX))
 }
 
-fn wall_ms() -> u64 {
+/// The time since 1970, in milliseconds (from 1970 itself until the clock is set).
+pub fn wall_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
@@ -65,7 +84,7 @@ fn wall_ms() -> u64 {
 
 /// Fills the buffer with the ESP32's random numbers.
 #[allow(unsafe_code)]
-fn fill(buffer: &mut [u8]) -> Result<(), String> {
+pub fn fill(buffer: &mut [u8]) -> Result<(), String> {
     // SAFETY: `buffer` is valid for writes of `buffer.len()` bytes for the duration of the call,
     // which fills exactly that many bytes and has no other precondition.
     unsafe { esp_fill_random(buffer.as_mut_ptr().cast(), buffer.len()) };
@@ -93,7 +112,7 @@ fn heap_stats() -> HeapStats {
         psram_min,
         stack_unused: stack_unused as usize,
         stack_total: STACK_BYTES,
-        http_stack: None,
+        http_stack: http_server::http_stack(),
     }
 }
 
@@ -175,9 +194,13 @@ fn write_backup(network: &Network, keys: &solite_core::radio::NetworkKeys) -> Re
 }
 
 /// The ESP32's random generator needs its entropy source on while no radio of the ESP32 runs;
-/// it is on only while the network starts (forming draws the keys).
+/// it is on only while the network starts (forming draws the keys). Once the Wi-Fi station has
+/// started, its radio feeds the generator and the switch must not run (spec 023 R3.4).
 #[allow(unsafe_code)]
 fn with_entropy<R>(body: impl FnOnce() -> R) -> R {
+    if WIFI_STARTED.load(Ordering::SeqCst) {
+        return body();
+    }
     // SAFETY: takes no argument; switches the hardware entropy source on, as the documentation
     // asks for random numbers without Wi-Fi or Bluetooth. Nothing else uses the ADC here.
     unsafe { bootloader_random_enable() };
@@ -253,16 +276,35 @@ fn start_network(radio: &mut Wired) -> Result<(Network, bool), String> {
     Ok((network, foreign))
 }
 
-fn run() -> Result<(), String> {
+/// `home_sent` turns true once `main` has the home (its server is then up), so that a later
+/// error is not reported as "no home".
+fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), String> {
     let start = Instant::now();
     let mono = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let link = Link {
         uart: UartTransport::install(0)?,
         start,
     };
-    let home = Mutex::new(load_home(&FatStorage::new(), wall_ms())?);
-    lock(&home).start_recipes(mono(), wall_ms());
-    let mut saver = Saver::new(FatStorage::new(), wall_ms());
+    let home = Arc::new(Mutex::new(load_home(&FatStorage::new(), wall_ms())?));
+    {
+        // The recipes' timers and the orders' deadlines run on the same monotonic clock from the
+        // first moment, API calls included (as `crates/host/src/serve.rs` does).
+        let mut guard = lock(&home);
+        guard.orders().set_clock(Arc::new(mono));
+        guard.start_recipes(mono(), wall_ms());
+    }
+    if let Some(events) = events {
+        let hub = lock(&home).live();
+        *home_sent = events
+            .send(Event::Home(Shared {
+                home: Arc::clone(&home),
+                hub,
+            }))
+            .is_ok();
+    }
+    // The saves wait for the clock (spec 023 R3.2); a stop writes whatever the gate says.
+    let mut saver =
+        Saver::new(FatStorage::new(), wall_ms()).with_gate(|| CLOCK_SET.load(Ordering::SeqCst));
     let boot = boot_pairing();
 
     reset_radio()?;
@@ -291,7 +333,7 @@ fn run() -> Result<(), String> {
         now: Arc::new(wall_ms),
         monotonic: Arc::new(mono),
     };
-    let stop = AtomicBool::new(false);
+    let stop = &STOP;
     let mut restarts = Restarts::new();
     let mut slot: Option<Wired> = Some(radio);
     loop {
@@ -303,12 +345,13 @@ fn run() -> Result<(), String> {
             &home,
             &mut saver,
             &clocks,
-            &stop,
+            stop,
             &mut fill,
             true,
             &mut |line| show(line),
         ) {
-            Ok(_) => return Ok(()),
+            // Stopped (the console's restart): the files due are saved first.
+            Ok(_) => return saver.tick(&home, wall_ms(), true),
             // A storage error, or a failed measure: logged by the caller, the loop stops and the
             // radio is left as it is.
             Err(RunError::Other(message)) => return Err(message),
@@ -370,16 +413,24 @@ fn start_marker_timer() {
     }
 }
 
-/// The engine thread's body: any error is logged by the caller, the ESP32 stays up.
-fn engine_thread() {
+/// The engine thread's body: any error is logged, the ESP32 stays up. Without a home, `main` is
+/// told why (no server starts); once the home is sent, the server stays up and the error is only
+/// logged.
+fn engine_thread(events: Option<Sender<Event>>) {
     start_marker_timer();
-    if let Err(e) = run() {
+    let mut home_sent = false;
+    if let Err(e) = run(events.as_ref(), &mut home_sent) {
         log::error!("{e}");
+        if let Some(events) = events.as_ref().filter(|_| !home_sent) {
+            let _ = events.send(Event::NoHome(e));
+        }
     }
+    STOPPED.store(true, Ordering::SeqCst);
 }
 
-/// Starts the engine thread on core 1, with `STACK_BYTES` of stack in internal RAM.
-pub fn spawn() -> Result<JoinHandle<()>, String> {
+/// Starts the engine thread on core 1, with `STACK_BYTES` of stack in internal RAM. With Wi-Fi,
+/// `events` receives the shared home once it is loaded.
+pub fn spawn(events: Option<Sender<Event>>) -> Result<JoinHandle<()>, String> {
     ThreadSpawnConfiguration {
         name: Some(c"engine"),
         stack_size: STACK_BYTES,
@@ -391,7 +442,7 @@ pub fn spawn() -> Result<JoinHandle<()>, String> {
     let handle = std::thread::Builder::new()
         .name("engine".into())
         .stack_size(STACK_BYTES)
-        .spawn(engine_thread)
+        .spawn(move || engine_thread(events))
         .map_err(|e| e.to_string());
     // Threads started later get the default configuration again.
     let _ = ThreadSpawnConfiguration::default().set();

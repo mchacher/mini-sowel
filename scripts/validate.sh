@@ -32,7 +32,8 @@ want() { [ -z "$only" ] || [ "$only" = "$1" ]; }
 
 step() { printf '\n== %s\n' "$1"; }
 
-if want ui && [ ! -d ui/node_modules ]; then
+# The radio image embeds the built interface (spec 023 R7.4): the firmware group builds ui/dist too.
+if { want ui || want firmware; } && [ ! -d ui/node_modules ]; then
   echo "validate: ui/node_modules is missing. Run: cd ui && npm ci" >&2
   exit 1
 fi
@@ -79,6 +80,11 @@ if want ui; then
 fi
 
 if want firmware; then
+  step "Firmware: the interface built for the radio image (ui/dist, always rebuilt: an old one would be embedded)"
+  (cd ui && npm run -s build >/dev/null)
+  script=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' ui/dist/index.html | head -n 1)
+  [ -n "$script" ] || { echo "validate: ui/dist/index.html names no assets/index-*.js script" >&2; exit 1; }
+
   step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim, the measuring image with feature flash-saves, the radio image with feature radio)"
   if [ -f "$HOME/export-esp.sh" ]; then
     . "$HOME/export-esp.sh"
@@ -101,6 +107,15 @@ if want firmware; then
       || { echo "validate: the radio build lacks CONFIG_UART_ISR_IN_IRAM=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
     ! grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
       || { echo "validate: the other images' build holds CONFIG_UART_ISR_IN_IRAM=y: they must keep their settings" >&2; exit 1; }
+    # The WebSocket of `/ws` is on in the radio build only (spec 023 R7.4).
+    grep -aqs '^CONFIG_HTTPD_WS_SUPPORT=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the radio build lacks CONFIG_HTTPD_WS_SUPPORT=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
+    ! grep -aqs '^CONFIG_HTTPD_WS_SUPPORT=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the other images' build holds CONFIG_HTTPD_WS_SUPPORT=y: they must keep their settings" >&2; exit 1; }
+    # The interface embedded is the one just built: the marker and the name of its hashed script.
+    elf=target/radio/xtensa-esp32-espidf/release/solite-firmware
+    grep -aqF 'solite-ui ' "$elf" || { echo "validate: the radio image holds no embedded interface (no solite-ui marker)" >&2; exit 1; }
+    grep -aqF "$script" "$elf" || { echo "validate: the radio image does not embed the current ui/dist ($script missing): rebuild it" >&2; exit 1; }
   )
 
   step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"

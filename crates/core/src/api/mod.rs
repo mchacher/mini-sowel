@@ -213,6 +213,18 @@ pub fn handle_stream(home: &mut Home, request: &Request, now: u64, random: Rando
     dispatch(home, request, now, random, true)
 }
 
+/// The interface's answer for the box's server (spec 023 R4.6): `None` when the path is not the
+/// interface's (`/`, `/assets/<name>`), left to `handle_stream`; else, in the order of
+/// `handle_stream`, 403 for a `Host` the reach refuses, then 405, 404 or the file to send. The
+/// box's server calls it on its own task, without the home; the host keeps `handle_stream`.
+pub fn static_reply(request: &Request) -> Option<Reply> {
+    let reply = static_files::route(request)?;
+    if !host_allowed(request.host, request.port, request.reach) {
+        return Some(Reply::Whole(error(403, "Forbidden host")));
+    }
+    Some(reply)
+}
+
 /// What the plain `handle` answers to an order: it cannot wait for the radio, so it does not
 /// queue the order.
 const ORDERS_NEED_STREAMING: &str = "Orders need the streaming handler";
