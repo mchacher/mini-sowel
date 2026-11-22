@@ -29,16 +29,14 @@ else
 fi
 
 fail() { echo "qemu: $1" >&2; exit 1; }
+fw_fail() { fail "$1"; }
+# The tools, the table, the image and the log checks shared with scripts/box.sh.
+. "$ROOT/scripts/lib/firmware.sh"
 
-# The version is the workspace's, not written here.
-VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml)
+VERSION=$(fw_version)
 [ -n "$VERSION" ] || fail "cannot read the workspace version from Cargo.toml."
 
 TARGET_DIR=firmware/target/xtensa-esp32-espidf/release
-ESPRESSIF=$ROOT/firmware/.embuild/espressif
-# The engine's limits, in KB (spec 016 R4.4): heap peak (D27) and internal RAM minimum free.
-PEAK_LIMIT_KB=350
-INTERNAL_MIN_KB=64
 
 MODE=sim
 case "$1" in
@@ -67,10 +65,7 @@ else
 fi
 
 # ESP-IDF's tools: the Python environment and ESP-IDF itself, downloaded by the firmware build.
-IDF_PATH=$(ls -d "$ESPRESSIF"/esp-idf/*/ 2>/dev/null | tail -n 1)
-IDF_PATH=${IDF_PATH%/}
-PY=$(ls "$ESPRESSIF"/python_env/*/bin/python 2>/dev/null | tail -n 1)
-[ -n "$IDF_PATH" ] && [ -n "$PY" ] || fail "ESP-IDF was not found in firmware/.embuild (build the firmware first)."
+fw_find_idf
 
 find_qemu() { ls "$ESPRESSIF"/tools/qemu-xtensa/*/qemu/bin/qemu-system-xtensa 2>/dev/null | tail -n 1; }
 QEMU=$(find_qemu)
@@ -81,10 +76,7 @@ if [ -z "$QEMU" ]; then
   [ -n "$QEMU" ] || fail "QEMU is still missing after its installation."
 fi
 
-# The bootloader: from the esp-idf-sys build folder whose bootloader was built last (a folder
-# rebuilt in place keeps its own date, so the folder's date would mislead).
-BOOTLOADER=$(ls -t "$TARGET_DIR"/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin 2>/dev/null | head -n 1)
-[ -f "$BOOTLOADER" ] || fail "bootloader not found in $TARGET_DIR/build."
+fw_find_bootloader "$TARGET_DIR"
 
 WORK=firmware/target/qemu
 mkdir -p "$WORK"
@@ -93,26 +85,13 @@ LOG=$WORK/serial.log
 
 # The partition table: firmware/partitions.csv (the one the box is flashed with), built here; the
 # application goes at the offset of `ota_0` in the built table, read from it, not written here.
+fw_find_tools
 PARTITIONS=$WORK/partition-table.bin
-GEN="$PY $IDF_PATH/components/partition_table/gen_esp32part.py"
-$GEN firmware/partitions.csv "$PARTITIONS" >/dev/null 2>&1 || fail "firmware/partitions.csv does not build."
-APP_OFFSET=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /, "", $4); print $4 }')
-[ -n "$APP_OFFSET" ] || fail "no ota_0 slot in firmware/partitions.csv."
+fw_build_table firmware/partitions.csv "$PARTITIONS"
 
 echo "== Flash image (16 MB)"
-ESPTOOL="$PY -m esptool --chip esp32"
-$ESPTOOL elf2image --flash_mode dio --flash_size 16MB -o "$WORK/app.bin" "$TARGET_DIR/solite-firmware" >/dev/null
-SLOT_SIZE=$($GEN "$PARTITIONS" 2>/dev/null | awk -F, '$1 == "ota_0" { gsub(/ /, "", $5); print $5 }')
-APP_SIZE=$(wc -c < "$WORK/app.bin" | tr -d ' ')
-[ -n "$SLOT_SIZE" ] || fail "no size for the ota_0 slot in firmware/partitions.csv."
-# The table prints sizes as 4M, 64K or 0x400000.
-case "$SLOT_SIZE" in
-  *M) SLOT_BYTES=$((${SLOT_SIZE%M} * 1048576)) ;;
-  *K) SLOT_BYTES=$((${SLOT_SIZE%K} * 1024)) ;;
-  *) SLOT_BYTES=$((SLOT_SIZE)) ;;
-esac
-[ "$APP_SIZE" -le "$SLOT_BYTES" ] || fail "app.bin ($APP_SIZE bytes) is larger than the ota_0 slot ($SLOT_BYTES bytes)."
-$ESPTOOL merge_bin --fill-flash-size 16MB -o "$WORK/flash.bin" \
+fw_elf2image "$TARGET_DIR/solite-firmware" "$WORK/app.bin"
+$ESPTOOL --chip esp32 merge_bin --fill-flash-size 16MB -o "$WORK/flash.bin" \
   0x1000 "$BOOTLOADER" 0x8000 "$PARTITIONS" "$APP_OFFSET" "$WORK/app.bin" >/dev/null
 
 # eFuses of a chip revision 3 (the values ESP-IDF's own `idf.py qemu` uses), so that the
@@ -139,18 +118,8 @@ echo "== QEMU"
   -serial "file:$LOG" </dev/null >/dev/null 2>"$WORK/qemu.err" &
 QPID=$!
 
-# A broken boot: a panic, or the ROM's reset line ("rst:") seen a second time.
-broken() {
-  grep -aqE 'Guru Meditation Error|abort\(\) was called|panicked at' "$LOG" && return 0
-  [ "$(grep -ac 'rst:' "$LOG")" -ge 2 ]
-}
-# The lines that must show: the banner, the memory, the storage and the network; then the engine's
-# (sim image) or `radio: none` (box image).
-ok() {
-  grep -aqF "solite $VERSION" "$LOG" && grep -aq 'memory: internal' "$LOG" \
-    && grep -aq 'storage: /data, ' "$LOG" && grep -aq 'network: .* no link started' "$LOG" || return 1
-  if [ "$MODE" = sim ]; then grep -aq 'engine: ' "$LOG"; else grep -aq 'radio: none' "$LOG"; fi
-}
+broken() { fw_broken "$LOG" qemu; }
+ok() { fw_lines_ok "$LOG" "$MODE"; }
 show_failure() {
   echo "qemu: $1" >&2
   echo "qemu: last 40 lines of the serial output:" >&2
@@ -175,20 +144,8 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
       grep -a 'radio: none' "$LOG"
       exit 0
     fi
-    ENGINE=$(grep -a 'engine: ' "$LOG" | tail -n 1)
-    echo "$ENGINE"
-    PEAK=$(echo "$ENGINE" | sed -n 's/.*(peak \([0-9]*\) KB).*/\1/p')
-    INTERNAL_MIN=$(echo "$ENGINE" | sed -n 's/.*internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
-    [ -n "$PEAK" ] && [ -n "$INTERNAL_MIN" ] || show_failure "cannot read the peak and the internal minimum from the engine line."
-    [ "$PEAK" -le "$PEAK_LIMIT_KB" ] || show_failure "the engine's heap peak is $PEAK KB, above the $PEAK_LIMIT_KB KB of decision D27."
-    DEVICES=$(echo "$ENGINE" | sed -n 's/^.*engine: \([0-9]*\) devices (\([0-9]*\) reported).*/\1/p')
-    REPORTED=$(echo "$ENGINE" | sed -n 's/^.*engine: \([0-9]*\) devices (\([0-9]*\) reported).*/\2/p')
-    [ -n "$DEVICES" ] && [ -n "$REPORTED" ] || show_failure "cannot read the reported devices from the engine line."
-    [ "$REPORTED" -eq "$DEVICES" ] || show_failure "only $REPORTED of the $DEVICES devices got a measure into the engine."
-    grep -aq 'scenario: started' "$LOG" || show_failure "the scenario never started."
-    DROPPED=$(sed -n '/scenario: started/,$p' "$LOG" | grep -ac 'callback queue full' || true)
-    [ "$DROPPED" -eq 0 ] || show_failure "the radio dropped $DROPPED callbacks while the scenario played."
-    [ "$INTERNAL_MIN" -ge "$INTERNAL_MIN_KB" ] || show_failure "the internal RAM minimum free is $INTERNAL_MIN KB, below the $INTERNAL_MIN_KB KB kept for the network."
+    echo "$(grep -a 'engine: ' "$LOG" | tail -n 1)"
+    REASON=$(fw_check_engine "$LOG") || show_failure "$REASON"
     exit 0
   fi
   sleep 1

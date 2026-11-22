@@ -37,7 +37,12 @@ Each of the three programs starts and says which tool it is, with its version:
   partition when it cannot mount it, and logs `storage: formatted (<reason>)`), logs
   `storage: /data, <used> KB used of <size> KB`, reads its network setting from
   `/data/network.json` and logs its choice (`network: wifi (setting auto), no link started`),
-  starts no link, and, in the image for the box, logs `radio: none`.
+  starts no link, and, in the image for the box, logs `radio: none`. The image runs on the Dongle
+  Max as in QEMU; the measuring image (cargo feature `flash-saves`, which turns on `sim`) is built to
+  run the realistic home on the box with every save written to the flash, and logs, instead of the count of
+  saves run without the emulator's flash, `saves: <n> written to flash, longest <ms> ms (<file>,
+  <KB> KB), total <ms> ms`: the time each save holds the radio loop. After the last save it logs
+  `storage-after: /data, <used> KB used of <size> KB`, the use of the FAT partition by the home.
 - **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the firmware in Espressif's
   QEMU, with 2 MB of PSRAM, and runs the engine in it with the simulated radio and a realistic
   home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
@@ -390,7 +395,7 @@ equipment", a device's "Create equipment"), as well as showing them.
 `--sim <scenario>` replaces `--radio tcp://<address>:6638` in every command (identify, `--pair`,
 `--listen`, `--serve`): a simulated radio and simulated devices, speaking the same protocols as the real
 ones, play a scenario file; the lines are the same, `radio: sim <scenario>` first. The simulated
-radio runs on the Mac and in the emulated ESP32.
+radio runs on the Mac, in the emulated ESP32, and in the measuring image, which is built for the Dongle Max.
 `--speed <1..100>` runs the scenario's clock faster (the pairing time is not affected).
 
 A scenario (JSON, at most 1 MB) names the radio (EZSP version 13 to 19, stack version, address,
@@ -408,6 +413,38 @@ The simulated radio keeps its network and its devices in `solite-data/sim/` (or 
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
 relay).
+
+### Flashes the box and brings it back
+
+`sh scripts/box.sh <command> [--port <device>] [--baud <rate>]` works on the Dongle Max over USB,
+with `esptool.py`, `espefuse.py` and `gen_esp32part.py` taken from the `PATH`, else from ESP-IDF's
+Python environment in `firmware/.embuild/`. The port is `--port`, or the only USB bridge found
+(none or several: exit 2 with the list); the baud rate is 921600 by default.
+
+- `identify` (read-only) prints the chip and its revision, the MAC address, the flash size, secure
+  boot and flash encryption. It stops (exit 3, `box: STOP, <reason>; nothing is written to this
+  box`) on a box it cannot flash: secure boot on, flash encryption on, a chip revision below 3 or a
+  flash that is not 16 MB. When the box does not answer (it is not in download mode), exit 4 and
+  the manual way (hold the button while plugging the cable) is printed.
+- `backup --out <folder>` reads the whole flash twice, keeps the file `dongle-max-<mac>-<date>.bin`
+  outside the repository (mode 0600) and its `.sha256` only when the two reads are equal, 16 MB long
+  and not one repeated byte, and prints the row for `docs/hardware.md`.
+- `restore <file>` writes the backup back, after checking its size, its SHA-256 and that the MAC of
+  its name is the connected box's.
+- `flash --image box|sim --backup <file>` refuses without a backup whose SHA-256 is in the backup
+  table of `docs/hardware.md` with a restore date; it checks the built image is the one asked for
+  and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage`, writes the bootloader, the table
+  of `firmware/partitions.csv` and the application, and resets the box.
+- `log --image box|sim [--seconds <n>] [--replug] [--expect-kept]` resets the box, captures its
+  serial output and checks it as `scripts/qemu.sh` checks QEMU's (banner, memory, `storage:`,
+  `network:`, then `radio: none` or the `engine:` and `saves:` lines); it also fails on `psram none`,
+  a panic or a boot loop, and with `--expect-kept` on `storage: formatted`. `--from-file <log>`
+  checks a captured log, `--raw` captures without checks.
+- `backup`, `restore` and `flash` print what they will do, then ask, on the terminal (never on
+  standard input), for the last 6 hex digits of the box's MAC address; anything else, or no
+  terminal, writes nothing. `--dry-run` prints the plan only. No command writes an eFuse.
+- No file of `firmware/src/` names GPIO12 or GPIO15, the radio's bootloader and reset lines: the
+  measuring image leaves the radio untouched.
 
 ### Measures the coverage of Zigbee2MQTT's definitions
 
@@ -441,8 +478,11 @@ under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 3
 equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
-counted in the worst case. `docs/memory-budget.md` shares the box's 2 MB of PSRAM and its internal
-RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's wiring and its risks.
+counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
+measuring image; they are written in `docs/memory-budget.md`, "On the box", once a box has run
+(none has). `docs/memory-budget.md` shares the box's 2 MB
+of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
+wiring and its risks.
 
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
@@ -473,3 +513,4 @@ measures.
 | 017 | Pairing while serving, from the API and the interface's devices page: new devices appear live and named |
 | 018 | Rooms and equipments made from the interface: the Topology and Equipments pages, Sowel's forms |
 | 019 | The Administration section (Devices, Equipments, Topology, Discovery per integration); a device has no room; equipments made from a device's row, bound as Sowel's interface binds |
+| 020 | `scripts/box.sh` identifies the Dongle Max, saves and restores its original firmware, flashes Solite's images with the user's typed confirmation and checks their boot log; the measuring image times the saves on the box |

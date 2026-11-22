@@ -2,8 +2,9 @@
 
 For whoever wires, flashes or restores the Dongle Max (Sonoff "Dongle-M" family, the model with
 the ESP32 and the Ethernet port). Every fact says where it comes from and how far to trust it.
-Nothing was measured on a box for this sheet: it is written from Sonoff's pages and from the
-community, and the unknowns have a read-only check each (section "Risks").
+This sheet is written from Sonoff's pages and from the community; its rows stay as they are until a
+run of `scripts/box.sh` on the box settles them (section "Measured on the box").
+The unknowns have a read-only check each (section "Risks").
 
 Trust levels:
 
@@ -76,8 +77,11 @@ bootloader pins must be driven in a fixed order, which the firmware's radio adap
   [SONOFF Dongle Flasher for Web](https://dongle.sonoff.tech/sonoff-dongle-flasher) and the Home
   Assistant add-on
   [hassio-ihost-addon](https://github.com/iHost-Open-Source-Project/hassio-ihost-addon).
-- No partition table and no stand-alone image of the original firmware are published. The only
-  complete copy is the one read from the user's own box (procedure below).
+- Sonoff publishes OTA application images of the ESP32 firmware (`donglem_esp32_*_ota.bin`) and
+  the radio's firmware (`zigbee_ncp_uart_hw_donglem_*.gbl`) in the release notes of its eWeLink
+  forum ("Dongle-M firmware Release Notes"). An OTA image is the application only: no bootloader,
+  no partition table, no NVS (the box's own settings, Wi-Fi included). The only complete copy is
+  the one read from the user's own box (procedure below).
 - Secure boot and flash encryption are not documented: the eFuses of the box say (check below).
 
 ## Risks, and the read-only check of each
@@ -95,40 +99,62 @@ The firmware codes **no pin** until the line it concerns is settled in this tabl
 
 ## Procedures
 
-Every step that writes says "needs the user's yes". Entering the download mode **reboots the
-ESP32 and stops the original firmware's radio bridge on TCP 6638** for as long as it lasts.
+All of them run through `sh scripts/box.sh` (spec 020). Every step that writes needs the user's yes:
+the script asks, on the terminal, for the last 6 hex digits of the box's MAC address, and no option
+skips the question. Entering the download mode **reboots the ESP32 and stops the original firmware's
+radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
 
-1. **Enter the download mode**: with the pin table not yet proven, hold the button while
-   plugging the USB cable (reported, see "The USB bridge"); `esptool.py` then reaches the ROM
-   bootloader.
-2. **Back up the whole flash first, before any other step** (needs the user's yes, because it
-   reboots the box into the bootloader):
-   `esptool.py -b 921600 read_flash 0x0 0x1000000 <file>`: a few minutes at 921600 baud, about 20
-   minutes at 115200.
-3. **Keep the file outside the repository**: it may hold the box's Wi-Fi credentials and its
-   identifiers. Write its SHA-256 here, with the date, the chip's MAC address and the original
-   firmware version shown by the web console:
+1. **Identify** (read-only): `sh scripts/box.sh identify`. It prints the chip and its revision, the
+   MAC address, the flash size, secure boot and flash encryption, and stops (exit 3) on a box it cannot
+   flash: secure boot on, flash encryption on, a chip revision below 3 or a flash that is not 16 MB.
+   `esptool.py` resets the box through the USB bridge; when it gets no answer (exit 4), enter the
+   download mode by hand: hold the button while plugging the USB cable (reported, see "The USB bridge").
+2. **Capture the original firmware's boot log** (read-only): `sh scripts/box.sh log --raw` (use
+   `--replug` when the bridge does not reset the chip). It settles the PSRAM, the strapping state and the
+   original firmware's version.
+3. **Back up the whole flash first, before any other write** (the user runs it, in their terminal):
+   `sh scripts/box.sh backup --out <folder outside the repository>`. It reads the 16 MB twice, and keeps
+   `dongle-max-<mac>-<date>.bin` (mode 0600, with its `.sha256`) when the two reads are equal and
+   not one repeated byte; it prints the row to paste below. When a read is invalid, both files are
+   kept (`.bin` and `.bin.read2`) for inspection and no row is printed. A read takes about 3
+   minutes at 921600 baud (about 6 minutes for the two) and about 24 minutes at 115200
+   (`--baud 115200`; about 50 minutes for the two). The file may hold the box's Wi-Fi credentials: it stays outside
+   the repository, and no MAC address, serial number or captured log goes into it.
 
-   | Date | Box | Firmware version | SHA-256 of the backup |
-   | ---- | --- | ---------------- | --------------------- |
-   | none taken | | | |
+   | Date | Chip revision | Firmware version | SHA-256 of the backup | Restore proven |
+   | ---- | ------------- | ---------------- | --------------------- | -------------- |
+   | 2026-11-22 | v3.1 | not read (the web console was not reachable) | 35aea91858ab0c4eb66ea776d7d1887c8113990b48828ef27684be190cee5e87 | 2026-11-22 |
 
-4. **Read the unknowns** (read-only): `esptool.py chip_id`, `espefuse.py summary`, and the
-   original firmware's boot log on the serial port. Write the results in this sheet.
-5. **Restore** (needs the user's yes): `esptool.py write_flash 0x0 <file>` writes the backup
-   back, the box then runs its original firmware again. The second way back is Sonoff's own web
-   flasher, or its Home Assistant add-on (see "The original firmware").
-6. **Flash Solite** (needs the user's yes, once the backup's SHA-256 is recorded in step 3 and the
-   restore is proven): from the repository root, after `cd firmware && cargo build --release`,
-   `espflash flash --partition-table firmware/partitions.csv --bootloader <bootloader.bin>
-   --erase-parts otadata,nvs firmware/target/xtensa-esp32-espidf/release/solite-firmware`, where
-   `<bootloader.bin>` is the newest
-   `firmware/target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/build/bootloader/bootloader.bin`
-   (the one `scripts/qemu.sh` uses). The table is the one of decision D25. `--erase-parts
-   otadata,nvs` erases the old firmware's boot selection and its NVS, which may hold the box's
-   Wi-Fi credentials; it is done only after the backup is recorded.
+   The date is the backup's (YYYY-MM-DD), the revision the one `esptool.py` reads (`v3.x`), the version
+   the one the web console shows, the SHA-256 the 64 hex digits in lower case; the last column holds
+   the date of the proof of step 4, empty until then. `flash` reads the fourth and fifth columns.
+4. **Restore, once, and prove it** (needs the user's yes): `sh scripts/box.sh restore <backup file>`
+   writes the backup back; the box runs its original firmware again. The way back is proven when the host
+   identifies the radio over TCP again: `cargo run -p solite-host -- --radio tcp://<address>:6638`. Write
+   the date in the backup's row. The second way back is Sonoff's own web flasher, or its Home Assistant
+   add-on (see "The original firmware"); a failed restore is run again at `--baud 115200`.
+5. **Flash Solite** (needs the user's yes, once the backup's row has its restore date): build the
+   image (`cd firmware && cargo build --release`, or `--features flash-saves` for the measuring image),
+   then `sh scripts/box.sh flash --image box|sim --backup <backup file>`. It refuses without the backup,
+   when the build is not the image asked for or does not fit the `ota_0` slot, erases `nvs`, `otadata`
+   and `storage` (the original firmware's settings, which may hold Wi-Fi credentials, are in the backup),
+   writes the bootloader, the table of `firmware/partitions.csv` (decision D25) and the application, then
+   resets the box.
+6. **Check the boot**: `sh scripts/box.sh log --image box|sim` checks the serial log as `scripts/qemu.sh`
+   checks QEMU's; `--expect-kept` on the second boot of the box's image checks that the partition was
+   kept. A boot loop or a panic fails with the last lines: restore the backup, or flash the other image.
+7. **Restore the original firmware at the end**, so the Mac's TCP development path works.
 
-## Open checks
+## Measured on the box
 
-The checks of steps 1 to 4 need the user's yes and a box on USB. Until they are done, the
-"unknown" rows above stay unknown.
+A box ran `scripts/box.sh` on 2026-11-22 (identify, backup read twice, restore and its proof, the box's
+image and the measuring image booted). The memory and save-stall figures are in
+[memory-budget.md](memory-budget.md). The original firmware's version stays unread: the box was not on
+the network, so its web console was not reachable.
+
+| Fact | Value | Date |
+| ---- | ----- | ---- |
+| Chip revision, PSRAM, flash size, eFuses | ESP32-D0WDR2-V3 revision v3.1, 2 MB PSRAM (2045 KB free at boot), 16 MB flash, secure boot off, flash encryption off | 2026-11-22 |
+| Does the USB bridge reset the chip (DTR and RTS)? | Yes: `esptool` enters download mode and resets the box by itself, at 115200 baud (921600 and 460800 fail: invalid packet head) | 2026-11-22 |
+| Original firmware version | not read (the box was not on the network) | 2026-11-22 |
+| PSRAM and GPIO16/17 (the risk above) | PSRAM found and usable with the firmware as built: no conflict seen | 2026-11-22 |

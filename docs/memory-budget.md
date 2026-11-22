@@ -63,10 +63,11 @@ This is the tight resource. About 70 percent of the worst case's bytes at its pe
 KB live at the peak) are allocations of 4 KB or less; applied to the realistic home's 187 KB, about 130 KB would
 go to the internal RAM first (**E**, by that ratio). It fits the 153 KB, barely, with the
 estimates above; the worst case does not fit, and its small allocations spill into PSRAM (the
-fallback above), which has room. Consequences, to read again when the box measures its own
-figures (the engine run in the firmware under QEMU, then the Dongle Max):
+fallback above), which has room. Consequences, to read again with the box's own figures (the engine run in
+the firmware under QEMU, then on the Dongle Max, "On the box" below):
 
-- the stack, TLS and network figures are estimates until the box reports them;
+- the stack, TLS and network figures are estimates: the box's figures ("On the box", below) cover the
+  boot and the engine; the network rows need Wi-Fi (E3c), the radio's buffers the radio (E3b);
 - lowering `SPIRAM_MALLOC_ALWAYSINTERNAL` (for example to 512 bytes) moves more of the engine to
   PSRAM at the price of slower access: the knob to turn if the internal RAM runs short;
 - the internal RAM left after the network is what the firmware's memory line shows at boot.
@@ -99,10 +100,10 @@ the `engine:` line above. Reading it:
   whole run's (329 KB at the first run) and the per-phase one (312 KB), are upper bounds of the
   true peak; the per-phase one is the tighter and never below the true peak. The bound holds for
   what the run exercised: the realistic home, the scenario of `firmware/fixtures/`, no network. It is labelled "QEMU,
-  with simulator" and measured again on the box (E3).
+  with simulator" and measured on the box with the measuring image ("On the box", below).
 - **Internal RAM: 107 KB free at the lowest**, against the 64 KB floor of `scripts/qemu.sh`. This
   run starts no network: the 70 KB the budget sets for Wi-Fi are not in the figure, and the
-  margin that decides is the box's, measured in E3.
+  margin that decides is the box's, with the network up (needs Wi-Fi, E3c).
 - **`SPIRAM_MALLOC_ALWAYSINTERNAL`**: kept at 4096. At 512 the same run read a peak of 359 KB (sum
   of the whole run's watermarks, against 329 KB at 4096 by the same reading, in the first run) and 149 KB of
   internal RAM at the lowest: more of the engine goes to PSRAM, the total does not shrink. The
@@ -122,7 +123,7 @@ the `engine:` line above. Reading it:
   into the engine (`50 devices (50 reported)`; the script fails when fewer than all did).
   `MAX_QUEUED_CALLBACKS` (16) is a real bound of the radio, but this run does not reach it. The
   engine writes its due files inside the radio loop; on the box a 94 KB write stalls the radio, which
-  the emulator no longer shows (measured in E3).
+  the emulator no longer shows (the box's stall is in "On the box", below).
 - **Orders at the start**: 3 `motion-light` instances of 16 lights each queue 48 orders at start
   against `orders::queue::MAX_UNATTENDED` (32); the 16 beyond it are logged `recipe order ...
   dropped: the queue of recipe orders is full` and not sent, again when the alarms arrive. The bound holds, and the warning is
@@ -130,3 +131,20 @@ the `engine:` line above. Reading it:
 - **Orders on the target**: motion sensors 10, 20 and 30 of the realistic home report an alarm
   at 60 s of scenario time; `motion-light` switches the lights, and the orders go through the
   simulated radio, which answers with each light's state.
+
+## On the box (spec 020)
+
+Measured on the Dongle Max by `scripts/box.sh`: the box's image for the boot, the measuring image
+(feature `flash-saves`: the realistic home with every save written to the flash, timed) for the
+engine. The run was made on 2026-11-22 with the box on USB. A save stall above 1 s, or a peak above D27's 350 KB, is written here with its figure
+and becomes a line of the roadmap's inbox (or a decision for the ceiling): the limit is never raised.
+
+| Figure | Value | Where it comes from |
+| ------ | ----- | ------------------- |
+| Free memory at boot, box image | 359 KB internal RAM free (largest block 160 KB), 2045 KB of 2048 KB PSRAM free (2026-11-22) | `sh scripts/box.sh log --image box` (the `memory:` line) |
+| Engine, realistic home: heap peak, internal RAM minimum, PSRAM minimum | Heap peak 312 KB (QEMU: 312 KB), internal RAM minimum 107 KB free, PSRAM minimum 1916 KB free; 50 devices, 10 zones, 50 equipments, 3 recipes (2026-11-22) | `sh scripts/box.sh log --image sim` (the `engine:` line) |
+| FAT partition: size, use after the realistic home | 7964 KB; 208 KB used after the realistic home, kept at the next boot (2026-11-22) | `sh scripts/box.sh log --image sim` (the `storage-after:` line, logged after the last save; `storage:` is the boot value) |
+| Save stall: the longest save (file, KB) and the total | Longest save 3770 ms (`devices.json`, 98 KB); 51 saves in 172 s in all; 3945 ms for the one save of a second boot (2026-11-22). Above the 1 s limit: a line of the roadmap inbox | `sh scripts/box.sh log --image sim` (the `saves:` line) |
+| Internal RAM with Wi-Fi up | needs Wi-Fi (E3c) | |
+| The 33 requests of an equipment with 16 + 16 bindings | needs Wi-Fi (E3c) | |
+| The serial link's buffers | needs the radio (E3b) | |

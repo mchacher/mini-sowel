@@ -24,7 +24,7 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # Partition table (decision D25): `partitions.csv` next to this file. esp-idf-sys does not read a
 # custom table from here (its README says to leave CONFIG_PARTITION_TABLE_* out), so the table
-# reaches the box through `espflash --partition-table partitions.csv`, and QEMU through
+# reaches the box through `scripts/box.sh flash`, and QEMU through
 # `scripts/qemu.sh`, which builds its image from the same file.
 
 # The data partition is FAT with wear levelling (spec 016): the engine's files have names longer

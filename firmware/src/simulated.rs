@@ -5,9 +5,15 @@
 //! loop has turned once; its events then play at their own pace, with loop turns between them.
 //! When the scenario has played its last event, the loop stops, the saver writes, and the memory
 //! of the run is measured.
+//!
+//! With the cargo feature `flash-saves` (the measuring image, spec 020) every save goes to the
+//! flash and is timed: the time of a `Storage::write` call is the time the radio loop is held. The
+//! run logs `saves: <n> written to flash, longest <ms> ms (<file>, <KB> KB), total <ms> ms`.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(not(feature = "flash-saves"))]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -74,10 +80,27 @@ impl Clock for WaitedClock {
 /// engine saves it once per device when its route is learned (the fixtures carry no route, so
 /// each of the 50 devices sets one at its first message); written for real, 49 saves would take
 /// a quarter of an hour. The last save, on stop, goes to the flash, so that its path is run for real.
+/// With the feature `flash-saves` (the box) every save goes to the flash, timed.
 struct RunStorage {
     inner: FatStorage,
+    #[cfg(not(feature = "flash-saves"))]
     to_flash: Arc<AtomicBool>,
+    #[cfg(not(feature = "flash-saves"))]
     dropped: Arc<AtomicUsize>,
+    #[cfg(feature = "flash-saves")]
+    stats: Arc<Mutex<SaveStats>>,
+}
+
+/// What the saves cost on the box: a count, the total time and the longest save, no list (the
+/// file name is one of the engine's four).
+#[cfg(feature = "flash-saves")]
+#[derive(Default)]
+struct SaveStats {
+    count: usize,
+    total_ms: u64,
+    longest_ms: u64,
+    longest_file: String,
+    longest_bytes: usize,
 }
 
 impl Storage for RunStorage {
@@ -85,6 +108,7 @@ impl Storage for RunStorage {
         self.inner.read(name)
     }
 
+    #[cfg(not(feature = "flash-saves"))]
     fn write(
         &self,
         name: &str,
@@ -99,6 +123,31 @@ impl Storage for RunStorage {
         {}
         self.dropped.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+
+    #[cfg(feature = "flash-saves")]
+    fn write(
+        &self,
+        name: &str,
+        next: &mut dyn FnMut() -> std::io::Result<Option<String>>,
+    ) -> Result<(), String> {
+        let begin = Instant::now();
+        let mut bytes = 0usize;
+        let result = self.inner.write(name, &mut || {
+            let chunk = next()?;
+            bytes += chunk.as_ref().map_or(0, String::len);
+            Ok(chunk)
+        });
+        let ms = u64::try_from(begin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut stats = lock(&self.stats);
+        stats.count += 1;
+        stats.total_ms = stats.total_ms.saturating_add(ms);
+        if ms >= stats.longest_ms {
+            stats.longest_ms = ms;
+            stats.longest_file = name.to_string();
+            stats.longest_bytes = bytes;
+        }
+        result
     }
 
     fn locate(&self, name: &str) -> String {
@@ -208,13 +257,21 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     radio.identify().map_err(|e| format!("radio: {e}"))?;
     radio.listen().map_err(|e| format!("radio: {e}"))?;
     lows.mark();
+    #[cfg(not(feature = "flash-saves"))]
     let to_flash = Arc::new(AtomicBool::new(false));
+    #[cfg(not(feature = "flash-saves"))]
     let dropped = Arc::new(AtomicUsize::new(0));
+    #[cfg(feature = "flash-saves")]
+    let stats = Arc::new(Mutex::new(SaveStats::default()));
     let mut saver = Saver::new(
         RunStorage {
             inner: FatStorage::new(),
+            #[cfg(not(feature = "flash-saves"))]
             to_flash: Arc::clone(&to_flash),
+            #[cfg(not(feature = "flash-saves"))]
             dropped: Arc::clone(&dropped),
+            #[cfg(feature = "flash-saves")]
+            stats: Arc::clone(&stats),
         },
         wall_ms(),
     );
@@ -239,12 +296,37 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     engine::run(
         &mut radio, &home, &mut saver, &clocks, &stop, &mut fill, true, &mut count,
     )?;
-    log::info!(
-        "scenario: {} saves run without the emulator's flash",
-        dropped.load(Ordering::SeqCst)
-    );
-    to_flash.store(true, Ordering::SeqCst);
+    #[cfg(not(feature = "flash-saves"))]
+    {
+        log::info!(
+            "scenario: {} saves run without the emulator's flash",
+            dropped.load(Ordering::SeqCst)
+        );
+        to_flash.store(true, Ordering::SeqCst);
+    }
     saver.tick(&home, wall_ms(), true)?;
+    #[cfg(feature = "flash-saves")]
+    {
+        let stats = lock(&stats);
+        log::info!(
+            "saves: {} written to flash, longest {} ms ({}, {} KB), total {} ms",
+            stats.count,
+            stats.longest_ms,
+            stats.longest_file,
+            stats.longest_bytes.div_ceil(1024),
+            stats.total_ms
+        );
+    }
+    // The FAT partition after the last save: the figure of the realistic home.
+    match crate::storage::usage() {
+        Ok((used, total)) => log::info!(
+            "storage-after: {}, {} KB used of {} KB",
+            BASE,
+            used / 1024,
+            total / 1024
+        ),
+        Err(e) => log::warn!("storage-after: {e}"),
+    }
     // The memory, with the home and the radio still alive.
     let after = measure::free_total();
     lows.mark();

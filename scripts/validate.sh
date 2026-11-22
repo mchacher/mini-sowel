@@ -1,6 +1,6 @@
 #!/bin/sh
-# The verdict, one command: docs, format, lint, types, tests, UI budget, the two ESP32 firmware
-# images (the box's, and the one QEMU runs) and the engine's run in QEMU.
+# The verdict, one command: docs, format, lint, types, tests, UI budget, the three ESP32 firmware
+# images (the box's, the one QEMU runs, the measuring one) and the engine's run in QEMU.
 #
 #   sh scripts/validate.sh          everything (before a commit, in CI)
 #   sh scripts/validate.sh --fast   the quick checks only (the pre-commit hook): docs, format, lint
@@ -79,7 +79,7 @@ if want ui; then
 fi
 
 if want firmware; then
-  step "Firmware: ESP32 builds and lint (the box's image, then the QEMU image with feature sim)"
+  step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim, the measuring image with feature flash-saves)"
   if [ -f "$HOME/export-esp.sh" ]; then
     . "$HOME/export-esp.sh"
   else
@@ -90,6 +90,7 @@ if want firmware; then
     cd firmware
     cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings
     cargo build --release --features sim --quiet && cargo clippy --release --features sim --quiet -- -D warnings
+    cargo build --release --features flash-saves --quiet && cargo clippy --release --features flash-saves --quiet -- -D warnings
   )
 
   step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"
