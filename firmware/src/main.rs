@@ -1,13 +1,21 @@
 //! Solite on the ESP32: starts ESP-IDF, writes its banner and its free memory to the serial log,
 //! mounts its data partition and reads its network setting. The image of the box starts no radio;
-//! the image QEMU runs (feature `sim`) runs the engine on the simulated radio.
+//! the image QEMU runs (feature `sim`) runs the engine on the simulated radio; the radio image
+//! (feature `radio`) drives the EFR32 over the UART and runs the engine on it.
 
 #[cfg(feature = "sim")]
 mod measure;
 mod memory;
+#[cfg(feature = "radio")]
+mod radio_engine;
+#[cfg(feature = "radio")]
+mod radio_uart;
 #[cfg(feature = "sim")]
 mod simulated;
 mod storage;
+
+#[cfg(all(feature = "radio", feature = "sim"))]
+compile_error!("radio and sim are two images");
 
 use solite_core::engine::Storage;
 
@@ -70,7 +78,21 @@ fn run_engine() {
     measure::stop_local_minimum();
 }
 
-#[cfg(not(feature = "sim"))]
+#[cfg(feature = "radio")]
+fn run_engine() {
+    let spawned = radio_engine::spawn();
+    let result = match spawned {
+        Ok(handle) => handle
+            .join()
+            .map_err(|_| "engine: the thread panicked".to_string()),
+        Err(e) => Err(format!("engine: cannot start its thread: {e}")),
+    };
+    if let Err(e) = result {
+        log::error!("{e}");
+    }
+}
+
+#[cfg(not(any(feature = "sim", feature = "radio")))]
 fn run_engine() {
     log::info!("radio: none");
 }

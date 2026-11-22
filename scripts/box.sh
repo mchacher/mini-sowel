@@ -5,15 +5,18 @@
 #   sh scripts/box.sh identify [--port <device>] [--baud <rate>]
 #   sh scripts/box.sh backup --out <folder> [--dry-run]
 #   sh scripts/box.sh restore <backup file> [--dry-run]
-#   sh scripts/box.sh flash --image box|sim --backup <backup file> [--dry-run]
-#   sh scripts/box.sh log --image box|sim [--seconds <n>] [--replug] [--expect-kept]
-#   sh scripts/box.sh log --from-file <log> --image box|sim [--expect-kept]   (no port)
+#   sh scripts/box.sh flash --image box|sim|radio --backup <backup file> [--dry-run]
+#   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
+#   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
 #   sh scripts/box.sh log --raw [--seconds <n>]                              (no checks)
 #
 # The port is --port, or the only USB bridge found (/dev/cu.usbserial*, /dev/cu.SLAB_USBtoUART*,
 # /dev/ttyUSB*); the baud rate is 921600. identify, backup, restore and flash need the box in
 # download mode (esptool resets it through the USB bridge; else hold the button while plugging the
-# cable); log needs a normal boot.
+# cable); log needs a normal boot. The radio image (spec 021) is read from firmware/target/radio
+# (built with the command `flash` prints when it is missing); `flash --image radio` does not reset
+# the box (`--after no_reset`): the first boot, and its pairing window, is the one `log --image
+# radio` captures, 300 s by default, shown live.
 #
 # backup, restore and flash print what they will do, then ask for the last 6 hex digits of the
 # box's MAC address on the terminal (/dev/tty, never standard input): with no terminal, or any
@@ -25,7 +28,7 @@
 # the box.
 #
 # Environment (the tests use them; they point at fakes): SOLITE_TARGET_DIR (the firmware's build
-# folder), SOLITE_HARDWARE_MD (the sheet whose backup table `flash` reads), SOLITE_SERIAL_CAPTURE
+# folder), SOLITE_RADIO_TARGET_DIR (the radio image's build folder), SOLITE_HARDWARE_MD (the sheet whose backup table `flash` reads), SOLITE_SERIAL_CAPTURE
 # (a command `<command> <port> <seconds>` printing the serial output, in place of pyserial),
 # SOLITE_ESPRESSIF (ESP-IDF's tools folder), SOLITE_PORT_PATTERNS (the glob patterns of the USB
 # bridges), SOLITE_REPLUG_SECONDS (the time allowed to plug the cable again, 60).
@@ -89,9 +92,12 @@ BACKUP=$(abs_path "$BACKUP")
 FROM_FILE=$(abs_path "$FROM_FILE")
 FILE=$(abs_path "$FILE")
 case "$BAUD" in '' | *[!0-9]*) usage "--baud takes a number" ;; esac
-case "$IMAGE" in '' | box | sim) ;; *) usage "--image is box or sim" ;; esac
+case "$IMAGE" in '' | box | sim | radio) ;; *) usage "--image is box, sim or radio" ;; esac
 
 TARGET_DIR=${SOLITE_TARGET_DIR:-$ROOT/firmware/target/xtensa-esp32-espidf/release}
+# The radio image is built into its own target folder, with its own ESP-IDF settings (spec 021).
+RADIO_TARGET_DIR=${SOLITE_RADIO_TARGET_DIR:-$ROOT/firmware/target/radio/xtensa-esp32-espidf/release}
+RADIO_BUILD='cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio'
 HARDWARE_MD=${SOLITE_HARDWARE_MD:-$ROOT/docs/hardware.md}
 FLASH_BYTES=16777216
 
@@ -313,25 +319,42 @@ check_backup_row() {
 }
 
 cmd_flash() {
-  [ -n "$IMAGE" ] || usage "flash needs --image box|sim"
+  [ -n "$IMAGE" ] || usage "flash needs --image box|sim|radio"
   [ -n "$BACKUP" ] || box_fail "flash needs --backup <file>: the backup of the original firmware, restored once."
   identify_box
   check_backup_file "$BACKUP"
   check_backup_row
 
-  ELF=$TARGET_DIR/solite-firmware
+  IMAGE_DIR=$TARGET_DIR
+  AFTER=
   if [ "$IMAGE" = box ]; then
     BUILD="cd firmware && cargo build --release"
+  elif [ "$IMAGE" = radio ]; then
+    BUILD=$RADIO_BUILD
+    IMAGE_DIR=$RADIO_TARGET_DIR
+    # The box is not reset at the end: the first boot is `log`'s, which captures its window.
+    AFTER="--after no_reset"
   else
     BUILD="cd firmware && cargo build --release --features flash-saves"
   fi
+  ELF=$IMAGE_DIR/solite-firmware
   [ -f "$ELF" ] || box_fail "$ELF not found: build it with ($BUILD)."
+  if [ "$IMAGE" = radio ]; then
+    grep -aqF 'radio: uart ' "$ELF" || box_fail "the build is not the radio image (feature radio): build it with ($BUILD)."
+    # The UART interrupt must run from internal RAM (sdkconfig.radio.defaults): a build made with
+    # another folder or settings misses it, and bytes are lost while a flash write stalls the caches.
+    grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' "$IMAGE_DIR"/build/esp-idf-sys-*/out/sdkconfig \
+      || box_fail "the radio build was not made with sdkconfig.radio.defaults (CONFIG_UART_ISR_IN_IRAM=y is not in its sdkconfig under $IMAGE_DIR): build it with ($BUILD)."
+  else
+    # The radio image is never flashed as the box's or the measuring image.
+    ! grep -aqF 'radio: uart ' "$ELF" || box_fail "the build is the radio image: build the $IMAGE image with ($BUILD)."
+  fi
   if [ "$IMAGE" = box ]; then
     ! grep -aqF 'scenario: started' "$ELF" || box_fail "the build is a sim image, not the box's: build it with ($BUILD)."
-  else
+  elif [ "$IMAGE" = sim ]; then
     grep -aqF 'written to flash' "$ELF" || box_fail "the build is not the measuring image (feature flash-saves): build it with ($BUILD)."
   fi
-  fw_find_bootloader "$TARGET_DIR"
+  fw_find_bootloader "$IMAGE_DIR"
   TABLE=$WORK/partition-table.bin
   fw_build_table "$ROOT/firmware/partitions.csv" "$TABLE"
   APP=$WORK/app.bin
@@ -347,19 +370,30 @@ cmd_flash() {
   echo "  write the bootloader at 0x1000 ($(wc -c < "$BOOTLOADER" | tr -d ' ') bytes)"
   echo "  write the partition table at 0x8000"
   echo "  write the application at $APP_OFFSET ($APP_SIZE bytes, slot of $SLOT_BYTES)"
-  echo "  then reset the box"
+  if [ "$IMAGE" = radio ]; then
+    echo "  WARNING: the erase of storage destroys zigbee.json (the only copy of the network's keys once the box formed one) and the paired devices: flash the radio image once, never again over a box that holds a network"
+  fi
+  if [ "$IMAGE" = radio ]; then
+    echo "  then leave the box as it is (no reset): its first boot is the one of 'log --image radio'"
+  else
+    echo "  then reset the box"
+  fi
   go_on
 
   for part in nvs otadata storage; do
     off=$(fw_part "$TABLE" "$part" 4)
     size=$(fw_bytes "$(fw_part "$TABLE" "$part" 5)")
-    esp erase_region "$off" "$(printf '0x%x' "$size")" >"$WORK/erase-$part.log" 2>&1 \
+    esp $AFTER erase_region "$off" "$(printf '0x%x' "$size")" >"$WORK/erase-$part.log" 2>&1 \
       || box_fail "the erase of $part failed (log: $WORK/erase-$part.log)."
   done
-  esp write_flash --flash_mode keep --flash_freq keep --flash_size keep \
+  esp $AFTER write_flash --flash_mode keep --flash_freq keep --flash_size keep \
     0x1000 "$BOOTLOADER" 0x8000 "$TABLE" "$APP_OFFSET" "$APP" >"$WORK/flash.log" 2>&1 \
     || box_fail "the flash failed (log: $WORK/flash.log); the box may not start: flash again, or restore the backup."
-  echo "box: flashed; the box resets. Check it: sh scripts/box.sh log --image $IMAGE"
+  if [ "$IMAGE" = radio ]; then
+    echo "box: flashed; the box is not reset. Capture its first boot and its pairing window: sh scripts/box.sh log --image radio"
+  else
+    echo "box: flashed; the box resets. Check it: sh scripts/box.sh log --image $IMAGE"
+  fi
 }
 
 # The serial output of a normal boot: $1 the port, $2 the seconds, on standard output. The box is
@@ -421,20 +455,27 @@ log_fail() {
 }
 
 cmd_log() {
-  if ! $RAW; then [ -n "$IMAGE" ] || usage "log needs --image box|sim (or --raw)"; fi
+  if ! $RAW; then [ -n "$IMAGE" ] || usage "log needs --image box|sim|radio (or --raw)"; fi
   if [ -n "$FROM_FILE" ]; then
     [ -f "$FROM_FILE" ] || box_fail "$FROM_FILE is not a file."
     LOGF=$FROM_FILE
   else
     resolve_port
     if [ -z "$SECONDS_" ]; then
-      if [ "$IMAGE" = sim ]; then SECONDS_=240; else SECONDS_=60; fi
+      case "$IMAGE" in sim) SECONDS_=240 ;; radio) SECONDS_=300 ;; *) SECONDS_=60 ;; esac
     fi
     case "$SECONDS_" in '' | *[!0-9]*) usage "--seconds takes a number" ;; esac
     $REPLUG && wait_replug
     LOGF=$WORK/serial-$(date +%Y%m%d-%H%M%S).log
     echo "box: capturing $SECONDS_ s of $PORT at 115200 baud..."
-    capture "$PORT" "$SECONDS_" >"$LOGF" || { echo "box: cannot read $PORT (log: $LOGF)." >&2; exit 4; }
+    if [ "$IMAGE" = radio ]; then
+      # Shown as it comes (the user sees the pairing window open), and kept in the log file.
+      rm -f "$WORK/capture-failed"
+      { capture "$PORT" "$SECONDS_" || : >"$WORK/capture-failed"; } | tee "$LOGF" >&2
+      [ ! -e "$WORK/capture-failed" ] || { echo "box: cannot read $PORT (log: $LOGF)." >&2; exit 4; }
+    else
+      capture "$PORT" "$SECONDS_" >"$LOGF" || { echo "box: cannot read $PORT (log: $LOGF)." >&2; exit 4; }
+    fi
     echo "box: serial log: $LOGF"
   fi
   if $RAW; then
@@ -446,6 +487,10 @@ cmd_log() {
   fw_broken "$LOGF" box && log_fail "the firmware panicked or boot-looped (a reset after the banner)."
   if grep -a 'memory: internal' "$LOGF" | grep -aq 'psram none'; then
     log_fail "PSRAM not found (the memory line says psram none): the box has 2 MB in its package."
+  fi
+  # The radio's own failures first: a radio that answers at no speed also lacks the lines after it.
+  if [ "$IMAGE" = radio ]; then
+    reason=$(fw_check_radio "$LOGF") || log_fail "$reason"
   fi
   missing=$(fw_missing_line "$LOGF" "$IMAGE")
   [ -z "$missing" ] || log_fail "the log is missing $missing."
@@ -463,6 +508,14 @@ cmd_log() {
   grep -a 'network: ' "$LOGF" | tail -n 1
   if [ "$IMAGE" = box ]; then
     grep -a 'radio: none' "$LOGF" | tail -n 1
+  elif [ "$IMAGE" = radio ]; then
+    grep -a 'radio: uart ' "$LOGF" | tail -n 1
+    grep -a 'ezsp: ' "$LOGF" | tail -n 1
+    grep -a 'radio address: ' "$LOGF" | tail -n 1
+    grep -aE 'network: (formed|resumed)' "$LOGF" | tail -n 1
+    grep -aE 'pairing: (open for|not opened)' "$LOGF" | head -n 1
+    grep -a 'serial: ' "$LOGF" | tail -n 1
+    grep -a 'heap: ' "$LOGF" | tail -n 1
   else
     grep -a 'engine: ' "$LOGF" | tail -n 1
     grep -a 'saves: [0-9]* written to flash' "$LOGF" | tail -n 1

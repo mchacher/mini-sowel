@@ -1,5 +1,5 @@
 //! The byte pipe between the core and the radio. The host implements it over TCP, the firmware
-//! will implement it over the UART; the core never opens a port itself.
+//! over the UART; the core never opens a port itself.
 
 use std::fmt;
 
@@ -31,4 +31,16 @@ pub trait RadioTransport {
 
     /// Writes all the bytes.
     fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError>;
+}
+
+/// One transport serves several `Radio`s in turn (a fresh one per try of the serial speed, per
+/// restart): each borrows it for its life.
+impl<T: RadioTransport + ?Sized> RadioTransport for &mut T {
+    fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
+        (**self).read(buf, timeout_ms)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        (**self).write(bytes)
+    }
 }

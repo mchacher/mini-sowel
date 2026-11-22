@@ -1,0 +1,5 @@
+# ESP-IDF settings read for the radio image only (spec 021, decision D32), after sdkconfig.defaults:
+# `CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults"`.
+# The UART interrupt runs from internal RAM, so bytes keep arriving while a flash write stalls the
+# caches (ESP_INTR_FLAG_IRAM needs it). The other images keep their settings and their figures.
+CONFIG_UART_ISR_IN_IRAM=y

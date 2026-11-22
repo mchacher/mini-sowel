@@ -503,3 +503,28 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   FAT partition, the save stall) without waiting for the radio's serial link. One tool to fake in the
   tests, the same image parts as `scripts/qemu.sh` (bootloader, table from `partitions.csv`, `ota_0`
   offset), and a runner that skipped every check was a write path to the box (D6).
+
+## D32: The radio over the UART in a radio image, pairing at boot
+
+- **Date**: 2026-11-22
+- **Choice**: a fourth image (feature `radio`) drives the EFR32 over UART1 (TX GPIO17, RX GPIO13,
+  8N1, no flow control), a 4 KB receive ring and the interrupt in internal RAM; the radio and the
+  engine share one thread on core 1 with 32 KB of stack. The interrupt setting is in
+  `sdkconfig.radio.defaults`, built in `target/radio`, so the other images keep their settings.
+  The speed is probed at each boot, the fixed `RADIO_BAUD` first, then 115200, 460800, 921600.
+  The core describes the pins by role (reset active low, bootloader active high, never set
+  active) and the reset sequence; the firmware runs it after the ESP32's boot, each level written
+  before the pin becomes an output, GPIO12 low before GPIO15 (both strapping pins). GPIO12 and
+  GPIO15 are named in `firmware/src/radio_uart.rs` only (a test). Pairing opens for 180 s at a
+  power-on boot when the marker `/data/booting` (removed after 10 minutes of running) is absent: a
+  crash, a watchdog, a brown-out or a boot loop opens nothing. The Zigbee backup is
+  `/data/zigbee.json`, the network and trust-centre keys in plain text on a flash that is not
+  encrypted, accepted until flash encryption is decided. Only a radio error restarts the radio
+  (reset, probe, resume, never a forming nor a window), at most 3 times in 10 minutes; a storage
+  error stops the loop. The radio image is a development image, in no public release before J4.
+  Replaces D31's "the EFR32 radio stays wired but not driven" and D26's "without it the image is
+  the box's and starts no radio" for the radio image.
+- **Why**: the simplest bounded way to pair without a network (a console command shares the log's
+  port, the button's pull-up is unknown); the probe finds a radio at another speed for one try's
+  cost; the ring holds more than the radio's ASH window, and the interrupt keeps the FIFO (11 ms at
+  115200) drained while a flash write stalls the caches; logic in the core is tested on the Mac.

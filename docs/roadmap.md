@@ -23,7 +23,7 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 | E1 | Prepare the target, before the delivery: how the Dongle Max's ESP32 is wired (pins to the radio, the Ethernet chip, the Wi-Fi antenna, the button, the LEDs), how it is flashed and how its original firmware is saved and restored; the whole engine run in the firmware under QEMU with the simulated radio, its memory measured; the memory budget per item written in `docs/`, a test with every bound at its maximum, the placement fixed in `sdkconfig` (the engine in PSRAM, one TLS session at a time), the network settled: one image holds Wi-Fi and Ethernet, only one is active (setting `auto | wifi | ethernet`, `auto` by default: a cable at boot means Ethernet, else Wi-Fi; no switching while running), Wi-Fi built first, the memory budget set by the larger of the two (Wi-Fi), not their sum (first: removes the memory risk and the unknowns of the board without hardware) | A written hardware sheet, and the engine's memory line in QEMU for the realistic home | built (spec 015: hardware sheet, memory budget, worst-case test, partition table, network choice in the core; spec 016: the engine in the firmware under QEMU, peak 312 KB for the realistic home) |
 | E2 | The real hardware from the Mac, the day of the delivery, nothing flashed: the pending demos of A3 to A5 and B2 to B8 (radio over TCP, SNZB-02, motion sensor, ZBMINIR2), defects fixed; then the stacked branches merged into `main`, pushed with the user's yes, the first CI run (second: proves EZSP in Rust on the real radio before the box) | The hand in front of the motion sensor switches the ZBMINIR2 from the Mac | demos run 2026-11-21, merged (pull requests 1 and 2); `setValue` defect open |
 | E3a | The box's first flash (spec 020): `scripts/box.sh` identifies the Dongle Max, saves its original firmware, restores it once, flashes the box's image and a measuring image (the realistic home, saves written to the flash and timed), checks their boot log; the free memory at boot, the engine's peak, the FAT partition and the save stall measured on the box | The backup restored and the radio seen again over TCP; both images boot; the figures are in `docs/memory-budget.md` | script and tests built (spec 020); the run on the box needs the user's yes for each write |
-| E3b | The radio over the serial link (UART): the engine on the real radio in the box; the serial link's buffers measured | A motion sensor paired and its measures seen, the radio driven by the box | |
+| E3b | The radio over the serial link (UART): the engine on the real radio in the box; the serial link's buffers measured | A motion sensor paired and its measures seen, the radio driven by the box | done on the box 2026-11-22 (spec 021): radio at 115200 baud, network resumed, SNZB-03PR2 paired and its measures read. Not run: the 10-minute capture (4 minutes), a second boot, the booting-marker and power-cut cases, the restart ladder, a forming of a network, the ZBMINIR2 |
 | E3c | The network (Wi-Fi first, then Ethernet, as E1 settled), the HTTP and WebSocket API, the interface served by the box (precompressed), configured by `scripts/demo-garage.sh`; the internal RAM with Wi-Fi up and the 33 requests of an equipment with 16 + 16 bindings measured | The interface of the box opened from the Mac, the garage set up through the API | |
 | E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings can also be written to flash when flashing); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) stays disabled in the box (404) until J4's password exists | The garage runs in the box for a day, Mac off | |
 
@@ -133,6 +133,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | `box.sh backup` prints `tr: stdout: Broken pipe` after a valid backup (cosmetic); the radio and the Wi-Fi of E3 settle the original firmware version, unread in E3a | Spec 020 |
 | 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
+| 2026-11-22 | Replace the pairing window opened at boot (180 s after a power-on boot, no input path) by the button or the authenticated route (J4) | Spec 021 |
+| 2026-11-22 | A device removal in the API: an unwanted device that joined during a window stays in the store | Spec 021 |
+| 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
+| 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
 | 2026-11-22 | The binding plan in the core (Rust), when the box makes equipments itself (milestone C's proposals); the interface's plan (spec 019) is its reference | Spec 019 |
 | 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
 
@@ -233,3 +237,15 @@ Every change to this roadmap: date, what changed, why.
   runs on the box in the measuring image only). The inbox line of the `devices.json` save stall is
   removed (measured by E3a); the line of the 33 requests goes to E3c. The run on the box (backup,
   restore, flash, figures) waits for the user's yes for each write.
+- 2026-11-22: spec 021 (E3b) specified and built: the radio image (feature `radio`) drives the EFR32 over
+  UART1 and runs the engine on it, with a speed probe, a restart of a wedged radio, pairing for 180 s at a
+  power-on boot, the `serial:` and `heap:` lines, `box.sh --image radio`; decision D32. Inbox lines added
+  (the boot window, a device removal, the keys of `zigbee.json`, `RADIO_BAUD`). The run on the box (baud
+  found, the sensor paired, the 0x70 outcome, the figures) is the next entry.
+- 2026-11-22: spec 021 (E3b) run on the box: the radio answered at 115200 baud, the first speed tried (EZSP 13,
+  EmberZNet 7.4.5.0); the box resumed a network made by another program (one channel and PAN, not recorded here) and formed none,
+  so the `EmberStatus 0x70` question of `setValue` stays open; pairing opened 180 s at boot and closed; the SNZB-03PR2
+  joined 0.75 s after the opening and its battery, motion and luminosity were read; GPIO17 works as TX with the
+  PSRAM; serial ring highest use 262 B, internal RAM minimum 234 KB. Not run: 10 minutes of capture (4 run), a second
+  boot, the booting-marker and power-cut cases, the restart ladder, a forming, the ZBMINIR2. `RADIO_BAUD` stays
+  115200 (its inbox line removed). The box stays on the radio image.

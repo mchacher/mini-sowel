@@ -80,3 +80,33 @@ pub fn engine_line(stats: &EngineStats) -> String {
         kib(stats.psram_min),
     )
 }
+
+/// What the radio image reports every few minutes: the free memory with its minimums since boot,
+/// and the engine thread's stack. Sizes in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeapStats {
+    pub internal_free: usize,
+    /// The lowest internal RAM free since boot.
+    pub internal_min: usize,
+    pub psram_free: usize,
+    /// The lowest PSRAM free since boot.
+    pub psram_min: usize,
+    /// Stack bytes never used by the engine thread (its high-water mark).
+    pub stack_unused: usize,
+    /// The engine thread's whole stack.
+    pub stack_total: usize,
+}
+
+/// The line the radio image logs every few minutes: `heap: internal 120 KB free (min 90 KB), psram
+/// 1700 KB free (min 1650 KB), engine stack 20 KB unused of 32 KB`. Sizes in KiB, rounded down.
+pub fn heap_line(stats: &HeapStats) -> String {
+    format!(
+        "heap: internal {} KB free (min {} KB), psram {} KB free (min {} KB), engine stack {} KB unused of {} KB",
+        kib(stats.internal_free),
+        kib(stats.internal_min),
+        kib(stats.psram_free),
+        kib(stats.psram_min),
+        kib(stats.stack_unused),
+        kib(stats.stack_total),
+    )
+}

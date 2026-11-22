@@ -62,19 +62,17 @@ cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # 
 sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
 cargo test --workspace                           # Rust tests (core, host)
-cargo test -p solite-core --test banner      # one Rust test file
-cd ui && npx vitest run src/App.test.tsx         # one UI test file
+cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.tsx   # one Rust, one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
 sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash: the user runs them)
-. "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (macOS, Linux)
-sh scripts/validate.sh                           # the verdict
-sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
+. "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
+sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
 sh scripts/validate.sh --only rust|ui|firmware|e2e  # a third of the verdict (CI jobs); e2e (opt-in, no CI): sh scripts/e2e-sim.sh
 ```
 
-`sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, the two
+`sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, the four
 ESP32 firmware images and the engine's run in QEMU. It must be green before any commit. After a
 fresh clone: `git config core.hooksPath .githooks` (Claude's commit hook also sets it). **Never
 flash the Dongle Max** without the user's explicit yes: its original firmware exposes the radio

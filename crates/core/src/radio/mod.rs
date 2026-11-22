@@ -3,10 +3,12 @@
 //! the transport and the time.
 
 pub mod ash;
+pub mod backup;
 mod commands;
 mod coordinator;
 pub mod ezsp;
 pub mod measures;
+pub mod serial;
 pub mod transport;
 pub mod zcl;
 pub mod zdo;

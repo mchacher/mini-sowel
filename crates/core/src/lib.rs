@@ -13,7 +13,9 @@ pub fn banner() -> String {
 }
 
 mod memory;
-pub use memory::{EngineStats, MemoryStats, PsramStats, engine_line, memory_line};
+pub use memory::{
+    EngineStats, HeapStats, MemoryStats, PsramStats, engine_line, heap_line, memory_line,
+};
 
 pub mod radio;
 

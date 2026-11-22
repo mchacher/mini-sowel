@@ -2,15 +2,17 @@
 
 For whoever wires, flashes or restores the Dongle Max (Sonoff "Dongle-M" family, the model with
 the ESP32 and the Ethernet port). Every fact says where it comes from and how far to trust it.
-This sheet is written from Sonoff's pages and from the community; its rows stay as they are until a
-run of `scripts/box.sh` on the box settles them (section "Measured on the box").
+This sheet is written from Sonoff's pages and from the community; a run of `scripts/box.sh` on the box
+settles its rows (section "Measured on the box"); the rows the radio image's run settles (the UART's
+speed and TX pin, the pins driven) are measured there too (run of 2026-11-22).
 The unknowns have a read-only check each (section "Risks").
 
 Trust levels:
 
 - **confirmed**: said by Sonoff's own pages.
 - **reported**: said by users (forum, pull requests), not by Sonoff.
-- **unknown**: not found, or contradictory; no firmware code uses it before it is settled.
+- **unknown**: not found, or contradictory; no firmware code uses it before it is settled, except the
+  pins of the radio image (below), which the run of that image settles.
 
 Every write to the box (flash, eFuse, partition) needs the user's explicit yes (decision D6).
 
@@ -31,10 +33,10 @@ GPIO numbers of the ESP32. "Level" is the active level when it is known.
 | Signal | GPIO | Level | Trust | Source |
 | ------ | ---- | ----- | ----- | ------ |
 | EFR32 UART, ESP32 receives (RX) | 13 | | confirmed | [ESPHome guide](https://dongle.sonoff.tech/guide/dongle-m/running-esphome-firmware-on-dongle-m/) |
-| EFR32 UART, ESP32 transmits (TX) | 17 | | unknown until `chip_id` and the boot log settle the risk "GPIO17 and the PSRAM"; evidence against the conflict: the same YAML runs `psram: mode: quad` together with `tx_pin: GPIO17` | same guide; community thread below |
+| EFR32 UART, ESP32 transmits (TX) | 17 | | confirmed on the box (2026-11-22): the radio image drives it as TX with the PSRAM present (2 MB, 2046 KB free), no conflict | same guide; run of the radio image |
 | EFR32 UART flow control (RTS, CTS) | none listed | | unknown | same guide lists none |
-| EFR32 UART baud rate | 115200, 460800 or 921600 selectable; the bootloader speaks 115200; the original firmware's value is not published | | unknown for the original firmware | same guide |
-| EFR32 reset | 15 | low | confirmed | same guide |
+| EFR32 UART baud rate | 115200, 460800 or 921600 selectable; the bootloader speaks 115200; the radio answered at 115200 baud, the first speed tried (2026-11-22); the original firmware's own value stays unread | | measured on the box for the radio (115200) | same guide; run of the radio image |
+| EFR32 reset | 15 | low | confirmed; GPIO15 is also a strapping pin of the ESP32 (MTDO: held low at reset it silences the ROM's boot messages) | same guide |
 | EFR32 bootloader entry | 12 | high (active high) | confirmed (same source): Sonoff's own ESPHome YAML in the guide sets `inverted: false` on GPIO12; GPIO12 is also a strapping pin | same guide |
 | Ethernet MDC | 23 | | confirmed | same guide |
 | Ethernet MDIO | 18 | | confirmed | same guide |
@@ -89,13 +91,16 @@ bootloader pins must be driven in a fixed order, which the firmware's radio adap
 | Risk | Why | Check (read-only) |
 | ---- | --- | ----------------- |
 | GPIO17 and the PSRAM | The EFR32 UART's TX is on GPIO17, while the in-package PSRAM of the ESP32-D0WDR2-V3 may use GPIO16 and GPIO17. If it does, the UART TX pin of the table is wrong, or the PSRAM and the radio cannot both work. | `esptool.py chip_id` and the original firmware's boot log (serial): they say whether the PSRAM is found, and on which pins. Evidence against the conflict: Sonoff's ESPHome YAML in the guide runs `psram: mode: quad` together with `tx_pin: GPIO17`; the row stays unknown until the check. |
-| GPIO12 at boot | GPIO12 is the flash-voltage strapping pin of the ESP32: driving it at the wrong level during boot can stop the box from starting, and burning the wrong eFuse can brick it. The EFR32 bootloader line is on it. | Read the strapping state in the boot log; the firmware does not drive GPIO12 before the boot is over. |
+| GPIO12 at boot | GPIO12 is the flash-voltage strapping pin of the ESP32: driving it at the wrong level during boot can stop the box from starting, and burning the wrong eFuse can brick it. The EFR32 bootloader line is on it. | Read the strapping state in the boot log; the radio image drives GPIO12 only from its `engine` thread, after the boot is over, the level (low) written before the pin becomes an output. |
 | Secure boot, flash encryption | If enabled, a flashed image must be signed or encrypted, and a backup read from flash is encrypted. | `espefuse.py summary` (reads eFuses only). |
 | Radio baud rate | The original firmware's UART speed is not published; a wrong speed gives no answer from the radio. | The original firmware's boot log, or its web console; the host program already speaks to the radio through it. |
 | LED and PHY power levels | Active levels are not published. | Read from the original firmware's behaviour, or try with the LED only (an LED cannot be damaged by the wrong level). |
 | The Wi-Fi antenna | Not described by Sonoff's pages found. | Not needed before Wi-Fi is built. |
 
-The firmware codes **no pin** until the line it concerns is settled in this table.
+Only the radio image (feature `radio`, spec 021) drives pins: GPIO12 (the bootloader line, never set
+active), GPIO15 (reset) and the UART's GPIO13 and GPIO17, all named in `firmware/src/radio_uart.rs`
+and nowhere else (a test checks it). The box and measuring images drive none. The run of the radio
+image settles those rows (section "Measured on the box").
 
 ## Procedures
 
@@ -134,16 +139,19 @@ radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
    the date in the backup's row. The second way back is Sonoff's own web flasher, or its Home Assistant
    add-on (see "The original firmware"); a failed restore is run again at `--baud 115200`.
 5. **Flash Solite** (needs the user's yes, once the backup's row has its restore date): build the
-   image (`cd firmware && cargo build --release`, or `--features flash-saves` for the measuring image),
-   then `sh scripts/box.sh flash --image box|sim --backup <backup file>`. It refuses without the backup,
+   image (`cd firmware && cargo build --release`, or `--features flash-saves` for the measuring image,
+   or the radio image with the command in the README), then
+   `sh scripts/box.sh flash --image box|sim|radio --backup <backup file>`. It refuses without the backup,
    when the build is not the image asked for or does not fit the `ota_0` slot, erases `nvs`, `otadata`
    and `storage` (the original firmware's settings, which may hold Wi-Fi credentials, are in the backup),
    writes the bootloader, the table of `firmware/partitions.csv` (decision D25) and the application, then
-   resets the box.
-6. **Check the boot**: `sh scripts/box.sh log --image box|sim` checks the serial log as `scripts/qemu.sh`
-   checks QEMU's; `--expect-kept` on the second boot of the box's image checks that the partition was
+   resets the box; the radio image is read from `firmware/target/radio` and leaves the box unreset
+   (`--after no_reset`), so that its first boot, and its pairing window, are the ones of `log`.
+6. **Check the boot**: `sh scripts/box.sh log --image box|sim|radio` checks the serial log as
+   `scripts/qemu.sh` checks QEMU's (the radio image's 300 seconds are shown as they come); `--expect-kept` on the second boot of the box's image checks that the partition was
    kept. A boot loop or a panic fails with the last lines: restore the backup, or flash the other image.
-7. **Restore the original firmware at the end**, so the Mac's TCP development path works.
+7. **Restore the original firmware** (optional, on the user's request), so the Mac's TCP development
+   path works; the box can end on the radio image.
 
 ## Measured on the box
 
@@ -158,3 +166,7 @@ the network, so its web console was not reachable.
 | Does the USB bridge reset the chip (DTR and RTS)? | Yes: `esptool` enters download mode and resets the box by itself, at 115200 baud (921600 and 460800 fail: invalid packet head) | 2026-11-22 |
 | Original firmware version | not read (the box was not on the network) | 2026-11-22 |
 | PSRAM and GPIO16/17 (the risk above) | PSRAM found and usable with the firmware as built: no conflict seen | 2026-11-22 |
+| PSRAM with the UART's TX on GPIO17 (the radio image) | PSRAM found (2 MB, 2046 KB free at boot) with GPIO17 driven as TX: no conflict | 2026-11-22 |
+| The EFR32 UART's speed (115200, 460800 or 921600) | 115200 baud, answered at the first speed tried (the probe needed no fallback) | 2026-11-22 |
+| The radio's firmware | EZSP protocol 13, stack type 2, EmberZNet 7.4.5.0 | 2026-11-22 |
+| The pins the radio image drives (GPIO12 low, GPIO15 reset, GPIO13 and GPIO17 UART) | driven in the fixed order (GPIO12 low before GPIO15); the radio answered, not wedged | 2026-11-22 |

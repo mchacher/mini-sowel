@@ -4,8 +4,8 @@
 //! pseudo-terminal (the script reads `/dev/tty`). No test touches a real serial port or a real box,
 //! and every run checks the fakes' log: no eFuse burn, ever.
 //!
-//! Also here: no file of `firmware/src/` names GPIO12 or GPIO15, the radio's bootloader and reset
-//! lines (spec 020 R6.3).
+//! Also here: only `firmware/src/radio_uart.rs` names the radio's pins, GPIO12 and GPIO15 (its
+//! bootloader and reset lines, spec 021 R2.3) and GPIO13 and GPIO17 (its UART).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -225,7 +225,15 @@ impl Env {
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = fs::remove_dir_all(&root);
-        for dir in ["tools", "ports", "state", "tmp", "out", "build"] {
+        for dir in [
+            "tools",
+            "ports",
+            "state",
+            "tmp",
+            "out",
+            "build",
+            "radio-build",
+        ] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
         write_exec(&root.join("tools/esptool.py"), FAKE_ESPTOOL);
@@ -236,15 +244,26 @@ impl Env {
         fs::write(root.join("image.bin"), noise(1)).unwrap();
         fs::write(root.join("log.txt"), "").unwrap();
         // The fake build of the firmware: the bootloader, and the application.
-        let boot = root.join("build/build/esp-idf-sys-abc/out/build/bootloader");
-        fs::create_dir_all(&boot).unwrap();
-        fs::write(boot.join("bootloader.bin"), vec![0u8; 100]).unwrap();
+        for build in ["build", "radio-build"] {
+            let boot = root
+                .join(build)
+                .join("build/esp-idf-sys-abc/out/build/bootloader");
+            fs::create_dir_all(&boot).unwrap();
+            fs::write(boot.join("bootloader.bin"), vec![0u8; 100]).unwrap();
+        }
+        // The radio build's ESP-IDF settings: the UART interrupt in internal RAM.
+        fs::write(
+            root.join("radio-build/build/esp-idf-sys-abc/out/sdkconfig"),
+            "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000\nCONFIG_UART_ISR_IN_IRAM=y\n",
+        )
+        .unwrap();
         let env = Env {
             root,
             extra: Vec::new(),
             path_has_tools: true,
         };
         env.set_build(Build::Box);
+        env.set_radio_build(Build::Radio);
         env
     }
 
@@ -262,12 +281,12 @@ impl Env {
     }
 
     fn set_build(&self, build: Build) {
-        let text = match build {
-            Build::Box => "solite-firmware: storage\n",
-            Build::Sim => "solite-firmware: scenario: started\n",
-            Build::Measuring => "solite-firmware: scenario: started saves: written to flash\n",
-        };
-        fs::write(self.path("build/solite-firmware"), text).unwrap();
+        fs::write(self.path("build/solite-firmware"), build.text()).unwrap();
+    }
+
+    /// The application in the radio image's own build folder (`target/radio`).
+    fn set_radio_build(&self, build: Build) {
+        fs::write(self.path("radio-build/solite-firmware"), build.text()).unwrap();
     }
 
     /// A backup file made for the fake box, with its `.sha256`; returns its path and its SHA-256.
@@ -336,6 +355,7 @@ impl Env {
             .env("FAKE_TOOLS", &tools)
             .env("FAKE_SERIAL_LOG", self.path("serial.log"))
             .env("SOLITE_TARGET_DIR", self.path("build"))
+            .env("SOLITE_RADIO_TARGET_DIR", self.path("radio-build"))
             .env(
                 "SOLITE_HARDWARE_MD",
                 self.path("hardware.md").display().to_string(),
@@ -386,6 +406,19 @@ enum Build {
     Box,
     Sim,
     Measuring,
+    /// The radio image: its application holds the marker `radio: uart `.
+    Radio,
+}
+
+impl Build {
+    fn text(self) -> &'static str {
+        match self {
+            Build::Box => "solite-firmware: storage\n",
+            Build::Sim => "solite-firmware: scenario: started\n",
+            Build::Measuring => "solite-firmware: scenario: started saves: written to flash\n",
+            Build::Radio => "solite-firmware: radio: uart  baud\n",
+        }
+    }
 }
 
 fn args_of<'a>(port: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
@@ -1195,24 +1228,340 @@ fn log_fails_on_a_missing_line_and_names_it() {
     assert!(out.text.contains("network line"));
 }
 
-// ---- the radio's pins --------------------------------------------------------------------
+// ---- the radio image ---------------------------------------------------------------------
 
-/// True when the text names GPIO12 or GPIO15 in any spelling (`GPIO12`, `Gpio12`, `gpio12`).
-fn names_the_radios_pins(text: &str) -> bool {
-    let lower = text.to_lowercase();
-    ["gpio12", "gpio15", "gpio_num_12", "gpio_num_15"]
-        .iter()
-        .any(|pin| lower.contains(pin))
+const RADIO_BUILD_TEXT: &str = "--features radio";
+
+#[test]
+fn flash_radio_reads_the_radio_build_leaves_the_box_unreset_and_still_asks() {
+    let (env, f, _) = ready("radio");
+    // The box's own folder holds a box image: the radio image is read from its own folder.
+    env.set_build(Build::Box);
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("to go on:"), "the prompt is still asked");
+    assert!(out.text.contains("log --image radio"));
+    let log = env.fake_log();
+    let write = log
+        .lines()
+        .find(|l| l.contains("write_flash"))
+        .expect("write_flash sent");
+    assert!(write.contains("--after no_reset"), "{write}");
+    assert!(write.contains("app.bin"));
+    // The erases leave the box in download mode too: no boot of an older image in between.
+    for erase in log.lines().filter(|l| l.contains("erase_region")) {
+        assert!(erase.contains("--after no_reset"), "{erase}");
+    }
+    // The box and sim images still reset the box.
+    let (env, f, _) = ready("box");
+    env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert!(!env.fake_log().contains("no_reset"));
 }
 
 #[test]
-fn the_pin_check_finds_both_radio_pins() {
+fn flash_radio_refuses_a_build_without_the_radio_marker_and_names_the_command() {
+    for build in [Build::Sim, Build::Box, Build::Measuring] {
+        let (env, f, _) = ready("radio");
+        env.set_radio_build(build);
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", "radio", "--backup", &f],
+        ));
+        assert_eq!(out.code, 1, "{}", out.text);
+        assert!(out.text.contains(RADIO_BUILD_TEXT), "{}", out.text);
+        assert!(out.text.contains("target/radio"), "{}", out.text);
+        assert!(!out.text.contains("to go on:") && !env.wrote());
+    }
+}
+
+#[test]
+fn flash_radio_refuses_a_build_made_without_the_uart_interrupt_setting() {
+    for sdkconfig in [
+        "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000\n# CONFIG_UART_ISR_IN_IRAM is not set\n",
+        "CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000\n",
+    ] {
+        let (env, f, _) = ready("radio");
+        fs::write(
+            env.path("radio-build/build/esp-idf-sys-abc/out/sdkconfig"),
+            sdkconfig,
+        )
+        .unwrap();
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", "radio", "--backup", &f],
+        ));
+        assert_eq!(out.code, 1, "{}", out.text);
+        assert!(out.text.contains("UART_ISR_IN_IRAM"), "{}", out.text);
+        assert!(
+            out.text.contains("sdkconfig.radio.defaults"),
+            "{}",
+            out.text
+        );
+        assert!(!out.text.contains("to go on:") && !env.wrote());
+    }
+    // No sdkconfig at all is refused too.
+    let (env, f, _) = ready("radio");
+    fs::remove_file(env.path("radio-build/build/esp-idf-sys-abc/out/sdkconfig")).unwrap();
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn flash_radio_says_before_the_prompt_that_it_erases_storage_and_the_dry_run_too() {
+    let (env, f, _) = ready("radio");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f, "--dry-run"],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("zigbee.json"), "{}", out.text);
+    assert!(out.text.contains("destroys"), "{}", out.text);
+    assert!(out.text.contains("paired devices"), "{}", out.text);
+    assert!(!env.wrote());
+    // With the prompt: the warning comes before it.
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text.find("destroys").unwrap() < out.text.find("to go on:").unwrap(),
+        "{}",
+        out.text
+    );
+    // The box image does not carry that warning.
+    let (env, f, _) = ready("box");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f, "--dry-run"],
+    ));
+    assert!(!out.text.contains("zigbee.json"), "{}", out.text);
+}
+
+#[test]
+fn flash_box_and_sim_refuse_a_radio_build_before_the_prompt() {
+    for image in ["box", "sim"] {
+        let (env, f, _) = ready(image);
+        env.set_build(Build::Radio);
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", image, "--backup", &f],
+        ));
+        assert_eq!(out.code, 1, "{}", out.text);
+        assert!(out.text.contains("radio image"), "{}", out.text);
+        assert!(!out.text.contains("to go on:") && !env.wrote());
+    }
+}
+
+#[test]
+fn an_image_other_than_box_sim_or_radio_is_a_usage_error_naming_the_three() {
+    let (env, f, _) = ready("box");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "wifi", "--backup", &f],
+    ));
+    assert_eq!(out.code, 2, "{}", out.text);
+    for name in ["box", "sim", "radio"] {
+        assert!(out.text.contains(name), "{name} missing in {}", out.text);
+    }
+    assert!(!env.wrote());
+}
+
+fn radio_log() -> String {
+    box_log().replace(
+        "I (431) solite: radio: none\n",
+        "I (440) solite: radio: uart 115200 baud\n\
+         I (460) solite: ezsp: protocol 13, stack type 2, EmberZNet 7.4.4.0\n\
+         I (461) solite: radio address: 0x8C6FB9FFFE123456\n\
+         I (900) solite: network: resumed (made by another program), channel 15, PAN 0x1A2B, extended PAN 0xDDDDDDDDDDDDDDDD\n\
+         I (901) solite: pairing: open for 180 s\n\
+         I (240500) solite: serial: 115200 baud, rx buffer 4096 B, highest 212 B, full 0 times\n\
+         I (240501) solite: heap: internal 120 KB free (min 95 KB), psram 1900 KB free (min 1850 KB), engine stack 20 KB unused of 32 KB\n",
+    )
+}
+
+#[test]
+fn log_checks_a_good_radio_log_and_prints_its_radio_lines() {
+    let env = Env::new();
+    let out = log_from(&env, &radio_log(), &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    for line in [
+        "radio: uart 115200 baud",
+        "ezsp: protocol 13",
+        "radio address: 0x8C6FB9FFFE123456",
+        "network: resumed",
+        "pairing: open for 180 s",
+        "serial: 115200 baud, rx buffer 4096 B",
+        "heap: internal 120 KB free (min 95 KB)",
+    ] {
+        assert!(out.text.contains(line), "{line} missing in {}", out.text);
+    }
+}
+
+#[test]
+fn log_radio_fails_when_the_radio_answers_at_no_speed() {
+    let env = Env::new();
+    let text = radio_log().replace(
+        "radio: uart 115200 baud",
+        "radio: no answer at any baud rate (115200, 460800, 921600)",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("no speed"), "{}", out.text);
+    assert!(out.text.contains("last 40 lines"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_when_the_radio_was_restarted_too_often() {
+    let env = Env::new();
+    let mut text = radio_log();
+    text.push_str("W (250000) solite: radio: stopped after 3 restarts in 10 min: link lost\n");
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("restarted too often"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_on_a_task_watchdog() {
+    let env = Env::new();
+    let mut text = radio_log();
+    text.push_str("E (250000) task_wdt: Task watchdog got triggered.\n");
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("task_wdt"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_and_names_a_refused_pairing_window() {
+    let env = Env::new();
+    let mut text = radio_log();
+    text.push_str(
+        "I (902) solite: pairing: failed: the radio refused permitJoining (status 0x70)\n",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("refused to open joining"), "{}", out.text);
+    assert!(out.text.contains("permitJoining"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_is_green_when_the_window_is_not_opened_at_boot_and_prints_the_reason() {
+    let env = Env::new();
+    let text = radio_log().replace(
+        "pairing: open for 180 s",
+        "pairing: not opened at boot (reset: crash)",
+    );
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text
+            .contains("pairing: not opened at boot (reset: crash)")
+    );
+}
+
+#[test]
+fn log_radio_counts_a_second_banner_as_a_reboot_even_without_a_rst_line() {
+    let env = Env::new();
+    let mut text = radio_log();
+    text.push_str(&format!("I (250000) solite: solite {VERSION}\n"));
+    assert!(!text.contains("rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\nI (250"));
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("rebooted"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_under_the_internal_ram_reserve_and_names_it() {
+    let env = Env::new();
+    let low = radio_log().replace("(min 95 KB)", "(min 63 KB)");
+    let out = log_from(&env, &low, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("64 KB"), "{}", out.text);
+    // 64 KB is the reserve: it passes.
+    let edge = radio_log().replace("(min 95 KB)", "(min 64 KB)");
+    let out = log_from(&env, &edge, &["--image", "radio"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn log_radio_without_a_serial_line_names_it_and_the_seconds_option() {
+    let env = Env::new();
+    let text: String = radio_log()
+        .lines()
+        .filter(|l| !l.contains("serial: 115200 baud"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("serial line"), "{}", out.text);
+    assert!(out.text.contains("--seconds"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_fails_on_a_panic_after_the_banner() {
+    let env = Env::new();
+    let mut text = radio_log();
+    text.push_str("Guru Meditation Error: Core 1 panic'ed (LoadProhibited)\n");
+    let out = log_from(&env, &text, &["--image", "radio"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("panicked"), "{}", out.text);
+}
+
+#[test]
+fn log_radio_from_the_port_shows_the_output_and_checks_it() {
+    let env = Env::new();
+    env.serial(&radio_log());
+    let out = env.go(&args_of(&env.port(), &["log", "--image", "radio"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("capturing 300 s"), "{}", out.text);
+    assert!(out.text.contains("pairing: open for 180 s"), "{}", out.text);
+}
+
+#[test]
+fn log_box_and_sim_keep_their_checks_and_their_default_times() {
+    let env = Env::new();
+    env.serial(&box_log());
+    let out = env.go(&args_of(&env.port(), &["log", "--image", "box"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("capturing 60 s"), "{}", out.text);
+    // A radio log is not a box log: `radio: none` is missing.
+    let out = log_from(&env, &radio_log(), &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+}
+
+// ---- the radio's pins --------------------------------------------------------------------
+
+/// The radio's pins: its bootloader and reset lines, and its UART's two lines.
+const RADIO_PINS: [&str; 4] = ["12", "13", "15", "17"];
+
+/// True when the text names one of the radio's pins in any spelling (`GPIO12`, `Gpio12`, `gpio12`,
+/// `GPIO_NUM_12`).
+fn names_the_radios_pins(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    RADIO_PINS
+        .iter()
+        .any(|n| lower.contains(&format!("gpio{n}")) || lower.contains(&format!("gpio_num_{n}")))
+}
+
+#[test]
+fn the_pin_check_finds_the_radio_pins() {
     assert!(names_the_radios_pins("let p = pins.gpio12;"));
     assert!(names_the_radios_pins("Gpio15"));
     assert!(names_the_radios_pins("// GPIO12 is a strapping pin"));
     assert!(names_the_radios_pins("GPIO_NUM_12"));
     assert!(names_the_radios_pins("gpio_num_15"));
-    assert!(!names_the_radios_pins("let p = pins.gpio13;"));
+    assert!(names_the_radios_pins("GPIO13 and GPIO17 are the UART"));
+    assert!(!names_the_radios_pins("let p = pins.gpio14;"));
 }
 
 /// Every `.rs` file under `dir`, at any depth.
@@ -1227,18 +1576,92 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// True when the text passes a radio pin as a bare number to a GPIO call: `gpio_set_level(15, 0)`,
+/// `gpio_config` masks like `1u64 << 12`, `PinDriver::output(.. 12 ..)`, `.output(13)`.
+fn passes_a_bare_radio_pin(text: &str) -> bool {
+    text.lines().any(|line| {
+        let lower = line.to_lowercase();
+        let gpio_call = ["gpio_", "pindriver", ".output(", ".input(", "uart_set_pin"]
+            .iter()
+            .any(|call| lower.contains(call));
+        let shift = RADIO_PINS
+            .iter()
+            .any(|n| lower.replace(' ', "").contains(&format!("<<{n}")));
+        let number = lower
+            .split(|c: char| !c.is_ascii_digit())
+            .any(|word| RADIO_PINS.contains(&word));
+        (gpio_call && number) || shift
+    })
+}
+
 #[test]
-fn no_file_of_the_firmware_names_gpio12_or_gpio15() {
-    let dir = Path::new(REPO).join("firmware/src");
+fn the_pin_check_finds_a_bare_numeric_pin_in_a_gpio_call() {
+    assert!(passes_a_bare_radio_pin("gpio_set_level(15, 0);"));
+    assert!(passes_a_bare_radio_pin(
+        "let p = PinDriver::output(pins.x, 12)?;"
+    ));
+    assert!(passes_a_bare_radio_pin("uart_set_pin(1, 17, 13, -1, -1)"));
+    assert!(passes_a_bare_radio_pin("pin_bit_mask: 1u64 << 12,"));
+    assert!(!passes_a_bare_radio_pin("gpio_set_level(14, 0);"));
+    assert!(!passes_a_bare_radio_pin("let stack = 32 * 1024; // 15 min"));
+}
+
+/// The files of the tree that name a radio pin and are not `radio_uart.rs`.
+fn pin_offenders(dir: &Path) -> Vec<String> {
     let mut files = Vec::new();
-    rust_files(&dir, &mut files);
-    assert!(!files.is_empty(), "no source found in {}", dir.display());
-    for path in files {
-        let text = fs::read_to_string(&path).unwrap();
+    rust_files(dir, &mut files);
+    files
+        .into_iter()
+        .filter(|path| path.file_name().is_some_and(|n| n != "radio_uart.rs"))
+        .filter(|path| {
+            let text = fs::read_to_string(path).unwrap();
+            names_the_radios_pins(&text) || passes_a_bare_radio_pin(&text)
+        })
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+#[test]
+fn the_pin_check_reports_a_file_other_than_radio_uart_naming_a_pin() {
+    let dir = std::env::temp_dir().join(format!("solite-pins-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("nested")).unwrap();
+    fs::write(
+        dir.join("radio_uart.rs"),
+        "const PIN_RESET: i32 = 15; // GPIO15\n",
+    )
+    .unwrap();
+    fs::write(dir.join("main.rs"), "fn main() {}\n").unwrap();
+    assert!(
+        pin_offenders(&dir).is_empty(),
+        "radio_uart.rs may name them"
+    );
+    fs::write(dir.join("nested/other.rs"), "// drives GPIO15 too\n").unwrap();
+    assert_eq!(pin_offenders(&dir), ["other.rs"]);
+    fs::remove_file(dir.join("nested/other.rs")).unwrap();
+    fs::write(
+        dir.join("nested/bare.rs"),
+        "unsafe { gpio_set_level(12, 0) };\n",
+    )
+    .unwrap();
+    assert_eq!(pin_offenders(&dir), ["bare.rs"]);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn only_radio_uart_names_the_radios_pins_in_the_firmware() {
+    let dir = Path::new(REPO).join("firmware/src");
+    let uart = fs::read_to_string(dir.join("radio_uart.rs")).unwrap();
+    let lower = uart.to_lowercase();
+    for pin in RADIO_PINS {
         assert!(
-            !names_the_radios_pins(&text),
-            "{} names GPIO12 or GPIO15: the radio's pins are not driven",
-            path.display()
+            lower.contains(&format!("gpio{pin}")),
+            "radio_uart.rs does not name GPIO{pin}"
         );
     }
+    let offenders = pin_offenders(&dir);
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} name the radio's pins: only radio_uart.rs may"
+    );
 }

@@ -55,9 +55,10 @@ cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # 
 sh scripts/demo-garage.sh [port]                     # the demo garage, through the API
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)
 cd firmware && cargo build --release              # the ESP32 firmware (box image; --features sim: the QEMU image)
+cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio   # the radio image
 sh scripts/e2e-sim.sh                             # the simulated path driven in headless Chromium (cd tools/e2e && npm ci first)
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
-sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash, log)
+sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash, log; --image box|sim|radio)
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```

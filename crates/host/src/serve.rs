@@ -368,4 +368,5 @@ fn radio_loop<T: RadioTransport>(
         verbose,
         &mut |line| println!("{line}"),
     )
+    .map_err(String::from)
 }

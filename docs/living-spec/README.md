@@ -43,6 +43,16 @@ Each of the three programs starts and says which tool it is, with its version:
   saves run without the emulator's flash, `saves: <n> written to flash, longest <ms> ms (<file>,
   <KB> KB), total <ms> ms`: the time each save holds the radio loop. After the last save it logs
   `storage-after: /data, <used> KB used of <size> KB`, the use of the FAT partition by the home.
+  The radio image (cargo feature `radio`, never with `sim`: `radio and sim are two images`) is built
+  in its own target folder with its own ESP-IDF settings (`firmware/sdkconfig.radio.defaults`,
+  which puts the UART interrupt in internal RAM); the other images keep theirs. After the
+  `network:` line it starts one thread, `engine`, on core 1 with 32 KB of stack, which resets the
+  radio, finds its serial speed, starts the radio's network and runs the engine's loop with the
+  home read from `/data`, showing the measures and the pairing lines on the serial log. A boot
+  with a power-on reset opens pairing for 180 seconds (see "Pairs a device"). Every 240 seconds it
+  logs `serial: <baud> baud, rx buffer 4096 B, highest <n> B, full <k> times` and `heap: internal
+  <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB`.
+  The radio image has no network and no HTTP server; it is a development image.
 - **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the firmware in Espressif's
   QEMU, with 2 MB of PSRAM, and runs the engine in it with the simulated radio and a realistic
   home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
@@ -92,6 +102,28 @@ failure it prints one line on the error output and exits 1: `radio: cannot conne
 `radio: error 0x<code>`, or the EZSP error (a version outside 13 to 19 is named); a malformed
 `--radio` or `--sim` prints the expected form and exits 2.
 
+The radio image of the firmware talks to the radio of the Dongle Max over the serial link (UART1:
+TX GPIO17, RX GPIO13, 8 data bits, no parity, 1 stop bit, no flow control), with a receive ring of
+4096 bytes and a transmit ring of 1024 bytes in internal RAM, and the interrupt in internal RAM so
+that bytes keep arriving while a flash write stalls the caches. The radio's two lines, reset
+(active low) and bootloader (active high, never set active), are described by role in the core,
+with the hardware reset as a list of steps: bootloader inactive, reset active for 100 ms, reset
+inactive, 1000 ms for the radio's application to start. The firmware runs them after its own boot,
+each level written before the pin becomes an output (GPIO12 low, then GPIO15 high). The speed is
+probed at each boot: 115200 first (the speed fixed in the core), then 460800 and 921600. A speed
+that gets no answer to the reset within 5 seconds logs `radio: no answer at <baud> baud` and the
+next is tried; any other failure stops the probe with its error. Found: `radio: uart <baud>
+baud`, then the `ezsp:` and `radio address:` lines; found at a speed other than 115200 it also
+warns `radio: answered at <baud> baud, RADIO_BAUD is 115200`. No answer at any speed logs
+`radio: no answer at any baud rate (115200, 460800, 921600)`; the engine does not start and the
+ESP32 stays up.
+
+A radio error while the engine runs (link lost, an ERROR frame, a driver error) restarts the radio:
+what is due is saved, an open pairing phase ends, the reset sequence runs, the speed is probed and
+the network is resumed (never formed, no pairing window). At most 3 restarts in 10 minutes; past
+that the image logs `radio: stopped after 3 restarts in 10 min: <last error>` and stays up. A
+storage error logs and stops the loop without resetting the radio.
+
 ### Pairs a device
 
 `cargo run -p solite-host -- --radio tcp://<address>:6638 --pair [seconds]` (180 by default,
@@ -138,6 +170,19 @@ joined: 0x00124B0012345678 (0x5C3D)
 device: 0x00124B0012345678 eWeLink TH01
 pairing: closed
 ```
+
+In the radio image of the firmware, the radio's network is started as `--pair` starts it (resumed,
+or formed on channel 15 with the ESP32's hardware random generator) and, when formed, the backup
+is written to `/data/zigbee.json` in the host's format before the next step; a `zigbee.json` of
+another network is kept, renamed `zigbee-<PAN id>.json`. The file holds the network and
+trust-centre keys in plain text, on a flash that is not encrypted. A marker file, `/data/booting`,
+is written at each boot and removed after 10 minutes of running. Pairing opens for 180 seconds at
+boot only when the reset is a power-on (power, or the USB bridge's reset) and no marker was there:
+a crash, a watchdog, a brown-out or a boot loop opens nothing and logs `pairing: not opened at
+boot (<reason>)`. The window is the home's pairing window; the image then only listens, and shows
+`pairing: open for 180 s`, the devices' lines and `pairing: closed`; a radio that refuses to open
+joining logs `pairing: failed: <reason>`. A setting the radio refuses while the network forms is
+logged as on the Mac.
 
 While serving, pairing also opens from the API or the interface (see "Serves Sowel's device API"
 and "Shows the home in the browser"); the devices that join are followed, identified and kept
@@ -431,20 +476,30 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   and not one repeated byte, and prints the row for `docs/hardware.md`.
 - `restore <file>` writes the backup back, after checking its size, its SHA-256 and that the MAC of
   its name is the connected box's.
-- `flash --image box|sim --backup <file>` refuses without a backup whose SHA-256 is in the backup
+- `flash --image box|sim|radio --backup <file>` refuses without a backup whose SHA-256 is in the backup
   table of `docs/hardware.md` with a restore date; it checks the built image is the one asked for
   and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage`, writes the bootloader, the table
-  of `firmware/partitions.csv` and the application, and resets the box.
-- `log --image box|sim [--seconds <n>] [--replug] [--expect-kept]` resets the box, captures its
+  of `firmware/partitions.csv` and the application, and resets the box. The radio image is read
+  from `firmware/target/radio`, a build without the marker `radio: uart ` is refused with the
+  build command, and the box and sim images refuse a radio build; the box is not reset at the end
+  (`--after no_reset`): the first boot, and its pairing window, is the one `log --image radio`
+  captures.
+- `log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]` resets the box, captures its
   serial output and checks it as `scripts/qemu.sh` checks QEMU's (banner, memory, `storage:`,
   `network:`, then `radio: none` or the `engine:` and `saves:` lines); it also fails on `psram none`,
   a panic or a boot loop, and with `--expect-kept` on `storage: formatted`. `--from-file <log>`
-  checks a captured log, `--raw` captures without checks.
+  checks a captured log, `--raw` captures without checks. With `--image radio` it captures 300
+  seconds by default and shows the serial output as it comes; it checks the banner, `memory:`,
+  `storage:` and `network:` lines, then `radio: uart`, `ezsp:`, a `network: formed|resumed` line,
+  `pairing: open for` or `pairing: not opened`, and the `serial:` and `heap:` lines; it fails on
+  `no answer at any baud rate`, `radio: stopped after`, `pairing: failed:` (named), `task_wdt`, a
+  panic, a second banner (a reboot) and a `heap:` internal minimum below 64 KB.
 - `backup`, `restore` and `flash` print what they will do, then ask, on the terminal (never on
   standard input), for the last 6 hex digits of the box's MAC address; anything else, or no
   terminal, writes nothing. `--dry-run` prints the plan only. No command writes an eFuse.
-- No file of `firmware/src/` names GPIO12 or GPIO15, the radio's bootloader and reset lines: the
-  measuring image leaves the radio untouched.
+- Only `firmware/src/radio_uart.rs` names GPIO12 and GPIO15 (the radio's bootloader and reset
+  lines, both strapping pins of the ESP32), GPIO13 and GPIO17 (the UART): a test checks it. The box
+  and measuring images leave the radio untouched.
 
 ### Measures the coverage of Zigbee2MQTT's definitions
 
@@ -479,8 +534,10 @@ equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 li
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
-measuring image; they are written in `docs/memory-budget.md`, "On the box", once a box has run
-(none has). `docs/memory-budget.md` shares the box's 2 MB
+measuring image; they are written in `docs/memory-budget.md`, "On the box". The radio image logs
+its own `heap:` line (the minimums since boot, the engine stack's high-water mark), and `box.sh
+log --image radio` fails when its internal RAM minimum is below the 64 KB reserve.
+`docs/memory-budget.md` shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
 wiring and its risks.
 
@@ -488,7 +545,8 @@ No mode exists in the tool, and `motion-light` is its only recipe; the host keep
 zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
-measures.
+measures; the firmware's radio image does the same over the serial link, with no network and no
+interface.
 
 ## History
 
@@ -514,3 +572,4 @@ measures.
 | 018 | Rooms and equipments made from the interface: the Topology and Equipments pages, Sowel's forms |
 | 019 | The Administration section (Devices, Equipments, Topology, Discovery per integration); a device has no room; equipments made from a device's row, bound as Sowel's interface binds |
 | 020 | `scripts/box.sh` identifies the Dongle Max, saves and restores its original firmware, flashes Solite's images with the user's typed confirmation and checks their boot log; the measuring image times the saves on the box |
+| 021 | The firmware's radio image drives the radio over the serial link, runs the engine on the box, and pairs a device at boot |
