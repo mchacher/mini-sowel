@@ -2,7 +2,7 @@
 //! refuses to run twice.
 
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -96,8 +96,13 @@ fn serving() -> (Reaped, u16, TempDir) {
 }
 
 fn run_script(port: u16) -> (bool, String, String) {
+    run_script_with(&port.to_string())
+}
+
+/// The script with this argument (a port, or an address with an optional port).
+fn run_script_with(argument: &str) -> (bool, String, String) {
     let output = Command::new("sh")
-        .args([SCRIPT, &port.to_string()])
+        .args([SCRIPT, argument])
         .output()
         .expect("sh runs the script");
     (
@@ -138,6 +143,35 @@ fn the_script_sets_the_garage_up_prints_the_ids_and_refuses_a_second_run() {
     assert!(!ok, "a second run must refuse: {out}");
     assert!(err.contains("a zone named Garage exists already"), "{err}");
     assert_eq!(get("zones").matches("\"Garage\"").count(), 1);
+}
+
+#[test]
+fn an_address_with_a_port_sets_the_garage_up_as_a_port_alone_does() {
+    let (_host, port, _data) = serving();
+    let (ok, out, err) = run_script_with(&format!("127.0.0.1:{port}"));
+    assert!(ok, "{out}\n{err}");
+    assert!(
+        out.contains("Garage light") && out.contains("instance  "),
+        "{out}"
+    );
+    let zones = Command::new("curl")
+        .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/zones")])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&zones.stdout).contains("\"Garage\""));
+}
+
+#[test]
+fn an_address_alone_means_port_80_and_the_message_names_it() {
+    // The default port is 80: the test needs it free on the loopback. A machine that runs a
+    // web server there cannot show that the message names port 80, so the test is skipped.
+    if TcpStream::connect("127.0.0.1:80").is_ok() {
+        eprintln!("something listens on 127.0.0.1:80: skipped");
+        return;
+    }
+    let (ok, _, err) = run_script_with("127.0.0.1");
+    assert!(!ok);
+    assert!(err.contains("no host answers at 127.0.0.1:80"), "{err}");
 }
 
 #[test]

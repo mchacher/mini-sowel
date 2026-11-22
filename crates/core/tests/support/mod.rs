@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use serde_json::{Value as Json, json};
-use solite_core::api::{Request, Response, handle};
+use solite_core::api::{Reach, Request, Response, handle};
 use solite_core::devices::{Devices, parse_list};
 use solite_core::home::Home;
 use solite_core::orders::DeviceCommand;
@@ -74,6 +74,7 @@ impl Rig {
                 path,
                 host: Some(HOST),
                 port: PORT,
+                reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 body: body.as_bytes(),
             },

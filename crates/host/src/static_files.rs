@@ -5,6 +5,7 @@ use std::fs::File;
 use std::path::Path;
 
 use solite_core::api::StaticFile;
+use solite_core::api::static_files::{STATIC_HEADERS, cache_control};
 use tiny_http::{Header, Request, Response, StatusCode};
 
 /// The default folder of `--ui`: the interface's build output.
@@ -12,18 +13,6 @@ pub const DEFAULT_UI_DIR: &str = "ui/dist";
 
 /// What `GET /` says when the interface is not built.
 const NOT_BUILT: &str = r#"{"error":"Interface not built: run npm run build in ui/"}"#;
-
-/// `index.html` is looked at again by the browser each time; a file of `assets/` has a hash in
-/// its name (Vite's) and never changes under it.
-const CACHE_INDEX: &str = "no-cache";
-const CACHE_ASSET: &str = "public, max-age=31536000, immutable";
-
-/// Another site framing the page could make the user switch a light.
-const SECURITY_HEADERS: [(&str, &str); 3] = [
-    ("X-Frame-Options", "DENY"),
-    ("Content-Security-Policy", "frame-ancestors 'none'"),
-    ("X-Content-Type-Options", "nosniff"),
-];
 
 /// True when the folder holds a built interface.
 pub fn is_built(ui: &Path) -> bool {
@@ -43,7 +32,7 @@ fn header(name: &str, value: &str) -> Option<Header> {
 }
 
 fn with_security<R: std::io::Read>(mut response: Response<R>) -> Response<R> {
-    for (name, value) in SECURITY_HEADERS {
+    for (name, value) in STATIC_HEADERS {
         if let Some(h) = header(name, value) {
             response.add_header(h);
         }
@@ -95,11 +84,7 @@ pub fn send(request: Request, ui: &Path, file: &StaticFile) {
         };
         return send_refusal(request, 404, Some(text.to_string()));
     };
-    let cache = if file.is_index() {
-        CACHE_INDEX
-    } else {
-        CACHE_ASSET
-    };
+    let cache = cache_control(file);
     let headers: Vec<Header> = [
         header("Content-Type", file.content_type),
         header("Cache-Control", cache),

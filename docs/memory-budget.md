@@ -32,12 +32,15 @@ MAX_*` of the core and how it is reached; a test fails when one is missing.
 | ---- | ----- | ---------- | ----- | ----- |
 | The engine: devices, zones, equipments, recipes, events, live queues, orders, largest answer, save path | the core's `MAX_*` (`devices::MAX_DEVICES` 64, `zones::MAX_ZONES` 32, `equipments::MAX_EQUIPMENTS` 64, `recipes::MAX_INSTANCES` 16, ...) | 1024 KB (ceiling; measured 987 KB). Realistic home: 300 KB (ceiling; measured 194 KB), shown beside, not added | Large allocations in PSRAM; small ones first in internal RAM, see below | M |
 | Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes |
+| The radio image's HTTP body buffers: one per worker, `MAX_BODY_BYTES` + 1 each, allocated once in PSRAM (spec 023) | 4 workers × 16 KB | 64 KB, **not added**: the engine's worst case already counts 4 bodies of 16 KB (above); beside the realistic home, which does not count them, they add 64 KB | PSRAM | E, from the bound |
+| The radio image's HTTP workers' stacks (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023) | 4 workers × 10 KB | 40 KB | PSRAM | E, from the setting |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
 | Update buffers: the download's chunk buffer and the flash write buffer | 1 update at a time | 32 KB | PSRAM | E |
 | Margin | | the rest | PSRAM | |
 
-Arithmetic, worst case: engine 1024 + transport 64 + TLS 64 + update 32 = 1184 KB, margin
-2048 − 1184 = **864 KB**. Realistic home: 300 + 64 + 64 + 32 = 460 KB, margin 1588 KB. The totals
+Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 32 =
+1224 KB, margin 2048 − 1224 = **824 KB**. Realistic home: 300 + 64 + body buffers 64 + 40 + 64 + 32
+= 564 KB, margin 1484 KB. The totals
 fit with room. The engine's small allocations land in internal RAM first (next section), so the
 PSRAM really used is lower than this sum and the margin larger.
 

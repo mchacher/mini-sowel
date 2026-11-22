@@ -5,11 +5,21 @@
 # their equipments (climate and motion sensors, the light), and the
 # motion-light recipe (spec 012) with a timeout of 20 s. Prints the ids.
 # The same garage is made from the interface's Topology and Equipments pages (spec 018).
-# usage: sh scripts/demo-garage.sh [port]      (port 8080 by default)
+# usage: sh scripts/demo-garage.sh [<port> | <address>[:<port>]]
+#   a number alone is a port on 127.0.0.1 (8080 by default); anything else is an address, port 80
+#   by default (the box on the home's network: sh scripts/demo-garage.sh 192.168.1.20).
 set -eu
 
-PORT="${1:-8080}"
-API="http://127.0.0.1:$PORT/api/v1"
+TARGET="${1:-8080}"
+case "$TARGET" in
+  '' | *[!0-9]*)
+    case "$TARGET" in
+      *:*) HOST_PART=${TARGET%%:*}; PORT=${TARGET##*:} ;;
+      *) HOST_PART=$TARGET; PORT=80 ;;
+    esac ;;
+  *) HOST_PART=127.0.0.1; PORT=$TARGET ;;
+esac
+API="http://$HOST_PART:$PORT/api/v1"
 JSON='Content-Type: application/json'
 
 # The `id` of a JSON object read on the standard input.
@@ -37,7 +47,7 @@ undo_hint() {
 trap undo_hint EXIT
 
 if ! ZONES=$(curl -sS -f "$API/zones"); then
-  echo "demo-garage: no host answers on port $PORT: start it with --sim scenarios/garage.json --serve" >&2
+  echo "demo-garage: no host answers at $HOST_PART:$PORT: start it with --sim scenarios/garage.json --serve (or give the box's address)" >&2
   exit 1
 fi
 if echo "$ZONES" | python3 -c '

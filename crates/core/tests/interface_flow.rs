@@ -5,7 +5,7 @@
 mod support;
 
 use serde_json::{Value, json};
-use solite_core::api::{Reply, Request, handle_stream};
+use solite_core::api::{Reach, Reply, Request, handle_stream};
 use support::*;
 
 const UNKNOWN: &str = "11111111-1111-4111-8111-111111111111";
@@ -391,6 +391,7 @@ fn a_light_is_made_by_the_forms_sequence_and_switches_the_relay() {
             path: &format!("/api/v1/equipments/{light}/orders/state"),
             host: Some(HOST),
             port: PORT,
+            reach: Reach::Loopback,
             content_type: Some("application/json"),
             body: br#"{"value":true}"#,
         },

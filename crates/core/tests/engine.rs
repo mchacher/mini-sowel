@@ -181,6 +181,7 @@ fn json_of(home: &mut Home, path: &str) -> serde_json::Value {
             path,
             host: Some("127.0.0.1:8080"),
             port: 8080,
+            reach: solite_core::api::Reach::Loopback,
             content_type: None,
             body: b"",
         },
@@ -695,6 +696,7 @@ fn a_device_still_being_set_up_is_busy_in_the_window_and_kept_by_a_new_request_w
                 path: &format!("/api/v1/devices/{id}"),
                 host: Some("127.0.0.1:8080"),
                 port: 8080,
+                reach: solite_core::api::Reach::Loopback,
                 content_type: None,
                 body: b"",
             },
@@ -839,4 +841,100 @@ fn a_storage_error_is_an_other_run_error_that_no_radio_restart_mends() {
         error.to_string(),
         "zones: memory://zones.json: cannot write: full"
     );
+}
+
+/// The box's clock is set by SNTP after a boot in 1970 (spec 022 R6.2): the wall clock jumps
+/// forward by decades while the loop runs.
+#[test]
+fn a_wall_clock_that_jumps_forward_by_56_years_does_not_stop_the_engine() {
+    const JUMP_MS: u64 = 56 * 365 * 24 * 3600 * 1000;
+    let mut rig = Rig::new();
+    let zone = rig.zone("Cellar");
+    let sensor = rig.sensor(0x20);
+    rig.equipment("Cellar climate", "sensor", &zone, &[&sensor]);
+    let mut bench = bench(vec![device(Kind::TemperatureHumidity, 0x20, 0x2000)]);
+    let home = Mutex::new(rig.home);
+    let jumped = Arc::new(AtomicBool::new(false));
+    let start = Instant::now();
+    let monotonic = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let wall = Arc::clone(&jumped);
+    let clocks = Clocks {
+        now: Arc::new(move || {
+            let jump = if wall.load(Ordering::SeqCst) {
+                JUMP_MS
+            } else {
+                0
+            };
+            T0 + jump + monotonic()
+        }),
+        monotonic: Arc::new(monotonic),
+    };
+    bench.ncp.borrow_mut().device_report(
+        0,
+        &DeviceReport {
+            temperature: Some(21.5),
+            ..DeviceReport::default()
+        },
+    );
+    let (ncp, flag, seen) = (
+        Rc::clone(&bench.ncp),
+        Arc::clone(&jumped),
+        Rc::new(Cell::new(0)),
+    );
+    *bench.done.borrow_mut() = Box::new(move || {
+        seen.set(seen.get() + 1);
+        match seen.get() {
+            10 => flag.store(true, Ordering::SeqCst),
+            12 => {
+                ncp.borrow_mut().device_report(
+                    0,
+                    &DeviceReport {
+                        temperature: Some(30.0),
+                        ..DeviceReport::default()
+                    },
+                );
+            }
+            _ => {}
+        }
+        seen.get() > 40
+    });
+    let storage = MemStorage::default();
+    let mut saver = Saver::new(&storage, T0);
+    let stopped = engine::run(
+        &mut bench.radio,
+        &home,
+        &mut saver,
+        &clocks,
+        &bench.stop,
+        &mut scripted(),
+        false,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(stopped, "the loop ended by its stop flag, not by an error");
+    assert!(jumped.load(Ordering::SeqCst));
+    let before = storage.attempts.get();
+    // The next save after the jump is written (a tick that is not a stop), with the value
+    // reported after it.
+    saver
+        .tick(&home, T0 + JUMP_MS + 60 * 60 * 1000, false)
+        .unwrap();
+    assert!(
+        storage.attempts.get() > before,
+        "a save is due after the jump and is attempted"
+    );
+    let mut home = lock(&home);
+    let devices = json_of(&mut home, "/api/v1/devices");
+    assert_eq!(devices[0]["status"], "online");
+    let data = devices[0]["data"].as_array().unwrap();
+    let temperature = data.iter().find(|d| d["key"] == "temperature").unwrap();
+    assert_eq!(temperature["value"], json!(30));
+    let saved: serde_json::Value =
+        serde_json::from_str(&storage.text(DEVICES_FILE).unwrap()).unwrap();
+    let saved_data = saved[0]["data"].as_array().unwrap();
+    let saved_temperature = saved_data
+        .iter()
+        .find(|d| d["key"] == "temperature")
+        .expect("the temperature is saved");
+    assert_eq!(saved_temperature["value"], json!(30));
 }

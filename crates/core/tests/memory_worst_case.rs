@@ -51,6 +51,13 @@
 //! - `radio/ezsp.rs::MAX_PROTOCOL_VERSION`: a protocol version number, no memory.
 //! - `network.rs::MAX_SETTING_BYTES`: the network setting is read from 256 bytes at most; one
 //!   short-lived text at boot, far below the rest, not part of the running engine.
+//! - `network.rs::MAX_WIFI_BYTES`, `network.rs::MAX_CONSOLE_LINE`: the Wi-Fi settings text (256
+//!   bytes) and a console line (512 bytes) are short-lived texts read at boot or from the serial
+//!   console, far below the rest, not part of the running engine.
+//! - `api/slots.rs::MAX_WORKERS`: the HTTP workers' count, 4, the one `api/mod.rs::MAX_BODY_BYTES`
+//!   multiplies.
+//! - `live/session.rs::MAX_INCOMING_BYTES`: a client's incoming frame, 1 KB, inside the 2 KB read
+//!   buffer counted with `live/mod.rs::MAX_QUEUED_BYTES`.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -58,7 +65,7 @@ use std::sync::Mutex;
 
 use peak_alloc::PeakAlloc;
 use serde_json::{Value, json};
-use solite_core::api::{Reply, Request, handle, handle_stream};
+use solite_core::api::{Reach, Reply, Request, handle, handle_stream};
 use solite_core::devices::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Devices, Id, MAX_DATA,
     MAX_DEVICES, MAX_ORDERS, PowerSource, Route, ValueType,
@@ -101,6 +108,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
         path,
         host: Some("127.0.0.1:8080"),
         port: 8080,
+        reach: Reach::Loopback,
         content_type: Some("application/json"),
         body,
     }

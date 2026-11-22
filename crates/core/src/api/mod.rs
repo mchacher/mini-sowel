@@ -9,11 +9,13 @@ mod input;
 mod orders;
 mod pairing;
 mod recipes;
-mod static_files;
+mod slots;
+pub mod static_files;
 mod zones;
 
 pub use crate::home::{CHUNK_ITEMS, ListCursor};
 pub use orders::order_response;
+pub use slots::{MAX_WORKERS, SlotGuard, Slots};
 pub use static_files::{StaticFile, content_type};
 
 use serde_json::{Map, Value};
@@ -28,6 +30,17 @@ pub const MAX_BODY_BYTES: usize = 16 * 1024;
 
 const PREFIX: &str = "/api/v1";
 
+/// Who can reach the server: it decides which `Host` headers are accepted and whether the
+/// pairing route is open (spec 022, D33).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach<'a> {
+    /// The Mac host: `Host` is `127.0.0.1:<port>` or `localhost:<port>`.
+    Loopback,
+    /// The box, on the home's network: private addresses and the box's own name (`solite-<6
+    /// hex>`) are accepted, and the pairing route is off.
+    Lan { name: &'a str },
+}
+
 /// One HTTP request, as the host read it.
 #[derive(Debug)]
 pub struct Request<'a> {
@@ -38,6 +51,8 @@ pub struct Request<'a> {
     pub host: Option<&'a str>,
     /// The port the server listens on: the only `Host` ports accepted.
     pub port: u16,
+    /// Who can reach the server.
+    pub reach: Reach<'a>,
     /// The `Content-Type` header, if any.
     pub content_type: Option<&'a str>,
     /// At most `MAX_BODY_BYTES + 1` bytes are needed to see that it is too long.
@@ -102,14 +117,65 @@ pub(crate) fn method_not_allowed() -> Response {
     error(405, "Method not allowed")
 }
 
-/// True for `127.0.0.1:<port>` and `localhost:<port>`: a page of another origin cannot reach the
-/// API through a DNS name that points here.
-pub fn host_allowed(host: Option<&str>, port: u16) -> bool {
+/// The suffixes a home network gives the box's name, besides the bare name.
+const NAME_SUFFIXES: [&str; 4] = [".local", ".lan", ".home", ".home.arpa"];
+
+/// True when `host` is an IPv4 address of `10/8`, `172.16/12`, `192.168/16` or `127/8`.
+fn private_ipv4(host: &str) -> bool {
+    let mut octets = [0u8; 4];
+    let mut count = 0;
+    for part in host.split('.') {
+        if count == 4 || part.is_empty() || part.len() > 3 {
+            return false;
+        }
+        let Ok(octet) = part.parse::<u8>() else {
+            return false;
+        };
+        octets[count] = octet;
+        count += 1;
+    }
+    count == 4
+        && match octets {
+            [10, ..] | [127, ..] => true,
+            [172, second, ..] => (16..=31).contains(&second),
+            [192, 168, ..] => true,
+            _ => false,
+        }
+}
+
+/// True when the `Host` header is one the server accepts for this reach. Under `Loopback`:
+/// `127.0.0.1:<port>` and `localhost:<port>`, so a page of another origin cannot reach the API
+/// through a DNS name that points here. Under `Lan`, without case: a private IPv4 address,
+/// `localhost` or the box's name (alone or with a home suffix), the port, when given, being the
+/// server's; anything else (a public address, an IPv6 literal, another name) is refused, which
+/// also stops DNS rebinding.
+pub fn host_allowed(host: Option<&str>, port: u16, reach: Reach) -> bool {
     let Some(host) = host else {
         return false;
     };
     let host = host.trim().to_ascii_lowercase();
-    host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+    match reach {
+        Reach::Loopback => {
+            host == format!("127.0.0.1:{port}") || host == format!("localhost:{port}")
+        }
+        Reach::Lan { name } => {
+            let (name_part, given_port) = match host.split_once(':') {
+                Some((name_part, given)) => (name_part, Some(given)),
+                None => (host.as_str(), None),
+            };
+            if given_port.is_some_and(|given| given.parse::<u16>().ok() != Some(port)) {
+                return false;
+            }
+            let name = name.to_ascii_lowercase();
+            private_ipv4(name_part)
+                || name_part == "localhost"
+                || (!name.is_empty()
+                    && (name_part == name
+                        || NAME_SUFFIXES
+                            .iter()
+                            .any(|suffix| name_part.strip_suffix(suffix) == Some(name.as_str()))))
+        }
+    }
 }
 
 /// Answers a request; the long lists are drained into one body (tests, tools). The host streams
@@ -169,7 +235,7 @@ fn dispatch(
     random: Random,
     streaming: bool,
 ) -> Reply {
-    if !host_allowed(request.host, request.port) {
+    if !host_allowed(request.host, request.port, request.reach) {
         return Reply::Whole(error(403, "Forbidden host"));
     }
     // The interface's files come before the API's checks: they take no body and no JSON.
@@ -224,6 +290,10 @@ fn dispatch(
         Some("devices") => devices::route(home, &segments, request, now),
         Some("zones") => zones::route(home, &segments, request, now, random),
         Some("equipments") => equipments::route(home, &segments, request, now, random),
+        // The box does not open pairing from the API (D28).
+        Some("integrations") if matches!(request.reach, Reach::Lan { .. }) => {
+            error(404, "Pairing from the API is off on the box")
+        }
         Some("integrations") => pairing::route(home, &segments, request),
         Some("recipes" | "recipe-instances") => {
             recipes::route(home, &segments, request, now, random)

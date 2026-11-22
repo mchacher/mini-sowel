@@ -1665,3 +1665,437 @@ fn only_radio_uart_names_the_radios_pins_in_the_firmware() {
         "{offenders:?} name the radio's pins: only radio_uart.rs may"
     );
 }
+
+// ---- flash --keep-storage and the ownership line (spec 022 R8) ----------------------------
+
+#[test]
+fn keep_storage_plans_to_erase_nvs_and_otadata_only_and_says_so() {
+    let (env, f, _) = ready("radio");
+    let out = env.go(&args_of(
+        &env.port(),
+        &[
+            "flash",
+            "--image",
+            "radio",
+            "--backup",
+            &f,
+            "--keep-storage",
+            "--dry-run",
+        ],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("erase nvs: 0x9000"), "{}", out.text);
+    assert!(out.text.contains("erase otadata: 0xf000"), "{}", out.text);
+    assert!(!out.text.contains("erase storage"), "{}", out.text);
+    assert!(
+        out.text
+            .contains("keep storage (the home, the network's backup and the Wi-Fi settings)"),
+        "{}",
+        out.text
+    );
+    assert!(
+        !out.text.contains("zigbee.json"),
+        "no warning: {}",
+        out.text
+    );
+    assert!(
+        out.text
+            .contains("the box drives this radio's network itself"),
+        "{}",
+        out.text
+    );
+    assert!(!env.wrote());
+}
+
+#[test]
+fn keep_storage_confirmed_sends_two_erases_never_storages_and_then_the_write() {
+    let (env, f, _) = ready("radio");
+    let out = env.go(&args_of(
+        &env.port(),
+        &[
+            "flash",
+            "--image",
+            "radio",
+            "--backup",
+            &f,
+            "--keep-storage",
+        ],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let log = env.fake_log();
+    let erases: Vec<&str> = log.lines().filter(|l| l.contains("erase_region")).collect();
+    assert_eq!(erases.len(), 2, "{log}");
+    assert!(
+        erases[0].contains("0x9000") && erases[1].contains("0xf000"),
+        "{erases:?}"
+    );
+    assert!(
+        !log.contains("0x820000"),
+        "storage's offset is never sent:\n{log}"
+    );
+    let last_erase = log.rfind("erase_region").unwrap();
+    assert!(
+        log.rfind("write_flash").unwrap() > last_erase,
+        "the write comes last"
+    );
+}
+
+#[test]
+fn the_radio_flash_without_keep_storage_is_as_before_and_points_to_the_option() {
+    let (env, f, _) = ready("radio");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "radio", "--backup", &f, "--dry-run"],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("erase storage: 0x820000"), "{}", out.text);
+    let warning = out
+        .text
+        .lines()
+        .find(|l| l.contains("WARNING"))
+        .expect("the warning");
+    assert!(
+        warning
+            .trim_end()
+            .ends_with("(use --keep-storage to keep them)"),
+        "{warning}"
+    );
+    assert!(
+        out.text
+            .contains("the box drives this radio's network itself"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn keep_storage_is_refused_with_the_box_and_sim_images() {
+    for image in ["sim", "box"] {
+        let (env, f, _) = ready(image);
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", image, "--backup", &f, "--keep-storage"],
+        ));
+        assert_eq!(out.code, 2, "{image}: {}", out.text);
+        assert!(
+            out.text
+                .contains("--keep-storage is for the radio image: the sim image seeds /data"),
+            "{}",
+            out.text
+        );
+        assert!(!env.wrote());
+    }
+}
+
+// ---- wifi (spec 022 R9) ---------------------------------------------------------------------
+
+/// The fake console: logs its arguments and environment, keeps the line it reads on its standard
+/// input, then prints the answers of `$FAKE_CONSOLE_ANSWER` (and stays alive `$FAKE_CONSOLE_STAY`
+/// seconds, as a box that goes on running).
+const FAKE_CONSOLE: &str = r#"#!/bin/sh
+echo "$*" >> "$FAKE_CONSOLE_ARGS"
+env >> "$FAKE_CONSOLE_ENV"
+read -r line
+printf '%s\n' "$line" >> "$FAKE_CONSOLE_LINES"
+[ -n "$FAKE_CONSOLE_SILENT" ] && { sleep 8; exit 0; }
+cat "$FAKE_CONSOLE_ANSWER"
+sleep "${FAKE_CONSOLE_STAY:-0}"
+"#;
+
+/// Types the name and the password on a pseudo-terminal when the prompts show, and reports in a
+/// file: whether the terminal's echo was off at the password prompt, and on again afterwards.
+/// `ctrlc` sends Ctrl-C at the password prompt instead of the password.
+const WIFI_HELPER: &str = r#"
+import os, pty, sys, termios, select, time
+name, password, mode, report = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+cmd = sys.argv[5:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(cmd[0], cmd)
+buf = b""
+stage = 0
+echo_off = None
+while True:
+    ready, _, _ = select.select([fd], [], [], 30)
+    if not ready:
+        break
+    try:
+        data = os.read(fd, 4096)
+    except OSError:
+        break
+    if not data:
+        break
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+    buf += data
+    if stage == 0 and b"network name:" in buf:
+        os.write(fd, (name + "\n").encode())
+        stage = 1
+    elif stage == 1 and b"not shown): " in buf:
+        echo_off = not (termios.tcgetattr(fd)[3] & termios.ECHO)
+        if mode == "ctrlc":
+            # A user presses Ctrl-C well after the prompt shows: a signal that lands before the
+            # script's `read` has started would only be handled after it.
+            time.sleep(0.5)
+            os.write(fd, b"\x03")
+        else:
+            os.write(fd, (password + "\n").encode())
+        stage = 2
+_, status = os.waitpid(pid, 0)
+try:
+    after = "on" if termios.tcgetattr(fd)[3] & termios.ECHO else "off"
+except Exception:
+    after = "unknown"
+with open(report, "w") as f:
+    f.write("echo_off_at_prompt=%s\necho_after=%s\n" % (echo_off, after))
+sys.exit(os.waitstatus_to_exitcode(status))
+"#;
+
+const SSID: &str = "Zz-Distinct-Net";
+/// A password with a quote and a backslash, to check the JSON escaping.
+const PASSWORD: &str = r#"Pw"9\distinct-pass"#;
+
+struct WifiRun {
+    code: i32,
+    text: String,
+    report: String,
+}
+
+impl Env {
+    /// Runs `box.sh wifi` with the fake console; `answer` is what the console prints.
+    fn wifi(
+        &self,
+        extra_args: &[&str],
+        answer: &str,
+        mode: &str,
+        extra_env: &[(&str, &str)],
+    ) -> WifiRun {
+        write_exec(&self.path("console.sh"), FAKE_CONSOLE);
+        fs::write(self.path("console-answer.txt"), answer).unwrap();
+        let report = self.path("report.txt");
+        let _ = fs::remove_file(&report);
+        let mut cmd = Command::new("/usr/bin/python3");
+        cmd.arg("-I").arg("-c").arg(WIFI_HELPER);
+        cmd.arg(SSID).arg(PASSWORD).arg(mode).arg(&report);
+        cmd.arg("/bin/sh").arg(SCRIPT).arg("wifi").args(extra_args);
+        cmd.current_dir(&self.root)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("TMPDIR", self.path("tmp"))
+            .env(
+                "SOLITE_PORT_PATTERNS",
+                format!("{}/ports/usbserial*", self.root.display()),
+            )
+            .env("SOLITE_SERIAL_CONSOLE", self.path("console.sh"))
+            .env("SOLITE_WIFI_WAIT_SECONDS", "3")
+            .env("FAKE_CONSOLE_ARGS", self.path("console-args.txt"))
+            .env("FAKE_CONSOLE_ENV", self.path("console-env.txt"))
+            .env("FAKE_CONSOLE_LINES", self.path("console-lines.txt"))
+            .env("FAKE_CONSOLE_ANSWER", self.path("console-answer.txt"));
+        for (k, v) in extra_env {
+            cmd.env(k, v);
+        }
+        let output = cmd.output().unwrap();
+        let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        WifiRun {
+            code: output.status.code().unwrap_or(-1),
+            text,
+            report: fs::read_to_string(&report).unwrap_or_default(),
+        }
+    }
+
+    /// The lines the fake console received on its standard input.
+    fn console_lines(&self) -> Vec<String> {
+        fs::read_to_string(self.path("console-lines.txt"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+const CONNECTED: &str = "wifi: settings saved\nwifi: connected, address 192.168.1.20, name solite-a1b2c3, channel 6, rssi -61 dBm\n";
+
+/// The text after the password prompt: what the script printed once the password was typed.
+fn after_password(text: &str) -> &str {
+    text.split("not shown): ").nth(1).unwrap_or("")
+}
+
+#[test]
+fn wifi_sends_one_json_line_and_prints_the_connection() {
+    let env = Env::new();
+    let run = env.wifi(&[], CONNECTED, "typed", &[]);
+    assert_eq!(run.code, 0, "{}", run.text);
+    assert!(
+        run.text.contains("box: Wi-Fi connected, address 192.168.1.20, name solite-a1b2c3; open http://192.168.1.20/"),
+        "{}",
+        run.text
+    );
+    let lines = env.console_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let json = lines[0].strip_prefix("wifi-set ").expect("a wifi-set line");
+    let value: serde_json::Value = serde_json::from_str(json).expect("valid JSON");
+    assert_eq!(value["ssid"], SSID);
+    assert_eq!(value["password"], PASSWORD, "quote and backslash escaped");
+}
+
+#[test]
+fn wifi_never_shows_logs_or_keeps_the_password_or_the_name() {
+    let env = Env::new();
+    let run = env.wifi(&[], CONNECTED, "typed", &[]);
+    assert_eq!(run.code, 0, "{}", run.text);
+    // The terminal echoes the name as it is typed; after the password prompt nothing shows either.
+    assert!(!run.text.contains(PASSWORD), "{}", run.text);
+    assert!(!after_password(&run.text).contains(SSID), "{}", run.text);
+    // Not in the fake's arguments or environment, nor in any file of the work folder.
+    for file in ["console-args.txt", "console-env.txt"] {
+        let text = fs::read_to_string(env.path(file)).unwrap();
+        assert!(!text.contains(PASSWORD) && !text.contains(SSID), "{file}");
+    }
+    fn scan(dir: &Path, found: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, found);
+            } else if let Ok(text) = fs::read_to_string(&path)
+                && (text.contains(PASSWORD) || text.contains(SSID))
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    let mut found = Vec::new();
+    scan(&env.path("tmp"), &mut found);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+#[test]
+fn wifi_does_not_echo_the_password_and_restores_the_echo() {
+    let env = Env::new();
+    let run = env.wifi(&[], CONNECTED, "typed", &[]);
+    assert!(
+        run.report.contains("echo_off_at_prompt=True"),
+        "{}",
+        run.report
+    );
+    assert!(!run.text.contains(PASSWORD), "{}", run.text);
+    assert!(!run.report.contains("echo_after=off"), "{}", run.report);
+}
+
+#[test]
+fn wifi_ctrl_c_at_the_password_prompt_restores_the_echo_and_sends_nothing() {
+    let env = Env::new();
+    let run = env.wifi(&[], CONNECTED, "ctrlc", &[]);
+    assert_ne!(run.code, 0, "{}", run.text);
+    assert!(
+        run.report.contains("echo_off_at_prompt=True"),
+        "{}",
+        run.report
+    );
+    assert!(!run.report.contains("echo_after=off"), "{}", run.report);
+    assert!(env.console_lines().is_empty(), "nothing was sent");
+    assert!(
+        !env.path("console-args.txt").exists(),
+        "the console was not even started"
+    );
+}
+
+#[test]
+fn wifi_with_no_terminal_asks_nothing_and_calls_nothing() {
+    let env = Env::new();
+    write_exec(&env.path("console.sh"), FAKE_CONSOLE);
+    let mut cmd = Command::new("/usr/bin/python3");
+    cmd.arg("-I")
+        .arg("-c")
+        .arg(HELPER)
+        .arg("notty")
+        .arg(format!("{SSID}\n{PASSWORD}"));
+    cmd.arg("/bin/sh").arg(SCRIPT).arg("wifi");
+    let output = cmd
+        .current_dir(&env.root)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("TMPDIR", env.path("tmp"))
+        .env(
+            "SOLITE_PORT_PATTERNS",
+            format!("{}/ports/usbserial*", env.root.display()),
+        )
+        .env("SOLITE_SERIAL_CONSOLE", env.path("console.sh"))
+        .env("FAKE_CONSOLE_ARGS", env.path("console-args.txt"))
+        .env("FAKE_CONSOLE_ENV", env.path("console-env.txt"))
+        .env("FAKE_CONSOLE_LINES", env.path("console-lines.txt"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stderr).to_string()
+        + &String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("box: no terminal to ask for the Wi-Fi settings, nothing done"),
+        "{text}"
+    );
+    assert!(
+        !env.path("console-args.txt").exists(),
+        "the console was not called"
+    );
+}
+
+#[test]
+fn wifi_prints_a_refusal_and_exits_1() {
+    let env = Env::new();
+    let run = env.wifi(
+        &[],
+        "wifi: settings refused (invalid password)\n",
+        "typed",
+        &[],
+    );
+    assert_eq!(run.code, 1, "{}", run.text);
+    assert!(
+        run.text
+            .contains("box: wifi: settings refused (invalid password)"),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+fn wifi_with_a_silent_console_says_so_and_exits_4() {
+    let env = Env::new();
+    let run = env.wifi(&[], "", "typed", &[("FAKE_CONSOLE_SILENT", "1")]);
+    assert_eq!(run.code, 4, "{}", run.text);
+    assert!(
+        run.text
+            .contains("box: no answer from Solite's console on ")
+            && run.text.contains("is the radio image running?"),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+fn wifi_saved_but_never_connected_prints_the_last_wifi_line_and_exits_1() {
+    let env = Env::new();
+    let answer =
+        "wifi: settings saved\nwifi: not connected (wrong password or refused), retry in 1 s\n";
+    let run = env.wifi(&[], answer, "typed", &[("FAKE_CONSOLE_STAY", "6")]);
+    assert_eq!(run.code, 1, "{}", run.text);
+    assert!(
+        run.text
+            .contains("box: wifi: not connected (wrong password or refused), retry in 1 s"),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+fn wifi_forget_sends_wifi_forget_and_exits_0() {
+    let env = Env::new();
+    let run = env.wifi(&["--forget"], "wifi: settings removed\n", "typed", &[]);
+    assert_eq!(run.code, 0, "{}", run.text);
+    assert_eq!(env.console_lines(), ["wifi-forget"]);
+    assert!(
+        !run.text.contains("network name"),
+        "no prompt for --forget: {}",
+        run.text
+    );
+}

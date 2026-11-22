@@ -1,7 +1,7 @@
 //! The pairing route (spec 017, R1): `/api/v1/integrations/solite/permit-join`, and the 409 of a
 //! device being paired.
 
-use solite_core::api::{Request, Response, handle};
+use solite_core::api::{Reach, Request, Response, handle};
 use solite_core::devices::Devices;
 use solite_core::home::Home;
 
@@ -33,6 +33,7 @@ fn call(
             path,
             host: Some(host),
             port: PORT,
+            reach: Reach::Loopback,
             content_type: Some(content_type),
             body: body.as_bytes(),
         },

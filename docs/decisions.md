@@ -528,3 +528,29 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   port, the button's pull-up is unknown); the probe finds a radio at another speed for one try's
   cost; the ring holds more than the radio's ASH window, and the interrupt keeps the FIFO (11 ms at
   115200) drained while a flash write stalls the caches; logic in the core is tested on the Mac.
+
+## D33: The radio image serves the API on the local network, over Wi-Fi
+
+- **Date**: 2026-11-22
+- **Choice**: the radio image (feature `radio`) joins the Wi-Fi network of `/data/wifi.json`
+  (written by `box.sh wifi` through the firmware's serial console; never NVS, never git) and serves
+  Sowel's API, `/ws` and the interface on port 80, with no authentication. A `Host` is
+  accepted when it is a private IPv4 address (10/8, 172.16/12, 192.168/16, 127/8), `localhost` or
+  the box's name `solite-<6 hex>` (alone or with `.local`, `.lan`, `.home`, `.home.arpa`); the
+  pairing route answers 404 (D28). ESP-IDF's HTTP server through `esp-idf-svc`, 4 workers by its
+  asynchronous requests (their stacks and 16 KB body buffers in PSRAM), at most 12 connections in
+  a socket table of 24, TCP keep-alive; on `/ws` the refusals are close
+  codes after the upgrade (4003, 1013), only `bearer.none` is echoed, and a dead client is found by
+  TCP keep-alive instead of 60 s of silence; a client that cannot be written to holds the server's
+  task up to 5 s. The interface is embedded at build time, gzip only, from flash. Wi-Fi power save
+  off; SNTP with `pool.ntp.org`; the engine's saves wait at most 20 s for the clock, the radio and
+  the pairing window of a power-on do not. `flate2` is in the firmware's build (never its code).
+  The setting `ethernet` starts no link in this image. Built in two specs: the rules in the core,
+  the packing and the scripts (spec 022), the firmware (spec 023).
+- **Why**: the true north's box is reached from the home's network; the radio image is a
+  development image, in no public release (D32), so an open API on the local network is
+  accepted, also while the box is the family's annex controller (the user, 2026-11-22), on two
+  conditions: the box stays on the home's own network (not a guest network), and no router port is
+  forwarded to it. The guards are the Mac host's (Host check against DNS rebinding, JSON-only
+  bodies against forms, Origin on `/ws`), and the pairing route stays off. The settings file
+  survives a flash with `--keep-storage`, which NVS would not.

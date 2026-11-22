@@ -21,7 +21,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use solite_core::api::{ListCursor, MAX_BODY_BYTES, Reply, Request, handle_stream, order_response};
+use solite_core::api::{
+    ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_stream,
+    order_response,
+};
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, Saver};
 use solite_core::home::Home;
@@ -96,9 +99,6 @@ fn bind(port: u16) -> Result<(TcpListener, Arc<Server>, std::net::SocketAddr), S
 /// How long the host waits for the WebSocket clients to answer their close frame when it stops.
 const CLIENTS_GRACE: Duration = Duration::from_secs(3);
 
-/// Requests answered at the same time; one more is told to come back (503).
-const MAX_WORKERS: usize = 4;
-
 /// A streamed list as a `Read`: each time the buffer is empty it takes the home, writes the next
 /// chunk of the list into the buffer, and lets go of the home. The home is never held while the
 /// socket is written (the server drains the reader between two chunks).
@@ -167,6 +167,7 @@ fn answer(
                 path: &path,
                 host: host.as_deref(),
                 port,
+                reach: Reach::Loopback,
                 content_type: request_type.as_deref(),
                 body: &body,
             },
@@ -225,31 +226,28 @@ fn http_loop(
     content_type: &Header,
     ui: &Arc<PathBuf>,
 ) {
-    let busy = Arc::new(AtomicUsize::new(0));
+    let slots = Slots::new(MAX_WORKERS);
     for request in server.incoming_requests() {
-        if busy.fetch_add(1, Ordering::SeqCst) >= MAX_WORKERS {
-            busy.fetch_sub(1, Ordering::SeqCst);
+        let Some(guard) = slots.try_take() else {
             let _ = request.respond(
                 Response::from_string(r#"{"error":"Busy"}"#)
                     .with_status_code(503)
                     .with_header(content_type.clone()),
             );
             continue;
-        }
-        let (home, random, worker_busy, content_type, ui) = (
+        };
+        let (home, random, content_type, ui) = (
             Arc::clone(home),
             Arc::clone(random),
-            Arc::clone(&busy),
             content_type.clone(),
             Arc::clone(ui),
         );
-        let spawned = thread::Builder::new().spawn(move || {
+        // The slot is released when the worker ends, or at once when the thread cannot start
+        // (the closure, and the guard with it, is dropped).
+        let _ = thread::Builder::new().spawn(move || {
             answer(request, &home, &random, port, &content_type, &ui);
-            worker_busy.fetch_sub(1, Ordering::SeqCst);
+            drop(guard);
         });
-        if spawned.is_err() {
-            busy.fetch_sub(1, Ordering::SeqCst);
-        }
     }
 }
 

@@ -8,6 +8,7 @@ mod support;
 use serde_json::{Value, json};
 use solite_core::devices::{DeviceStatus, Id};
 use solite_core::equipments::EquipmentStatus;
+use solite_core::live::session::{DEV_ORIGINS, close_reason, origin_allowed, pick_subprotocol};
 use solite_core::live::{
     CLOSE_TRY_AGAIN_LATER, ClientId, EngineEvent, LiveHandle, LiveHub, MAX_CLIENTS,
     MAX_QUEUED_EVENTS, Topic, topic_of_type,
@@ -1111,4 +1112,38 @@ fn sixty_four_devices_discovered_at_once_close_a_client_that_never_reads_and_not
     // 64 devices of about 400 bytes are past the 8 KB of a client that does not read.
     assert_eq!(hub.close_request(slow), Some(CLOSE_TRY_AGAIN_LATER));
     assert_eq!(hub.close_request(other), None);
+}
+
+// ---- The session rules (spec 022 R5.1, moved from the host's `ws.rs`) ----
+
+#[test]
+fn the_origin_is_absent_the_hosts_own_or_a_development_server() {
+    let host = Some("192.168.1.20");
+    assert!(origin_allowed(None, host));
+    assert!(origin_allowed(Some("http://192.168.1.20"), host));
+    assert!(origin_allowed(Some("https://192.168.1.20"), host));
+    for dev in DEV_ORIGINS {
+        assert!(origin_allowed(Some(dev), host), "{dev}");
+    }
+    assert!(!origin_allowed(Some("http://evil.example"), host));
+    assert!(!origin_allowed(Some("null"), host));
+    assert!(!origin_allowed(Some("http://192.168.1.20/path"), host));
+    assert!(!origin_allowed(Some("http://192.168.1.20"), None));
+}
+
+#[test]
+fn only_a_bearer_subprotocol_is_echoed() {
+    assert_eq!(
+        pick_subprotocol(["bearer.none"]),
+        Some("bearer.none".into())
+    );
+    assert_eq!(
+        pick_subprotocol(["x, bearer.abc"]),
+        Some("bearer.abc".into())
+    );
+    assert_eq!(pick_subprotocol(["x", "y, z"]), None);
+    assert_eq!(pick_subprotocol([]), None);
+    assert_eq!(close_reason(1013), "Try again later");
+    assert_eq!(close_reason(1009), "Message too big");
+    assert_eq!(close_reason(4003), "");
 }

@@ -90,9 +90,27 @@ fn heap_line_shows_the_minimums_and_the_stack_in_kib() {
         psram_min: 1650 * 1024,
         stack_unused: 20 * 1024,
         stack_total: 32 * 1024,
+        http_stack: None,
     };
     assert_eq!(
         heap_line(&stats),
         "heap: internal 120 KB free (min 90 KB), psram 1700 KB free (min 1650 KB), engine stack 20 KB unused of 32 KB"
+    );
+}
+
+#[test]
+fn heap_line_adds_the_http_workers_stack_when_there_is_one() {
+    let stats = HeapStats {
+        internal_free: 120 * 1024,
+        internal_min: 90 * 1024,
+        psram_free: 1700 * 1024,
+        psram_min: 1650 * 1024,
+        stack_unused: 27 * 1024,
+        stack_total: 32 * 1024,
+        http_stack: Some((6 * 1024, 10 * 1024)),
+    };
+    assert_eq!(
+        heap_line(&stats),
+        "heap: internal 120 KB free (min 90 KB), psram 1700 KB free (min 1650 KB), engine stack 27 KB unused of 32 KB, http stack 6 KB unused of 10 KB"
     );
 }

@@ -5,7 +5,8 @@
 #   sh scripts/box.sh identify [--port <device>] [--baud <rate>]
 #   sh scripts/box.sh backup --out <folder> [--dry-run]
 #   sh scripts/box.sh restore <backup file> [--dry-run]
-#   sh scripts/box.sh flash --image box|sim|radio --backup <backup file> [--dry-run]
+#   sh scripts/box.sh flash --image box|sim|radio --backup <backup file> [--keep-storage] [--dry-run]
+#   sh scripts/box.sh wifi [--forget] [--port <device>]
 #   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
 #   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
 #   sh scripts/box.sh log --raw [--seconds <n>]                              (no checks)
@@ -23,6 +24,11 @@
 # other answer, nothing is done. --dry-run prints the plan only. No option skips the question. No
 # command writes an eFuse. `backup`, `restore` and `flash` are run by the user, in their terminal.
 #
+# `flash --image radio --keep-storage` erases nvs and otadata only: the home, the network's backup
+# and the Wi-Fi settings (the files of `storage`) stay. `wifi` asks on the terminal for the Wi-Fi
+# network's name and password (echo off, never shown, logged or kept) and sends them to the radio
+# image's serial console (spec 022 R9); `wifi --forget` removes them.
+#
 # Exit codes: 0 done, 1 failed or refused at the prompt, 2 wrong usage or port, 3 the box is
 # unfit (secure boot, flash encryption, chip revision below 3, flash not 16 MB), 4 no answer from
 # the box.
@@ -31,7 +37,10 @@
 # folder), SOLITE_RADIO_TARGET_DIR (the radio image's build folder), SOLITE_HARDWARE_MD (the sheet whose backup table `flash` reads), SOLITE_SERIAL_CAPTURE
 # (a command `<command> <port> <seconds>` printing the serial output, in place of pyserial),
 # SOLITE_ESPRESSIF (ESP-IDF's tools folder), SOLITE_PORT_PATTERNS (the glob patterns of the USB
-# bridges), SOLITE_REPLUG_SECONDS (the time allowed to plug the cable again, 60).
+# bridges), SOLITE_REPLUG_SECONDS (the time allowed to plug the cable again, 60),
+# SOLITE_SERIAL_CONSOLE (a program `<program> <port>` that reads the console line on its standard
+# input and prints the answers, in place of the serial port), SOLITE_WIFI_WAIT_SECONDS (the time
+# `wifi` waits for the connection, 60).
 #
 # Output stays short: a build or a long tool output goes to $TMPDIR/solite-box/, and its path is
 # printed on a failure. Backups and serial logs never go into the repository.
@@ -45,7 +54,7 @@ fw_fail() { box_fail "$1"; }
 . "$ROOT/scripts/lib/firmware.sh"
 
 usage() {
-  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log [--port <device>] [--baud <rate>] [options]" >&2
+  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi [--port <device>] [--baud <rate>] [options]" >&2
   [ -n "$1" ] && echo "box: $1" >&2
   exit 2
 }
@@ -65,6 +74,8 @@ DRY=false
 SECONDS_=
 REPLUG=false
 KEPT=false
+KEEP_STORAGE=false
+FORGET=false
 FROM_FILE=
 RAW=false
 FILE=
@@ -81,6 +92,8 @@ while [ $# -gt 0 ]; do
     --replug) REPLUG=true; shift ;;
     --expect-kept) KEPT=true; shift ;;
     --raw) RAW=true; shift ;;
+    --keep-storage) KEEP_STORAGE=true; shift ;;
+    --forget) FORGET=true; shift ;;
     -*) usage "unknown option $1" ;;
     *) [ -z "$FILE" ] || usage "one file only"; FILE=$1; shift ;;
   esac
@@ -320,6 +333,9 @@ check_backup_row() {
 
 cmd_flash() {
   [ -n "$IMAGE" ] || usage "flash needs --image box|sim|radio"
+  if $KEEP_STORAGE && [ "$IMAGE" != radio ]; then
+    usage "--keep-storage is for the radio image: the sim image seeds /data"
+  fi
   [ -n "$BACKUP" ] || box_fail "flash needs --backup <file>: the backup of the original firmware, restored once."
   identify_box
   check_backup_file "$BACKUP"
@@ -360,18 +376,26 @@ cmd_flash() {
   APP=$WORK/app.bin
   fw_elf2image "$ELF" "$APP"
 
+  # The partitions erased: with --keep-storage (radio image), storage stays.
+  ERASED="nvs otadata storage"
+  $KEEP_STORAGE && ERASED="nvs otadata"
   echo "box: flash the $IMAGE image (the original firmware is saved in $(basename "$BACKUP")):"
   for part in nvs otadata storage; do
     off=$(fw_part "$TABLE" "$part" 4)
     size=$(fw_bytes "$(fw_part "$TABLE" "$part" 5)")
     [ -n "$off" ] && [ -n "$size" ] || box_fail "no $part partition in firmware/partitions.csv."
-    echo "  erase $part: $off, $size bytes"
+    case " $ERASED " in *" $part "*) echo "  erase $part: $off, $size bytes" ;; esac
   done
+  if $KEEP_STORAGE; then
+    echo "  keep storage (the home, the network's backup and the Wi-Fi settings)"
+    echo "  WARNING: keep it only over a radio image: a sim image's /data is a test home"
+  fi
   echo "  write the bootloader at 0x1000 ($(wc -c < "$BOOTLOADER" | tr -d ' ') bytes)"
   echo "  write the partition table at 0x8000"
   echo "  write the application at $APP_OFFSET ($APP_SIZE bytes, slot of $SLOT_BYTES)"
   if [ "$IMAGE" = radio ]; then
-    echo "  WARNING: the erase of storage destroys zigbee.json (the only copy of the network's keys once the box formed one) and the paired devices: flash the radio image once, never again over a box that holds a network"
+    $KEEP_STORAGE || echo "  WARNING: the erase of storage destroys zigbee.json (the only copy of the network's keys once the box formed one) and the paired devices: flash the radio image once, never again over a box that holds a network (use --keep-storage to keep them)"
+    echo "  the box drives this radio's network itself: never start a Mac host with this network's backup on another radio while the box runs"
   fi
   if [ "$IMAGE" = radio ]; then
     echo "  then leave the box as it is (no reset): its first boot is the one of 'log --image radio'"
@@ -380,7 +404,7 @@ cmd_flash() {
   fi
   go_on
 
-  for part in nvs otadata storage; do
+  for part in $ERASED; do
     off=$(fw_part "$TABLE" "$part" 4)
     size=$(fw_bytes "$(fw_part "$TABLE" "$part" 5)")
     esp $AFTER erase_region "$off" "$(printf '0x%x' "$size")" >"$WORK/erase-$part.log" 2>&1 \
@@ -522,11 +546,161 @@ cmd_log() {
   fi
 }
 
+# Talks to the radio image's serial console (spec 022 R9). Standard input: the network's name and
+# its password, one per line (`set`), nothing (`forget`). The JSON is built here, from those two
+# lines: the password is in no argument, no environment variable and no file. DTR and RTS stay
+# low, so that opening the port does not reset the box. Exit 0 done, 1 refused or not connected,
+# 4 no answer. $1 the port, $2 `set` or `forget`.
+console_exchange() {
+  [ -n "$SOLITE_SERIAL_CONSOLE" ] || fw_find_idf
+  ${PY:-python3} -c '
+import json, os, re, select, subprocess, sys, time
+
+port, mode = sys.argv[1], sys.argv[2]
+fake = os.environ.get("SOLITE_SERIAL_CONSOLE")
+wait = float(os.environ.get("SOLITE_WIFI_WAIT_SECONDS") or 60)
+secrets = []
+if mode == "set":
+    ssid = sys.stdin.readline().rstrip("\r\n")
+    password = sys.stdin.readline().rstrip("\r\n")
+    secrets = [ssid] + ([password] if password else [])
+    line = "wifi-set " + json.dumps({"ssid": ssid, "password": password})
+else:
+    line = "wifi-forget"
+
+def clean(text):
+    for secret in secrets:
+        text = text.replace(secret, "<hidden>")
+    return text
+
+if fake:
+    import atexit
+    proc = subprocess.Popen([fake, port], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    atexit.register(lambda: proc.poll() is None and proc.kill())
+    fd = proc.stdout.fileno()
+    def send(data):
+        proc.stdin.write(data)
+        proc.stdin.flush()
+    def read(timeout):
+        ready, _, _ = select.select([fd], [], [], max(timeout, 0))
+        return os.read(fd, 4096) if ready else b""
+else:
+    import serial
+    s = serial.Serial()
+    s.port = port
+    s.baudrate = 115200
+    s.timeout = 0.2
+    s.dtr = False
+    s.rts = False
+    s.open()
+    s.dtr = False
+    s.rts = False
+    def send(data):
+        s.write(data)
+        s.flush()
+    def read(timeout):
+        s.timeout = max(min(timeout, 0.5), 0.01)
+        return s.read(4096)
+
+buffer = b""
+def lines_until(deadline):
+    # The complete lines that arrive before the deadline, one at a time.
+    global buffer
+    while True:
+        while b"\n" in buffer:
+            one, buffer = buffer.split(b"\n", 1)
+            yield one.decode("utf-8", "replace").strip()
+        left = deadline - time.time()
+        if left <= 0:
+            return
+        data = read(left)
+        if not data and fake and proc.poll() is not None:
+            return
+        buffer += data
+
+def no_answer():
+    print("box: no answer from Solite\u0027s console on %s: is the radio image running?" % port)
+    sys.exit(4)
+
+send((line + "\n").encode())
+want = "wifi: settings saved" if mode == "set" else "wifi: settings removed"
+answer = None
+for text in lines_until(time.time() + 5):
+    if text.startswith("wifi: settings"):
+        answer = text
+        break
+if answer is None:
+    no_answer()
+if answer.startswith("wifi: settings refused"):
+    print("box: " + clean(answer))
+    sys.exit(1)
+if mode == "forget":
+    print("box: Wi-Fi settings removed")
+    sys.exit(0)
+last = answer
+for text in lines_until(time.time() + wait):
+    if not text.startswith("wifi:"):
+        continue
+    last = text
+    found = re.match(r"wifi: connected, address (\d+\.\d+\.\d+\.\d+)(?:, name ([^,\s]+))?", text)
+    if found:
+        address, name = found.group(1), found.group(2) or "?"
+        print("box: Wi-Fi connected, address %s, name %s; open http://%s/" % (address, name, address))
+        sys.exit(0)
+print("box: " + clean(last))
+sys.exit(1)
+' "$1" "$2"
+}
+
+# Restores the terminal's echo, whatever way the script ends.
+TTY_STATE=
+restore_tty() {
+  [ -z "$TTY_STATE" ] || stty "$TTY_STATE" </dev/tty 2>/dev/null
+  TTY_STATE=
+}
+
+cmd_wifi() {
+  if $FORGET; then
+    resolve_port
+    code=0
+    : | console_exchange "$PORT" forget || code=$?
+    exit "$code"
+  fi
+  if ! (exec </dev/tty) 2>/dev/null; then
+    echo "box: no terminal to ask for the Wi-Fi settings, nothing done" >&2
+    exit 1
+  fi
+  resolve_port
+  name=
+  pass=
+  printf "box: Wi-Fi network name: " >/dev/tty
+  IFS= read -r name </dev/tty
+  name=$(printf '%s' "$name" | tr -d '\r')
+  [ -n "$name" ] || { echo "box: no network name given, nothing sent" >&2; exit 1; }
+  # The password is read with the echo off, restored on any exit (Ctrl-C included).
+  TTY_STATE=$(stty -g </dev/tty 2>/dev/null)
+  trap 'restore_tty; exit 130' INT TERM HUP
+  trap restore_tty EXIT
+  stty -echo </dev/tty 2>/dev/null
+  printf "box: Wi-Fi password (empty for an open network, not shown): " >/dev/tty
+  IFS= read -r pass </dev/tty
+  restore_tty
+  printf '\n' >/dev/tty
+  pass=$(printf '%s' "$pass" | tr -d '\r')
+  code=0
+  # `printf` is a built-in of the shell: the two lines never appear in a process list.
+  printf '%s\n%s\n' "$name" "$pass" | console_exchange "$PORT" set || code=$?
+  name=
+  pass=
+  exit "$code"
+}
+
 case "$COMMAND" in
   identify) cmd_identify ;;
   backup) cmd_backup ;;
   restore) cmd_restore ;;
   flash) cmd_flash ;;
   log) cmd_log ;;
+  wifi) cmd_wifi ;;
   *) usage "unknown command $COMMAND" ;;
 esac
