@@ -160,7 +160,16 @@ fn an_existing_zone_measure_33_is_refused_and_nothing_is_created() {
     let (_host, port, _data) = serving(GARAGE);
     let (ok, _, _) = run(&[&port.to_string(), "--keep"]);
     assert!(ok);
-    let equipments_before = get(port, "equipments");
+    // The ids only: a simulated sensor keeps changing its values while the test runs.
+    let ids = |port: u16| -> Vec<String> {
+        let all: serde_json::Value = serde_json::from_str(&get(port, "equipments")).unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let equipments_before = ids(port);
     let (ok, out, err) = run(&[&port.to_string()]);
     assert!(!ok, "{out}");
     assert!(
@@ -168,7 +177,11 @@ fn an_existing_zone_measure_33_is_refused_and_nothing_is_created() {
         "{err}"
     );
     assert_eq!(measure_zone_count(port), 1, "no second zone");
-    assert_eq!(get(port, "equipments"), equipments_before);
+    assert_eq!(
+        ids(port),
+        equipments_before,
+        "no equipment created or removed"
+    );
 }
 
 #[test]
