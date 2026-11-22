@@ -5,12 +5,14 @@ import {
   homeRoutes,
   installFakeWebSocket,
   light,
+  device,
   mockApi,
   resetStores,
   zone,
 } from "../test-utils";
 import { connect } from "./useLive";
 import { useEquipments } from "./useEquipments";
+import { useDevices } from "./useDevices";
 import { useZoneAggregation } from "./useZoneAggregation";
 
 beforeEach(() => {
@@ -79,5 +81,34 @@ describe("stores", () => {
     expect(api.count("GET /api/v1/equipments")).toBe(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(api.count("GET /api/v1/equipments")).toBe(3); // the trailing one of the window
+  });
+
+  it("useDevices follows add, remove and status in pairing order", () => {
+    const { addDevice, removeDevice, updateDeviceStatus } = useDevices.getState();
+    addDevice(device("a", "A"));
+    addDevice(device("b", "B"));
+    expect(Object.keys(useDevices.getState().devices)).toEqual(["a", "b"]);
+    updateDeviceStatus("b", "offline");
+    expect(useDevices.getState().devices.b.status).toBe("offline");
+    removeDevice("a");
+    expect(Object.keys(useDevices.getState().devices)).toEqual(["b"]);
+  });
+
+  it("useDevices.updateDeviceZone puts the old zone back and throws when refused", async () => {
+    mockApi({ "PUT /api/v1/devices/a": { status: 404, body: { error: "Device not found" } } });
+    useDevices.getState().addDevice(device("a", "A", { zoneId: "old" }));
+    await expect(useDevices.getState().updateDeviceZone("a", "new")).rejects.toThrow(
+      "Device not found",
+    );
+    expect(useDevices.getState().devices.a.zoneId).toBe("old");
+  });
+
+  it("useDevices.updateDeviceZone sends the zone, and null for no room", async () => {
+    const api = mockApi({ "PUT /api/v1/devices/a": { body: {} } });
+    useDevices.getState().addDevice(device("a", "A"));
+    await useDevices.getState().updateDeviceZone("a", "z");
+    await useDevices.getState().updateDeviceZone("a", null);
+    expect(api.calls.map((c) => c.body)).toEqual([{ zoneId: "z" }, { zoneId: null }]);
+    expect(useDevices.getState().devices.a.zoneId).toBeNull();
   });
 });

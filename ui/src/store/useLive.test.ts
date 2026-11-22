@@ -4,12 +4,15 @@ import {
   aggregate,
   homeRoutes,
   installFakeWebSocket,
+  device,
   mockApi,
   resetStores,
   zone,
 } from "../test-utils";
 import { connect, reconnectDelay, useLive } from "./useLive";
 import { useZoneAggregation } from "./useZoneAggregation";
+import { useDevices } from "./useDevices";
+import { usePairing } from "./usePairing";
 
 let api: ReturnType<typeof mockApi>;
 
@@ -40,12 +43,12 @@ describe("live store", () => {
     expect(useLive.getState().status).toBe("connecting");
   });
 
-  it("subscribes to zones and equipments when the socket opens, and the stores fetch", () => {
+  it("subscribes to zones, equipments and devices when the socket opens, and the stores fetch", () => {
     connect();
     FakeWebSocket.last.open();
     expect(useLive.getState().status).toBe("open");
     expect(FakeWebSocket.last.sent).toEqual([
-      '{"type":"subscribe","topics":["zones","equipments"]}',
+      '{"type":"subscribe","topics":["zones","equipments","devices"]}',
     ]);
     expect(api.count("GET /api/v1/zones")).toBe(1);
     expect(api.count("GET /api/v1/equipments")).toBe(1);
@@ -133,5 +136,35 @@ describe("live store", () => {
     setVisibility("visible");
     window.dispatchEvent(new Event("online"));
     expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("applies device.discovered, device.status_changed and device.removed, and marks the new one", () => {
+    connect();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.receive({ type: "device.discovered", device: device("a", "A") });
+    expect(Object.keys(useDevices.getState().devices)).toEqual(["a"]);
+    expect(usePairing.getState().newIds).toEqual(["a"]);
+    FakeWebSocket.last.receive({
+      type: "device.status_changed",
+      deviceId: "a",
+      deviceName: "A",
+      status: "offline",
+    });
+    expect(useDevices.getState().devices.a.status).toBe("offline");
+    expect(usePairing.getState().newIds).toEqual(["a"]);
+    FakeWebSocket.last.receive({ type: "device.removed", deviceId: "a", deviceName: "A" });
+    expect(useDevices.getState().devices).toEqual({});
+  });
+
+  it("reads the devices and the pairing state again on every open", () => {
+    connect();
+    FakeWebSocket.last.open();
+    expect(api.count("GET /api/v1/devices")).toBe(1);
+    expect(api.count("GET /api/v1/integrations/solite/permit-join")).toBe(1);
+    FakeWebSocket.last.drop();
+    vi.advanceTimersByTime(1000);
+    FakeWebSocket.last.open();
+    expect(api.count("GET /api/v1/devices")).toBe(2);
+    expect(api.count("GET /api/v1/integrations/solite/permit-join")).toBe(2);
   });
 });

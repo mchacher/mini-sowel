@@ -17,10 +17,10 @@
       `crates/core/tests/engine.rs` with the simulator.
 - [x] 7. Host: `--serve` starts the network (shared with `pair`), `set_following(false)`;
       `main.rs` uses the core's grace; tests in `crates/host/tests/serve.rs` and `ws.rs`.
-- [ ] 8. Interface: types, `api/devices.ts`, `api/pairing.ts`, `createZone`, `useDevices`
+- [x] 8. Interface: types, `api/devices.ts`, `api/pairing.ts`, `createZone`, `useDevices`
       (ported), `usePairing`, `useLive`, `DeviceNameEditor` (ported), `DevicesPage`,
       `DeviceRow`, `ZoneSelect`, sidebar entry, `#/devices`, messages; Vitest tests beside them.
-- [ ] 9. `docs/architecture.md`, `scripts/demo-garage.sh` comment; `npm run check:bundle`.
+- [x] 9. `docs/architecture.md`, `scripts/demo-garage.sh` comment; `npm run check:bundle`.
 - [ ] 10. `sh scripts/validate.sh` green (QEMU's run and memory gates included).
 - [ ] 11. Code review (`code-reviewer`), demo on the simulator, then with the ZBMINIR2.
 
@@ -130,7 +130,7 @@
 
 ## Validation
 
-- [ ] `npm run check:bundle`: about 40 KB gzip
+- [x] `npm run check:bundle`: 40.5 KB gzip
 - [ ] Validate command green (bundle budget, QEMU run and memory gates included)
 - [ ] Agent review done, blocking findings fixed
 - [ ] Demo seen and approved by the user (simulator, then the ZBMINIR2)

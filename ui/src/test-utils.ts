@@ -6,8 +6,11 @@ import { disconnect, useLive } from "./store/useLive";
 import { useEquipments } from "./store/useEquipments";
 import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
+import { useDevices } from "./store/useDevices";
+import { resetPairingTimers, usePairing } from "./store/usePairing";
 import type {
   DataBindingWithValue,
+  Device,
   EquipmentWithDetails,
   OrderBindingWithDetails,
   ZoneAggregatedData,
@@ -249,18 +252,45 @@ export function resetStores(): void {
   useEquipments.setState({ equipments: [], loading: false, error: null });
   useZoneAggregation.setState({ data: {}, loading: false, error: null });
   useLive.setState({ status: "connecting" });
+  resetPairingTimers();
+  useDevices.setState({ devices: {}, loading: false, error: null });
+  usePairing.setState({ open: false, remaining: 0, error: null, newIds: [] });
 }
 
-/** The three GETs the stores make when the socket opens. */
+/** A device as `GET /api/v1/devices` gives it, without its data. */
+export function device(id: string, name: string, extra: Partial<Device> = {}): Device {
+  return {
+    id,
+    integrationId: "solite",
+    sourceDeviceId: `0x${id}`,
+    name,
+    manufacturer: "SONOFF",
+    model: "ZBMINIR2",
+    zoneId: null,
+    source: "solite",
+    status: "online",
+    lastSeen: null,
+    createdAt: "2026-11-21T10:00:00.000Z",
+    updatedAt: "2026-11-21T10:00:00.000Z",
+    ...extra,
+  };
+}
+
+/** The GETs the stores make when the socket opens. */
 export function homeRoutes(home: {
   zones: ZoneWithChildren[];
   equipments?: EquipmentWithDetails[];
   aggregation?: Record<string, ZoneAggregatedData>;
+  devices?: Device[];
 }): Record<string, Route> {
   return {
     "GET /api/v1/zones": { body: home.zones },
     "GET /api/v1/equipments": { body: home.equipments ?? [] },
     "GET /api/v1/zones/aggregation": { body: home.aggregation ?? {} },
+    "GET /api/v1/devices": { body: home.devices ?? [] },
+    "GET /api/v1/integrations/solite/permit-join": {
+      body: { permitJoin: false, remaining: 0 },
+    },
   };
 }
 
