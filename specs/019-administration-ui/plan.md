@@ -2,23 +2,23 @@
 
 ## Steps
 
-- [ ] 1. Living spec updated (the delta, History row 019, row 017 corrected); D30 written; roadmap
+- [x] 1. Living spec updated (the delta, History row 019, row 017 corrected); D30 written; roadmap
       J1, J2, inbox and log; `docs/specs-index.md` row 017; the notes at the top of specs 017 and
       018; `docs/architecture.md`.
-- [ ] 2. Core: not applicable (no change in `src/`); the new tests of
+- [x] 2. Core: not applicable (no change in `src/`); the new tests of
       `crates/core/tests/interface_flow.rs` written first, green against today's API.
-- [ ] 3. Adapters (host, firmware): not applicable.
-- [ ] 4. API or WebSocket: not applicable (routes and events of specs 008, 010, 013, 017).
-- [ ] 5. Interface, logic: `lib/binding-candidates.ts`, the plan in `bindingUtils.ts`,
+- [x] 3. Adapters (host, firmware): not applicable.
+- [x] 4. API or WebSocket: not applicable (routes and events of specs 008, 010, 013, 017).
+- [x] 5. Interface, logic: `lib/binding-candidates.ts`, the plan in `bindingUtils.ts`,
       `isCompatible` and `deduceType` in `equipment-type-meta.tsx`, `deviceEquipments.ts`,
       `api/equipments.ts`, `api/devices.ts`, `store/useDevices.ts`, `store/useEquipments.ts`;
       their tests first (the cases below), then the code.
-- [ ] 6. Interface, screens: `SidebarItem`, `admin-nav-items`, `Sidebar` (section);
+- [x] 6. Interface, screens: `SidebarItem`, `admin-nav-items`, `Sidebar` (section);
       `DiscoveryPage`, `ZigbeeDiscovery`, `integrations.ts`; `DeviceList`, `DevicesPage`
       (`DeviceRow` removed); `DeviceSelector`, `EquipmentForm`, `NewEquipmentForm`; routes in
       `App.tsx`; messages; tests beside each file. Screenshots of the section, Discovery, Devices
       and the form (Hybrid and Dark), for the demo.
-- [ ] 7. `docs/design-system.md` (port table, layout, size); `npm run check:bundle`: the first
+- [x] 7. `docs/design-system.md` (port table, layout, size); `npm run check:bundle`: the first
       load must read **at most 60 KB gzip** (this spec's gate; 170 KB is the hard budget the
       script enforces); over 60 KB, stop and review the spec before going on.
 - [ ] 8. `sh scripts/validate.sh` green (bundle budget, QEMU run and memory gates included).

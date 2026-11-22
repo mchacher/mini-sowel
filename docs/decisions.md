@@ -455,3 +455,29 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   atomic (no half-made equipment when a request fails) and runs the core's tested rules; the
   browser-side plan is over 800 lines of Sowel code the box's interface has no room for (170 KB
   budget).
+
+## D30: The equipment is the entry point
+
+- **Date**: 2026-11-22
+- **Choice**: replaces D29's way of binding (D29's screens and zone form stay). The interface never
+  gives a device a room (`Device.zoneId` is kept in the API for Sowel's format, D3, and read by
+  nothing). The equipment form needs at least one device, since Solite has no equipment page to
+  complete one. It binds as Sowel's interface does, from a plan computed in the browser (Sowel's
+  `bindingUtils.ts` and `binding-candidates.ts`, ported for D3's seven types) and one request per
+  binding, the equipment deleted again if one is refused. `POST /equipments` with `deviceIds` keeps
+  Sowel's `createWithAutoBindings` (every key) for the API's clients. Sowel's Administration section
+  is ported, with a Discovery screen per integration in the place of Sowel's Integrations entry.
+- **Why**: Sowel's model (`equipments.md`, "Equipment vs Device"); the plan sits beside the selector
+  that uses the same rule (Sowel's architecture: one module decides compatibility and bindings); the
+  core keeps Sowel's route as Sowel's server has it, and the realistic home of D20, its firmware
+  fixtures and memory figures are untouched. **D29's two arguments, reversed**: (1) "the browser-side
+  plan is over 800 lines of Sowel code the box's interface has no room for": only the part for D3's
+  seven types is ported (about 250 lines, about 5 KB gzip), and the first load stays far under the 170 KB
+  budget (51.8 KB gzip, checked with `npm run check:bundle`, against a gate of 60 KB for this spec);
+  (2) "one request is atomic": atomicity is given up for Sowel's bindings; a refused binding deletes the
+  equipment again, and the half-made equipment is visible for the time of the requests (as in Sowel).
+  The equipment made by the old way, every key bound, was wrong for the type, which outweighs atomicity.
+  **Risk on the box**: one creation sends up to 33 sequential requests (1 + 16 + 16), one connection
+  each, to an ESP32 that answers 503 `Busy` past 4 requests at once; sequential requests stay under it,
+  but neither the Mac tests nor QEMU measure the box's time or connection behaviour; the hardware demo
+  (from the Mac) and E3 on the box are the checks.

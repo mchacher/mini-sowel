@@ -1,5 +1,17 @@
 # Spec 017: add a device from the interface
 
+> **Superseded in part by spec 019** (the text below stays as the record of what was built):
+> Goal 3 "place them in a room (an existing one, or a new one made on the spot)"; Out of scope
+> "Editing rooms beyond creating one under the home's root"; R5's room select, the whole "Room
+> select" bullet ("No room", "New room…", the zone made under the root, the rollback) and "Empty
+> home text"; the living spec delta's "the list with rename, room (including 'New room…')" and
+> History "named and placed in a room"; the acceptance "renaming, choosing a room, 'New room…'";
+> the edge cases "'New room…' refused (32 zones)", "A rename or zone refused", "'New room…' with an
+> empty name", "Only the root zone: the select offers 'No room' and 'New room…'"; Decided in
+> autonomy "'New room…' in the room select"; "How the user will check it" ("choose 'New room…'
+> 'Garage'", "is renamed and placed in the garage"). A device has no room: the room is its
+> equipment's, chosen in the equipment form.
+
 ## Context
 
 Increment J1 of the roadmap (milestone J, the autonomous box): add a device from the interface.

@@ -34,8 +34,8 @@ in a real annex without intervention (the true north's test).
 
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
-| J1 | Add a device from the interface: pairing while serving, the device appears live, named and placed in a room | The ZBMINIR2 is added without a terminal | |
-| J2 | Rooms and equipments from the interface (Sowel's screens ported) | The garage and its equipments made with the mouse | |
+| J1 | Add a device from the interface: pairing while serving, per integration (Administration › Discovery), the device appears live and named; it has no room of its own (the room is its equipment's, J2) | The ZBMINIR2 is added without a terminal | |
+| J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | |
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
@@ -122,10 +122,15 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
 | 2026-11-21 | The engine saves `devices.json` (94 KB) once per device when its route changes (at the first contact, then rarely); the write is synchronous in the radio loop: measure the stall it causes on the box (E3) | Spec 016 review |
-| 2026-11-22 | The equipment detail page (Sowel's `EquipmentDetailPage`): its bindings, values, history | Spec 018 |
+| 2026-11-22 | The equipment detail page (Sowel's `EquipmentDetailPage`: its bindings, values, history), to complete an equipment or replace its devices (Sowel's `ChangeDeviceModal`); until then the form needs at least one device. Replaces spec 018's line of the same name, which it widens | Spec 019 |
 | 2026-11-22 | Bindings added and removed one by one from the interface (Sowel's `AddBindingModal`, `MissingBindingsModal`); the routes exist (spec 010) | Spec 018 |
 | 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
 | 2026-11-22 | An equipment enabled or disabled from the interface (`PUT {"enabled"}` exists) | Spec 018 |
+| 2026-11-22 | Measure on the box (E3) the creation of an equipment with 16 data and 16 order bindings (33 sequential requests): time, and no 503 `Busy` | Spec 019 |
+| 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
+| 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
+| 2026-11-22 | The binding plan in the core (Rust), when the box makes equipments itself (milestone C's proposals); the interface's plan (spec 019) is its reference | Spec 019 |
+| 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
 
 ## Sowel issues to open
 
@@ -214,3 +219,8 @@ Every change to this roadmap: date, what changed, why.
   output goes to a log, one verdict line is read), so the agents' context stays small; the same
   practice was filed as Sowel issue 1291. The commit hook checks the main folder, so one branch at
   a time is worked on while an agent builds there.
+- 2026-11-22: spec 019 specified and built (UI): J1 and J2 corrected after a misreading of Sowel's model
+  (specs 017 and 018 let the user put a device in a room; in Sowel a device never has a room, the
+  equipment does). The interface gets Sowel's Administration section (Devices, Equipments, Topology,
+  Discovery per integration), "Create equipment" on a device's row, and the equipment form binds from a
+  plan computed in the browser (D30). Inbox lines added from spec 019.
