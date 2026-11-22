@@ -12,12 +12,14 @@ import { computeBindingPlan } from "./bindingUtils";
 export function NewEquipmentForm({
   defaultZoneId,
   initialType,
+  typeIsGuess,
   initialName,
   initialDeviceIds,
   onClose,
 }: {
   defaultZoneId?: string;
   initialType?: EquipmentType;
+  typeIsGuess?: boolean;
   initialName?: string;
   initialDeviceIds?: string[];
   onClose: () => void;
@@ -30,6 +32,7 @@ export function NewEquipmentForm({
       zones={tree}
       defaultZoneId={defaultZoneId}
       initialType={initialType}
+      typeIsGuess={typeIsGuess}
       initialName={initialName}
       initialDeviceIds={initialDeviceIds}
       onSubmit={async ({ name, type, zoneId, devices }) => {

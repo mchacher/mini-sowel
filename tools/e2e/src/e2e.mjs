@@ -122,14 +122,12 @@ try {
   });
 
   await step("create-sensor", async () => {
-    await deviceWithData("TH01", "temperature");
+    // The MS01 is the one to tick in step 2: its data must be there when the form stops reading.
     await deviceWithData("MS01", "occupancy");
+    // Pressed as soon as the row is there, possibly before the TH01's data exist: the form
+    // guesses its type again from its own re-reads, and "Create" waits for them.
     await row("TH01").getByRole("button", { name: "Create equipment" }).click();
     await page.locator("#equipment-name").waitFor();
-    check(
-      (await page.locator("#equipment-type").inputValue()) === "sensor",
-      "the type is not guessed as sensor",
-    );
     await page.locator("#equipment-name").fill("Capteurs garage");
     await page.locator("#equipment-zone").selectOption({ label: "Garage" });
     await page.getByRole("button", { name: "Next: Select devices" }).click();
@@ -141,6 +139,12 @@ try {
         (b) => b.textContent === "Create" && !b.disabled,
       ),
     );
+    await page.getByRole("button", { name: "Back" }).click();
+    check(
+      (await page.locator("#equipment-type").inputValue()) === "sensor",
+      "the type is not guessed as sensor",
+    );
+    await page.getByRole("button", { name: "Next: Select devices" }).click();
     await page.getByRole("button", { name: "Create", exact: true }).click();
     await row("TH01").getByText("Capteurs garage").waitFor();
     await row("MS01").getByText("Capteurs garage").waitFor();

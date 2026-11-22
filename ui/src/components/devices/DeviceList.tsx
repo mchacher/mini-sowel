@@ -198,6 +198,7 @@ export function DeviceList({ devices, newIds = [] }: { devices: Device[]; newIds
       {creating && (
         <NewEquipmentForm
           initialType={deduceType(creating) ?? "light_onoff"}
+          typeIsGuess={deduceType(creating) === null}
           initialName={creating.name}
           initialDeviceIds={[creating.id]}
           onClose={() => setCreating(null)}

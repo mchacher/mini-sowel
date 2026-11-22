@@ -219,6 +219,33 @@ describe("EquipmentForm", () => {
       expect(api.count("GET /api/v1/devices")).toBe(2);
     });
 
+    it("guesses the type again from a read that brings the data, until the user picks one", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const fresh = { ...fixtures.th01(), data: [], orders: [] };
+      mockApi({ "GET /api/v1/devices": [{ body: [fresh] }, { body: [fixtures.th01()] }] });
+      render(
+        <EquipmentForm
+          title="Create equipment"
+          zones={tree}
+          initialType="light_onoff"
+          typeIsGuess
+          initialName="TH01"
+          initialDeviceIds={[fresh.id]}
+          defaultZoneId="garage"
+          onSubmit={async () => {}}
+          onClose={() => {}}
+        />,
+      );
+      fireEvent.click(next());
+      await advance(0);
+      const create = () => screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
+      expect(create().disabled).toBe(true);
+      await advance(5000);
+      expect(create().disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("sensor");
+    });
+
     it("reads once, not every 5 s, when the plan is not empty", async () => {
       vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
       const api = mockApi({ "GET /api/v1/devices": { body: [ZBMINIR2] } });
