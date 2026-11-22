@@ -358,8 +358,8 @@ equipment", a device's "Create equipment"), as well as showing them.
   model and Equipment column ("Room › Equipment" for each equipment that binds it, the room a link
   to its page; "—" when none); "Create equipment" on a device with none; delete (confirmed; a
   refusal shows its text for 5 s); "Add devices" opens Discovery. A device has no room select.
-- **Discovery** (`#/discovery/<integration>`, Zigbee's is `#/discovery/solite`): one tab per
-  integration (Zigbee); "Add a device" opens pairing for 180 s (a countdown from the route's
+- **Discovery** (`#/discovery/<integration>`, Zigbee's is `#/discovery/solite`): the integration's
+  name as a heading (Zigbee), a tab bar only past one integration; "Add a device" opens pairing for 180 s (a countdown from the route's
   `remaining`, and "Stop"); the devices discovered while the screen is open appear first, marked
   "New", as rows of the Devices list; leaving the screen empties it. It follows
   `device.discovered`, `device.removed` and `device.status_changed` live.

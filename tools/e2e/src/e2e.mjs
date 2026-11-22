@@ -90,6 +90,11 @@ try {
 
   await step("discovery-add-a-device", async () => {
     await page.goto(`${base}/#/discovery`);
+    await page.getByRole("heading", { level: 2, name: "Zigbee" }).waitFor();
+    check(
+      (await page.getByRole("button", { name: /^Zigbee/ }).count()) === 0,
+      "Discovery shows a tab bar with one integration",
+    );
     await page.getByRole("button", { name: "Add a device" }).click();
     // The three simulated devices join within 8 simulated seconds (speed 10).
     for (const model of ["ZBMINIR2", "TH01", "MS01"]) {

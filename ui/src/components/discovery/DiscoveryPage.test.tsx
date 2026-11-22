@@ -13,6 +13,8 @@ import {
   type Route,
 } from "../../test-utils";
 import type { Device } from "../../types";
+import { DiscoveryPage } from "./DiscoveryPage";
+import { INTEGRATIONS } from "./integrations";
 
 const PERMIT = "/api/v1/integrations/solite/permit-join";
 const tree = () => [zone("root", "Home", [zone("garage", "Garage", [], "root")])];
@@ -45,12 +47,23 @@ const fake = () =>
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
 
 describe("Discovery", () => {
-  it("shows the title and one tab, Zigbee, marked, with the count of its devices", async () => {
+  it("shows the title and the Zigbee heading, with no tab bar and nothing scrollable", async () => {
     await boot([device("a", "A"), device("b", "B"), device("c", "C", { integrationId: "other" })]);
-    const tab = screen.getByRole("button", { name: /Zigbee/ });
-    expect(tab.textContent).toBe("Zigbee2");
-    expect(tab.getAttribute("aria-current")).toBe("page");
-    expect(screen.getAllByRole("button", { name: /\d$/ })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 2, name: "Zigbee" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Zigbee/ })).toBeNull();
+    expect(document.querySelector(".overflow-x-auto")).toBeNull();
+  });
+
+  it("shows the tab bar, not clipped by a scrollbar, only past one integration", () => {
+    const Other = () => <p>Other screen</p>;
+    const two = [
+      ...INTEGRATIONS,
+      { id: "other", labelKey: "discovery.integration.solite", Screen: Other },
+    ];
+    const { container } = render(<DiscoveryPage hash="#/discovery/other" integrations={two} />);
+    expect(screen.getAllByRole("button", { name: /Zigbee/ })).toHaveLength(2);
+    expect(screen.getByText("Other screen")).toBeTruthy();
+    expect(container.querySelector(".overflow-x-auto")!.className).toContain("overflow-y-hidden");
   });
 
   it.each(["#/discovery", "#/discovery/unknown"])("shows the Zigbee screen at %s", async (hash) => {

@@ -158,10 +158,12 @@ Ported from Sowel's `components/layout/Sidebar.tsx` (its Administration block),
 - **Integrations**: a list in the interface (`components/discovery/integrations.ts`), one entry per
   integration: its id (the devices' `integrationId` and the API's `/integrations/:id`), its label,
   its screen. Today one entry: `solite`, "Zigbee". A second integration is one more entry.
-- **Header**: the title "Discovery" ("Découverte"); below it, Sowel's integration tabs
+- **Header**: the title "Discovery" ("Découverte"); below it, with one integration (today), its
+  name as a heading ("Zigbee"), no tab bar. Past one integration, Sowel's integration tabs
   (`DevicesPage`'s `TabButton`: label and count of that integration's devices, `border-b-2
-  border-primary text-primary` on the one shown), shown even with one integration so the screen
-  says which integration it is about.
+  border-primary text-primary` on the one shown) replace the heading; their container clips its
+  vertical overflow (`overflow-y-hidden`), because the active tab's `-mb-px` would otherwise draw a
+  stray vertical scrollbar beside `overflow-x-auto`.
 - **The Zigbee screen** (`ZigbeeDiscovery`), spec 017's controls moved here unchanged: "Add a
   device" sends `POST /api/v1/integrations/solite/permit-join {"time": 180}`; while open, "Pairing
   open: put the device in pairing mode" with the seconds left, counting down, and "Stop" (`{"time":

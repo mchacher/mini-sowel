@@ -18,7 +18,7 @@ export const INTEGRATIONS: Integration[] = [
 const PREFIX = "#/discovery/";
 
 /** The integration a hash asks for; the first one for `#/discovery` or an id nobody knows. */
-export function integrationFromHash(hash: string): Integration {
+export function integrationFromHash(hash: string, list: Integration[] = INTEGRATIONS): Integration {
   const id = hash.startsWith(PREFIX) ? decodeURIComponent(hash.slice(PREFIX.length)) : "";
-  return INTEGRATIONS.find((i) => i.id === id) ?? INTEGRATIONS[0];
+  return list.find((i) => i.id === id) ?? list[0];
 }
