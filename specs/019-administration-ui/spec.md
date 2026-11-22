@@ -727,3 +727,7 @@ room.
    section, Discovery, Devices and the form, Hybrid and Dark themes.
 2. Real hardware: the plan's demo script (`plan.md`, "Real hardware"), with the ZBMINIR2. The
    result of the run (date, what was seen) is written here.
+   Run on 2026-11-22 on the real Dongle Max (original firmware, USB relayed to TCP by `socat`):
+   the ZBMINIR2 paired from Discovery, the equipment "Lumière garage" was made in the Garage from
+   its row, and the light switched on and off from the room's page. The author reported that
+   everything worked. The engine ran on the Mac; the Dongle Max only relayed the radio.
