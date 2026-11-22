@@ -1,8 +1,14 @@
-// Ported from Sowel ui/src/store/useZones.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: the actions
-// that edit zones (createZone, updateZone, deleteZone): the interface only reads them.
+// Ported from Sowel ui/src/store/useZones.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: `reorderZones`
+// (Solite has no reorder route).
 import { create } from "zustand";
 import type { Zone, ZoneWithChildren } from "../types";
-import { getZones } from "../api";
+import {
+  getZones,
+  createZone as apiCreateZone,
+  updateZone as apiUpdateZone,
+  deleteZone as apiDeleteZone,
+  type ZoneInput,
+} from "../api";
 import { apiErrorText } from "../lib/api-error";
 
 interface ZonesState {
@@ -12,6 +18,9 @@ interface ZonesState {
 
   // Actions
   fetchZones: () => Promise<void>;
+  createZone: (data: ZoneInput) => Promise<Zone>;
+  updateZone: (id: string, data: Partial<ZoneInput>) => Promise<void>;
+  deleteZone: (id: string) => Promise<void>;
 
   // WebSocket handlers
   handleZoneCreated: (zone: Zone) => void;
@@ -35,6 +44,23 @@ export const useZones = create<ZonesState>((set, get) => ({
         error: apiErrorText(err),
       });
     }
+  },
+
+  // The page reads the tree again at once after its own request, it does not wait for the event.
+  createZone: async (data) => {
+    const zone = await apiCreateZone(data);
+    await get().fetchZones();
+    return zone;
+  },
+
+  updateZone: async (id, data) => {
+    await apiUpdateZone(id, data);
+    await get().fetchZones();
+  },
+
+  deleteZone: async (id) => {
+    await apiDeleteZone(id);
+    await get().fetchZones();
   },
 
   // WebSocket handlers — refetch tree on any change

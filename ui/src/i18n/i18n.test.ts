@@ -36,8 +36,22 @@ describe("t()", () => {
     setLanguage(detectLanguage());
     expect(i18n.language).toBe("fr");
     expect(document.documentElement.lang).toBe("fr");
-    expect(t("app.noRoom")).toBe("Aucune pièce : créez-en une depuis la page des appareils");
+    expect(t("app.noRoom")).toBe("Aucune pièce : créez-en une dans la page Topologie");
     vi.spyOn(navigator, "language", "get").mockReturnValue("de-DE");
     expect(detectLanguage()).toBe("en");
+  });
+});
+
+describe("spec 018 keys", () => {
+  it("has every key of the Topology and Equipments pages in French and in English", async () => {
+    const { en, fr } = await import("./messages");
+    const keys = Object.keys(en).filter((k) =>
+      /^(zones\.|equipments\.|deviceSelector\.|nav\.|common\.(back|create|creating|saving|retry|edit|delete|close|optional)$|dashboard\.unknownZone$|devices\.filterPlaceholder$)/.test(
+        k,
+      ),
+    );
+    expect(keys.length).toBeGreaterThan(60);
+    for (const key of keys) expect(fr[key], key).toBeTruthy();
+    for (const key of Object.keys(fr)) expect(en[key], key).toBeTruthy();
   });
 });

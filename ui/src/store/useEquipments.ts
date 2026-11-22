@@ -1,9 +1,15 @@
 // Ported from Sowel ui/src/store/useEquipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: the actions
-// that edit equipments and their bindings; the order timing (`useOrderTiming`, which only feeds Sowel's
+// that edit bindings (one request creates them, decision D29); the order timing (`useOrderTiming`, which only feeds Sowel's
 // pending-order spinners).
 import { create } from "zustand";
-import type { EquipmentStatus, EquipmentWithDetails } from "../types";
-import { getEquipments, executeEquipmentOrder as apiExecuteOrder } from "../api";
+import type { EquipmentStatus, EquipmentType, EquipmentWithDetails } from "../types";
+import {
+  getEquipments,
+  createEquipment as apiCreateEquipment,
+  updateEquipment as apiUpdateEquipment,
+  deleteEquipment as apiDeleteEquipment,
+  executeEquipmentOrder as apiExecuteOrder,
+} from "../api";
 import { coalesceCalls } from "../lib/coalesce-calls";
 import { apiErrorText } from "../lib/api-error";
 
@@ -14,6 +20,14 @@ interface EquipmentsState {
 
   // Actions
   fetchEquipments: () => Promise<void>;
+  createEquipment: (data: {
+    name: string;
+    type: EquipmentType;
+    zoneId: string;
+    deviceIds?: string[];
+  }) => Promise<EquipmentWithDetails>;
+  updateEquipment: (id: string, data: { name?: string; zoneId?: string }) => Promise<void>;
+  deleteEquipment: (id: string) => Promise<void>;
   executeOrder: (equipmentId: string, alias: string, value: unknown) => Promise<void>;
   // WebSocket handlers
   handleEquipmentCreated: () => void;
@@ -28,7 +42,7 @@ const refetchEquipments = coalesceCalls(() => {
   void useEquipments.getState().fetchEquipments();
 }, 1000);
 
-export const useEquipments = create<EquipmentsState>((set) => ({
+export const useEquipments = create<EquipmentsState>((set, get) => ({
   equipments: [],
   loading: false,
   error: null,
@@ -44,6 +58,23 @@ export const useEquipments = create<EquipmentsState>((set) => ({
         error: apiErrorText(err),
       });
     }
+  },
+
+  // The page reads the list again at once after its own request, it does not wait for the event.
+  createEquipment: async (data) => {
+    const equipment = await apiCreateEquipment(data);
+    await get().fetchEquipments();
+    return equipment;
+  },
+
+  updateEquipment: async (id, data) => {
+    await apiUpdateEquipment(id, data);
+    await get().fetchEquipments();
+  },
+
+  deleteEquipment: async (id) => {
+    await apiDeleteEquipment(id);
+    await get().fetchEquipments();
   },
 
   executeOrder: async (equipmentId, alias, value) => {

@@ -1,7 +1,9 @@
 // Solite's own file: the page of one zone. Sowel's HomePage (451 lines) pulls about 35 modules,
 // the 11-store WebSocket and a router; this one keeps its parts (the title, Sowel's
 // ZoneHeroLead and ZoneAggregationPills, Sowel's Panel with the equipments grouped by family) and
-// nothing else.
+// nothing else; its "Add equipment" button opens Sowel's equipment form with this room chosen
+// (spec 018).
+import { useState } from "react";
 import {
   Box,
   CircleDot,
@@ -10,6 +12,7 @@ import {
   Gauge,
   Lightbulb,
   Monitor,
+  Plus,
   Thermometer,
   ToggleRight,
   Tv,
@@ -23,6 +26,7 @@ import { EquipmentRow } from "./EquipmentRow";
 import { Panel, SliceHeader } from "./Panel";
 import { ZoneAggregationPills } from "./ZoneAggregationPills";
 import { ZoneHeroLead } from "./ZoneHeroLead";
+import { NewEquipmentForm } from "../equipments/NewEquipmentForm";
 
 // One icon for each section of Sowel's ZoneEquipmentsView (its openings icon is a shutter, which
 // the tool has not).
@@ -57,6 +61,7 @@ export function ZonePage({
   empty?: boolean;
 }) {
   const { t } = useTranslation();
+  const [adding, setAdding] = useState(false);
   const groups = SECTIONS.map((section) => ({
     ...section,
     equipments: equipments.filter((eq) => sectionOf(eq) === section.id),
@@ -64,9 +69,18 @@ export function ZonePage({
 
   return (
     <div className="space-y-4">
-      <header>
-        <h1 className="text-display font-semibold text-text">{zone.name}</h1>
-        <ZoneHeroLead zone={zone} aggData={aggregate} />
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-display font-semibold text-text">{zone.name}</h1>
+          <ZoneHeroLead zone={zone} aggData={aggregate} />
+        </div>
+        <button
+          onClick={() => setAdding(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-primary text-white text-small font-medium hover:bg-primary-hover"
+        >
+          <Plus size={16} strokeWidth={1.5} />
+          {t("equipments.addEquipment")}
+        </button>
       </header>
       {aggregate && <ZoneAggregationPills data={aggregate} zoneId={zone.id} />}
       {empty ? (
@@ -92,6 +106,7 @@ export function ZonePage({
           ))}
         </Panel>
       )}
+      {adding && <NewEquipmentForm defaultZoneId={zone.id} onClose={() => setAdding(false)} />}
     </div>
   );
 }

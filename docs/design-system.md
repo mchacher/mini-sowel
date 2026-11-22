@@ -37,14 +37,17 @@ naming its Sowel source and commit:
 | `theme.ts` | same | one line sets `data-theme`; the `theme-color` metas cut |
 | `lib/format-relative.ts` | same | `parseReadingTime` copied locally (it came from Sowel's backend) |
 | `components/home/ZoneAggregationPills.tsx` | same | the sparkline, the history flag, the shutter and water-valve pills cut |
-| `store/useZones.ts`, `store/useEquipments.ts` | same | the editing actions and the order timing cut |
-| `api/client.ts`, `api/zones.ts`, `api/equipments.ts`, `api/index.ts` | same | no token or refresh; a GET answered 503 retried once after 1 s; only the four calls used |
+| `store/useZones.ts`, `store/useEquipments.ts` | same | `reorderZones`, the binding actions and the order timing cut; the actions read the tree or the list again after their own request |
+| `api/client.ts`, `api/zones.ts`, `api/equipments.ts`, `api/index.ts` | same | no token or refresh; a GET answered 503 retried once after 1 s; only the calls used (zones: get, aggregation, create, update, delete; equipments: get, create with `deviceIds`, update, delete, order) |
 | `types.ts`, `components/equipments/bindingUtils.ts`, `components/equipments/useEquipmentState.ts` | same | the named subsets the ported files use, copied unchanged |
 | `index.css` utilities `card`, `panel-lid`, `slices`, `slice-rows` | `styles/utilities.css` | unchanged |
 | `i18n/index.ts` (i18next, 67 KB of locales) | `i18n/{index,messages,react-i18next}.ts` | replaced: a `t()` with Sowel's keys, French and English |
 | `components/layout/SidebarZoneTree.tsx` | `components/layout/ZoneTree.tsx` | replaced: same classes and icons, links in the hash |
 | `components/home/{ZoneEquipmentsView,CompactEquipmentCard}.tsx`, `pages/HomePage.tsx` | `components/home/{ZonePage,EquipmentRow}.tsx`, `App.tsx` | replaced, with Sowel's sections and classes |
 | `store/useWebSocket.ts` | `store/useLive.ts` | replaced: four topics, Sowel's reconnection |
+| `lib/zone-path.ts` and its test | same | unchanged |
+| `pages/ZonesPage.tsx`, `components/zones/{ZoneTree,ZoneForm}.tsx` | `components/zones/{ZonesPage,ZoneTree,ZoneForm}.tsx` | ported (spec 018): no auth, reorder or expand/collapse; names at most 64; no "None" parent; edit and delete in the rows; the modal is `components/ui/Modal.tsx` (Escape and click outside close it) |
+| `pages/EquipmentsPage.tsx`, `components/equipments/{EquipmentForm,DeviceSelector,equipment-type-meta}.tsx` | `components/equipments/{EquipmentsPage,EquipmentForm,DeviceSelector,equipment-type-meta}.tsx` | ported (spec 018): D3's seven types; no search, candidates or contracts; a row instead of `EquipmentCard`; one `POST` with `deviceIds`; check boxes, 64 devices at most, a warning past 16 values |
 
 The rules, the colour roles, the components and the contrast measurements are Sowel's, and are not
 repeated here: read them in Sowel's `design-system/` folder.
@@ -117,4 +120,4 @@ opens it as a drawer (Sowel's pattern; Sowel switches at `lg`). Code: `ui/src/co
   buttons, `strokeWidth={1.5}` as in Sowel; ported files keep Sowel's sizes.
 - **Updating from Sowel**: copy the files of the two tables under Source again from a newer Sowel
   commit, compare each with the commit in its header, apply the cuts listed again, update the
-  commits and dates, and check the budget (first load 34 KB gzip in spec 014).
+  commits and dates, and check the budget (first load 48.2 KB gzip after spec 018).

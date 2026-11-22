@@ -1,7 +1,8 @@
 // Subset of Sowel ui/src/types.ts (Sowel commit 5da84dc1, UI 1.87.0), each declaration copied
 // unchanged: Zone, ZoneWithChildren, ZoneAggregatedData, Equipment, EquipmentWithDetails,
 // EquipmentType, EquipmentFamily, EquipmentStatus, EquipmentStatusReason, DataBindingWithValue,
-// OrderBindingWithDetails, BatteryAlert, and what they name (DataCategory, OrderCategory...).
+// OrderBindingWithDetails, BatteryAlert, DeviceData, and what they name (DataCategory,
+// OrderCategory...).
 // The file is Sowel's model, which Solite's API answers (decision D3).
 
 // ============================================================
@@ -497,6 +498,18 @@ export interface Device {
   rawExpose?: unknown;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Sowel's `DeviceData` (ui/src/types.ts, commit 5da84dc1), unchanged: what the device selector reads. */
+export interface DeviceData {
+  id: string;
+  deviceId: string;
+  key: string;
+  type: DataType;
+  category: DataCategory;
+  value: unknown;
+  unit?: string;
+  lastUpdated: string | null;
 }
 
 /** The state of the pairing window (spec 017, `GET /integrations/solite/permit-join`). */

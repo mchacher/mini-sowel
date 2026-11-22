@@ -440,3 +440,18 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   could not run together with `--serve`. The route under `/integrations/solite` follows Sowel's
   grouping of what an integration does; 202 with the state asked for avoids a new wait mechanism
   for a rare action whose refusal is read with `GET`.
+
+## D29: Equipments from the interface
+
+- **Date**: 2026-11-22
+- **Choice**: Sowel's zone and equipment screens are ported (spec 018) with D3's seven types and
+  without bindings edited one by one. The equipment form creates the equipment and its bindings in
+  one `POST /api/v1/equipments` with `deviceIds` (alias = data key, the core's auto-binding of
+  spec 010), not as Sowel's interface does, which computes a binding plan in the browser
+  (`autoCreateBindings`, `bindingUtils.ts`) and sends one request per binding. The zone form has
+  no "None" parent: Solite's tree has one root (spec 010 R7.10), and `parentId: null` means the
+  root on `POST` and is refused on `PUT`.
+- **Why**: J2 of the roadmap: the garage and its equipments made with the mouse. One request is
+  atomic (no half-made equipment when a request fails) and runs the core's tested rules; the
+  browser-side plan is over 800 lines of Sowel code the box's interface has no room for (170 KB
+  budget).

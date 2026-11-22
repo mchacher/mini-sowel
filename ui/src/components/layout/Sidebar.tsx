@@ -1,41 +1,58 @@
-import { Menu, Radio, X } from "lucide-react";
+import { Box, Map, Menu, Radio, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FlatZone } from "../../zones";
 import { SoliteLogo } from "./SoliteLogo";
 import { ZoneTree } from "./ZoneTree";
 
-type Zones = { zones: FlatZone[]; activeId: string | null; devicesActive?: boolean };
+/** The pages under the rooms: their hash, as shown in the address. */
+export type Page = "devices" | "equipments" | "zones";
+
+type Zones = { zones: FlatZone[]; activeId: string | null; page?: Page | null };
 
 function Brand() {
   return <SoliteLogo size={36} showWordmark className="min-w-0" />;
 }
 
-function Nav({ zones, activeId, devicesActive, onPick }: Zones & { onPick?: () => void }) {
+const PAGES: { page: Page; icon: typeof Radio; labelKey: string }[] = [
+  { page: "devices", icon: Radio, labelKey: "app.devices" },
+  { page: "equipments", icon: Box, labelKey: "nav.equipments" },
+  { page: "zones", icon: Map, labelKey: "nav.zones" },
+];
+
+function Nav({ zones, activeId, page, onPick }: Zones & { onPick?: () => void }) {
   const { t } = useTranslation();
   return (
     <nav aria-label={t("app.mainNav")} className="flex-1 overflow-y-auto py-3 px-2">
-      <ZoneTree zones={zones} activeId={devicesActive ? null : activeId} onPick={onPick} />
-      <a
-        href="#/devices"
-        onClick={(e) => {
-          e.preventDefault();
-          window.location.hash = "#/devices";
-          onPick?.();
-        }}
-        aria-current={devicesActive ? "page" : undefined}
-        className={`flex items-center gap-2 px-3 py-1.5 mt-3 mx-1 min-w-0 rounded-sm group transition-colors duration-150 ${devicesActive ? "bg-primary-light" : ""}`}
-      >
-        <Radio
-          size={14}
-          strokeWidth={1.5}
-          className={`flex-shrink-0 transition-colors ${devicesActive ? "text-primary" : "text-text group-hover:text-primary"}`}
-        />
-        <span
-          className={`text-body font-medium transition-colors truncate ${devicesActive ? "text-primary" : "text-text group-hover:text-primary"}`}
-        >
-          {t("app.devices")}
-        </span>
-      </a>
+      <ZoneTree zones={zones} activeId={page ? null : activeId} onPick={onPick} />
+      <div className="mt-3 space-y-0.5">
+        {PAGES.map(({ page: entry, icon: Icon, labelKey }) => {
+          const active = page === entry;
+          return (
+            <a
+              key={entry}
+              href={`#/${entry}`}
+              onClick={(e) => {
+                e.preventDefault();
+                window.location.hash = `#/${entry}`;
+                onPick?.();
+              }}
+              aria-current={active ? "page" : undefined}
+              className={`flex items-center gap-2 px-3 py-1.5 mx-1 min-w-0 rounded-sm group transition-colors duration-150 ${active ? "bg-primary-light" : ""}`}
+            >
+              <Icon
+                size={14}
+                strokeWidth={1.5}
+                className={`flex-shrink-0 transition-colors ${active ? "text-primary" : "text-text group-hover:text-primary"}`}
+              />
+              <span
+                className={`text-body font-medium transition-colors truncate ${active ? "text-primary" : "text-text group-hover:text-primary"}`}
+              >
+                {t(labelKey)}
+              </span>
+            </a>
+          );
+        })}
+      </div>
     </nav>
   );
 }
@@ -45,13 +62,13 @@ function Nav({ zones, activeId, devicesActive, onPick }: Zones & { onPick?: () =
  * Hidden below `md`, where the top bar's menu button opens the same column as a drawer (Sowel
  * hides its sidebar below `lg` and opens a drawer the same way).
  */
-export function Sidebar({ zones, activeId, devicesActive }: Zones) {
+export function Sidebar({ zones, activeId, page }: Zones) {
   return (
     <aside className="hidden md:flex flex-col h-full w-[260px] bg-surface border-r border-border shrink-0">
       <div className="flex items-center h-[49px] px-4 border-b border-border-light">
         <Brand />
       </div>
-      <Nav zones={zones} activeId={activeId} devicesActive={devicesActive} />
+      <Nav zones={zones} activeId={activeId} page={page} />
     </aside>
   );
 }
@@ -74,12 +91,7 @@ export function MobileTopBar({ onMenu }: { onMenu: () => void }) {
 }
 
 /** The phone's drawer: the zone tree over a backdrop; picking a zone or the backdrop closes it. */
-export function MobileDrawer({
-  zones,
-  activeId,
-  devicesActive,
-  onClose,
-}: Zones & { onClose: () => void }) {
+export function MobileDrawer({ zones, activeId, page, onClose }: Zones & { onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <div className="fixed inset-0 z-50 md:hidden">
@@ -101,7 +113,7 @@ export function MobileDrawer({
             <X size={18} strokeWidth={1.5} />
           </button>
         </div>
-        <Nav zones={zones} activeId={activeId} devicesActive={devicesActive} onPick={onClose} />
+        <Nav zones={zones} activeId={activeId} page={page} onPick={onClose} />
       </div>
     </div>
   );

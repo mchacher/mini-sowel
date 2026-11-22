@@ -10,7 +10,9 @@ import { useDevices } from "./store/useDevices";
 import { resetPairingTimers, usePairing } from "./store/usePairing";
 import type {
   DataBindingWithValue,
+  DataCategory,
   Device,
+  DeviceData,
   EquipmentWithDetails,
   OrderBindingWithDetails,
   ZoneAggregatedData,
@@ -299,4 +301,26 @@ export async function advance(ms: number): Promise<void> {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);
   });
+}
+
+/** A device as `GET /api/v1/devices` gives it, with its data given as `[key, category]`. */
+export function deviceWithData(
+  id: string,
+  name: string,
+  data: [string, DataCategory][],
+  extra: Partial<Device> = {},
+): Device & { data: DeviceData[]; orders: { key: string }[] } {
+  return {
+    ...device(id, name, extra),
+    data: data.map(([key, category]) => ({
+      id: `${id}-${key}`,
+      deviceId: id,
+      key,
+      type: "number",
+      category,
+      value: 1,
+      lastUpdated: null,
+    })),
+    orders: [],
+  };
 }

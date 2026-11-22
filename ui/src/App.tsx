@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Banner } from "./components/layout/Banner";
-import { MobileDrawer, MobileTopBar, Sidebar } from "./components/layout/Sidebar";
+import { MobileDrawer, MobileTopBar, Sidebar, type Page } from "./components/layout/Sidebar";
 import { ZonePage } from "./components/home/ZonePage";
 import { DevicesPage } from "./components/devices/DevicesPage";
+import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
+import { ZonesPage } from "./components/zones/ZonesPage";
 import { useTranslation } from "react-i18next";
 import { connect, useLive } from "./store/useLive";
 import { useEquipments } from "./store/useEquipments";
@@ -21,7 +23,11 @@ function useHash(): string {
   return hash;
 }
 
-const DEVICES_HASH = "#/devices";
+const PAGES: Record<string, Page> = {
+  "#/devices": "devices",
+  "#/equipments": "equipments",
+  "#/zones": "zones",
+};
 
 /** The home screen: the sidebar of rooms and devices, and the page of the selected one. */
 export function App() {
@@ -36,7 +42,7 @@ export function App() {
   const live = useLive((s) => s.status);
   const hash = useHash();
   const hashId = zoneIdFromHash(hash);
-  const devicesPage = hash === DEVICES_HASH;
+  const page = PAGES[hash] ?? null;
   const [menuOpen, setMenuOpen] = useState(false);
 
   // The stores fetch when the socket opens, the first time and after each reconnection.
@@ -49,12 +55,12 @@ export function App() {
 
   return (
     <div className="flex h-screen bg-background text-text">
-      <Sidebar zones={flat} activeId={zone?.id ?? null} devicesActive={devicesPage} />
+      <Sidebar zones={flat} activeId={zone?.id ?? null} page={page} />
       {menuOpen && (
         <MobileDrawer
           zones={flat}
           activeId={zone?.id ?? null}
-          devicesActive={devicesPage}
+          page={page}
           onClose={() => setMenuOpen(false)}
         />
       )}
@@ -63,8 +69,12 @@ export function App() {
         <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
           <Banner />
           {error && <p className="text-body text-error">{error}</p>}
-          {devicesPage ? (
+          {page === "devices" ? (
             <DevicesPage />
+          ) : page === "equipments" ? (
+            <EquipmentsPage />
+          ) : page === "zones" ? (
+            <ZonesPage />
           ) : zone ? (
             <ZonePage
               zone={zone}
@@ -73,7 +83,7 @@ export function App() {
               onExecuteOrder={(id, alias, value) =>
                 useEquipments.getState().executeOrder(id, alias, value)
               }
-              empty={onlyRoot}
+              empty={onlyRoot && !equipments.some((e) => e.zoneId === zone.id)}
             />
           ) : (
             loaded && !error && <p className="text-body text-text-secondary">{t("app.noRoom")}</p>

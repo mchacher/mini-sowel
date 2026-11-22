@@ -73,6 +73,24 @@ describe("live store", () => {
     expect(data.b.temperature).toBe(2);
   });
 
+  it("zone and equipment events read the tree and the equipments again (spec 018)", async () => {
+    connect();
+    FakeWebSocket.last.open();
+    await vi.advanceTimersByTimeAsync(1500);
+    const zones = api.count("GET /api/v1/zones");
+    const equipments = api.count("GET /api/v1/equipments");
+    FakeWebSocket.last.receive({ type: "zone.created", zone: zone("g", "Garage", [], "root") });
+    FakeWebSocket.last.receive({ type: "zone.updated", zone: zone("g", "Garage 2", [], "root") });
+    FakeWebSocket.last.receive({ type: "zone.removed", zoneId: "g" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.count("GET /api/v1/zones")).toBe(zones + 3);
+    FakeWebSocket.last.receive({ type: "equipment.created" });
+    FakeWebSocket.last.receive({ type: "equipment.updated" });
+    FakeWebSocket.last.receive({ type: "equipment.removed" });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(api.count("GET /api/v1/equipments")).toBeGreaterThan(equipments);
+  });
+
   it("reconnects after 1 s, 2 s, 4 s... capped at 30 s, and every open refetches", async () => {
     connect();
     FakeWebSocket.last.open();

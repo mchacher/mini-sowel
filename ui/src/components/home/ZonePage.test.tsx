@@ -1,9 +1,14 @@
-import { cleanup, render, screen, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { aggregate, equipment, light, sensor, zone } from "../../test-utils";
+import { aggregate, equipment, light, mockApi, resetStores, sensor, zone } from "../../test-utils";
+import { useZones } from "../../store/useZones";
 import { ZonePage } from "./ZonePage";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetStores();
+  vi.unstubAllGlobals();
+});
 
 const noOrder = vi.fn(async () => {});
 const garage = zone("garage", "Garage", [], "root");
@@ -117,5 +122,17 @@ describe("ZonePage", () => {
       <ZonePage zone={garage} aggregate={undefined} equipments={[]} onExecuteOrder={noOrder} />,
     );
     expect(screen.getByText("No equipment in this room")).toBeTruthy();
+  });
+
+  it("opens the equipment form with this room chosen from Add equipment", () => {
+    mockApi({ "GET /api/v1/devices": { body: [] } });
+    useZones.setState({ tree: [zone("root", "Home", [garage])] });
+    render(
+      <ZonePage zone={garage} aggregate={undefined} equipments={[]} onExecuteOrder={noOrder} />,
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Add equipment" }));
+    expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
+    expect((screen.getByLabelText("Zone") as HTMLSelectElement).value).toBe("garage");
   });
 });
