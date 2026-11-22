@@ -23,6 +23,10 @@ opt-level = "z"
 # The image QEMU runs: the engine with the simulated radio and the realistic home of
 # `fixtures/` (spec 016, decision D26). Without it, the image is the box's: no radio yet.
 sim = ["dep:solite-sim"]
+# The measuring image for the box (spec 020): `sim`, but every save goes to the flash, timed, and
+# the run logs the `saves:` line. QEMU's flash takes a quarter of an hour for those saves, so only
+# the box runs it.
+flash-saves = ["sim"]
 
 [dependencies]
 solite-core = { path = "../crates/core" }

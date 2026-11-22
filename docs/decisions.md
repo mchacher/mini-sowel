@@ -481,3 +481,25 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   each, to an ESP32 that answers 503 `Busy` past 4 requests at once; sequential requests stay under it,
   but neither the Mac tests nor QEMU measure the box's time or connection behaviour; the hardware demo
   (from the Mac) and E3 on the box are the checks.
+
+## D31: The simulator runs on the box in a measuring image; esptool replaces espflash
+
+- **Date**: 2026-11-22
+- **Choice**: replaces the part of D26 that kept the simulator out of the box ("not for the box") and
+  the part of D25 that gave the partition table to the box "through `espflash --partition-table`".
+  The simulator now also runs on the Dongle Max, in a third image, the measuring image (cargo feature
+  `flash-saves`, which turns on `sim`): the realistic home with every save written to the flash and
+  timed, to measure on the real ESP32 what QEMU could only bound. The box's own image never holds the
+  simulator. Every write to the box goes through `sh scripts/box.sh`, which uses `esptool.py` for each
+  step (identify, backup, restore, flash) and refuses to flash without a backup that was restored once;
+  espflash is dropped, and the `runner` line of `firmware/.cargo/config.toml` that flashed with it is
+  removed, so `cargo run` in `firmware/` flashes nothing. The EFR32 radio stays wired but not driven
+  (no file of `firmware/src/` names GPIO12 or GPIO15).
+  The prompt of `box.sh` reads the end of the box's MAC from `/dev/tty`: that stops a pipe and a
+  script's plain standard input, not a pseudo-terminal. The guarantee is the user's explicit yes
+  in the conversation plus the MAC typed, not the terminal alone.
+- **Why**: QEMU's flash takes a quarter of an hour for the saves the box does in seconds, and says
+  nothing of the box's timing; a measuring image answers (free memory at boot, the engine's peak, the
+  FAT partition, the save stall) without waiting for the radio's serial link. One tool to fake in the
+  tests, the same image parts as `scripts/qemu.sh` (bootloader, table from `partitions.csv`, `ota_0`
+  offset), and a runner that skipped every check was a write path to the box (D6).

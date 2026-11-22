@@ -1,0 +1,1244 @@
+//! `scripts/box.sh` (spec 020) run with fake tools: `esptool.py`, `espefuse.py` and
+//! `gen_esp32part.py` are shell scripts written into a temporary folder, put first on the `PATH`;
+//! each logs its arguments and answers from environment variables. The prompt is answered through a
+//! pseudo-terminal (the script reads `/dev/tty`). No test touches a real serial port or a real box,
+//! and every run checks the fakes' log: no eFuse burn, ever.
+//!
+//! Also here: no file of `firmware/src/` names GPIO12 or GPIO15, the radio's bootloader and reset
+//! lines (spec 020 R6.3).
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/box.sh");
+const REPO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const FLASH_BYTES: usize = 16 * 1024 * 1024;
+const MAC: &str = "7c:df:a1:3a:bc:de";
+const MAC_NAME: &str = "7cdfa13abcde";
+const MAC_TAIL: &str = "3abcde";
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+const FAKE_ESPTOOL: &str = r#"#!/bin/sh
+echo "esptool.py $*" >> "$FAKE_LOG"
+echo "via:${FAKE_VIA:-path}" >> "$FAKE_LOG"
+cmd=
+for a in "$@"; do
+  case "$a" in
+    flash_id | read_flash | write_flash | erase_region | elf2image) cmd=$a; break ;;
+  esac
+done
+last=
+for a in "$@"; do last=$a; done
+case "$cmd" in
+  flash_id)
+    if [ -n "$FAKE_NO_ANSWER" ]; then
+      echo "A fatal error occurred: Failed to connect to ESP32" >&2
+      exit 2
+    fi
+    echo "esptool.py v4.14.0"
+    echo "Connecting....."
+    echo "Chip is ESP32-D0WDR2-V3 (revision ${FAKE_REV:-v3.1})"
+    echo "Features: WiFi, BT, Dual Core, 240MHz, Embedded PSRAM"
+    echo "MAC: ${FAKE_MAC:-7c:df:a1:3a:bc:de}"
+    echo "Manufacturer: 20"
+    echo "Detected flash size: ${FAKE_FLASH:-16MB}"
+    ;;
+  read_flash)
+    n=$(cat "$FAKE_STATE/reads" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "$FAKE_STATE/reads"
+    case "${FAKE_READ:-ok}" in
+      ok) cp "$FAKE_IMAGE" "$last" ;;
+      differ) if [ "$n" -eq 1 ]; then cp "$FAKE_IMAGE" "$last"; else cp "$FAKE_IMAGE2" "$last"; fi ;;
+      short) head -c 1000 "$FAKE_IMAGE" > "$last" ;;
+      uniform) head -c 16777216 /dev/zero > "$last" ;;
+    esac
+    # A permissive file, as a tool under a loose umask would leave it: the script's chmod must fix it.
+    chmod 666 "$last"
+    ;;
+  write_flash)
+    [ -n "$FAKE_WRITE_FAIL" ] && { echo "A fatal error occurred: write failed" >&2; exit 2; }
+    echo "Hash of data verified."
+    ;;
+  erase_region) echo "Erase completed successfully" ;;
+  elf2image)
+    out=
+    prev=
+    for a in "$@"; do
+      [ "$prev" = "-o" ] && out=$a
+      prev=$a
+    done
+    head -c "${FAKE_APP_SIZE:-1000}" /dev/zero > "$out"
+    ;;
+esac
+exit 0
+"#;
+
+const FAKE_ESPEFUSE: &str = r#"#!/bin/sh
+echo "espefuse.py $*" >> "$FAKE_LOG"
+echo "via:${FAKE_VIA:-path}" >> "$FAKE_LOG"
+echo "ABS_DONE_0 (BLOCK0) Secure boot V1 is enabled for bootloader image = ${FAKE_ABS0:-False} R/W (0b0)"
+echo "ABS_DONE_1 (BLOCK2) Secure boot V2 is enabled for bootloader image = ${FAKE_ABS1:-False} R/W (0b0)"
+echo "FLASH_CRYPT_CNT (BLOCK0) Flash encryption mode counter = ${FAKE_CRYPT:-0} R/W (0b0000000)"
+exit 0
+"#;
+
+const FAKE_GEN: &str = r##"#!/bin/sh
+echo "gen_esp32part.py $*" >> "$FAKE_LOG"
+echo "via:${FAKE_VIA:-path}" >> "$FAKE_LOG"
+if [ $# -eq 2 ]; then
+  echo TABLE > "$2"
+  exit 0
+fi
+echo "# ESP-IDF Partition Table"
+echo "# Name, Type, SubType, Offset, Size, Flags"
+echo "nvs,data,nvs,0x9000,24K,"
+echo "otadata,data,ota,0xf000,8K,"
+echo "phy_init,data,phy,0x11000,4K,"
+echo "ota_0,app,ota_0,0x20000,4M,"
+echo "ota_1,app,ota_1,0x420000,4M,"
+echo "storage,data,fat,0x820000,8064K,"
+"##;
+
+/// Stands in for ESP-IDF's Python: `python -m esptool ...` runs the fake tool, a script runs
+/// through `sh`; both mark the log `via:embuild`.
+const FAKE_PYTHON: &str = r#"#!/bin/sh
+FAKE_VIA=embuild
+export FAKE_VIA
+if [ "$1" = "-m" ]; then
+  m=$2
+  shift 2
+  exec "$FAKE_TOOLS/$m.py" "$@"
+fi
+exec sh "$@"
+"#;
+
+const FAKE_CAPTURE: &str = "#!/bin/sh\ncat \"$FAKE_SERIAL_LOG\"\n";
+
+/// Runs the script in a pseudo-terminal (mode `pty`: the answer is typed when the prompt shows) or
+/// with no controlling terminal and the answer piped on standard input (mode `notty`).
+const HELPER: &str = r#"
+import os, pty, sys
+mode, answer = sys.argv[1], sys.argv[2]
+cmd = sys.argv[3:]
+if mode == "notty":
+    r, w = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        os.dup2(r, 0)
+        os.close(w)
+        os.execvp(cmd[0], cmd)
+    os.write(w, (answer + "\n").encode())
+    os.close(w)
+    _, status = os.waitpid(pid, 0)
+    sys.exit(os.waitstatus_to_exitcode(status))
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(cmd[0], cmd)
+buf = b""
+sent = False
+while True:
+    try:
+        data = os.read(fd, 4096)
+    except OSError:
+        break
+    if not data:
+        break
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+    buf += data
+    if not sent and b"to go on:" in buf:
+        os.write(fd, (answer + "\n").encode())
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(status))
+"#;
+
+struct Out {
+    code: i32,
+    text: String,
+}
+
+#[derive(Clone, Copy)]
+enum Tty {
+    /// The answer is typed on a terminal when the script asks.
+    Pty,
+    /// No terminal at all; the answer is piped on standard input.
+    NoTty,
+}
+
+struct Env {
+    root: PathBuf,
+    extra: Vec<(String, String)>,
+    path_has_tools: bool,
+}
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn write_exec(path: &Path, text: &str) {
+    fs::write(path, text).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// 16 MB of bytes that are neither uniform nor repeating: a backup stand-in.
+fn noise(seed: u64) -> Vec<u8> {
+    let mut x = seed | 1;
+    let mut bytes = Vec::with_capacity(FLASH_BYTES);
+    while bytes.len() < FLASH_BYTES {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        bytes.extend_from_slice(&x.to_le_bytes());
+    }
+    bytes.truncate(FLASH_BYTES);
+    bytes
+}
+
+fn sha256(path: &Path) -> String {
+    let output = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(path)
+        .output()
+        .or_else(|_| Command::new("sha256sum").arg(path).output())
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+impl Env {
+    fn new() -> Env {
+        let root = std::env::temp_dir().join(format!(
+            "solite-box-script-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["tools", "ports", "state", "tmp", "out", "build"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        write_exec(&root.join("tools/esptool.py"), FAKE_ESPTOOL);
+        write_exec(&root.join("tools/espefuse.py"), FAKE_ESPEFUSE);
+        write_exec(&root.join("tools/gen_esp32part.py"), FAKE_GEN);
+        write_exec(&root.join("capture.sh"), FAKE_CAPTURE);
+        fs::write(root.join("ports/usbserial-1"), "").unwrap();
+        fs::write(root.join("image.bin"), noise(1)).unwrap();
+        fs::write(root.join("log.txt"), "").unwrap();
+        // The fake build of the firmware: the bootloader, and the application.
+        let boot = root.join("build/build/esp-idf-sys-abc/out/build/bootloader");
+        fs::create_dir_all(&boot).unwrap();
+        fs::write(boot.join("bootloader.bin"), vec![0u8; 100]).unwrap();
+        let env = Env {
+            root,
+            extra: Vec::new(),
+            path_has_tools: true,
+        };
+        env.set_build(Build::Box);
+        env
+    }
+
+    fn with(mut self, key: &str, value: &str) -> Env {
+        self.extra.push((key.to_string(), value.to_string()));
+        self
+    }
+
+    fn path(&self, p: &str) -> PathBuf {
+        self.root.join(p)
+    }
+
+    fn port(&self) -> String {
+        self.path("ports/usbserial-1").display().to_string()
+    }
+
+    fn set_build(&self, build: Build) {
+        let text = match build {
+            Build::Box => "solite-firmware: storage\n",
+            Build::Sim => "solite-firmware: scenario: started\n",
+            Build::Measuring => "solite-firmware: scenario: started saves: written to flash\n",
+        };
+        fs::write(self.path("build/solite-firmware"), text).unwrap();
+    }
+
+    /// A backup file made for the fake box, with its `.sha256`; returns its path and its SHA-256.
+    fn backup(&self, mac_name: &str) -> (PathBuf, String) {
+        let file = self.path(&format!("out/dongle-max-{mac_name}-2026-11-22.bin"));
+        fs::copy(self.path("image.bin"), &file).unwrap();
+        let sha = sha256(&file);
+        fs::write(
+            file.with_extension("bin.sha256"),
+            format!("{sha}  {}\n", file.file_name().unwrap().to_string_lossy()),
+        )
+        .unwrap();
+        (file, sha)
+    }
+
+    /// The hardware sheet whose backup table holds one row.
+    fn sheet(&self, sha: &str, restored: &str) -> PathBuf {
+        let path = self.path("hardware.md");
+        fs::write(
+            &path,
+            format!(
+                "# Hardware\n\n| Date | Chip revision | Firmware version | SHA-256 of the backup | Restore proven |\n| ---- | ---- | ---- | ---- | ---- |\n| 2026-11-22 | v3.1 | 1.2.3 | {sha} | {restored} |\n"
+            ),
+        )
+        .unwrap();
+        path
+    }
+
+    /// The fake serial output the capture command prints.
+    fn serial(&self, text: &str) {
+        fs::write(self.path("serial.log"), text).unwrap();
+    }
+
+    fn run(&self, args: &[&str], tty: Tty, answer: &str) -> Out {
+        self.run_in(&self.root, args, tty, answer)
+    }
+
+    /// Run from a folder of the environment, as a caller who gives relative paths.
+    fn go_in(&self, dir: &str, args: &[&str]) -> Out {
+        self.run_in(&self.path(dir), args, Tty::Pty, MAC_TAIL)
+    }
+
+    fn run_in(&self, dir: &Path, args: &[&str], tty: Tty, answer: &str) -> Out {
+        let mut cmd = Command::new("/usr/bin/python3");
+        cmd.arg("-I").arg("-c").arg(HELPER);
+        cmd.arg(match tty {
+            Tty::Pty => "pty",
+            Tty::NoTty => "notty",
+        });
+        cmd.arg(answer);
+        cmd.arg("/bin/sh").arg(SCRIPT).args(args);
+        let tools = self.path("tools");
+        let path = if self.path_has_tools {
+            format!("{}:/usr/bin:/bin", tools.display())
+        } else {
+            "/usr/bin:/bin".to_string()
+        };
+        cmd.current_dir(dir)
+            .env_clear()
+            .env("PATH", path)
+            .env("TMPDIR", self.path("tmp"))
+            .env("FAKE_LOG", self.path("log.txt"))
+            .env("FAKE_STATE", self.path("state"))
+            .env("FAKE_IMAGE", self.path("image.bin"))
+            .env("FAKE_IMAGE2", self.path("image2.bin"))
+            .env("FAKE_TOOLS", &tools)
+            .env("FAKE_SERIAL_LOG", self.path("serial.log"))
+            .env("SOLITE_TARGET_DIR", self.path("build"))
+            .env(
+                "SOLITE_HARDWARE_MD",
+                self.path("hardware.md").display().to_string(),
+            )
+            .env(
+                "SOLITE_PORT_PATTERNS",
+                format!("{}/ports/usbserial*", self.root.display()),
+            )
+            .env("SOLITE_SERIAL_CAPTURE", self.path("capture.sh"))
+            .env("SOLITE_REPLUG_SECONDS", "3")
+            .env("SOLITE_ESPRESSIF", self.path("espressif"));
+        for (k, v) in &self.extra {
+            cmd.env(k, v);
+        }
+        let output = cmd.output().unwrap();
+        let log = self.fake_log();
+        assert!(!log.contains("burn"), "an eFuse burn was sent:\n{log}");
+        let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        Out {
+            code: output.status.code().unwrap_or(-1),
+            text,
+        }
+    }
+
+    /// The common case: a terminal, the right answer unless said otherwise.
+    fn go(&self, args: &[&str]) -> Out {
+        self.run(args, Tty::Pty, MAC_TAIL)
+    }
+
+    fn fake_log(&self) -> String {
+        fs::read_to_string(self.path("log.txt")).unwrap()
+    }
+
+    /// True when a write or a read of the flash reached a fake tool.
+    fn wrote(&self) -> bool {
+        let log = self.fake_log();
+        log.contains("write_flash") || log.contains("erase_region")
+    }
+
+    fn read_flash_sent(&self) -> bool {
+        self.fake_log().contains("read_flash")
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Build {
+    Box,
+    Sim,
+    Measuring,
+}
+
+fn args_of<'a>(port: &'a str, rest: &[&'a str]) -> Vec<&'a str> {
+    let mut v = vec![rest[0], "--port", port];
+    v.extend_from_slice(&rest[1..]);
+    v
+}
+
+// ---- identify ----------------------------------------------------------------------------
+
+#[test]
+fn identify_prints_five_lines_and_sends_only_reads() {
+    let env = Env::new();
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    for line in [
+        "chip: ESP32-D0WDR2-V3, revision v3.1",
+        &format!("mac: {MAC}"),
+        "flash: 16 MB",
+        "secure boot: off",
+        "flash encryption: off",
+    ] {
+        assert!(out.text.contains(line), "{line} missing in {}", out.text);
+    }
+    let log = env.fake_log();
+    assert!(log.contains("flash_id") && log.contains("summary"));
+    assert!(!env.wrote() && !env.read_flash_sent());
+}
+
+#[test]
+fn identify_exits_2_with_no_port_or_with_two() {
+    let env = Env::new();
+    fs::remove_file(env.path("ports/usbserial-1")).unwrap();
+    let out = env.go(&["identify"]);
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(out.text.contains("no USB serial device"));
+
+    fs::write(env.path("ports/usbserial-1"), "").unwrap();
+    fs::write(env.path("ports/usbserial-2"), "").unwrap();
+    let out = env.go(&["identify"]);
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(out.text.contains("usbserial-1") && out.text.contains("usbserial-2"));
+    assert!(env.fake_log().is_empty(), "no tool is run without a port");
+}
+
+#[test]
+fn identify_exits_4_when_the_box_does_not_answer() {
+    let env = Env::new().with("FAKE_NO_ANSWER", "1");
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 4, "{}", out.text);
+    assert!(out.text.contains("hold the button while plugging"));
+    assert!(out.text.contains("6638"));
+}
+
+#[test]
+fn identify_stops_on_secure_boot() {
+    let env = Env::new().with("FAKE_ABS0", "True");
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(out.text.contains("box: STOP, secure boot is on"));
+    assert!(out.text.contains("nothing is written to this box"));
+}
+
+#[test]
+fn identify_stops_on_flash_encryption() {
+    let env = Env::new().with("FAKE_CRYPT", "1");
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(out.text.contains("box: STOP, flash encryption is on"));
+}
+
+#[test]
+fn identify_stops_on_an_old_chip_or_a_small_flash() {
+    let env = Env::new().with("FAKE_REV", "v1.0");
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(out.text.contains("revision v1.0"), "{}", out.text);
+
+    let env = Env::new().with("FAKE_FLASH", "4MB");
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(out.text.contains("the flash is 4 MB, not 16 MB"));
+}
+
+#[test]
+fn the_tools_come_from_the_path_else_from_esp_idfs_environment() {
+    let env = Env::new();
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let log = env.fake_log();
+    assert!(log.contains("via:path") && !log.contains("via:embuild"));
+
+    // None on the PATH, a fake ESP-IDF tree in its place.
+    let mut env = Env::new();
+    env.path_has_tools = false;
+    let bin = env.path("espressif/python_env/idf5.5_py3.9_env/bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_exec(&bin.join("python"), FAKE_PYTHON);
+    fs::create_dir_all(env.path("espressif/esp-idf/v5.5.5/components/partition_table")).unwrap();
+    let out = env.go(&args_of(&env.port(), &["identify"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let log = env.fake_log();
+    assert!(
+        log.contains("via:embuild") && !log.contains("via:path"),
+        "{log}"
+    );
+}
+
+// ---- backup ------------------------------------------------------------------------------
+
+fn out_dir(env: &Env) -> String {
+    env.path("out").display().to_string()
+}
+
+#[test]
+fn backup_writes_the_named_file_its_hash_and_prints_the_row() {
+    for answer in ["3ABCDE", MAC_TAIL] {
+        let env = Env::new();
+        let out_arg = out_dir(&env);
+        let out = env.run(
+            &args_of(&env.port(), &["backup", "--out", &out_arg]),
+            Tty::Pty,
+            answer,
+        );
+        assert_eq!(out.code, 0, "{}", out.text);
+        let date = String::from_utf8(Command::new("date").arg("+%F").output().unwrap().stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+        let file = env.path(&format!("out/dongle-max-{MAC_NAME}-{date}.bin"));
+        assert!(file.is_file(), "{}", out.text);
+        let sha = sha256(&file);
+        let sidecar = file.with_extension("bin.sha256");
+        assert!(fs::read_to_string(&sidecar).unwrap().starts_with(&sha));
+        for path in [&file, &sidecar] {
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", path.display());
+        }
+        assert!(
+            !env.path(&format!("out/dongle-max-{MAC_NAME}-{date}.bin.read2"))
+                .exists()
+        );
+        assert!(out.text.contains(&format!("| {date} | v3.1 | | {sha} | |")));
+        assert!(!out.text.contains("box: backup NOT valid"));
+        let reads = env.fake_log().matches("read_flash 0x0 0x1000000").count();
+        assert_eq!(reads, 2);
+    }
+}
+
+#[test]
+fn backup_refuses_an_answer_piped_on_standard_input() {
+    let env = Env::new();
+    let out_arg = out_dir(&env);
+    let out = env.run(
+        &args_of(&env.port(), &["backup", "--out", &out_arg]),
+        Tty::NoTty,
+        MAC_TAIL,
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: no terminal to confirm, nothing done")
+    );
+    assert!(!env.read_flash_sent());
+}
+
+#[test]
+fn backup_stops_on_a_wrong_answer() {
+    let env = Env::new();
+    let out_arg = out_dir(&env);
+    let out = env.run(
+        &args_of(&env.port(), &["backup", "--out", &out_arg]),
+        Tty::Pty,
+        "ffffff",
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("box: not confirmed, nothing done"));
+    assert!(!env.read_flash_sent());
+}
+
+#[test]
+fn backup_is_not_valid_when_the_second_read_differs() {
+    let env = Env::new().with("FAKE_READ", "differ");
+    fs::write(env.path("image2.bin"), noise(2)).unwrap();
+    let out_arg = out_dir(&env);
+    let out = env.go(&args_of(&env.port(), &["backup", "--out", &out_arg]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: backup NOT valid, nothing to record")
+    );
+    let names: Vec<String> = fs::read_dir(env.path("out"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(names.iter().any(|n| n.ends_with(".bin")), "{names:?}");
+    assert!(names.iter().any(|n| n.ends_with(".read2")), "{names:?}");
+    assert!(!names.iter().any(|n| n.ends_with(".sha256")), "{names:?}");
+    // Both files are private, though the tool left them readable by everyone.
+    for entry in fs::read_dir(env.path("out")).unwrap() {
+        let path = entry.unwrap().path();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{}", path.display());
+    }
+}
+
+#[test]
+fn backup_dry_run_sends_no_read_flash() {
+    let env = Env::new();
+    let out_arg = out_dir(&env);
+    let out = env.go(&args_of(
+        &env.port(),
+        &["backup", "--out", &out_arg, "--dry-run"],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(!out.text.contains("to go on:"), "no prompt on a dry run");
+    assert!(!env.read_flash_sent() && !env.wrote());
+}
+
+#[test]
+fn restore_refuses_a_backup_with_no_sha256_file() {
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    fs::remove_file(file.with_extension("bin.sha256")).unwrap();
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains(".sha256 is missing"), "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn relative_paths_are_the_callers_not_the_repositorys() {
+    // restore <file>, from the folder that holds it.
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    let name = file.file_name().unwrap().to_string_lossy().to_string();
+    let out = env.go_in(
+        "out",
+        &args_of(&env.port(), &["restore", &name, "--dry-run"]),
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+
+    // backup --out <relative folder>: the file lands there.
+    let env = Env::new();
+    let out = env.go_in(".", &args_of(&env.port(), &["backup", "--out", "out"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let found = fs::read_dir(env.path("out"))
+        .unwrap()
+        .any(|e| e.unwrap().file_name().to_string_lossy().ends_with(".bin"));
+    assert!(found, "{}", out.text);
+
+    // log --from-file <relative>.
+    let env = Env::new();
+    fs::write(env.path("box.log"), box_log()).unwrap();
+    let out = env.go_in(
+        ".",
+        &args_of(
+            &env.port(),
+            &["log", "--image", "box", "--from-file", "box.log"],
+        ),
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn backup_is_not_valid_when_the_read_is_short_or_uniform() {
+    for mode in ["short", "uniform"] {
+        let env = Env::new().with("FAKE_READ", mode);
+        let out_arg = out_dir(&env);
+        let out = env.go(&args_of(&env.port(), &["backup", "--out", &out_arg]));
+        assert_eq!(out.code, 1, "{mode}: {}", out.text);
+        assert!(out.text.contains("box: backup NOT valid"), "{mode}");
+        assert!(!fs::read_dir(env.path("out")).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".sha256")
+        }));
+    }
+}
+
+#[test]
+fn backup_refuses_a_missing_out_a_folder_in_the_repository_or_an_existing_file() {
+    let env = Env::new();
+    let out = env.go(&args_of(&env.port(), &["backup"]));
+    assert_eq!(out.code, 2, "{}", out.text);
+
+    let repo_folder = format!("{REPO}/docs");
+    let out = env.go(&args_of(&env.port(), &["backup", "--out", &repo_folder]));
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(out.text.contains("inside the repository"));
+
+    let date = String::from_utf8(Command::new("date").arg("+%F").output().unwrap().stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    fs::write(
+        env.path(&format!("out/dongle-max-{MAC_NAME}-{date}.bin")),
+        "x",
+    )
+    .unwrap();
+    let out_arg = out_dir(&env);
+    let out = env.go(&args_of(&env.port(), &["backup", "--out", &out_arg]));
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(out.text.contains("already exists"));
+    assert!(!env.read_flash_sent());
+}
+
+// ---- restore -----------------------------------------------------------------------------
+
+#[test]
+fn restore_writes_the_backup_with_the_keep_flags() {
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let log = env.fake_log();
+    assert!(
+        log.contains(&format!(
+            "write_flash --flash_mode keep --flash_freq keep --flash_size keep 0x0 {f}"
+        )),
+        "{log}"
+    );
+}
+
+#[test]
+fn restore_stops_on_an_empty_or_a_wrong_answer() {
+    for answer in ["", "000000"] {
+        let env = Env::new();
+        let (file, _) = env.backup(MAC_NAME);
+        let f = file.display().to_string();
+        let out = env.run(&args_of(&env.port(), &["restore", &f]), Tty::Pty, answer);
+        assert_eq!(out.code, 1, "{}", out.text);
+        assert!(out.text.contains("box: not confirmed, nothing done"));
+        assert!(!env.wrote());
+    }
+}
+
+#[test]
+fn restore_dry_run_prints_the_plan_and_does_nothing() {
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f, "--dry-run"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("write ") && out.text.contains("at 0x0"));
+    assert!(!out.text.contains("to go on:"), "no prompt on a dry run");
+    assert!(!env.wrote());
+}
+
+#[test]
+fn restore_refuses_an_altered_file_another_box_or_a_short_file() {
+    // The SHA-256 differs from the .sha256.
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    let mut bytes = fs::read(&file).unwrap();
+    bytes[10] ^= 0xff;
+    fs::write(&file, bytes).unwrap();
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("altered"));
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+
+    // The MAC of the name is another box's.
+    let env = Env::new();
+    let (file, _) = env.backup("112233445566");
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("another box"));
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+
+    // Not 16 MB.
+    let env = Env::new();
+    let (file, _) = env.backup(MAC_NAME);
+    fs::write(&file, vec![1u8; 1000]).unwrap();
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn restore_prints_the_two_ways_out_when_the_write_fails() {
+    let env = Env::new().with("FAKE_WRITE_FAIL", "1");
+    let (file, _) = env.backup(MAC_NAME);
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("--baud 115200"));
+    assert!(out.text.contains("Sonoff's web flasher"));
+}
+
+#[test]
+fn restore_stops_on_an_unfit_box_before_the_prompt() {
+    let env = Env::new().with("FAKE_ABS0", "True");
+    let (file, _) = env.backup(MAC_NAME);
+    let f = file.display().to_string();
+    let out = env.go(&args_of(&env.port(), &["restore", &f]));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+// ---- flash -------------------------------------------------------------------------------
+
+/// A box with a backup, a sheet that lists it, and the image built.
+fn ready(image: &str) -> (Env, String, String) {
+    let env = Env::new();
+    let (file, sha) = env.backup(MAC_NAME);
+    env.sheet(&sha, "2026-11-22");
+    let _ = image;
+    let f = file.display().to_string();
+    (env, f, sha)
+}
+
+#[test]
+fn flash_erases_the_settings_and_writes_the_three_parts() {
+    let (env, f, _) = ready("box");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let log = env.fake_log();
+    for region in [
+        "erase_region 0x9000 0x6000",
+        "erase_region 0xf000 0x2000",
+        "erase_region 0x820000 0x7e0000",
+    ] {
+        assert!(log.contains(region), "{region} missing in\n{log}");
+    }
+    let write = log
+        .lines()
+        .find(|l| l.contains("write_flash"))
+        .expect("write_flash sent");
+    assert!(write.contains("0x1000 ") && write.contains("bootloader.bin"));
+    assert!(write.contains("0x8000 ") && write.contains("partition-table.bin"));
+    assert!(write.contains("0x20000 ") && write.contains("app.bin"));
+    assert!(
+        log.find("erase_region").unwrap() < log.find("write_flash").unwrap(),
+        "the erase comes first"
+    );
+    assert!(log.contains("elf2image --flash_mode dio --flash_size 16MB"));
+}
+
+#[test]
+fn flash_refuses_a_backup_that_is_not_proven() {
+    // No --backup.
+    let (env, _, _) = ready("box");
+    let out = env.go(&args_of(&env.port(), &["flash", "--image", "box"]));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+
+    // Its SHA-256 is in no row.
+    let (env, f, _) = ready("box");
+    env.sheet(&"0".repeat(64), "2026-11-22");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("in no row"));
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+
+    // Its row has no restore date: empty, or anything that is not a date.
+    for cell in ["", "no", "pending", "—", "2026-11"] {
+        let (env, f, sha) = ready("box");
+        env.sheet(&sha, cell);
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", "box", "--backup", &f],
+        ));
+        assert_eq!(out.code, 1, "cell {cell:?}: {}", out.text);
+        assert!(out.text.contains("no restore date"), "cell {cell:?}");
+        assert!(!out.text.contains("to go on:") && !env.wrote());
+    }
+
+    // Its MAC is another box's.
+    let env = Env::new();
+    let (file, sha) = env.backup("112233445566");
+    env.sheet(&sha, "2026-11-22");
+    let f = file.display().to_string();
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("another box"));
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn flash_dry_run_prints_the_regions_and_does_nothing() {
+    let (env, f, _) = ready("box");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f, "--dry-run"],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+    for text in [
+        "erase nvs: 0x9000, 24576 bytes",
+        "erase otadata: 0xf000, 8192 bytes",
+        "erase storage: 0x820000, 8257536 bytes",
+        "bootloader at 0x1000",
+        "partition table at 0x8000",
+        "application at 0x20000",
+    ] {
+        assert!(out.text.contains(text), "{text} missing in {}", out.text);
+    }
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn flash_stops_on_an_unfit_box_before_the_prompt() {
+    let (env, f, _) = ready("box");
+    let env = env.with("FAKE_CRYPT", "3");
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 3, "{}", out.text);
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn flash_refuses_the_wrong_image_and_names_the_build() {
+    // `sim` with the image QEMU runs (no "written to flash").
+    let (env, f, _) = ready("sim");
+    env.set_build(Build::Sim);
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "sim", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("cargo build --release --features flash-saves")
+    );
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+
+    // `box` with a sim build.
+    for build in [Build::Sim, Build::Measuring] {
+        let (env, f, _) = ready("box");
+        env.set_build(build);
+        let out = env.go(&args_of(
+            &env.port(),
+            &["flash", "--image", "box", "--backup", &f],
+        ));
+        assert_eq!(out.code, 1, "{}", out.text);
+        assert!(out.text.contains("cargo build --release"));
+        assert!(!out.text.contains("to go on:") && !env.wrote());
+    }
+
+    // The right pair goes through.
+    let (env, f, _) = ready("sim");
+    env.set_build(Build::Measuring);
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "sim", "--backup", &f],
+    ));
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn flash_refuses_a_missing_application_or_one_larger_than_the_slot() {
+    let (env, f, _) = ready("box");
+    fs::remove_file(env.path("build/solite-firmware")).unwrap();
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("not found"));
+    assert!(!env.wrote());
+
+    // 4 MB is the slot: one byte more is refused.
+    let (env, f, _) = ready("box");
+    let env = env.with("FAKE_APP_SIZE", &(4 * 1024 * 1024 + 1).to_string());
+    let out = env.go(&args_of(
+        &env.port(),
+        &["flash", "--image", "box", "--backup", &f],
+    ));
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("larger than the ota_0 slot"));
+    assert!(!out.text.contains("to go on:") && !env.wrote());
+}
+
+#[test]
+fn flash_stops_on_a_wrong_answer() {
+    let (env, f, _) = ready("box");
+    let out = env.run(
+        &args_of(&env.port(), &["flash", "--image", "box", "--backup", &f]),
+        Tty::Pty,
+        "abcdef",
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("box: not confirmed, nothing done"));
+    assert!(!env.wrote());
+}
+
+// ---- log ---------------------------------------------------------------------------------
+
+fn box_log() -> String {
+    format!(
+        "ets Jun  8 2016 00:22:57\nrst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\n\
+         I (400) solite: solite {VERSION}\n\
+         I (410) solite: memory: internal 245 KB free (largest block 110 KB), psram 2039 KB free of 2048 KB\n\
+         I (420) solite: storage: formatted (does not mount)\n\
+         I (421) solite: storage: /data, 12 KB used of 7936 KB\n\
+         I (430) solite: network: wifi (setting auto), no link started\n\
+         I (431) solite: radio: none\n"
+    )
+}
+
+fn sim_log(peak: u32, internal_min: u32, reported: u32, saves: bool) -> String {
+    let mut text = box_log().replace("radio: none\n", "seed: realistic home written to /data\n");
+    text.push_str("I (500) solite: scenario: started\n");
+    text.push_str(&format!(
+        "I (900) solite: engine: 50 devices ({reported} reported), 10 zones, 50 equipments, 3 recipes; \
+         heap 170 KB (peak {peak} KB); internal 221 KB free (min {internal_min} KB); \
+         psram 1985 KB free (min 1916 KB)\n"
+    ));
+    if saves {
+        text.push_str(
+            "I (901) solite: saves: 49 written to flash, longest 410 ms (devices.json, 94 KB), total 8200 ms\n",
+        );
+    }
+    text
+}
+
+fn log_from(env: &Env, text: &str, extra: &[&str]) -> Out {
+    let file = env.path("captured.log");
+    fs::write(&file, text).unwrap();
+    let f = file.display().to_string();
+    let mut args = vec!["log", "--from-file", &f];
+    args.extend_from_slice(extra);
+    env.go(&args)
+}
+
+#[test]
+fn log_checks_the_box_image_from_a_file() {
+    let env = Env::new();
+    let out = log_from(&env, &box_log(), &["--image", "box"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    for line in [
+        &*format!("solite {VERSION}"),
+        "memory: internal 245 KB free",
+        "storage: /data, 12 KB used",
+        "network: wifi",
+        "radio: none",
+    ] {
+        assert!(out.text.contains(line), "{line} missing in {}", out.text);
+    }
+    assert!(env.fake_log().is_empty(), "a file needs no tool");
+}
+
+#[test]
+fn log_checks_the_measuring_image_and_prints_its_engine_and_saves_lines() {
+    let env = Env::new();
+    let out = log_from(&env, &sim_log(312, 107, 50, true), &["--image", "sim"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("engine: 50 devices (50 reported)"));
+    assert!(
+        out.text
+            .contains("saves: 49 written to flash, longest 410 ms")
+    );
+}
+
+#[test]
+fn log_fails_on_a_reset_after_the_banner_or_a_panic() {
+    let env = Env::new();
+    let looping = format!(
+        "{}rst:0xc (SW_CPU_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\n",
+        box_log()
+    );
+    let out = log_from(&env, &looping, &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("last 40 lines"));
+    assert!(out.text.contains("rst:0xc"));
+
+    let panic = format!(
+        "{}Guru Meditation Error: Core 0 panic'ed (LoadProhibited)\n",
+        box_log()
+    );
+    let out = log_from(&env, &panic, &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("Guru Meditation Error"));
+}
+
+#[test]
+fn log_does_not_count_the_resets_before_the_banner() {
+    let env = Env::new();
+    let text = format!(
+        "rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\nrst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)\n{}",
+        box_log()
+    );
+    let out = log_from(&env, &text, &["--image", "box"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn log_expect_kept_fails_on_a_formatted_partition() {
+    let env = Env::new();
+    let out = log_from(&env, &box_log(), &["--image", "box", "--expect-kept"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("storage: formatted"));
+
+    let kept = box_log().replace("storage: formatted (does not mount)\n", "");
+    let out = log_from(&env, &kept, &["--image", "box", "--expect-kept"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+
+    let out = log_from(&env, &box_log(), &["--image", "box"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn log_raw_writes_the_capture_and_checks_nothing() {
+    let env = Env::new();
+    env.serial("this is not a solite boot\n");
+    let out = env.go(&args_of(&env.port(), &["log", "--raw"]));
+    assert_eq!(out.code, 0, "{}", out.text);
+    let logs: Vec<PathBuf> = fs::read_dir(env.path("tmp/solite-box"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("serial-")
+        })
+        .collect();
+    assert_eq!(logs.len(), 1, "{}", out.text);
+    assert_eq!(
+        fs::read_to_string(&logs[0]).unwrap(),
+        "this is not a solite boot\n"
+    );
+}
+
+#[test]
+fn log_replug_waits_for_the_port_to_come_back() {
+    let env = Env::new();
+    env.serial(&box_log());
+    let port = env.path("ports/usbserial-1");
+    fs::remove_file(&port).unwrap();
+    let late = port.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        fs::write(late, "").unwrap();
+    });
+    let p = port.display().to_string();
+    let out = env.go(&["log", "--image", "box", "--port", &p, "--replug"]);
+    handle.join().unwrap();
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(out.text.contains("radio: none"));
+
+    // The port never comes back within the time allowed.
+    let env = Env::new();
+    env.serial(&box_log());
+    let port = env.path("ports/usbserial-1");
+    fs::remove_file(&port).unwrap();
+    let p = port.display().to_string();
+    let out = env.go(&["log", "--image", "box", "--port", &p, "--replug"]);
+    assert_eq!(out.code, 4, "{}", out.text);
+}
+
+#[test]
+fn log_fails_when_the_psram_is_not_found() {
+    let env = Env::new();
+    let text = box_log().replace("psram 2039 KB free of 2048 KB", "psram none");
+    let out = log_from(&env, &text, &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("PSRAM"));
+}
+
+#[test]
+fn log_fails_on_a_limit_of_the_measuring_image_and_names_the_figure() {
+    let env = Env::new();
+    let out = log_from(&env, &sim_log(351, 107, 50, true), &["--image", "sim"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("351 KB"));
+
+    let out = log_from(&env, &sim_log(312, 63, 50, true), &["--image", "sim"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("63 KB"));
+
+    let out = log_from(&env, &sim_log(312, 107, 49, true), &["--image", "sim"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("only 49 of the 50 devices"));
+
+    let out = log_from(&env, &sim_log(312, 107, 50, false), &["--image", "sim"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("saves:"));
+}
+
+#[test]
+fn log_fails_on_a_missing_line_and_names_it() {
+    let env = Env::new();
+    let text = box_log().replace(
+        "I (430) solite: network: wifi (setting auto), no link started\n",
+        "",
+    );
+    let out = log_from(&env, &text, &["--image", "box"]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.text.contains("network line"));
+}
+
+// ---- the radio's pins --------------------------------------------------------------------
+
+/// True when the text names GPIO12 or GPIO15 in any spelling (`GPIO12`, `Gpio12`, `gpio12`).
+fn names_the_radios_pins(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    ["gpio12", "gpio15", "gpio_num_12", "gpio_num_15"]
+        .iter()
+        .any(|pin| lower.contains(pin))
+}
+
+#[test]
+fn the_pin_check_finds_both_radio_pins() {
+    assert!(names_the_radios_pins("let p = pins.gpio12;"));
+    assert!(names_the_radios_pins("Gpio15"));
+    assert!(names_the_radios_pins("// GPIO12 is a strapping pin"));
+    assert!(names_the_radios_pins("GPIO_NUM_12"));
+    assert!(names_the_radios_pins("gpio_num_15"));
+    assert!(!names_the_radios_pins("let p = pins.gpio13;"));
+}
+
+/// Every `.rs` file under `dir`, at any depth.
+fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            rust_files(&path, found);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn no_file_of_the_firmware_names_gpio12_or_gpio15() {
+    let dir = Path::new(REPO).join("firmware/src");
+    let mut files = Vec::new();
+    rust_files(&dir, &mut files);
+    assert!(!files.is_empty(), "no source found in {}", dir.display());
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            !names_the_radios_pins(&text),
+            "{} names GPIO12 or GPIO15: the radio's pins are not driven",
+            path.display()
+        );
+    }
+}

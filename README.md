@@ -31,7 +31,7 @@ What the tool does today: [docs/living-spec/](docs/living-spec/README.md). Where
    - macOS: `brew install cmake ninja`; Linux: install `cmake`, `ninja-build`, `python3`,
      `python3-venv` and `libudev-dev` with the system's package manager; Windows: follow the
      [espup prerequisites](https://github.com/esp-rs/espup#requirements);
-   - then `cargo install espup ldproxy espflash --locked` and `espup install --targets esp32`;
+   - then `cargo install espup ldproxy --locked` and `espup install --targets esp32`;
    - QEMU's system libraries, to boot the firmware in an emulated ESP32: macOS:
      `brew install libgcrypt glib pixman sdl2 libslirp`; Debian or Ubuntu: `libgcrypt20
      libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0`. QEMU itself is downloaded into
@@ -57,12 +57,15 @@ cd ui && npm run dev                              # the interface in development
 cd firmware && cargo build --release              # the ESP32 firmware (box image; --features sim: the QEMU image)
 sh scripts/e2e-sim.sh                             # the simulated path driven in headless Chromium (cd tools/e2e && npm ci first)
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
+sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash, log)
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```
 
-The firmware is built, not flashed: the Dongle Max keeps its original firmware during development
-(see [docs/decisions.md](docs/decisions.md), D6).
+The firmware is flashed only through `sh scripts/box.sh flash`, with the user's yes for each write: the
+command asks, on the terminal, for the end of the box's MAC address, and refuses without a backup of the
+original firmware that was restored once (see [docs/decisions.md](docs/decisions.md), D6 and D31, and
+[docs/hardware.md](docs/hardware.md)). Without a flash, the Dongle Max keeps its original firmware.
 
 ## How the project is worked on
 

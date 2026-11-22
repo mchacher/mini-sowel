@@ -66,6 +66,7 @@ cargo test -p solite-core --test banner      # one Rust test file
 cd ui && npx vitest run src/App.test.tsx         # one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
+sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash: the user runs them)
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (macOS, Linux)
 sh scripts/validate.sh                           # the verdict
 sh scripts/validate.sh --fast                    # quick checks (the pre-commit hook)
