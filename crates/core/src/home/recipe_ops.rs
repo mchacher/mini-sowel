@@ -7,7 +7,7 @@ use super::events::EventQueue;
 use super::{Home, ListCursor, new_id};
 use crate::devices::Random;
 use crate::failure::Outcome;
-use crate::recipes::{RecipeEngine, RecipeInstance};
+use crate::recipes::{RecipeEngine, RecipeInstance, Settle};
 
 impl Home {
     /// The recipe instances, with their logs.
@@ -89,6 +89,18 @@ impl Home {
             self.recipes_changed = true;
         }
         Ok(())
+    }
+
+    /// Settles the instances after a change of the home that can make their settings stale
+    /// (spec 024, R4); `recipes.json` is written when one changed. Never fails.
+    pub(crate) fn settle_recipes(&mut self, change: Settle, wall: u64) {
+        if self.recipes.is_empty() {
+            return;
+        }
+        let mono = self.mono(wall);
+        if self.with_engine(|engine, home| engine.settle(home, &change, wall, mono)) {
+            self.recipes_changed = true;
+        }
     }
 
     /// The instances read from storage, not started yet (`start_recipes`).

@@ -12,7 +12,7 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["devices"], _) => method_not_allowed(),
         (["devices", id], "GET") => get(home, id),
         (["devices", id], "PUT") => update(home, id, request.body, now),
-        (["devices", id], "DELETE") => delete(home, id),
+        (["devices", id], "DELETE") => delete(home, id, now),
         (["devices", _], _) => method_not_allowed(),
         _ => error(404, "Not found"),
     }
@@ -28,7 +28,7 @@ fn get(home: &Home, id: &str) -> Response {
         .map_or_else(not_found, |device| json(200, device))
 }
 
-fn delete(home: &mut Home, id: &str) -> Response {
+fn delete(home: &mut Home, id: &str, now: u64) -> Response {
     // The engine is still identifying or setting up this device: it would come back at once.
     if home
         .devices
@@ -37,7 +37,7 @@ fn delete(home: &mut Home, id: &str) -> Response {
     {
         return error(409, "Device is being paired");
     }
-    if home.remove_device(id) {
+    if home.remove_device(id, now) {
         no_content()
     } else {
         not_found()

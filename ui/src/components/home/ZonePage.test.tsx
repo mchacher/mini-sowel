@@ -6,10 +6,13 @@ import {
   fixtures,
   light,
   mockApi,
+  motionLightRecipe,
+  recipeInstance,
   resetStores,
   sensor,
   zone,
 } from "../../test-utils";
+import { useRecipes } from "../../store/useRecipes";
 import { useZones } from "../../store/useZones";
 import { ZonePage } from "./ZonePage";
 
@@ -160,5 +163,32 @@ describe("ZonePage", () => {
     expect(screen.getByText("Choose at least one device")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("ZBMINIR2"));
     expect(create.disabled).toBe(false);
+  });
+
+  it("shows the Recipes panel under the equipments when the host has recipes, and none without", () => {
+    render(
+      <ZonePage
+        zone={garage}
+        aggregate={aggregate()}
+        equipments={[light("l", "Garage light", "garage", true)]}
+        onExecuteOrder={noOrder}
+      />,
+    );
+    expect(screen.queryByRole("heading", { name: "Recipes" })).toBeNull();
+    cleanup();
+    useRecipes.setState({
+      recipes: [motionLightRecipe()],
+      instances: [recipeInstance("i1", { zone: "garage", lights: ["l"] })],
+    });
+    render(
+      <ZonePage
+        zone={garage}
+        aggregate={aggregate()}
+        equipments={[light("l", "Garage light", "garage", true)]}
+        onExecuteOrder={noOrder}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Recipes" })).toBeTruthy();
+    expect(screen.getByText("Motion Light")).toBeTruthy();
   });
 });

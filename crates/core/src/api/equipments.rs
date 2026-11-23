@@ -26,7 +26,7 @@ pub fn route(
             None => error(404, "Equipment not found"),
         },
         (["equipments", id], "PUT") => update(home, id, request.body, now),
-        (["equipments", id], "DELETE") => match home.delete_equipment(id) {
+        (["equipments", id], "DELETE") => match home.delete_equipment(id, now) {
             Ok(()) => no_content(),
             Err(e) => failure(&e),
         },
@@ -35,13 +35,13 @@ pub fn route(
         (["equipments", id, "order-bindings"], "POST") => add_order(home, id, request.body, random),
         (["equipments", _, "data-bindings" | "order-bindings"], _) => method_not_allowed(),
         (["equipments", id, "data-bindings", binding], "DELETE") => {
-            match home.remove_data_binding(id, binding) {
+            match home.remove_data_binding(id, binding, now) {
                 Ok(()) => no_content(),
                 Err(e) => failure(&e),
             }
         }
         (["equipments", id, "order-bindings", binding], "DELETE") => {
-            match home.remove_order_binding(id, binding) {
+            match home.remove_order_binding(id, binding, now) {
                 Ok(()) => no_content(),
                 Err(e) => failure(&e),
             }

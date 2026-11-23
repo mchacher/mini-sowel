@@ -360,7 +360,8 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   rules and messages: the root cannot be deleted, nor a zone with child zones or equipments; a
   zone cannot move under itself or a descendant. Deleting a zone returns its devices to no zone.
   At most 32 zones (the root included).
-- **Equipments**: types `light_onoff`, `light_dimmable`, `shutter`, `sensor`, `switch`,
+- **Equipments**: a device removed takes its bindings away from the equipments, each of which then
+  gets `equipment.updated`. Types `light_onoff`, `light_dimmable`, `shutter`, `sensor`, `switch`,
   `thermostat`, `button`. `POST /api/v1/equipments {name, type, zoneId, deviceIds}` binds every
   data and order of the given devices under their key as alias (`temperature`, `state`...) (the
   interface binds otherwise: see "Shows the home in the browser");
@@ -421,10 +422,24 @@ Sowel's 1.1.2), through Sowel's routes:
 - **What survives a restart**: the instances, in `recipes.json` beside the other files, written at
   once; each enabled one is started again (one that no longer validates logs `Failed to restore:
   <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
-  read stops the host; an entry beyond 16, or with an id already seen, is dropped. A light
-  equipment deleted (from the API or the interface) while an instance uses it: the running instance
-  counts it as off and logs an error for each order to it, the other lights still served; at the
-  next start the instance no longer validates (`Light equipment not found: <id>`) and stays stopped.
+  read stops the host; an entry beyond 16, or with an id already seen, is dropped.
+- **When what it uses changes** (decision D38; Sowel keeps the stale ids): right after an
+  equipment is deleted or changed, a binding removed, a device removed or a zone deleted, the
+  instances settle. A deleted equipment leaves the settings of every instance that names it (its
+  id taken out of the lights, the buttons, or the legacy `light`, which becomes empty), with the
+  warning `Equipment removed from settings: <name>` in its log, and the change is written. Every
+  enabled instance is then checked as a creation is: one that no longer validates is stopped,
+  disabled and written, with the error `Disabled: <reason>` (`At least one light is required`, a
+  light no longer in the zone or without its `state` order binding...) and the events
+  `recipe.instance.stopped` (when it ran) and `recipe.instance.error`; it sends no order after
+  that. A running one whose settings lost an id and still validates starts again with them (its
+  start line, its state reset). An instance whose zone is deleted is deleted with its log
+  (`recipe.instance.removed`). A renamed equipment, or a change nothing uses, leaves the instances
+  untouched; a disabled instance is only pruned. `POST .../enable` on an instance whose settings
+  no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled. A motion sensor
+  deleted under a running instance is not settled: its motion simply stops.
+- **From the interface**: the instances are made, changed, enabled, disabled and deleted, and
+  their log read, from a room's page (see "Shows the home in the browser").
 - **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
   waiting for the recipes.
 
@@ -436,7 +451,8 @@ still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, 
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
 it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
 the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
-equipment", a device's "Create equipment"), as well as showing them. The interface also opens at
+equipment", a device's "Create equipment") and sets the recipes (a room's Recipes panel), as well
+as showing them. The interface also opens at
 `http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
 copy embedded in the radio image at build time.
 
@@ -450,6 +466,26 @@ copy embedded in the radio image at build time.
   dimmed without control; an "Add equipment" button opens the equipment form with the room chosen.
   "No room yet: create one in the Topology page" when only the home's root exists and it holds no equipment; "No equipment
   in this room".
+- **The room's recipes**: under its equipments, the **Recipes** panel (when the host has a
+  recipe) with the number of instances whose zone is the room and a "+" that lists the recipes
+  (name, description); picking one opens the form under the panel. Each instance is a row: the
+  recipe's icon and name (French from the recipe's `i18n.fr`), the names of its lights (three,
+  then `+N`), a timer pill counting down to the off timer and an "Override" pill while enabled,
+  and a switch that enables or disables it (dimmed when disabled; a refusal shows its text for
+  5 s). A click on its name opens its journal: the log newest first, `HH:MM` and message, errors
+  and warnings in their colours, read again every 5 s while open ("No entries"; "The journal could
+  not be read" when the first read fails), with a **Settings** button (Delete, for a recipe the
+  host does not know). Settings opens the form in a dialog, filled from the instance, with Save
+  and Delete (confirmed). "No recipe in <room>" and an "Add a recipe" link when the room has none.
+  **The form** is built from the recipe's slots, in their order, each with its name (`*` when
+  required) and description: the zone is the room; an equipment list is a checkbox per equipment
+  of the room of the slot's type; a duration is a number of minutes ("min"), sent as `"<n>m"`; a
+  number, a checkbox for a boolean, a select for `select`, a text field otherwise; defaults from
+  the slots (the timeout 10). As Sowel's, the lux threshold shows only when the room has a
+  luminosity, the buttons only when the home has a button equipment. A required slot left empty
+  shows "<slot> is required" and sends nothing; a refusal shows the host's text under the form,
+  which stays open. Every `recipe.instance.*` event reads the instances again (a burst read once,
+  then once more after 1 s).
 - **Devices**: `#/devices`: every device by name, with its status, name (editable), manufacturer,
   model and Equipment column ("Room › Equipment" for each equipment that binds it, the room a link
   to its page; "—" when none); "Create equipment" on a device with none; delete (confirmed; a
@@ -679,3 +715,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 021 | The firmware's radio image drives the radio over the serial link, runs the engine on the box, and pairs a device at boot |
 | 022 | The rules for serving on the local network in the core, the interface packed for the flash, the scripts on an address, the 33 requests measured |
 | 023 | The radio image joins Wi-Fi and serves Sowel's API, its live events and the interface from its flash |
+| 024 | Recipes from a room's page (list, form from the slots, enable and disable, journal, settings, delete); a recipe settles when what it uses changes |

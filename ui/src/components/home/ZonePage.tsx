@@ -2,7 +2,7 @@
 // the 11-store WebSocket and a router; this one keeps its parts (the title, Sowel's
 // ZoneHeroLead and ZoneAggregationPills, Sowel's Panel with the equipments grouped by family) and
 // nothing else; its "Add equipment" button opens Sowel's equipment form with this room chosen
-// (spec 018).
+// (spec 018); under the equipments, the room's Recipes panel (spec 024).
 import { useState } from "react";
 import {
   Box,
@@ -27,6 +27,7 @@ import { Panel, SliceHeader } from "./Panel";
 import { ZoneAggregationPills } from "./ZoneAggregationPills";
 import { ZoneHeroLead } from "./ZoneHeroLead";
 import { NewEquipmentForm } from "../equipments/NewEquipmentForm";
+import { ZoneRecipesSection } from "../recipes/ZoneRecipesSection";
 
 // One icon for each section of Sowel's ZoneEquipmentsView (its openings icon is a shutter, which
 // the tool has not).
@@ -105,6 +106,14 @@ export function ZonePage({
             </div>
           ))}
         </Panel>
+      )}
+      {!empty && (
+        <ZoneRecipesSection
+          zoneId={zone.id}
+          zoneName={zone.name}
+          equipments={equipments}
+          aggregate={aggregate}
+        />
       )}
       {adding && <NewEquipmentForm defaultZoneId={zone.id} onClose={() => setAdding(false)} />}
     </div>

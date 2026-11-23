@@ -40,7 +40,7 @@ in a real annex without intervention (the true north's test).
 | - | --------- | --------- | ------ |
 | J1 | Add a device from the interface: pairing while serving, per integration (Administration › Discovery), the device appears live and named; it has no room of its own (the room is its equipment's, J2) | The ZBMINIR2 is added without a terminal | |
 | J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | |
-| J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | |
+| J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | built (spec 024); a recipe settles when what it uses changes (D38) |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
 | J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | |
@@ -148,9 +148,11 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | Run the pending box checks of spec 023: the lost link (access point off), no 1970 date on the flash after a boot with the access point off, a wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered relay, the console's long and unknown lines, a client that stops reading, the power-on cases with the access point or its Internet off | Spec 023 |
 | 2026-11-22 | A device that speaks during the clock wait keeps a `lastSeen` of 1970 until it speaks again (seen on the box: the ZBMINIR2 at 4.6 s, the clock set at 19.5 s), so the interface shows it from 1970 and a save after the clock writes that date to the flash: R3.2's "a normal boot writes no 1970 date" holds only for what is stamped after the clock. Shift the dates taken before the clock by the jump, or treat them as unknown, as `motionSince` now is | Spec 023 run |
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
-| 2026-11-22 | Events missing in the core: `remove_device` drops bindings without `equipment.updated` and `set_device_zone` emits nothing (Sowel emits both) | Architecture review 2026-11-22 |
-| 2026-11-22 | A running recipe keeps stale ids when an equipment it uses is deleted or its bindings change (its orders fail, the log says so): settle in J3's spec | Architecture review 2026-11-22 |
-| 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): look at it in J3 and J6 | Architecture review 2026-11-22 |
+| 2026-11-22 | `set_device_zone` emits nothing (Sowel's `EngineEvent` has no `device.updated`: check what Sowel's interface reads instead). The `remove_device` half is done (spec 024) | Architecture review 2026-11-22 |
+| 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); look again in J6 | Architecture review 2026-11-22 |
+| 2026-11-23 | A motion sensor (or its binding) deleted under a running motion-light is not settled: the instance keeps its resolved sources until its next start; resolve them again on an equipment change, if Sowel does | Spec 024 |
+| 2026-11-23 | A motion-light whose button loses its device or its `action` binding is disabled whole (D38's validation), so the garage stops lighting on motion until the button is taken out: prune such a button instead, for a box that runs a month alone | Spec 024 review |
+| 2026-11-23 | Rule: a budget of flash writes for the tests on the box (see D39, proposed): one pass of a flow on the real box, loops and measures on the Mac or in QEMU; each box run notes its writes | User, 2026-11-23 |
 | 2026-11-22 | The home lock is held for a whole batch of measures, aggregation included: measure it before device recognition adds work per measure | Architecture review 2026-11-22 |
 | 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
 
@@ -277,3 +279,7 @@ Every change to this roadmap: date, what changed, why.
   inbox lines on the power-on needed to pair are removed (D36 answers them), the J4 pairing line
   rewritten; the 33 requests measured over 10 s (inbox line replaces the one asking to measure); the
   pending box checks narrowed to what was not run; new line: a `lastSeen` taken before the clock stays 1970.
+- 2026-11-23: spec 024 (J3) built: recipes from a room's page; a recipe settles when what it uses
+  changes (D38). The stale-ids inbox line is done and removed; the missing-events line keeps its
+  `set_device_zone` half; the GET line is kept for J6. New lines: a deleted motion sensor is not
+  settled; the flash-write budget rule for box tests (D39, proposed).

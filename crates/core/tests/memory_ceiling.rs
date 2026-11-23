@@ -28,28 +28,15 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_300_kb()
 
     let Realistic {
         mut home,
-        lights,
+        lights: _,
         instance_ids,
         ..
     } = realistic::build(&mut random);
-    // The lights lose their order bindings after the start, so that every switching logs an
-    // error line (16 lights named, cut at 200 bytes) besides its info line.
-    for light in &lights {
-        let bindings: Vec<String> = home
-            .equipments()
-            .get(light)
-            .unwrap()
-            .order_bindings
-            .iter()
-            .map(|b| b.id.to_string())
-            .collect();
-        for binding in bindings {
-            let path = format!("/api/v1/equipments/{light}/order-bindings/{binding}");
-            let removed = handle(&mut home, &request("DELETE", &path, b""), T0, &mut random);
-            assert_eq!(removed.status, 204);
-        }
-    }
-    // The button is pressed (a voltage report) until every log is full: 2 lines per press.
+    // The lights keep their bindings: since spec 024 a light that loses its toggle binding
+    // disables the instance (R4), so the long error lines of a missing binding no longer come;
+    // the logs fill with the switching lines, and the worst case (every entry at 200 bytes) is
+    // added to the peak below.
+    // The button is pressed (a voltage report) until every log is full.
     let press = MeasureEvent {
         sender: Sender::Eui64([0x00, 0x12, 0x4B, 0x00, 0x12, 0x34, 0x56, 0]),
         endpoint: 1,
@@ -61,7 +48,7 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_300_kb()
         }],
     };
     let mut now = T0;
-    for _ in 0..30 {
+    for _ in 0..60 {
         now += 1000;
         home.measures(&press, now, &mut random).unwrap();
         home.recompute(now);
@@ -117,7 +104,7 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_300_kb()
     assert_eq!(hub.close_request(client), None, "not overflowed");
     let (queued_events, queued_bytes) = hub.queued(client);
 
-    // The logs: 50 entries each, about half of them 200 bytes. The worst case (every entry 200
+    // The logs: 50 entries each, of switching lines. The worst case (every entry 200
     // bytes) is added to the peak to show that it fits too.
     let mut log_bytes = 0usize;
     for id in &instance_ids {

@@ -783,7 +783,7 @@ fn a_disabled_light_among_two_gets_no_order_and_no_log_line_but_counts_in_the_me
 }
 
 #[test]
-fn a_light_deleted_while_running_is_reported_as_having_no_toggle_binding() {
+fn a_light_deleted_while_running_leaves_its_settings_and_the_other_light_is_served() {
     let mut rig = Rig::new();
     let g = rig.garage();
     let relay2 = rig.relay(0x7B);
@@ -792,19 +792,19 @@ fn a_light_deleted_while_running_is_reported_as_having_no_toggle_binding() {
     rig.sent();
     let (status, _) = rig.delete(&format!("/api/v1/equipments/{second}"));
     assert_eq!(status, 204);
+    // Spec 024: pruned and restarted (its sync switches the remaining light off).
+    assert_eq!(rig.sent(), [Command::Off]);
     rig.report(&motion(PIR, true));
     assert_eq!(rig.sent(), [Command::On], "the other light is switched");
     let messages = rig.messages(&id);
-    assert_eq!(
-        messages[messages.len() - 2],
-        format!("Error turning on some lights: {second}: no toggle order binding")
+    assert!(
+        !messages.iter().any(|m| m.starts_with("Error")),
+        "{messages:?}"
     );
     assert_eq!(
         messages[messages.len() - 1],
-        "Motion detected — 2 light(s) turned on"
+        "Motion detected — 1 light(s) turned on"
     );
-    let (_, log) = rig.get(&format!("/api/v1/recipe-instances/{id}/log?limit=2"));
-    assert_eq!(log[1]["level"], "error");
 }
 
 #[test]

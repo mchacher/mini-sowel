@@ -749,7 +749,7 @@ fn a_device_deleted_from_the_home_comes_back_as_new_when_it_announces_itself_in_
     window.ask(30);
     window.run(40_000, &[]);
     let first = lock(&window.home).devices.list()[0].device.id.to_string();
-    assert!(lock(&window.home).remove_device(&first));
+    assert!(lock(&window.home).remove_device(&first, 0));
     // The device is still in the simulated network: it announces itself again.
     let mut ncp = window.bench.ncp.borrow_mut();
     let mut again = device(Kind::Relay, 0x22, 0x2002);

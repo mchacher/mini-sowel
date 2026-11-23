@@ -868,8 +868,7 @@ fn recipe_instances_tell_their_life_as_sowels_recipe_manager_does() {
     );
     assert_eq!(status, 200);
     assert_eq!(types(&batch(&hub, c)), ["recipe.instance.started"]);
-    // Disabled again, the light gone: enabling cannot start it, which is told as a state
-    // change; disabling an instance that is enabled but not running is one too.
+    // Disabled again, the light gone: enabling is refused (spec 024, R4.7) and tells nothing.
     rig.post(
         &format!("/api/v1/recipe-instances/{instance}/disable"),
         json!({}),
@@ -878,16 +877,12 @@ fn recipe_instances_tell_their_life_as_sowels_recipe_manager_does() {
     let (status, _) = rig.delete(&format!("/api/v1/equipments/{}", garage.light));
     assert_eq!(status, 204);
     batch(&hub, c);
-    rig.post(
+    let (status, _) = rig.post(
         &format!("/api/v1/recipe-instances/{instance}/enable"),
         json!({}),
     );
-    assert_eq!(types(&batch(&hub, c)), ["recipe.instance.state.changed"]);
-    rig.post(
-        &format!("/api/v1/recipe-instances/{instance}/disable"),
-        json!({}),
-    );
-    assert_eq!(types(&batch(&hub, c)), ["recipe.instance.state.changed"]);
+    assert_eq!(status, 400);
+    assert!(batch(&hub, c).is_empty());
     // Disabled already: nothing at all.
     rig.post(
         &format!("/api/v1/recipe-instances/{instance}/disable"),

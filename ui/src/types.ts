@@ -533,3 +533,74 @@ export interface PermitJoinState {
   remaining: number;
   error?: string;
 }
+
+// ============================================================
+// Recipes (mirrors src/shared/types.ts, Sowel commit 5da84dc1, T:680-853, spec 024)
+// Subset: what the room's Recipes panel reads. `RecipeActionDef`, `RecipeTileDef` and
+// `RecipePublishDef` are not copied (the fields that name them are left out).
+// ============================================================
+
+export interface RecipeSlotDef {
+  id: string;
+  name: string;
+  description: string;
+  type:
+    | "zone"
+    | "equipment"
+    | "number"
+    | "duration"
+    | "time"
+    | "boolean"
+    | "text"
+    | "data-key"
+    | "select";
+  required: boolean;
+  list?: boolean;
+  defaultValue?: unknown;
+  options?: { value: string; label: string }[];
+  constraints?: {
+    equipmentType?: EquipmentType | EquipmentType[];
+    min?: number;
+    max?: number;
+  };
+}
+
+export interface RecipeSlotI18n {
+  name: string;
+  description: string;
+  options?: Record<string, string>;
+}
+
+export interface RecipeLangPack {
+  name: string;
+  description: string;
+  slots?: Record<string, RecipeSlotI18n>;
+}
+
+export interface RecipeInfo {
+  id: string;
+  name: string;
+  description: string;
+  slots: RecipeSlotDef[];
+  i18n?: Record<string, RecipeLangPack>;
+  /** Lucide icon name from the recipe's manifest; absent when it declares none. */
+  icon?: string;
+}
+
+export interface RecipeInstance {
+  id: string;
+  recipeId: string;
+  params: Record<string, unknown>;
+  enabled: boolean;
+  createdAt: string;
+  /** What the recipe publishes while it runs (`GET /recipe-instances`): `timerExpiresAt`, `overrideMode`... */
+  state?: Record<string, unknown>;
+}
+
+export interface RecipeLogEntry {
+  id: number;
+  instanceId: string;
+  timestamp: string;
+  message: string;
+  level: "info" | "warn" | "error";
+}

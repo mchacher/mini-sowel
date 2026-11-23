@@ -210,7 +210,7 @@ fn a_list_changed_between_two_chunks_is_still_valid_json() {
         .map(|d| d.device.id.to_string())
         .collect();
     for id in ids {
-        rig.home.remove_device(&id);
+        rig.home.remove_device(&id, rig.now);
     }
     let parts = chunks(&mut cursor, &rig.home);
     assert_eq!(
