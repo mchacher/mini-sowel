@@ -602,7 +602,9 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (4003, 4003, 1013), sets a session context released by ESP-IDF when it deletes the socket (which
   frees the slot) and sends the welcome. The live thread hands each frame to the server's task
   with `httpd_queue_work` and `httpd_ws_send_frame_async`, and waits for its result; a frame for a
-  session already closed is not sent (its socket number may belong to a new connection). The rest
+  session already closed is not sent (its socket number may belong to a new connection), and a
+  close asked by the live thread is a shutdown of the socket run on the server's task, for a
+  session still open. The rest
   of the server stays `esp-idf-svc`'s. D33's other `/ws` rules are unchanged.
 - **Why**: with ESP-IDF 5.5, the WebSocket handshake never calls the URI handler, only the frames
   that follow do, and `esp-idf-svc` 0.53 builds its session (its `New` case) on the handshake's

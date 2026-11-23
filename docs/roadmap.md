@@ -152,7 +152,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | A running recipe keeps stale ids when an equipment it uses is deleted or its bindings change (its orders fail, the log says so): settle in J3's spec | Architecture review 2026-11-22 |
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): look at it in J3 and J6 | Architecture review 2026-11-22 |
 | 2026-11-22 | The home lock is held for a whole batch of measures, aggregation included: measure it before device recognition adds work per measure | Architecture review 2026-11-22 |
-| 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1). Report: scratchpad of the 2026-11-22 review | Architecture review 2026-11-22 |
+| 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
 
 ## Sowel issues to open
 

@@ -19,13 +19,13 @@ use std::time::{Duration, Instant};
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::sys::{
-    ESP_FAIL, ESP_OK, esp_err_t, http_method_HTTP_GET, httpd_handle_t, httpd_queue_work,
+    ESP_FAIL, ESP_OK, SHUT_RDWR, esp_err_t, http_method_HTTP_GET, httpd_handle_t, httpd_queue_work,
     httpd_register_uri_handler, httpd_req_get_hdr_value_len, httpd_req_get_hdr_value_str,
     httpd_req_t, httpd_req_to_sockfd, httpd_sess_trigger_close, httpd_uri_t, httpd_ws_frame_t,
     httpd_ws_recv_frame, httpd_ws_send_frame, httpd_ws_send_frame_async,
     httpd_ws_type_t_HTTPD_WS_TYPE_BINARY, httpd_ws_type_t_HTTPD_WS_TYPE_CLOSE,
     httpd_ws_type_t_HTTPD_WS_TYPE_CONTINUE, httpd_ws_type_t_HTTPD_WS_TYPE_PING,
-    httpd_ws_type_t_HTTPD_WS_TYPE_TEXT,
+    httpd_ws_type_t_HTTPD_WS_TYPE_TEXT, lwip_shutdown,
 };
 use solite_core::api::{Reach, host_allowed};
 use solite_core::devices::lock;
@@ -333,6 +333,8 @@ fn send(live: &Live, fd: i32, closed: &Arc<AtomicBool>, kind: Frame, payload: &[
             return false;
         }
     }
+    // No timeout here: `payload` is borrowed by the queued frame until `send_queued` has run, and
+    // this wait is what keeps it alive (ESP-IDF's own send timeout, 5 s, bounds the send).
     result.recv() == Ok(ESP_OK)
 }
 
@@ -358,12 +360,45 @@ fn send_batch(live: &Live, fd: i32, client: ClientId, closed: &Arc<AtomicBool>) 
     first || send(live, fd, closed, Frame::Continue(true), b"]")
 }
 
-/// Closes a live session's socket, unless the session is already closed: lwIP reuses a closed
-/// socket's number at once, and closing it again would close whichever connection holds that
-/// number now (a reload's new one, for example).
-fn close_open(live: &Live, fd: i32, closed: &AtomicBool) {
-    if !closed.load(Ordering::SeqCst) {
-        trigger_close(live.server, fd);
+/// A live session to close, checked on the server's task.
+struct Closing {
+    fd: i32,
+    closed: Arc<AtomicBool>,
+}
+
+/// Runs on the server's task: shuts the socket down unless ESP-IDF has deleted the session
+/// meanwhile. The check and the shutdown run on the task that deletes sessions, so the socket
+/// number is still this session's; ESP-IDF then reads the end of the stream and closes it itself.
+/// (`httpd_sess_trigger_close` would close the server's slot one loop turn later, when it may
+/// already hold a new connection.)
+#[allow(unsafe_code)]
+extern "C" fn close_queued(argument: *mut c_void) {
+    // SAFETY: `argument` is the `Box<Closing>` leaked by `close_open`, taken back once here.
+    let closing = unsafe { Box::from_raw(argument.cast::<Closing>()) };
+    if !closing.closed.load(Ordering::SeqCst) {
+        // SAFETY: on the server's task, for a socket that is still this session's.
+        unsafe { lwip_shutdown(closing.fd, SHUT_RDWR as i32) };
+    }
+}
+
+/// Closes a live session's socket from the live thread, through the server's task: lwIP reuses a
+/// closed socket's number at once, so the check that the session is still open must run where
+/// sessions are deleted.
+#[allow(unsafe_code)]
+fn close_open(live: &Live, fd: i32, closed: &Arc<AtomicBool>) {
+    if closed.load(Ordering::SeqCst) {
+        return;
+    }
+    let argument = Box::into_raw(Box::new(Closing {
+        fd,
+        closed: Arc::clone(closed),
+    }));
+    // SAFETY: the server handle is live; `close_queued` takes the box back, or, when the work
+    // cannot be queued, it is taken back here.
+    unsafe {
+        if httpd_queue_work(live.server, Some(close_queued), argument.cast()) != ESP_OK {
+            drop(Box::from_raw(argument));
+        }
     }
 }
 

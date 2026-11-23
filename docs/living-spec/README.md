@@ -588,7 +588,9 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
 - `pair` opens the serial port (which resets the box), waits for `console: ready` as `wifi` does,
   sends the line `pair` and reads the answer within 15 s: `pairing: open for 180 s` (printed as
   `box: pairing is open (open for 180 s): put the device in pairing mode now`, exit 0);
-  `pairing: failed: <reason>` (printed, exit 1); no answer: the message of `wifi`, exit 4. It asks
+  `pairing: failed: <reason>` (printed, exit 1); the console's `pairing: asked from the console`
+  with no window after it: `box: the console took the line but the engine opened no pairing window
+  within 15 s: is the radio running?`, exit 1; no answer: the message of `wifi`, exit 4. It asks
   nothing and needs no backup: it writes nothing to the flash.
 - `backup`, `restore` and `flash` print what they will do; `backup` and `restore` then ask, on the
   terminal (never on standard input), for the last 6 hex digits of the box's MAC address; anything

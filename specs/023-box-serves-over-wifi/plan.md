@@ -83,6 +83,7 @@ built and linted by `validate.sh`, and run on the box.
 | script `box.sh pair` | A console that answers `pairing: open for 180 s` | the line `pair` sent, exit 0, `box: pairing is open (open for 180 s)` printed, no prompt |
 | script `box.sh pair` | A silent console, `SOLITE_WIFI_ANSWER_SECONDS=1` | the line `pair` sent, exit 4, `no answer from Solite's console` |
 | script `box.sh pair` | A console that answers `pairing: failed: the radio refused` | exit 1, the line printed |
+| script `box.sh pair` | A console that answers `pairing: asked from the console` only (from the code review) | exit 1, the engine named, not `no answer` |
 | `validate.sh` (firmware step) | The radio build's `sdkconfig` | holds `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y`, else stops naming it |
 | `validate.sh` (firmware step) | `ui/node_modules` missing | stops with `cd ui && npm ci` named; checked by hand once, as the other validate branches |
 
@@ -137,7 +138,7 @@ through the same `handle_stream`.
 | The internal RAM | `heap:` minimum ≥ 64 KB; `memory-network:`, the network's cost (234 KB − the first `heap:` minimum) and the projection written (R9.1, R9.3); below 64 KB: the knob `SPIRAM_MALLOC_ALWAYSINTERNAL` 2048, measured again; still below: stop and report | partly: `memory-network:` written; the minimum, the cost and the projection NOT RUN |
 | A Mac host at `--radio tcp://<box>:6638` | connection refused | seen with `nc`: `Connection refused` (second run) |
 
-57 scenarios: 27 in the table above (26 tested by `validate.sh`: 10 core, 15 script and the settings
+58 scenarios: 28 in the table above (27 tested by `validate.sh`: 10 core, 16 script and the settings
 check; 1 checked by hand), 30 checked on the box. The other 74 scenarios of E3c (the core, `ui-embed`, `box.sh wifi`,
 `--keep-storage`, `demo-garage.sh`, `measure-api.sh`) are in spec 022's plan.
 

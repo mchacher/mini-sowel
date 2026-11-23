@@ -1,7 +1,8 @@
 //! The radio image's serial console (feature `radio`, spec 023 R6): a thread on core 0 reads the
-//! lines `scripts/box.sh wifi` sends on the USB serial port (UART0, the log's port), hands each to
-//! the core's `parse_console_line`, writes or removes `/data/wifi.json`, then stops the engine
-//! (its files saved) and restarts the ESP32. A line itself is never logged.
+//! lines `scripts/box.sh wifi` and `pair` send on the USB serial port (UART0, the log's port), hands
+//! each to the core's `parse_console_line`. `wifi-set` and `wifi-forget` write or remove
+//! `/data/wifi.json`, then stop the engine (its files saved) and restart the ESP32; `pair` asks the
+//! engine for the pairing window (D35). A line itself is never logged.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};

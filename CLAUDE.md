@@ -65,7 +65,7 @@ cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.ts
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
 sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them)
-sh scripts/box.sh pair                           # open the box's pairing window for 180 s, over the USB cable
+sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line

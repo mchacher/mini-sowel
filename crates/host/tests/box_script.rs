@@ -2188,13 +2188,37 @@ fn pair_with_a_silent_console_says_so_and_exits_4() {
         ],
     );
     assert_eq!(run.code, 4, "{}", run.text);
-    assert_eq!(env.console_lines(), ["pair"]);
+    // The line sent is checked by the test above: the fake console may not have written it yet
+    // when the 1 s window ends.
     assert!(
         run.text
             .contains("box: no answer from Solite's console on "),
         "{}",
         run.text
     );
+}
+
+#[test]
+fn pair_taken_by_the_console_but_never_opened_names_the_engine_and_exits_1() {
+    let env = Env::new();
+    let run = env.console_command(
+        "pair",
+        &[],
+        "pairing: asked from the console\n",
+        "typed",
+        &[
+            ("SOLITE_WIFI_ANSWER_SECONDS", "1"),
+            ("FAKE_CONSOLE_STAY", "3"),
+        ],
+    );
+    assert_eq!(run.code, 1, "{}", run.text);
+    assert!(
+        run.text
+            .contains("the console took the line but the engine opened no pairing window"),
+        "{}",
+        run.text
+    );
+    assert!(!run.text.contains("no answer from"), "{}", run.text);
 }
 
 #[test]

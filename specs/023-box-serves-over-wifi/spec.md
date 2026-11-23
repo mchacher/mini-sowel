@@ -253,10 +253,12 @@ through the running firmware's console and the box is flashed with `--keep-stora
    built: each frame is handed to the server's task (`httpd_queue_work`, then
    `httpd_ws_send_frame_async` there) and the thread waits for its result; a frame for a session
    already closed is not sent (its socket number may belong to a new connection). A close asked by
-   the hub (1013 on a full queue) is sent; a ping every 30 s.
+   the hub (1013 on a full queue) is sent; a ping every 30 s. The live thread closes a client (a
+   failed send, a close asked by the hub) through the server's task too: there, a session still
+   open has its socket shut down, and ESP-IDF closes it (from the code review, 2026-11-22).
 3. A client is dropped when a frame cannot be written within 5 s (the server's send timeout) or when
    TCP keep-alive finds it gone (R4.2, about 45 s). The 60 s silence rule of the host is not used on
-   the box: ESP-IDF answers the pings and pongs itself and does not hand them to the firmware.
+   the box: ESP-IDF answers the pings itself; the pongs it hands over are ignored.
 4. A message over 1 KB (`MAX_INCOMING_BYTES`) closes with 1009; a text or binary message is a
    subscribe (`LiveHub::subscribe`), as on the Mac.
 5. The constants and the subprotocol rule are the core's `live::session` (spec 022), shared with
@@ -796,6 +798,10 @@ Decided after the run on the box (2026-11-22, in autonomy, the user away):
   `ws_handler` never saw the handshake with ESP-IDF 5.5.
 - `motionSince` is none while the clock reads before 2020-01-01 (`CLOCK_SET_AFTER_MS`): the box
   counts from 1970 until SNTP answers, and the interface showed 20779 days of calm.
+- From the code review (Opus, 2026-11-22): the live thread's close of a client goes through the
+  server's task (a shutdown of the socket for a session still open), since ESP-IDF's
+  `httpd_sess_trigger_close` acts one loop turn later on a slot a new connection may hold by then;
+  `box.sh pair` names the engine (exit 1) when the console took the line but no window opened.
 - The 33 requests' failure and the `lastSeen` of 1970 are recorded, not fixed here: both are
   roadmap inbox lines, outside the three changes the run asked for.
 

@@ -575,7 +575,7 @@ cmd_log() {
 # lines: the password is in no argument, no environment variable and no file. Opening the port
 # resets the box (the USB bridge), so the line is sent once the console says `console: ready`.
 # Exit 0 done, 1 refused, not connected or pairing failed, 4 no answer. $1 the port, $2 `set`,
-# `forget` or `pair` (waits for `pairing: open for`).
+# `forget` or `pair` (waits for `pairing: open for`; the console's `pairing: asked` alone, exit 1).
 console_exchange() {
   [ -n "$SOLITE_SERIAL_CONSOLE" ] || fw_find_idf
   ${PY:-python3} -c '
@@ -666,13 +666,20 @@ if not fake:
             break
 send((line + "\n").encode())
 if mode == "pair":
+    asked = False
     for text in lines_until(time.time() + answer_wait):
+        if text.startswith("pairing: asked from the console"):
+            asked = True
         if text.startswith("pairing: open for"):
             print("box: pairing is open (" + text[len("pairing: "):] + "): put the device in pairing mode now")
             sys.exit(0)
         if text.startswith("pairing: failed"):
             print("box: " + text)
             sys.exit(1)
+    if asked:
+        print("box: the console took the line but the engine opened no pairing window within "
+              + str(int(answer_wait)) + " s: is the radio running? (sh scripts/box.sh log --image radio)")
+        sys.exit(1)
     no_answer()
 want = "wifi: settings saved" if mode == "set" else "wifi: settings removed"
 answer = None
