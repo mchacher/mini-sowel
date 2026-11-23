@@ -315,6 +315,30 @@ fn after_a_restart_the_first_computation_gives_the_time_of_motion_since() {
 }
 
 #[test]
+fn motion_since_waits_for_a_clock_that_is_set() {
+    let mut rig = Rig::new();
+    let pir = rig.motion_sensor(2);
+    let zone = rig.zone("Garage");
+    // The box has not reached the time server yet: its clock counts from 1970.
+    rig.now = 6_000;
+    rig.equipment("PIR", "sensor", &zone, &[&pir]);
+    let data = aggregate(&mut rig, &zone);
+    assert_eq!(data["motionSensors"], 1);
+    assert_eq!(data["motionSince"], Value::Null, "no time to show yet");
+    // The clock is set: the next computation gives the time, kept afterwards.
+    rig.now = T0 + 20_000;
+    assert_eq!(
+        aggregate(&mut rig, &zone)["motionSince"],
+        format_iso(T0 + 20_000).as_str()
+    );
+    rig.now = T0 + 50_000;
+    assert_eq!(
+        aggregate(&mut rig, &zone)["motionSince"],
+        format_iso(T0 + 20_000).as_str()
+    );
+}
+
+#[test]
 fn motion_sensors_counts_the_motion_bindings_of_every_equipment() {
     let mut rig = Rig::new();
     let zone = rig.zone("Hall");

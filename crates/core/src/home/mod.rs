@@ -40,6 +40,9 @@ pub(crate) fn new_id(random: Random) -> Outcome<Id> {
     Ok(Id::from_random(bytes))
 }
 
+/// A wall-clock time before 2020-01-01 is a clock that was never set (the box starts at 1970).
+const CLOCK_SET_AFTER_MS: u64 = 1_577_836_800_000;
+
 /// What the home remembers of the last aggregate it computed for a zone: its motion and
 /// luminosity (what recipes read), `motionSince`, and a fingerprint of the rest to tell whether
 /// the next aggregate differs (Sowel's `aggregatedDataEqual`, `motionSince` left out).
@@ -302,7 +305,9 @@ impl Home {
                     luminosity: data.luminosity,
                 });
             }
-            let since = if data.motion_sensors == 0 {
+            // No time before the clock is set (a box that has not reached the time server yet counts
+            // from 1970): the first computation after it gives the time.
+            let since = if data.motion_sensors == 0 || now < CLOCK_SET_AFTER_MS {
                 None
             } else {
                 match previous {

@@ -379,7 +379,9 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   have their own bound (32), and an order from the API is sent before them.
 - **Zone aggregation** (`GET /api/v1/zones/aggregation`), as Sowel computes it, over each zone and
   its sub-zones: average `temperature` (1 decimal), `humidity`, `luminosity`; `motion`, the
-  number of motion sensors and `motionSince`; open doors and windows; water leak, smoke; lights
+  number of motion sensors and `motionSince` (none while the clock is not set, that is before
+  2020-01-01, as on a box that has not reached the time server: the first computation after the
+  clock is set gives the time); open doors and windows; water leak, smoke; lights
   on and in total; shutters; equipments unavailable by category. It is recomputed after every batch of measures, status change and edit.
 
 Zones and equipments are kept in `zones.json` and `equipments.json` beside `devices.json`, written
