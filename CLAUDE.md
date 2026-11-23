@@ -16,7 +16,7 @@ about 150 lines**: a subject that grows moves to `docs/` or becomes a check.
 | The design of one change                     | `specs/NNN-name/{spec,architecture,plan}.md` |
 | The documents the project started from       | [inputs/](inputs/README.md)                 |
 | How the interface looks                      | [docs/design-system.md](docs/design-system.md) |
-| How specs and code are reviewed              | [.claude/agents/](.claude/agents/)          |
+| How specs are reviewed, code built and reviewed | [.claude/agents/](.claude/agents/)       |
 | How agents are run (models, output, briefs) | [docs/agents.md](docs/agents.md)             |
 | Sowel's model, API and recipes (the contract) | The Sowel repository, see "Sowel contract" below |
 

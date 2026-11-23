@@ -199,11 +199,13 @@ git branch --show-current                 # must NOT be main
 3. **Tests**: see 3.3.
 4. **Docs**: see 3.4.
 
-**To save tokens**, steps 2 to 4 go to one agent (Agent tool, `model: "sonnet"`) that follows the
-approved `plan.md` and the rules of 3.2 to 3.4; give it the spec folder, not your conclusions, and
-ask for a short report (what changed, tests run, anything the spec did not cover). Put this in its prompt, as a strict rule: every test, build, QEMU run or install goes through `sh scripts/quiet.sh <command>` (see `CLAUDE.md`), never bare, and no long output is pasted back; targeted tests while it iterates, the full check once at the end. Take the work
-back on Opus only if it loops on the same failure (see "Models" in `CLAUDE.md`). Then you run
-the checks yourself.
+**To save tokens**, steps 2 to 4 go to the `implementer` agent (Agent tool,
+`subagent_type: implementer`, Sonnet, set in its file): it holds the strict rules (output through
+`quiet.sh`, nothing outside the spec, no commit, stop after three identical failures) and the
+report format. Give it the spec folder, not your conclusions, the branch, the files and lines to
+start from, and a report path in the session's scratchpad. Read the report only when its one-line
+answer is not enough. Take the work back on Opus only if it stops on the same failure (see
+[docs/agents.md](../../../docs/agents.md)). Then you run the checks yourself.
 
 Do only what the spec says. No unrelated refactor, no extra option, no "while I was there". If the
 spec turns out wrong or incomplete, stop, tell the user, update the spec, and get their yes again.
