@@ -4,3 +4,4 @@ export * from "./zones";
 export * from "./equipments";
 export * from "./devices";
 export * from "./pairing";
+export * from "./recipes";

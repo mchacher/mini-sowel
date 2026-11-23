@@ -380,23 +380,10 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         assert_eq!(created.status, 201, "{created:?}");
         instance_ids.push(created_id(&created));
     }
-    // The lights lose their order bindings after the start, so that every switching logs an
-    // error line (16 lights named, cut at 200 bytes) besides its info line.
-    for light in &lights {
-        let bindings: Vec<String> = home
-            .equipments()
-            .get(light)
-            .unwrap()
-            .order_bindings
-            .iter()
-            .map(|b| b.id.to_string())
-            .collect();
-        for binding in bindings {
-            let path = format!("/api/v1/equipments/{light}/order-bindings/{binding}");
-            let removed = handle(&mut home, &request("DELETE", &path, b""), T0, &mut random);
-            assert_eq!(removed.status, 204);
-        }
-    }
+    // The lights keep their bindings: since spec 024 a light that loses its toggle binding
+    // disables the instance (R4), so the long error lines of a missing binding no longer come;
+    // the logs fill with the switching lines, and the worst case (every entry at 200 bytes) is
+    // added to the peak below.
     // A button is pressed until every log is full; each press is a frame of 16 measures.
     let press = MeasureEvent {
         sender: Sender::Eui64(eui(16)),
@@ -411,7 +398,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
             .collect(),
     };
     let mut now = T0;
-    for _ in 0..30 {
+    for _ in 0..60 {
         now += 1000;
         home.measures(&press, now, &mut random).unwrap();
         home.recompute(now);

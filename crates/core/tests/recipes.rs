@@ -309,25 +309,25 @@ fn the_log_keeps_the_last_50_lines_newest_first_and_cuts_a_message_at_200_bytes(
     assert!(ids[49] > 11, "the first lines were dropped: {ids:?}");
     assert!(!log.iter().any(|e| e["message"] == "Instance created"));
 
-    // A message over 200 bytes: 16 lights deleted, then one motion.
+    // A message over 200 bytes: a light named with 64 characters, 3-byte ones, deleted (spec
+    // 024: its name goes to the warning line, 33 + 2 + 62 x 3 = 221 bytes, cut at 200 on a
+    // character boundary).
     let mut rig = Rig::new();
     let g = rig.garage();
-    let mut lights = Vec::new();
-    for i in 0..16u8 {
-        let relay = rig.relay(0x80 + i);
-        lights.push(rig.equipment(&format!("L{i}"), "light_onoff", &g.zone, &[&relay]));
-    }
-    let id = rig.garage_instance(&g, json!({"lights": lights}));
-    for light in &lights {
-        let (status, _) = rig.delete(&format!("/api/v1/equipments/{light}"));
-        assert_eq!(status, 204);
-    }
-    rig.report(&motion(PIR, true));
+    let relay = rig.relay(0x80);
+    let name = format!("ab{}", "€".repeat(62));
+    let long_light = rig.equipment(&name, "light_onoff", &g.zone, &[&relay]);
+    let id = rig.garage_instance(&g, json!({"lights": [g.light, long_light]}));
+    let (status, _) = rig.delete(&format!("/api/v1/equipments/{long_light}"));
+    assert_eq!(status, 204);
     let (_, log) = rig.get(&format!("{}/{id}/log?limit=2", base()));
     let long = log[1]["message"].as_str().unwrap();
-    assert!(long.starts_with("Error turning on some lights: "));
+    assert!(long.starts_with("Equipment removed from settings: ab€"));
     assert_eq!(long.len(), 200, "cut at 200 bytes");
-    assert_eq!(log[0]["message"], "Motion detected — 16 light(s) turned on");
+    assert_eq!(
+        log[0]["message"],
+        "Recipe activated — no motion, lights off"
+    );
 }
 
 #[test]

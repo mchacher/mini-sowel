@@ -48,11 +48,31 @@ describe("live store", () => {
     FakeWebSocket.last.open();
     expect(useLive.getState().status).toBe("open");
     expect(FakeWebSocket.last.sent).toEqual([
-      '{"type":"subscribe","topics":["zones","equipments","devices"]}',
+      '{"type":"subscribe","topics":["zones","equipments","devices","recipes"]}',
     ]);
     expect(api.count("GET /api/v1/zones")).toBe(1);
     expect(api.count("GET /api/v1/equipments")).toBe(1);
     expect(api.count("GET /api/v1/zones/aggregation")).toBe(1);
+    expect(api.count("GET /api/v1/recipes")).toBe(1);
+    expect(api.count("GET /api/v1/recipe-instances")).toBe(1);
+  });
+
+  it("a recipe.instance.* event reads the instances again, once for a burst", async () => {
+    connect();
+    FakeWebSocket.last.open();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(api.count("GET /api/v1/recipe-instances")).toBe(1); // the open's own read
+    FakeWebSocket.last.receive([
+      { type: "recipe.instance.state.changed" },
+      { type: "recipe.instance.started" },
+    ]);
+    FakeWebSocket.last.receive({ type: "recipe.instance.error" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.count("GET /api/v1/recipe-instances")).toBe(2); // one, not three
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.count("GET /api/v1/recipe-instances")).toBe(3); // the trailing one of the window
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(api.count("GET /api/v1/recipe-instances")).toBe(3);
   });
 
   it("applies an array of events and a single event, and ignores what is not JSON", () => {

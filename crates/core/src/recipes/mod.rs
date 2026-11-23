@@ -197,6 +197,68 @@ pub fn recipe_info(id: &str) -> Option<Value> {
     (id == motion_light::ID).then(motion_light::info)
 }
 
+/// A change of the home that a settle looks at (spec 024, R4): the equipment deleted (its id and
+/// name), the zone deleted. Both `None` for a change that only can make settings invalid (an
+/// equipment changed, a binding or a device removed).
+#[derive(Debug, Default, Clone)]
+pub struct Settle {
+    pub equipment: Option<(Id, String)>,
+    pub zone: Option<Id>,
+}
+
+/// The keys of a recipe's params that hold equipment ids: its `equipment` slots, and
+/// motion-light's legacy `light`.
+fn equipment_keys(recipe: &str) -> Vec<String> {
+    let mut keys: Vec<String> = recipe_info(recipe)
+        .and_then(|info| info.get("slots").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter(|slot| slot.get("type").and_then(Value::as_str) == Some("equipment"))
+        .filter_map(|slot| slot.get("id").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    if recipe == motion_light::ID {
+        keys.push("light".into());
+    }
+    keys
+}
+
+/// The params text without the id `gone` in the given keys (removed from a list, a single id
+/// becomes `""`); `None` when nothing named it (or the text is not a JSON object).
+fn prune_equipment(text: &str, keys: &[String], gone: &str) -> Option<Box<str>> {
+    let mut value = serde_json::from_str::<Value>(text).ok()?;
+    let fields = value.as_object_mut()?;
+    let mut changed = false;
+    for key in keys {
+        match fields.get_mut(key.as_str()) {
+            Some(Value::Array(list)) => {
+                let before = list.len();
+                list.retain(|v| v.as_str() != Some(gone));
+                changed |= list.len() != before;
+            }
+            Some(slot @ Value::String(_)) if slot.as_str() == Some(gone) => {
+                *slot = Value::String(String::new());
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
+    changed
+        .then(|| {
+            serde_json::to_string(&value)
+                .ok()
+                .map(String::into_boxed_str)
+        })
+        .flatten()
+}
+
+/// Validates an instance's params text for its recipe.
+fn validate_text(recipe: &str, text: &str, home: &Home) -> Result<(), String> {
+    let value =
+        serde_json::from_str::<Value>(text).map_err(|e| format!("params are not JSON: {e}"))?;
+    validate(recipe, &value, home)
+}
+
 /// Checks the parameters of a recipe against the home, with the recipe's messages.
 fn validate(recipe: &str, params: &Value, home: &Home) -> Result<(), String> {
     match recipe {
@@ -527,6 +589,11 @@ impl RecipeEngine {
         if slot.instance.enabled == enabled {
             return Ok(false);
         }
+        // An instance that cannot run is not enabled (spec 024, R4.7; Sowel enables it).
+        if enabled {
+            validate_text(&slot.instance.recipe_id, &slot.instance.params, home)
+                .map_err(|e| Failure::new(400, format!("Invalid params: {e}")))?;
+        }
         slot.instance.enabled = enabled;
         if enabled {
             // `started` came with the start; one that failed is told as a state change.
@@ -553,6 +620,97 @@ impl RecipeEngine {
         } else {
             Err(Failure::new(400, "Instance not running"))
         }
+    }
+
+    // ---- Settling (spec 024, R4) ----
+
+    /// Stops (if it runs) and disables the instance at `index`, with the reason in its log and
+    /// the `error` event.
+    fn disable_for(&mut self, index: usize, wall: u64, reason: &str) {
+        let slot = &mut self.slots[index];
+        if slot.runner.take().is_some() {
+            RecipeEngine::announce_stopped(&self.live, slot);
+        }
+        slot.instance.enabled = false;
+        let message = format!("Disabled: {reason}");
+        RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+        let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+        announce(&self.live, || EngineEvent::RecipeInstanceError {
+            instance_id: id,
+            recipe_id: recipe.clone(),
+            error: reason.to_string(),
+        });
+    }
+
+    /// Settles the instances after a change of the home: the instances of a deleted zone are
+    /// deleted, a deleted equipment leaves every instance's settings, an enabled instance that no
+    /// longer validates is disabled, a running one whose settings changed restarts. True when
+    /// something is to be written.
+    pub fn settle(&mut self, home: &Home, change: &Settle, wall: u64, mono: u64) -> bool {
+        let mut changed = false;
+        // 4: the instances of a deleted zone go with it.
+        if let Some(zone) = change.zone {
+            let zone = zone.to_string();
+            let gone: Vec<Id> = self
+                .slots
+                .iter()
+                .filter(|s| {
+                    serde_json::from_str::<Value>(&s.instance.params)
+                        .ok()
+                        .is_some_and(|p| p.get("zone").and_then(Value::as_str) == Some(&zone))
+                })
+                .map(|s| s.instance.id)
+                .collect();
+            for id in gone {
+                changed |= self.delete(&id.to_string()).is_ok();
+            }
+        }
+        // 1: a deleted equipment leaves the settings.
+        let mut pruned = vec![false; self.slots.len()];
+        if let Some((gone, name)) = &change.equipment {
+            let gone = gone.to_string();
+            for (index, slot) in self.slots.iter_mut().enumerate() {
+                let keys = equipment_keys(&slot.instance.recipe_id);
+                if let Some(text) = prune_equipment(&slot.instance.params, &keys, &gone) {
+                    slot.instance.params = text;
+                    let message = format!("Equipment removed from settings: {name}");
+                    RecipeEngine::push_log(
+                        slot,
+                        &mut self.next_log_id,
+                        wall,
+                        Level::Warn,
+                        &message,
+                    );
+                    pruned[index] = true;
+                    changed = true;
+                }
+            }
+        }
+        // 2, 3: every enabled instance checked again.
+        for (index, pruned) in pruned.into_iter().enumerate() {
+            let slot = &self.slots[index];
+            if !slot.instance.enabled {
+                continue;
+            }
+            match validate_text(&slot.instance.recipe_id, &slot.instance.params, home) {
+                Err(reason) => {
+                    self.disable_for(index, wall, &reason);
+                    changed = true;
+                }
+                Ok(()) if pruned && slot.runner.is_some() => {
+                    let slot = &mut self.slots[index];
+                    slot.runner = None;
+                    RecipeEngine::announce_stopped(&self.live, slot);
+                    if let Err(reason) =
+                        self.start_slot(index, home, mono, wall, "Failed to restart", false)
+                    {
+                        self.disable_for(index, wall, &reason);
+                    }
+                }
+                Ok(()) => {}
+            }
+        }
+        changed
     }
 
     // ---- Loading ----

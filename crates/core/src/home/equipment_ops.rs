@@ -9,6 +9,7 @@ use crate::equipments::{
 };
 use crate::failure::{Failure, Outcome};
 use crate::live::{EngineEvent, Topic};
+use crate::recipes::Settle;
 
 /// What `POST /equipments` gives. `kind` and `zone_id` are as written.
 #[derive(Debug, Default)]
@@ -43,7 +44,7 @@ fn not_found() -> Failure {
 
 impl Home {
     /// `equipment.updated`, after a binding was added or removed.
-    fn announce_equipment_updated(&self, id: &str) {
+    pub(super) fn announce_equipment_updated(&self, id: &str) {
         if let Some(item) = self.equipments.get(id) {
             self.live
                 .emit(Topic::Equipments, || EngineEvent::EquipmentUpdated {
@@ -193,10 +194,11 @@ impl Home {
             .emit(Topic::Equipments, || EngineEvent::EquipmentUpdated {
                 equipment: updated.clone(),
             });
+        self.settle_recipes(Settle::default(), now);
         Ok(updated)
     }
 
-    pub fn delete_equipment(&mut self, id: &str) -> Outcome<()> {
+    pub fn delete_equipment(&mut self, id: &str, now: u64) -> Outcome<()> {
         let Some(parsed) = Id::parse(id) else {
             return Err(not_found());
         };
@@ -213,6 +215,14 @@ impl Home {
                 equipment_name: removed.name.to_string(),
                 zone_id: removed.zone_id,
             });
+        let equipment = Some((removed.id, removed.name.to_string()));
+        self.settle_recipes(
+            Settle {
+                equipment,
+                zone: None,
+            },
+            now,
+        );
         Ok(())
     }
 
@@ -255,7 +265,7 @@ impl Home {
         Ok(binding)
     }
 
-    pub fn remove_data_binding(&mut self, equipment: &str, binding: &str) -> Outcome<()> {
+    pub fn remove_data_binding(&mut self, equipment: &str, binding: &str, now: u64) -> Outcome<()> {
         let Some(item) = self.equipments.get_mut(equipment) else {
             return Err(not_found());
         };
@@ -267,6 +277,7 @@ impl Home {
         item.data_bindings.remove(index);
         self.equipments_changed = true;
         self.announce_equipment_updated(equipment);
+        self.settle_recipes(Settle::default(), now);
         Ok(())
     }
 
@@ -309,7 +320,12 @@ impl Home {
         Ok(binding)
     }
 
-    pub fn remove_order_binding(&mut self, equipment: &str, binding: &str) -> Outcome<()> {
+    pub fn remove_order_binding(
+        &mut self,
+        equipment: &str,
+        binding: &str,
+        now: u64,
+    ) -> Outcome<()> {
         let Some(item) = self.equipments.get_mut(equipment) else {
             return Err(not_found());
         };
@@ -321,6 +337,7 @@ impl Home {
         item.order_bindings.remove(index);
         self.equipments_changed = true;
         self.announce_equipment_updated(equipment);
+        self.settle_recipes(Settle::default(), now);
         Ok(())
     }
 }

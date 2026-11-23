@@ -1,5 +1,5 @@
 // Solite's own file: the live connection to the host's `/ws` (spec 013), written for the
-// two topics the screen needs. Sowel's ui/src/store/useWebSocket.ts is a monolith of 645 lines that
+// topics the screen needs. Sowel's ui/src/store/useWebSocket.ts is a monolith of 645 lines that
 // imports 11 stores; this one keeps its behaviour (subprotocol, batched events, reconnection with
 // backoff and jitter, refetch on every open, reconnection when the page comes back) and nothing else.
 import { create } from "zustand";
@@ -9,9 +9,11 @@ import { usePairing } from "./usePairing";
 import { useEquipments } from "./useEquipments";
 import { useZoneAggregation } from "./useZoneAggregation";
 import { useZones } from "./useZones";
+import { useRecipes } from "./useRecipes";
+import { coalesceCalls } from "../lib/coalesce-calls";
 
 /** What the screen is subscribed to. */
-const TOPICS = ["zones", "equipments", "devices"];
+const TOPICS = ["zones", "equipments", "devices", "recipes"];
 /** The host takes no token (decision D13); the subprotocol is still sent, as Sowel's client does. */
 const SUBPROTOCOL = "bearer.none";
 const MAX_RECONNECT_DELAY = 30_000;
@@ -32,7 +34,16 @@ type LiveEvent =
   | { type: "equipment.status.changed"; equipmentId: string; newStatus: EquipmentStatus }
   | { type: "device.discovered"; device: Device }
   | { type: "device.removed"; deviceId: string }
-  | { type: "device.status_changed"; deviceId: string; status: DeviceStatus };
+  | { type: "device.status_changed"; deviceId: string; status: DeviceStatus }
+  | {
+      type:
+        | "recipe.instance.created"
+        | "recipe.instance.removed"
+        | "recipe.instance.started"
+        | "recipe.instance.stopped"
+        | "recipe.instance.state.changed"
+        | "recipe.instance.error";
+    };
 
 export const useLive = create<LiveState>(() => ({ status: "connecting" }));
 
@@ -55,6 +66,11 @@ function socketUrl(): string {
   return `${protocol}//${window.location.host}/ws`;
 }
 
+/** Recipe events come in bursts (a state change per tick): one read per 1 s window (spec 024, R3). */
+const refetchInstances = coalesceCalls(() => {
+  void useRecipes.getState().fetchInstances();
+}, 1000);
+
 /** The stores read again: events may have been lost while the socket was closed (spec 013 closes slow clients). */
 function refetchAll(): void {
   void useZones.getState().fetchZones();
@@ -62,6 +78,8 @@ function refetchAll(): void {
   void useZoneAggregation.getState().fetchAggregation();
   void useDevices.getState().fetchDevices();
   void usePairing.getState().refresh();
+  void useRecipes.getState().fetchRecipes();
+  void useRecipes.getState().fetchInstances();
 }
 
 function apply(event: LiveEvent): void {
@@ -104,6 +122,14 @@ function apply(event: LiveEvent): void {
       break;
     case "device.status_changed":
       useDevices.getState().updateDeviceStatus(event.deviceId, event.status);
+      break;
+    case "recipe.instance.created":
+    case "recipe.instance.removed":
+    case "recipe.instance.started":
+    case "recipe.instance.stopped":
+    case "recipe.instance.state.changed":
+    case "recipe.instance.error":
+      refetchInstances();
       break;
   }
 }

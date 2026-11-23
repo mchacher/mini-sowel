@@ -2206,9 +2206,11 @@ fn pair_taken_by_the_console_but_never_opened_names_the_engine_and_exits_1() {
         &[],
         "pairing: asked from the console\n",
         "typed",
+        // 3 s for the answer, not 1: under `validate.sh`'s parallel load the fake console's shell
+        // took more than 1 s to answer (spec 024's run, twice).
         &[
-            ("SOLITE_WIFI_ANSWER_SECONDS", "1"),
-            ("FAKE_CONSOLE_STAY", "3"),
+            ("SOLITE_WIFI_ANSWER_SECONDS", "3"),
+            ("FAKE_CONSOLE_STAY", "5"),
         ],
     );
     assert_eq!(run.code, 1, "{}", run.text);

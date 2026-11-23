@@ -6,6 +6,7 @@ import { disconnect, useLive } from "./store/useLive";
 import { useEquipments } from "./store/useEquipments";
 import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
+import { useRecipes } from "./store/useRecipes";
 import { useDevices } from "./store/useDevices";
 import { resetPairingTimers, usePairing } from "./store/usePairing";
 import type {
@@ -18,6 +19,8 @@ import type {
   EquipmentWithDetails,
   OrderBindingWithDetails,
   OrderCategory,
+  RecipeInfo,
+  RecipeInstance,
   ZoneAggregatedData,
   ZoneWithChildren,
 } from "./types";
@@ -259,6 +262,7 @@ export function resetStores(): void {
   useLive.setState({ status: "connecting" });
   resetPairingTimers();
   useDevices.setState({ devices: {}, loading: false, error: null });
+  useRecipes.setState({ recipes: [], instances: [], loading: false, error: null });
   usePairing.setState({ open: false, remaining: 0, error: null, newIds: [], pageOpen: false });
 }
 
@@ -344,6 +348,75 @@ export function deviceWithData(
       ...(o.category ? { category: o.category } : {}),
       ...(o.enumValues ? { enumValues: o.enumValues } : {}),
     })),
+  };
+}
+
+/** Solite's motion-light recipe as `GET /api/v1/recipes` gives it (slots of Sowel's recipe). */
+export function motionLightRecipe(): RecipeInfo {
+  return {
+    id: "motion-light",
+    name: "Motion Light",
+    description: "Turns the lights on with motion and off after a delay.",
+    icon: "Lightbulb",
+    i18n: {
+      fr: {
+        name: "Lumière automatique",
+        description: "Allume avec le mouvement.",
+        slots: { lights: { name: "Lumières", description: "Les lumières à piloter" } },
+      },
+    },
+    slots: [
+      { id: "zone", name: "Zone", description: "The zone", type: "zone", required: true },
+      {
+        id: "lights",
+        name: "Lights",
+        description: "Lights to drive",
+        type: "equipment",
+        list: true,
+        required: true,
+        constraints: { equipmentType: "light_onoff" },
+      },
+      {
+        id: "timeout",
+        name: "Timeout",
+        description: "Delay before off",
+        type: "duration",
+        required: false,
+        defaultValue: "10m",
+      },
+      {
+        id: "luxThreshold",
+        name: "Lux threshold",
+        description: "Below this, the light may turn on",
+        type: "number",
+        required: false,
+      },
+      {
+        id: "buttons",
+        name: "Buttons",
+        description: "Buttons that override",
+        type: "equipment",
+        list: true,
+        required: false,
+        constraints: { equipmentType: "button" },
+      },
+    ],
+  };
+}
+
+/** An instance of a recipe as `GET /api/v1/recipe-instances` gives it. */
+export function recipeInstance(
+  id: string,
+  params: Record<string, unknown>,
+  extra: Partial<RecipeInstance> = {},
+): RecipeInstance {
+  return {
+    id,
+    recipeId: "motion-light",
+    params,
+    enabled: true,
+    createdAt: "2026-11-21T10:00:00.000Z",
+    ...extra,
   };
 }
 

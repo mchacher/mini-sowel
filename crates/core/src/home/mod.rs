@@ -23,7 +23,7 @@ use crate::failure::{Failure, Outcome};
 use crate::live::{EngineEvent, LiveHandle, LiveHub, Topic};
 use crate::orders::OrderQueue;
 use crate::radio::MeasureEvent;
-use crate::recipes::RecipeEngine;
+use crate::recipes::{RecipeEngine, Settle};
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
 use events::{Event, EventQueue, EventValue, Interest};
@@ -480,6 +480,7 @@ impl Home {
     pub fn delete_zone(&mut self, id: &str, now: u64) -> Outcome<()> {
         let equipments = &self.equipments;
         let gone = self.zones.find(id).map(|z| (z.id, z.name.clone()));
+        let gone_zone = gone.as_ref().map(|(zone, _)| *zone);
         self.zones
             .delete(id, |zone| equipments.count_in_zone(zone))?;
         self.zones_changed = true;
@@ -491,6 +492,15 @@ impl Home {
         }
         if let Some(id) = Id::parse(id) {
             self.devices.clear_zone(&id.to_string(), now);
+        }
+        if let Some(zone) = gone_zone {
+            self.settle_recipes(
+                Settle {
+                    equipment: None,
+                    zone: Some(zone),
+                },
+                now,
+            );
         }
         Ok(())
     }
@@ -516,9 +526,10 @@ impl Home {
             .ok_or_else(|| Failure::new(404, "Device not found"))
     }
 
-    /// Forgets a device and the bindings made on its data and orders (the equipments stay).
-    /// False when there is no such device.
-    pub fn remove_device(&mut self, id: &str) -> bool {
+    /// Forgets a device and the bindings made on its data and orders (the equipments stay, each
+    /// that lost a binding with its `equipment.updated`), then settles the recipes. False when
+    /// there is no such device.
+    pub fn remove_device(&mut self, id: &str, now: u64) -> bool {
         let Some(item) = self.devices.get(id) else {
             return false;
         };
@@ -533,6 +544,7 @@ impl Home {
                 device_id: gone.0,
                 device_name: gone.1,
             });
+        let mut touched = Vec::new();
         for item in self.equipments.list_mut() {
             let before = item.data_bindings.len() + item.order_bindings.len();
             item.data_bindings
@@ -541,7 +553,14 @@ impl Home {
                 .retain(|b| !orders.contains(&b.device_order_id));
             if before != item.data_bindings.len() + item.order_bindings.len() {
                 self.equipments_changed = true;
+                touched.push(item.equipment.id.to_string());
             }
+        }
+        for equipment in &touched {
+            self.announce_equipment_updated(equipment);
+        }
+        if !touched.is_empty() {
+            self.settle_recipes(Settle::default(), now);
         }
         true
     }

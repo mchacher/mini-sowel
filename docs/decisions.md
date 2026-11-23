@@ -628,3 +628,32 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   call: on the box (2026-11-22) a browser got its 101 and then nothing, no welcome and no event.
   The post-handshake callback is ESP-IDF's own place for that work, on the request that still holds
   the headers.
+
+## D38: A recipe settles when what it uses changes
+
+- **Date**: 2026-11-23 (spec 024, decided in an autonomous run, for the user's review)
+- **Choice**: right after an equipment is deleted or changed, a binding removed, a device removed
+  or a zone deleted, the core settles the recipe instances: a deleted equipment's id leaves the
+  settings of every instance that names it (warning line); every enabled instance is validated
+  again and, when it fails, stopped and **disabled** (`Disabled: <reason>`, events `stopped` and
+  `error`); a running one whose settings lost an id restarts with them; the instances of a deleted
+  zone are deleted. `enable` refuses (400 `Invalid params: <reason>`) an instance that does not
+  validate. It diverges from Sowel, which keeps the stale ids, lets the instance fail on each order
+  and enables an instance that cannot start.
+- **Why**: the box runs for a month with nobody reading its logs; an instance that looks enabled
+  but sends orders to an equipment that is gone is a state the interface cannot show. Disabled
+  with its reason, it shows as a switch off and a line in its journal, and it is never restarted
+  in error at each boot. A deleted zone's instance could never be valid again (a new room has a
+  new id) and would be shown nowhere, so it goes with its zone. The settle walks at most 16
+  instances x 32 ids and never fails the request that caused it.
+
+## D39: A budget of flash writes for the tests on the box (proposed)
+
+- **Date**: 2026-11-23 (proposed in an autonomous run, from the user's instruction; to confirm)
+- **Choice**: a run on the real box is one pass of the flow being shown, never a loop: no repeated
+  `measure-api.sh`, no burst or stress against the box. Loops, measures and stress run on the Mac
+  (`--sim`) or under QEMU. Each spec that runs on the box writes in its result the approximate
+  number of flash writes the run caused (saves of `/data` files, images flashed).
+- **Why**: the box's flash wears with writes (each save of a JSON file rewrites it, and a flash
+  of an image rewrites megabytes); the box is meant to run for years in an annex, and the test
+  runs should not spend its endurance.
