@@ -1905,6 +1905,18 @@ impl Env {
         mode: &str,
         extra_env: &[(&str, &str)],
     ) -> WifiRun {
+        self.console_command("wifi", extra_args, answer, mode, extra_env)
+    }
+
+    /// Runs a `box.sh` sub-command that talks to the console (`wifi`, `pair`) with the fake one.
+    fn console_command(
+        &self,
+        command: &str,
+        extra_args: &[&str],
+        answer: &str,
+        mode: &str,
+        extra_env: &[(&str, &str)],
+    ) -> WifiRun {
         write_exec(&self.path("console.sh"), FAKE_CONSOLE);
         fs::write(self.path("console-answer.txt"), answer).unwrap();
         let report = self.path("report.txt");
@@ -1912,7 +1924,7 @@ impl Env {
         let mut cmd = Command::new("/usr/bin/python3");
         cmd.arg("-I").arg("-c").arg(WIFI_HELPER);
         cmd.arg(SSID).arg(PASSWORD).arg(mode).arg(&report);
-        cmd.arg("/bin/sh").arg(SCRIPT).arg("wifi").args(extra_args);
+        cmd.arg("/bin/sh").arg(SCRIPT).arg(command).args(extra_args);
         cmd.current_dir(&self.root)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
@@ -2140,6 +2152,65 @@ fn wifi_forget_sends_wifi_forget_and_exits_0() {
     assert!(
         !run.text.contains("network name"),
         "no prompt for --forget: {}",
+        run.text
+    );
+}
+
+#[test]
+fn pair_sends_pair_and_exits_0_when_the_window_opens() {
+    let env = Env::new();
+    let run = env.console_command("pair", &[], "pairing: open for 180 s\n", "typed", &[]);
+    assert_eq!(run.code, 0, "{}", run.text);
+    assert_eq!(env.console_lines(), ["pair"]);
+    assert!(
+        run.text.contains("box: pairing is open (open for 180 s)"),
+        "{}",
+        run.text
+    );
+    assert!(
+        !run.text.contains("network name"),
+        "no prompt: {}",
+        run.text
+    );
+}
+
+#[test]
+fn pair_with_a_silent_console_says_so_and_exits_4() {
+    let env = Env::new();
+    let run = env.console_command(
+        "pair",
+        &[],
+        "",
+        "typed",
+        &[
+            ("FAKE_CONSOLE_SILENT", "1"),
+            ("SOLITE_WIFI_ANSWER_SECONDS", "1"),
+        ],
+    );
+    assert_eq!(run.code, 4, "{}", run.text);
+    assert_eq!(env.console_lines(), ["pair"]);
+    assert!(
+        run.text
+            .contains("box: no answer from Solite's console on "),
+        "{}",
+        run.text
+    );
+}
+
+#[test]
+fn pair_prints_a_failure_and_exits_1() {
+    let env = Env::new();
+    let run = env.console_command(
+        "pair",
+        &[],
+        "pairing: failed: the radio refused\n",
+        "typed",
+        &[],
+    );
+    assert_eq!(run.code, 1, "{}", run.text);
+    assert!(
+        run.text.contains("box: pairing: failed: the radio refused"),
+        "{}",
         run.text
     );
 }

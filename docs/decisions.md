@@ -572,3 +572,40 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: the user does not need the original firmware's backup: Sonoff supplies its own reflash
   (its web flasher, or its Home Assistant add-on), which brings the box back to its original
   firmware. The backup and its proven restore stay available for whoever wants them.
+
+## D35: The pairing window also opens from the serial console, never from the network
+
+- **Date**: 2026-11-22
+- **Choice**: the radio image's serial console (spec 022 R9) takes a third line, `pair`, sent by
+  `sh scripts/box.sh pair` over the USB cable: the engine opens the pairing window for 180 s
+  (`PAIR_AT_BOOT_SECONDS`), whatever the boot was and whether the marker `/data/booting` is there,
+  and logs `pairing: open for 180 s` (or `pairing: failed: <reason>`). It completes D32's window
+  at a power-on boot, which stays as it is, and keeps D28's rule for the box: the pairing route
+  answers 404 on the network until J4's password. D32's "a console command shares the log's port"
+  is no longer a reason against it: the console of D33 already reads that port. The window still
+  opens only from what a person does by hand at the box (power, or the cable), never from the
+  local network.
+- **Why**: on the real box (2026-11-22), pairing the ZBMINIR2 needed a power-on more than 10
+  minutes after the previous boot: opening the serial port resets the box and, within 10 minutes,
+  the marker refuses the window; a software restart opens none. A line on the cable that already
+  carries the Wi-Fi settings opens it at once, with no new input path and no exposure on the
+  network (the API has no authentication, D13).
+
+## D36: `/ws` is registered directly with ESP-IDF on the box
+
+- **Date**: 2026-11-22
+- **Choice**: the radio image registers `/ws` itself with `httpd_register_uri_handler`
+  (`is_websocket`, the subprotocol `bearer.none`, `ws_post_handshake_cb`), with
+  `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y` in `sdkconfig.radio.defaults` (checked by
+  `validate.sh`), instead of `esp-idf-svc`'s `ws_handler`. The post-handshake callback, on the
+  handshake's request, reads `Host` and `Origin`, takes a slot of the core's `LiveHub` or closes
+  (4003, 4003, 1013), sets a session context released by ESP-IDF when it deletes the socket (which
+  frees the slot) and sends the welcome. The live thread hands each frame to the server's task
+  with `httpd_queue_work` and `httpd_ws_send_frame_async`, and waits for its result; a frame for a
+  session already closed is not sent (its socket number may belong to a new connection). The rest
+  of the server stays `esp-idf-svc`'s. D33's other `/ws` rules are unchanged.
+- **Why**: with ESP-IDF 5.5, the WebSocket handshake never calls the URI handler, only the frames
+  that follow do, and `esp-idf-svc` 0.53 builds its session (its `New` case) on the handshake's
+  call: on the box (2026-11-22) a browser got its 101 and then nothing, no welcome and no event.
+  The post-handshake callback is ESP-IDF's own place for that work, on the request that still holds
+  the headers.

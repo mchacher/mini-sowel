@@ -62,7 +62,7 @@ bootloader pins must be driven in a fixed order, which the firmware's radio adap
 - The CP2102(N) reaches the ESP32: ESPHome is flashed over USB (confirmed, ESPHome guide).
 - Whether it also reaches the EFR32's UART is **unknown**.
 - DTR and RTS reset the ESP32 and enter its download mode automatically (measured, see "Measured on
-  the box"); opening the serial port also resets the box (seen with `box.sh wifi`, 2026-11-22).
+  the box"); opening the serial port also resets the box (seen with `box.sh wifi` and `box.sh pair`, 2026-11-22).
 - A user reports holding the button while plugging the USB cable to enter download mode
   ([forum thread](https://forum.ewelink.cc/t/is-the-dongle-m-cursed/207730), reported, not
   verified); the procedure below keeps it for a box whose bridge does not reset it.

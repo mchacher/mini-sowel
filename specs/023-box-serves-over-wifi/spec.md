@@ -234,20 +234,26 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 ### R5: Live events on the box
 
-1. `GET /ws` is registered as ESP-IDF's WebSocket handler with the subprotocol `bearer.none` (the
-   one the interface sends, `ui/src/store/useLive.ts`). ESP-IDF answers the handshake itself; then
-   the firmware checks, in this order: the `Host` (spec 022 R4.2), else closes with 4003 `Forbidden
+1. `GET /ws` is registered directly with ESP-IDF (`httpd_register_uri_handler`, `is_websocket`),
+   with the subprotocol `bearer.none` (the one the interface sends, `ui/src/store/useLive.ts`) and a
+   post-handshake callback (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y`, decision D36). ESP-IDF
+   answers the handshake itself, then calls the callback on the handshake's request, where the
+   firmware checks, in this order: the `Host` (spec 022 R4.2), else closes with 4003 `Forbidden
    host`; the `Origin` (the core's `live::session::origin_allowed`, its development origins
-   included, decided by the user), else 4003 `Origin not allowed`; a slot in the hub (`LiveHub::connect`), else 1013 `Try again later` (the 5th client).
-   Then it sends the welcome message of spec 013. `esp-idf-svc` 0.53 exposes no header of a
-   WebSocket request: `Host` and `Origin` are read from the raw `httpd_req_t` of
-   `EspHttpWsConnection::New` (`http/server.rs` l.1330-1334) with ESP-IDF's
-   `httpd_req_get_hdr_value_len` / `httpd_req_get_hdr_value_str`, in one small `unsafe` function
-   with its `SAFETY` comment (D11), each header bounded by the 1024-byte head of R4.2.
+   included, decided by the user), else 4003 `Origin not allowed`; a slot in the hub
+   (`LiveHub::connect`), else 1013 `Try again later` (the 5th client). Then it sets the request's
+   session context, which ESP-IDF keeps with the socket and releases when it deletes it (the slot is
+   freed there), and sends the welcome message of spec 013. `Host` and `Origin` are read from the
+   raw `httpd_req_t` with ESP-IDF's `httpd_req_get_hdr_value_len` / `httpd_req_get_hdr_value_str`,
+   in one small `unsafe` function with its `SAFETY` comment (D11), each header bounded by the
+   1024-byte head of R4.2. (`esp-idf-svc`'s `ws_handler` is not used: with ESP-IDF 5.5 the
+   handshake never reaches a WebSocket URI handler, so its session was never made, D36.)
 2. The live thread (core 0) every 200 ms (`TICK_MS`) sends each client its batch as one text
    message in fragments (`[`, each event, `]`) taken with `begin_batch` and `pop`, no batch string
-   built, through `esp-idf-svc`'s detached sender (which hands each frame to the server's task); a
-   close asked by the hub (1013 on a full queue) is sent; a ping every 30 s.
+   built: each frame is handed to the server's task (`httpd_queue_work`, then
+   `httpd_ws_send_frame_async` there) and the thread waits for its result; a frame for a session
+   already closed is not sent (its socket number may belong to a new connection). A close asked by
+   the hub (1013 on a full queue) is sent; a ping every 30 s.
 3. A client is dropped when a frame cannot be written within 5 s (the server's send timeout) or when
    TCP keep-alive finds it gone (R4.2, about 45 s). The 60 s silence rule of the host is not used on
    the box: ESP-IDF answers the pings and pongs itself and does not hand them to the firmware.
@@ -280,10 +286,17 @@ through the running firmware's console and the box is flashed with `--keep-stora
    within 5 s" becomes 15 s.
 3. After a save or a removal, the engine is asked to stop (its stop flag), saves its files (forced
    save, as the host's Ctrl-C does), and the ESP32 restarts by software (no pairing window: not a
-   power-on, spec 021); if the engine has not stopped within 10 s, it restarts anyway. After a
-   removal it then starts no link (R1.3).
+   power-on, spec 021; the `pair` line of R6.5 opens one); if the engine has not stopped within 10
+   s, it restarts anyway. After a removal it then starts no link (R1.3).
 4. With this console, `sh scripts/box.sh wifi` (spec 022 R9) ends as it describes: the settings
    saved, the box restarted, its address printed; `wifi --forget` removes them.
+5. `Pair` (added after the run on the box, 2026-11-22, decision D35): the line `pair` alone
+   (`ConsoleCommand::Pair`) logs `pairing: asked from the console` and sets a flag that a small
+   thread, `pair-watch` (4 KB of stack, every 500 ms), turns into the home's pairing request for
+   `PAIR_AT_BOOT_SECONDS` (180 s), whatever the boot and the marker; the engine then logs
+   `pairing: open for 180 s` or `pairing: failed: <reason>`. `sh scripts/box.sh pair` sends it and
+   reads that answer within 15 s (exit 0 open, 1 failed, 4 no answer). Nothing is written to the
+   flash. The pairing route stays 404 on the network (R4.7).
 
 ### R7: The interface in the firmware
 
@@ -494,6 +507,24 @@ through the running firmware's console and the box is flashed with `--keep-stora
 - `.github/workflows/ci.yml`: the firmware job installs Node and `ui/` packages (the radio image
   embeds the built interface).
 
+### Added after the run on the box (2026-11-22)
+
+- `docs/living-spec/README.md`: "Starts and shows its name" (the console's `pair` line also opens
+  pairing for 180 s); "Pairs a device" (the window opens for 180 s on the console's `pair`, whatever
+  the boot and the marker; opening the serial port resets the box, so within 10 minutes of the
+  previous boot the marker refuses that boot's window and `pair` opens it; pairing never opens from
+  the network on the box, D35); "Serves Sowel's API from the box" (pairing opens at a power-on boot
+  or from the console's `pair`, over the cable only); the zone aggregation (`motionSince` is none
+  while the clock is not set, before 2020-01-01); the `box.sh` list (the `pair` bullet).
+- `docs/decisions.md`: D35 (the pairing window from the serial console, never from the network) and
+  D36 (`/ws` registered directly with ESP-IDF).
+- `docs/architecture.md`: the Live events row (`/ws` registered directly, the post-handshake
+  callback, `httpd_queue_work`), the Firmware row (`pair`, `pair-watch`), the radio settings line.
+- `CLAUDE.md` and `README.md`: `sh scripts/box.sh pair`. `docs/hardware.md`: `box.sh pair` also
+  resets the box. `docs/memory-budget.md`: the 33 requests measured.
+- `docs/roadmap.md`: the inbox lines on the power-on needed to pair removed, the J4 pairing line
+  rewritten, the 33 requests and a `lastSeen` of 1970 added, the pending checks narrowed; journal.
+
 ### No longer true
 
 Found by searching `no link started`, `starts no link`, `no network`, `no HTTP server`, `does not
@@ -553,6 +584,17 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
 - `firmware/src/main.rs` l.1-2, module comment: "reads its network setting" → adds the Wi-Fi and
   the server of the radio image; l.41, doc comment of `log_network`: "no link is started" → for
   the images without a link (the radio image's path starts Wi-Fi).
+- After the run on the box (2026-11-22), searched with `ws_handler`, `detached`, `EspHttpWsConnection`,
+  `power-on`, `pairing window` and `box.sh wifi`: this spec's R5.1 and R5.2 (`esp-idf-svc`'s
+  `ws_handler`, `EspHttpWsConnection::New`, the detached sender) and `architecture.md` (the diagram,
+  the Live sessions row, the `CONFIG_HTTPD_WS_SUPPORT` row, the `live_ws.rs` row, the risk on the
+  `New` variant), rewritten for D36; `firmware/sdkconfig.radio.defaults` (its comment on
+  `esp-idf-svc`'s handler); `docs/architecture.md` l.42 ("on ESP-IDF's WebSocket handler"); the
+  living spec's "the pairing window of a power-on boot is unchanged" (the box's pairing route); the
+  roadmap inbox lines "pairing a device still needs a power-on" and "pairing the ZBMINIR2 needs a
+  power-on after 10 min", removed, and "Replace the pairing window opened at boot (... no input
+  path)", rewritten; this spec's last sentence of the first run's result. D28, D32 and D33 stay as
+  dated history; D35 and D36 say what changed.
 
 ## Acceptance criteria
 
@@ -564,14 +606,16 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
       Mac on each log file `box.sh log` printed (the SSID is never written in the repository or
       in a report), and it prints 0. NOT RUN.
 - [ ] `http://<box address>/` opens the interface from the Mac's browser, with the rooms and the
-      live state (one live client), served by the box (the Mac host not running). Partly seen
-      (2026-11-22): the interface answered 200 and `GET /api/v1/devices` 200 from the box; the live
-      state in a browser was not recorded.
-- [ ] `sh scripts/demo-garage.sh <box address>` sets the garage up on the box; the motion before the
-      sensor switches the ZBMINIR2, and the interface shows it live. NOT RUN (no relay paired).
+      live state (one live client), served by the box (the Mac host not running). Seen in the
+      second run (2026-11-22): the interface live in Chromium, the welcome and the events, 7
+      reloads out of 7.
+- [x] `sh scripts/demo-garage.sh <box address>` sets the garage up on the box; the motion before the
+      sensor switches the ZBMINIR2, and the interface shows it live. Seen in the second run
+      (2026-11-22).
 - [ ] `sh scripts/measure-api.sh <box address>` prints 33 answered 201, 0 Busy, and its total time;
-      the figure is in `docs/memory-budget.md`. NOT RUN (`no device with an order`: no relay
-      paired).
+      the figure is in `docs/memory-budget.md`. Second run (2026-11-22): never `Busy`, but over
+      10 s in seven runs of eight and one request with no answer in two; the figures are in
+      `docs/memory-budget.md`. FAILED (roadmap inbox).
 - [ ] The `memory-network:` line, the `heap:` minimum through the run, the network's cost (234 KB
       minus the first `heap:` minimum, R9.1) and the projection for the realistic home are in
       `docs/memory-budget.md`; the minimum and the projection are at or above 64 KB, with or
@@ -585,8 +629,8 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
       saved (a `clock: synced` line, then a pairing or an edit), the box is unplugged and plugged
       back with the access point off; once the access point is on again and the box answers,
       `GET /api/v1/devices` before any device has spoken since that boot (no measure line of it in
-      the log): every `lastSeen` is of the day, none in 1970. NOT RUN (no `clock:` line seen in
-      the 20 s capture).
+      the log): every `lastSeen` is of the day, none in 1970. NOT RUN (the `clock:` line was seen
+      in the second run; a device that spoke before it kept a 1970 `lastSeen`: roadmap inbox).
 - [ ] After `sh scripts/box.sh wifi --forget` and the box's restart, the log shows `wifi: no
       settings ...`, no `wifi: connected` and no `serving:`: the settings were in the file only,
       none kept in NVS. NOT RUN.
@@ -745,6 +789,16 @@ Decided during the run on the box (2026-11-22):
   script ends, and bounds its wait (20 s): on a loaded Mac the first Ctrl-C landed before `read`
   started, the shell held it, and the test hung a `validate.sh` run.
 
+Decided after the run on the box (2026-11-22, in autonomy, the user away):
+- D35: the serial console's `pair` line opens the pairing window for 180 s whatever the boot, never
+  the network (the API stays 404); `box.sh pair` sends it.
+- D36: `/ws` registered directly with ESP-IDF, with the post-handshake callback: `esp-idf-svc`'s
+  `ws_handler` never saw the handshake with ESP-IDF 5.5.
+- `motionSince` is none while the clock reads before 2020-01-01 (`CLOCK_SET_AFTER_MS`): the box
+  counts from 1970 until SNTP answers, and the interface showed 20779 days of calm.
+- The 33 requests' failure and the `lastSeen` of 1970 are recorded, not fixed here: both are
+  roadmap inbox lines, outside the three changes the run asked for.
+
 Decided while building (plan steps 1 to 4, 2026-11-22):
 
 - `box.sh wifi` reads the console's answers through ESP-IDF's log prefix (`I (<ms>) <module>:`,
@@ -829,5 +883,38 @@ features):
 - [x] the radio `app.bin`: 1774 KB (1816560 bytes) of 4096 KB (the release build of the last source, 2026-11-22; the box ran debug builds).
 
 Not run either: the power-on pairing with the access point on or off, the console's stack
-high-water mark, the Mac host refused on port 6638. Pairing the ZBMINIR2 needs a power-on more than
-10 minutes after a boot (a software restart opens no pairing window): roadmap inbox.
+high-water mark, the Mac host refused on port 6638. Pairing the ZBMINIR2 needed a power-on more than
+10 minutes after a boot (a software restart opens no pairing window): answered by D35's `pair`
+(second run, below).
+
+Second run (2026-11-22, the radio image with the three changes made after the first run flashed,
+Wi-Fi 192.168.0.46, the SNZB-03PR2 and the ZBMINIR2 paired; the Mac host not running):
+
+- [x] `sh scripts/box.sh pair` (D35): `pairing: open for 180 s` after the reset of the port; the
+      ZBMINIR2 paired on the box in this run.
+- [x] the garage set up through the API (`demo-garage.sh`), the motion before the SNZB-03PR2
+      switching the ZBMINIR2 (the relay heard clicking).
+- [x] `/ws` live in Chromium (D36): the welcome and the events, 7 reloads out of 7; 4003 for a
+      foreign `Host` and a foreign `Origin`; the development origin `http://localhost:5173`
+      welcomed; with a browser tab holding one slot, a script's 4th and 5th clients closed 1013, the
+      same on a second try (the closed ones freed theirs); a message of 1025 bytes closed 1009.
+- [x] `motionSince` before the clock: the interface showed `Calme · 20779 j` (from 1970); fixed in
+      the core (no `motionSince` before 2020-01-01), with its test.
+- [x] the server's limits: a 17 KB body 413, a chunked body 411, a header of 1100 bytes 431 then a
+      new request 200, 13 connections held: 2 closed by the box and a new request answered 200;
+      `/` with `Host: evil.example` 403; `permit-join` 404 with its message for `GET` and for a JSON
+      `POST` (a `POST` with no `Content-Type` gets 415 first: the JSON-only rule runs before the
+      route); port 6638 refused.
+- [x] the `clock:` line: `clock: synced, 2026-11-22T22:34:43.000Z` 19.5 s after the boot, after
+      `wifi: connected` (7.5 s); `memory-network: internal 163 KB free (largest block 62 KB), psram
+      1904 KB free of 2048 KB`. The ZBMINIR2, which spoke at 5.9 s, kept a `lastSeen` of
+      `1970-01-01T00:00:04.639Z` (R3.3: a date taken before the clock; roadmap inbox).
+- [ ] the 33 requests: eight runs of `measure-api.sh`, never a 503 `Busy`, totals 14.4, 9.0, 10.5,
+      10.7, 16.1, 19.1, 22.3 and 20.6 s, so over the 10 s of R10 in seven; in two runs one request
+      got no answer (curl status 000), the 32 others 201. Each creation takes 0.15 to 0.65 s (a GET
+      about 0.05 s). FAILED: roadmap inbox.
+- [ ] NOT RUN: the lost link (access point off), no 1970 date on the flash after a boot with the
+      access point off, a wrong password, `wifi --forget`, the SSID grep, the 4 requests in progress
+      and the 5th `Busy`, the unpowered relay, the console's long and unknown lines, a client that
+      stops reading, the power-on cases, the `heap:` minimum of a run and the projection, the
+      console's stack high-water mark: roadmap inbox.

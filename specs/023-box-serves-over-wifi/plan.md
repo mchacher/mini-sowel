@@ -40,9 +40,15 @@ named in `spec.md` (context).
       under 64 KB (R9.3): `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` 2048 in `sdkconfig.radio.defaults`
       (approved by the user), rebuilt, flashed again with the user's yes, measured again; still
       under: stop and report the figures. Partial (2026-11-22): Wi-Fi, serving and three answers
-      checked, `memory-network:` written; the rest NOT RUN (the column "Run 2026-11-22" below and
-      "Result of the run" in `spec.md`).
+      checked, `memory-network:` written. Second run (2026-11-22): the garage, the motion switching the
+      ZBMINIR2, `/ws` live in a browser, `box.sh pair`, the `clock:` line, the error cases of the
+      server and the 33 requests (over 10 s); the rest NOT RUN (the column "Run 2026-11-22" below
+      and "Result of the run" in `spec.md`).
 - [x] 8. Roadmap reviewed (E3c status, inbox).
+- [x] 9. After the run on the box (2026-11-22), tests first: the console's `pair` line (D35) in the
+      core, the firmware and `box.sh pair`; `/ws` registered directly with ESP-IDF (D36) and its
+      setting checked by `validate.sh`; `motionSince` waits for a clock that is set; the docs of
+      "Added after the run on the box" in `spec.md`; `validate.sh` green; review (`code-reviewer`).
 
 ## Test plan
 
@@ -72,6 +78,12 @@ built and linted by `validate.sh`, and run on the box.
 | script `box.sh log` | Box and sim logs (existing tests) | unchanged checks, `no link started` still required |
 | script `box.sh wifi` | A console that answers `wifi: settings saved` 6 s after the line, then `wifi: connected, address ...` | exit 0, the address printed (the 15 s window) |
 | script `box.sh wifi` | A silent console, `SOLITE_WIFI_ANSWER_SECONDS=1` (the existing test, adapted to stay fast) | exit 4, `no answer from Solite's console` |
+| core `parse_console_line` (`tests/network.rs`) | `pair`, `pair\r`, `pair now` | `Pair`, `Pair`, `Unknown` |
+| core `Home::aggregate` (`tests/aggregate.rs`) | A motion sensor bound while the clock reads 6 s (1970), then the clock set | `motionSince` null, then the time of the first computation after the clock, kept afterwards |
+| script `box.sh pair` | A console that answers `pairing: open for 180 s` | the line `pair` sent, exit 0, `box: pairing is open (open for 180 s)` printed, no prompt |
+| script `box.sh pair` | A silent console, `SOLITE_WIFI_ANSWER_SECONDS=1` | the line `pair` sent, exit 4, `no answer from Solite's console` |
+| script `box.sh pair` | A console that answers `pairing: failed: the radio refused` | exit 1, the line printed |
+| `validate.sh` (firmware step) | The radio build's `sdkconfig` | holds `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y`, else stops naming it |
 | `validate.sh` (firmware step) | `ui/node_modules` missing | stops with `cd ui && npm ci` named; checked by hand once, as the other validate branches |
 
 Bounds covered here: the 64 KB internal minimum (the existing `log` test), `MAX_WIFI_BYTES` for the
@@ -97,17 +109,17 @@ through the same `handle_stream`.
 | Access point off for a minute, then on | `wifi: lost (...)`, retries; a motion before the sensor while it is off switches the ZBMINIR2; then `wifi: connected`, the interface reconnects | NOT RUN |
 | The interface from the Mac | loads, gzip, cached assets (a second load fetches only `index.html`) | partly: `/` answered 200; gzip and the cache NOT RUN |
 | A 5th browser tab | closed 1013, reconnecting; the 4 others live | NOT RUN |
-| `curl` with `Host: evil.example` on `/api/v1/zones` and on `/` | 403 both; a page of another origin on `/ws`: closed 4003 | partly: 403 on an API route seen; `/` and `/ws` NOT RUN |
-| A `/ws` client (small Python client) with `Origin: http://localhost:5173` | the welcome message (development origin accepted, decided by the user) | NOT RUN |
+| `curl` with `Host: evil.example` on `/api/v1/zones` and on `/` | 403 both; a page of another origin on `/ws`: closed 4003 | seen: 403 on an API route and on `/`; `/ws` closed 4003 for `Host: evil.example` and for `Origin: http://evil.example` (second run) |
+| A `/ws` client (small Python client) with `Origin: http://localhost:5173` | the welcome message (development origin accepted, decided by the user) | seen (second run) |
 | `curl -X POST .../permit-join` | 404 `Pairing from the API is off on the box` | seen: 404 with its message |
-| A 17 KB body | 413 | NOT RUN |
-| `curl -X POST -H 'Transfer-Encoding: chunked' -H 'Content-Type: application/json' --data-binary @body.json .../api/v1/zones` | 411 `Length required` | NOT RUN |
-| `curl` with a header of 1100 bytes (one long `X-Pad` header) | 431 from ESP-IDF; the next request on a new connection answered normally | NOT RUN |
-| 13 connections opened and held (a small Python script on the Mac), then a request on the first | the least recently used connection closed by the box; the request on a new connection answered; with one browser tab open, its live client reconnects if it was the one closed | NOT RUN |
+| A 17 KB body | 413 | seen: 413 `Body too large` (second run) |
+| `curl -X POST -H 'Transfer-Encoding: chunked' -H 'Content-Type: application/json' --data-binary @body.json .../api/v1/zones` | 411 `Length required` | seen (second run) |
+| `curl` with a header of 1100 bytes (one long `X-Pad` header) | 431 from ESP-IDF; the next request on a new connection answered normally | seen: 431, then 200 (second run) |
+| 13 connections opened and held (a small Python script on the Mac), then a request on the first | the least recently used connection closed by the box; the request on a new connection answered; with one browser tab open, its live client reconnects if it was the one closed | seen: 2 of the 13 closed by the box, a request on a new connection answered 200, a browser tab open (second run); its reconnection not watched |
 | 4 requests in progress at once (a small Python script: 4 `POST /api/v1/zones` with `Content-Length: 100`, bodies sent one byte a second), then a 5th request | the 5th answered 503 `{"error":"Busy"}` at once; the 4 answered once their bodies end | NOT RUN |
 | The ZBMINIR2 unpowered; 3 orders to it at once | 2 answered `device did not answer` after 12 s, the 3rd 503 `Busy` at once | NOT RUN |
 | A line of 600 bytes, then `hello`, sent on the serial console (pyserial on the Mac) | `console: line over 512 bytes, ignored`, `console: unknown command`; neither line's text in the log | NOT RUN |
-| A `/ws` message of 1025 bytes (`websocat` or a small Python client, `Origin` absent) | closed 1009; the other live clients unaffected | NOT RUN |
+| A `/ws` message of 1025 bytes (`websocat` or a small Python client, `Origin` absent) | closed 1009 `Message too big` (second run); the other clients not watched |
 | A `/ws` client that stops reading (a small Python client with a small receive buffer) while events flow | dropped after a blocked write of at most 5 s, or by keep-alive; the other live client stays live; a `curl` during it answered within about 5 s | NOT RUN |
 | `GET /api/v1/devices` in a loop while `measure-api.sh` runs (each binding writes `equipments.json` to the flash) | every answer 200, none lost; the interface's live state late at most, no 1013 for the browser tab | NOT RUN |
 | A power-on (USB unplugged and plugged back) with the access point on | `pairing: open for 180 s` before `clock: synced`; a device paired in the window; the first save written after `clock:`, with dates of the day | NOT RUN |
@@ -118,13 +130,15 @@ through the same `handle_stream`.
 | The console thread's stack: its high-water mark after a `box.sh wifi` (it writes the flash), in that run's `console: restarting (stack ... B unused of 4096 B)` line | a margin left on its stack (the figure written in `docs/memory-budget.md`); none: the stack raised and the run made again | NOT RUN |
 | A `/ws` message sent in two fragments (a small Python client, `Origin` absent) | accepted as no concern (spec, "Decided in autonomy"): the box answers or closes the connection, no other client affected, the engine runs on | NOT RUN |
 | The SSID in the logs | `grep -c '<SSID>' <log file>` on the Mac prints 0 for every capture of the run | NOT RUN |
+| A 5th live client | closed 1013 | seen: with a browser tab holding one slot, the 4th and 5th clients of a script closed 1013, the same count on a second try (no slot kept by the closed ones) (second run) |
+| `sh scripts/box.sh pair` on the box (D35) | `pairing: open for 180 s` within 15 s of the reset | seen (second run) |
 | The radio `app.bin` | its size noted in the run's result, under the 4096 KB slot | seen: its size in `spec.md` |
-| The 33 requests | `measure-api.sh` passes (R10) | NOT RUN |
+| The 33 requests | `measure-api.sh` passes (R10) | FAILED (second run, eight runs): never `Busy`, but totals 9.0 to 22.3 s, over 10 s in seven; one request with no answer in two runs (roadmap inbox) |
 | The internal RAM | `heap:` minimum ≥ 64 KB; `memory-network:`, the network's cost (234 KB − the first `heap:` minimum) and the projection written (R9.1, R9.3); below 64 KB: the knob `SPIRAM_MALLOC_ALWAYSINTERNAL` 2048, measured again; still below: stop and report | partly: `memory-network:` written; the minimum, the cost and the projection NOT RUN |
-| A Mac host at `--radio tcp://<box>:6638` | connection refused | NOT RUN |
+| A Mac host at `--radio tcp://<box>:6638` | connection refused | seen with `nc`: `Connection refused` (second run) |
 
-49 scenarios: 21 in the table above (20 tested by `validate.sh`: 8 core and 12 script; 1 checked by
-hand), 28 checked on the box. The other 74 scenarios of E3c (the core, `ui-embed`, `box.sh wifi`,
+57 scenarios: 27 in the table above (26 tested by `validate.sh`: 10 core, 15 script and the settings
+check; 1 checked by hand), 30 checked on the box. The other 74 scenarios of E3c (the core, `ui-embed`, `box.sh wifi`,
 `--keep-storage`, `demo-garage.sh`, `measure-api.sh`) are in spec 022's plan.
 
 ## Validation

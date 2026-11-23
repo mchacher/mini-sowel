@@ -385,6 +385,8 @@ pub enum ConsoleCommand {
     Refused(WifiRefusal),
     /// `wifi-forget`.
     WifiForget,
+    /// `pair`: open the pairing window for `PAIR_AT_BOOT_SECONDS`, whatever the boot was.
+    Pair,
     Empty,
     Unknown,
     /// More than `MAX_CONSOLE_LINE` bytes.
@@ -415,6 +417,7 @@ pub fn parse_console_line(line: &[u8]) -> ConsoleCommand {
             Err(refusal) => ConsoleCommand::Refused(refusal),
         },
         ("wifi-forget", None) => ConsoleCommand::WifiForget,
+        ("pair", None) => ConsoleCommand::Pair,
         _ => ConsoleCommand::Unknown,
     }
 }

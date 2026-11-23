@@ -57,7 +57,8 @@ Each of the three programs starts and says which tool it is, with its version:
   serves Sowel's API, `/ws` and the interface on port 80 (see "Serves Sowel's API from the box").
   New lines: `solite-ui <n> files, <KB> KB`, `console: ready`, `wifi: ...`, `clock: ...`,
   `serving: ...`, `memory-network: ...`. A boot
-  with a power-on reset opens pairing for 180 seconds (see "Pairs a device"). Every 240 seconds it
+  with a power-on reset opens pairing for 180 seconds, and so does the serial console's `pair` line
+  at any time (see "Pairs a device"). Every 240 seconds it
   logs `serial: <baud> baud, rx buffer 4096 B, highest <n> B, full <k> times` and `heap: internal
   <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB, http stack <s> KB unused of <t> KB`.
   The radio image is a development image: its API is open on the local network (decision D33).
@@ -192,7 +193,12 @@ boot only when the reset is a power-on (power, or the USB bridge's reset) and no
 a crash, a watchdog, a brown-out or a boot loop opens nothing and logs `pairing: not opened at
 boot (<reason>)`. The window is the home's pairing window; the image then only listens, and shows
 `pairing: open for 180 s`, the devices' lines and `pairing: closed`; a radio that refuses to open
-joining logs `pairing: failed: <reason>`. A setting the radio refuses while the network forms is
+joining logs `pairing: failed: <reason>`. The same window opens for 180 seconds, whatever the boot
+and the marker, when the firmware's serial console reads the line `pair` (sent by `sh scripts/box.sh
+pair` over the USB cable; the console logs `pairing: asked from the console` and the engine takes
+the request within half a second). Opening the serial port resets the box: when the previous boot was
+less than 10 minutes before, the marker refuses that boot's window and the `pair` line opens it.
+Pairing never opens from the network on the box (decision D35). A setting the radio refuses while the network forms is
 logged as on the Mac.
 
 While serving, pairing also opens from the API or the interface (see "Serves Sowel's device API"
@@ -326,7 +332,8 @@ own network (not a guest network) with no router port forwarded to it (decided b
 except:
 
 - `GET` and `POST /api/v1/integrations/solite/permit-join` answer 404 `Pairing from the API is off
-  on the box`; the pairing window of a power-on boot is unchanged.
+  on the box`; pairing opens at a power-on boot or from the serial console's `pair` line, over the
+  USB cable only (decision D35).
 - On `/ws` the refusals come after the upgrade, as close codes: 4003 for a wrong host, 4003 for an
   origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
   `http://127.0.0.1:5173`) are accepted as on the Mac. Only the subprotocol `bearer.none` is echoed.
@@ -578,6 +585,11 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   input: the password is never in a process list, a file, a log or the output; the name is not
   printed either. `wifi --forget` sends `wifi-forget` and reads `wifi: settings removed` (exit 0, or
   exit 4 with no answer).
+- `pair` opens the serial port (which resets the box), waits for `console: ready` as `wifi` does,
+  sends the line `pair` and reads the answer within 15 s: `pairing: open for 180 s` (printed as
+  `box: pairing is open (open for 180 s): put the device in pairing mode now`, exit 0);
+  `pairing: failed: <reason>` (printed, exit 1); no answer: the message of `wifi`, exit 4. It asks
+  nothing and needs no backup: it writes nothing to the flash.
 - `backup`, `restore` and `flash` print what they will do; `backup` and `restore` then ask, on the
   terminal (never on standard input), for the last 6 hex digits of the box's MAC address; anything
   else, or no terminal, writes nothing. `flash` asks nothing beyond the command itself (D34).

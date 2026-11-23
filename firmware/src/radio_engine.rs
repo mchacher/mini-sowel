@@ -35,8 +35,8 @@ use solite_core::home::Home;
 use solite_core::live::LiveHandle;
 use solite_core::radio::backup;
 use solite_core::radio::serial::{
-    BootPairing, RADIO_BAUD, ResetReason, RestartSteps, Restarted, Restarts, marker_wait_ms,
-    pairing_at_boot, probe, probe_order, restart,
+    BootPairing, PAIR_AT_BOOT_SECONDS, RADIO_BAUD, ResetReason, RestartSteps, Restarted, Restarts,
+    marker_wait_ms, pairing_at_boot, probe, probe_order, restart,
 };
 use solite_core::radio::{
     Network, NetworkSettings, Radio, RadioError, RadioTransport, TransportError,
@@ -53,6 +53,10 @@ use crate::wifi::{CLOCK_SET, Event, WIFI_STARTED};
 pub const STACK_BYTES: usize = 32 * 1024;
 /// The Zigbee backup, in the host's format.
 const BACKUP_FILE: &str = "zigbee.json";
+/// Set by the console's `pair` line: the engine opens the pairing window for the same time as at a
+/// power-on boot, whatever the boot was (taken by `start_pair_watch`).
+pub static PAIR_ASKED: AtomicBool = AtomicBool::new(false);
+
 /// The marker written at each boot and removed after `STABLE_MS` of running.
 const MARKER_FILE: &str = "booting";
 
@@ -329,6 +333,7 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
         }
     }
 
+    start_pair_watch(&home);
     let clocks = Clocks {
         now: Arc::new(wall_ms),
         monotonic: Arc::new(mono),
@@ -391,6 +396,25 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
                 Err(error) => last = error.to_string(),
             }
         }
+    }
+}
+
+/// Turns the console's `pair` line into a pairing request, every half second.
+fn start_pair_watch(home: &Arc<Mutex<Home>>) {
+    let home = Arc::clone(home);
+    let spawned = std::thread::Builder::new()
+        .name("pair-watch".into())
+        .stack_size(4096)
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                if PAIR_ASKED.swap(false, Ordering::SeqCst) {
+                    lock(&home).pairing_mut().request(PAIR_AT_BOOT_SECONDS);
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("pairing: cannot start the console watch: {e}");
     }
 }
 

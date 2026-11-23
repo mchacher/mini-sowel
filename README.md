@@ -59,7 +59,7 @@ cd firmware && cargo build --release              # the ESP32 firmware (box imag
 cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio   # the radio image (build the interface first: cd ui && npm run build)
 sh scripts/e2e-sim.sh                             # the simulated path driven in headless Chromium (cd tools/e2e && npm ci first)
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
-sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log, wifi; --image box|sim|radio)
+sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log, wifi, pair; --image box|sim|radio)
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check: must be green before a commit
 ```

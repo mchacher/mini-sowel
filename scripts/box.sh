@@ -7,6 +7,7 @@
 #   sh scripts/box.sh restore <backup file> [--dry-run]
 #   sh scripts/box.sh flash --image box|sim|radio [--backup <backup file>] [--keep-storage] [--dry-run]
 #   sh scripts/box.sh wifi [--forget] [--port <device>]
+#   sh scripts/box.sh pair [--port <device>]   (opens the pairing window for 180 s, on the radio image)
 #   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
 #   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
 #   sh scripts/box.sh log --raw [--seconds <n>]                              (no checks)
@@ -56,7 +57,7 @@ fw_fail() { box_fail "$1"; }
 . "$ROOT/scripts/lib/firmware.sh"
 
 usage() {
-  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi [--port <device>] [--baud <rate>] [options]" >&2
+  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi|pair [--port <device>] [--baud <rate>] [options]" >&2
   [ -n "$1" ] && echo "box: $1" >&2
   exit 2
 }
@@ -570,10 +571,11 @@ cmd_log() {
 }
 
 # Talks to the radio image's serial console (spec 022 R9). Standard input: the network's name and
-# its password, one per line (`set`), nothing (`forget`). The JSON is built here, from those two
+# its password, one per line (`set`), nothing (`forget`, `pair`). The JSON is built here, from those two
 # lines: the password is in no argument, no environment variable and no file. Opening the port
 # resets the box (the USB bridge), so the line is sent once the console says `console: ready`.
-# Exit 0 done, 1 refused or not connected, 4 no answer. $1 the port, $2 `set` or `forget`.
+# Exit 0 done, 1 refused, not connected or pairing failed, 4 no answer. $1 the port, $2 `set`,
+# `forget` or `pair` (waits for `pairing: open for`).
 console_exchange() {
   [ -n "$SOLITE_SERIAL_CONSOLE" ] || fw_find_idf
   ${PY:-python3} -c '
@@ -589,6 +591,8 @@ if mode == "set":
     password = sys.stdin.readline().rstrip("\r\n")
     secrets = [ssid] + ([password] if password else [])
     line = "wifi-set " + json.dumps({"ssid": ssid, "password": password})
+elif mode == "pair":
+    line = "pair"
 else:
     line = "wifi-forget"
 
@@ -661,6 +665,15 @@ if not fake:
         if text.endswith("console: ready"):
             break
 send((line + "\n").encode())
+if mode == "pair":
+    for text in lines_until(time.time() + answer_wait):
+        if text.startswith("pairing: open for"):
+            print("box: pairing is open (" + text[len("pairing: "):] + "): put the device in pairing mode now")
+            sys.exit(0)
+        if text.startswith("pairing: failed"):
+            print("box: " + text)
+            sys.exit(1)
+    no_answer()
 want = "wifi: settings saved" if mode == "set" else "wifi: settings removed"
 answer = None
 for text in lines_until(time.time() + answer_wait):
@@ -733,6 +746,13 @@ cmd_wifi() {
   exit "$code"
 }
 
+cmd_pair() {
+  resolve_port
+  code=0
+  : | console_exchange "$PORT" pair || code=$?
+  exit "$code"
+}
+
 case "$COMMAND" in
   identify) cmd_identify ;;
   backup) cmd_backup ;;
@@ -740,5 +760,6 @@ case "$COMMAND" in
   flash) cmd_flash ;;
   log) cmd_log ;;
   wifi) cmd_wifi ;;
+  pair) cmd_pair ;;
   *) usage "unknown command $COMMAND" ;;
 esac

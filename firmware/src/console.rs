@@ -14,7 +14,7 @@ use esp_idf_svc::sys::{
 };
 use solite_core::network::{ConsoleCommand, MAX_CONSOLE_LINE, parse_console_line};
 
-use crate::radio_engine::{STOP, STOPPED};
+use crate::radio_engine::{PAIR_ASKED, STOP, STOPPED};
 use crate::storage;
 
 /// The console thread's stack, in internal RAM: it writes the flash.
@@ -109,6 +109,10 @@ fn act(line: &[u8]) {
                 }
                 Err(e) => log::error!("{e}"),
             }
+        }
+        ConsoleCommand::Pair => {
+            PAIR_ASKED.store(true, Ordering::SeqCst);
+            log::info!("pairing: asked from the console");
         }
         ConsoleCommand::WifiForget => match storage::remove(WIFI_FILE) {
             Ok(()) => {

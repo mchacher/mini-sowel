@@ -440,3 +440,10 @@ fn the_settings_written_by_the_console_are_read_back_the_same() {
         assert_eq!(keys, ["password", "ssid"]);
     }
 }
+
+#[test]
+fn pair_alone_asks_for_the_pairing_window() {
+    assert_eq!(parse_console_line(b"pair"), ConsoleCommand::Pair);
+    assert_eq!(parse_console_line(b"pair\r"), ConsoleCommand::Pair);
+    assert_eq!(parse_console_line(b"pair now"), ConsoleCommand::Unknown);
+}
