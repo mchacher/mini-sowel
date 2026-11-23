@@ -558,7 +558,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   bodies against forms, Origin on `/ws`), and the pairing route stays off. The settings file
   survives a flash with `--keep-storage`, which NVS would not.
 
-## D34: The backup of the original firmware is optional for `flash`
+## D35: The backup of the original firmware is optional for `flash`
 
 - **Date**: 2026-11-22
 - **Choice**: replaces, for `box.sh flash`, the mandatory backup and the MAC confirmation that
@@ -573,7 +573,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (its web flasher, or its Home Assistant add-on), which brings the box back to its original
   firmware. The backup and its proven restore stay available for whoever wants them.
 
-## D35: The pairing window also opens from the serial console, never from the network
+## D36: The pairing window also opens from the serial console, never from the network
 
 - **Date**: 2026-11-22
 - **Choice**: the radio image's serial console (spec 022 R9) takes a third line, `pair`, sent by
@@ -591,7 +591,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   carries the Wi-Fi settings opens it at once, with no new input path and no exposure on the
   network (the API has no authentication, D13).
 
-## D36: `/ws` is registered directly with ESP-IDF on the box
+## D37: `/ws` is registered directly with ESP-IDF on the box
 
 - **Date**: 2026-11-22
 - **Choice**: the radio image registers `/ws` itself with `httpd_register_uri_handler`

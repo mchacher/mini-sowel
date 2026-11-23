@@ -66,7 +66,7 @@ sh scripts/validate.sh                            # every check: must be green b
 
 The firmware is flashed only through `sh scripts/box.sh flash`, run by the user. A backup of the original
 firmware is optional (`--backup <file>`, checked when given): the way back is Sonoff's own reflash (see
-[docs/decisions.md](docs/decisions.md), D6, D31 and D34, and [docs/hardware.md](docs/hardware.md)).
+[docs/decisions.md](docs/decisions.md), D6, D31 and D35, and [docs/hardware.md](docs/hardware.md)).
 Without a flash, the Dongle Max keeps its original firmware.
 
 ## How the project is worked on

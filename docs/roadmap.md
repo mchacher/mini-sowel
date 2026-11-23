@@ -138,7 +138,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | `box.sh backup` prints `tr: stdout: Broken pipe` after a valid backup (cosmetic); the radio and the Wi-Fi of E3 settle the original firmware version, unread in E3a | Spec 020 |
 | 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
-| 2026-11-22 | Replace the pairing windows of the box (180 s at a power-on boot, and the serial console's `pair` over the cable, D35) by the button or the authenticated route (J4) | Spec 021, D35 |
+| 2026-11-22 | Replace the pairing windows of the box (180 s at a power-on boot, and the serial console's `pair` over the cable, D36) by the button or the authenticated route (J4) | Spec 021, D36 |
 | 2026-11-22 | A device removal in the API: an unwanted device that joined during a window stays in the store | Spec 021 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
 | 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
@@ -267,13 +267,13 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-22: spec 023 (E3c, firmware) specified: E3c reads Wi-Fi only, Ethernet moves to the new E3e after E3d; E3d's settings route is the serial console. Five inbox lines added from the spec (mDNS, the server in QEMU, the bearer token on `/ws`, the pairing window after `wifi`, the realistic home measured with Wi-Fi up).
 - 2026-11-22: spec 023 done (E3c done, box run partial): the box joined Wi-Fi and served the API and the
   interface; the garage, the 33 requests, the lost link, the clock line and the error cases not run (inbox).
-  Decision D34: the backup is optional for `box.sh flash` (its inbox line removed). The living spec's
+  Decision D35: the backup is optional for `box.sh flash` (its inbox line removed). The living spec's
   sentence saying `box.sh wifi` does not reset the box is corrected in the same change.
 - 2026-11-22: architecture review (read-only, Opus): sound, nothing to fix before J3. Six lines added to the
   inbox (one broadcast point, missing events, stale recipe ids, GET side effects, the home lock, the
   two-core rule).
 - 2026-11-22: spec 023 completed on the box: garage set up, motion switched the ZBMINIR2, `/ws` fixed
-  (D36) and seen live in Chromium, `box.sh pair` added (D35), `motionSince` waits for the clock. The
-  inbox lines on the power-on needed to pair are removed (D35 answers them), the J4 pairing line
+  (D37) and seen live in Chromium, `box.sh pair` added (D36), `motionSince` waits for the clock. The
+  inbox lines on the power-on needed to pair are removed (D36 answers them), the J4 pairing line
   rewritten; the 33 requests measured over 10 s (inbox line replaces the one asking to measure); the
   pending box checks narrowed to what was not run; new line: a `lastSeen` taken before the clock stays 1970.

@@ -198,7 +198,7 @@ and the marker, when the firmware's serial console reads the line `pair` (sent b
 pair` over the USB cable; the console logs `pairing: asked from the console` and the engine takes
 the request within half a second). Opening the serial port resets the box: when the previous boot was
 less than 10 minutes before, the marker refuses that boot's window and the `pair` line opens it.
-Pairing never opens from the network on the box (decision D35). A setting the radio refuses while the network forms is
+Pairing never opens from the network on the box (decision D36). A setting the radio refuses while the network forms is
 logged as on the Mac.
 
 While serving, pairing also opens from the API or the interface (see "Serves Sowel's device API"
@@ -333,7 +333,7 @@ except:
 
 - `GET` and `POST /api/v1/integrations/solite/permit-join` answer 404 `Pairing from the API is off
   on the box`; pairing opens at a power-on boot or from the serial console's `pair` line, over the
-  USB cable only (decision D35).
+  USB cable only (decision D36).
 - On `/ws` the refusals come after the upgrade, as close codes: 4003 for a wrong host, 4003 for an
   origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
   `http://127.0.0.1:5173`) are accepted as on the Mac. Only the subprotocol `bearer.none` is echoed.
@@ -533,7 +533,7 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   and not one repeated byte, and prints the row for `docs/hardware.md`.
 - `restore <file>` writes the backup back, after checking its size, its SHA-256 and that the MAC of
   its name is the connected box's.
-- `flash --image box|sim|radio [--backup <file>]` takes the backup as an option (decision D34: the
+- `flash --image box|sim|radio [--backup <file>]` takes the backup as an option (decision D35: the
   way back to the original firmware is Sonoff's own reflash, and the plan says so when no backup is
   given); a backup given is refused unless it is 16 MB, its name holds this box's MAC and its
   SHA-256 is in the backup table of `docs/hardware.md` with a restore date. It checks the built
@@ -594,7 +594,7 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   nothing and needs no backup: it writes nothing to the flash.
 - `backup`, `restore` and `flash` print what they will do; `backup` and `restore` then ask, on the
   terminal (never on standard input), for the last 6 hex digits of the box's MAC address; anything
-  else, or no terminal, writes nothing. `flash` asks nothing beyond the command itself (D34).
+  else, or no terminal, writes nothing. `flash` asks nothing beyond the command itself (D35).
   `--dry-run` prints the plan only. No command writes an eFuse.
 - Only `firmware/src/radio_uart.rs` names GPIO12 and GPIO15 (the radio's bootloader and reset
   lines, both strapping pins of the ESP32), GPIO13 and GPIO17 (the UART): a test checks it. The box

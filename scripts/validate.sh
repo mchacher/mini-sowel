@@ -112,7 +112,7 @@ if want firmware; then
       || { echo "validate: the radio build lacks CONFIG_HTTPD_WS_SUPPORT=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
     ! grep -aqs '^CONFIG_HTTPD_WS_SUPPORT=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
       || { echo "validate: the other images' build holds CONFIG_HTTPD_WS_SUPPORT=y: they must keep their settings" >&2; exit 1; }
-    # `/ws` checks a client and sends its welcome in ESP-IDF's post-handshake callback (D36): without
+    # `/ws` checks a client and sends its welcome in ESP-IDF's post-handshake callback (D37): without
     # it the handshake succeeds and the client gets nothing.
     grep -aqs '^CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
       || { echo "validate: the radio build lacks CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }

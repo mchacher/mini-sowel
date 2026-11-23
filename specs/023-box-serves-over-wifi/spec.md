@@ -236,7 +236,7 @@ through the running firmware's console and the box is flashed with `--keep-stora
 
 1. `GET /ws` is registered directly with ESP-IDF (`httpd_register_uri_handler`, `is_websocket`),
    with the subprotocol `bearer.none` (the one the interface sends, `ui/src/store/useLive.ts`) and a
-   post-handshake callback (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y`, decision D36). ESP-IDF
+   post-handshake callback (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y`, decision D37). ESP-IDF
    answers the handshake itself, then calls the callback on the handshake's request, where the
    firmware checks, in this order: the `Host` (spec 022 R4.2), else closes with 4003 `Forbidden
    host`; the `Origin` (the core's `live::session::origin_allowed`, its development origins
@@ -247,7 +247,7 @@ through the running firmware's console and the box is flashed with `--keep-stora
    raw `httpd_req_t` with ESP-IDF's `httpd_req_get_hdr_value_len` / `httpd_req_get_hdr_value_str`,
    in one small `unsafe` function with its `SAFETY` comment (D11), each header bounded by the
    1024-byte head of R4.2. (`esp-idf-svc`'s `ws_handler` is not used: with ESP-IDF 5.5 the
-   handshake never reaches a WebSocket URI handler, so its session was never made, D36.)
+   handshake never reaches a WebSocket URI handler, so its session was never made, D37.)
 2. The live thread (core 0) every 200 ms (`TICK_MS`) sends each client its batch as one text
    message in fragments (`[`, each event, `]`) taken with `begin_batch` and `pop`, no batch string
    built: each frame is handed to the server's task (`httpd_queue_work`, then
@@ -292,7 +292,7 @@ through the running firmware's console and the box is flashed with `--keep-stora
    s, it restarts anyway. After a removal it then starts no link (R1.3).
 4. With this console, `sh scripts/box.sh wifi` (spec 022 R9) ends as it describes: the settings
    saved, the box restarted, its address printed; `wifi --forget` removes them.
-5. `Pair` (added after the run on the box, 2026-11-22, decision D35): the line `pair` alone
+5. `Pair` (added after the run on the box, 2026-11-22, decision D36): the line `pair` alone
    (`ConsoleCommand::Pair`) logs `pairing: asked from the console` and sets a flag that a small
    thread, `pair-watch` (4 KB of stack, every 500 ms), turns into the home's pairing request for
    `PAIR_AT_BOOT_SECONDS` (180 s), whatever the boot and the marker; the engine then logs
@@ -515,11 +515,11 @@ through the running firmware's console and the box is flashed with `--keep-stora
   pairing for 180 s); "Pairs a device" (the window opens for 180 s on the console's `pair`, whatever
   the boot and the marker; opening the serial port resets the box, so within 10 minutes of the
   previous boot the marker refuses that boot's window and `pair` opens it; pairing never opens from
-  the network on the box, D35); "Serves Sowel's API from the box" (pairing opens at a power-on boot
+  the network on the box, D36); "Serves Sowel's API from the box" (pairing opens at a power-on boot
   or from the console's `pair`, over the cable only); the zone aggregation (`motionSince` is none
   while the clock is not set, before 2020-01-01); the `box.sh` list (the `pair` bullet).
-- `docs/decisions.md`: D35 (the pairing window from the serial console, never from the network) and
-  D36 (`/ws` registered directly with ESP-IDF).
+- `docs/decisions.md`: D36 (the pairing window from the serial console, never from the network) and
+  D37 (`/ws` registered directly with ESP-IDF).
 - `docs/architecture.md`: the Live events row (`/ws` registered directly, the post-handshake
   callback, `httpd_queue_work`), the Firmware row (`pair`, `pair-watch`), the radio settings line.
 - `CLAUDE.md` and `README.md`: `sh scripts/box.sh pair`. `docs/hardware.md`: `box.sh pair` also
@@ -572,7 +572,7 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
   2026-11-21 (decisions are dated history, not rewritten); D33 says what the box uses.
 - `crates/core/src/network.rs` l.114-116, doc comment of `boot_lines`: "(the firmware starts no
   link and detects no cable ...)" → for the images without a link.
-- From decision D34 (the backup optional for `flash`, no MAC question for `flash`):
+- From decision D35 (the backup optional for `flash`, no MAC question for `flash`):
   `docs/living-spec/README.md`, "Flashes the box and brings it back" (the `flash` bullet "refuses
   without a backup", the prompt bullet "`backup`, `restore` and `flash` ... ask", the `--keep-storage`
   bullet's `--backup <file>`, and the `wifi` bullet's "without resetting the box": opening the port
@@ -581,7 +581,7 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
   6 "restore the backup"); `README.md` (the flashing paragraph); `scripts/box.sh` (the header
   comment and the comment of `console_exchange`: "DTR and RTS stay low, so that opening the port
   does not reset the box"); D31's "refuses to flash without a backup that was restored once" stays
-  as dated history, D34 replaces it. `CLAUDE.md` (its `box.sh` line: the user runs `flash`) and
+  as dated history, D35 replaces it. `CLAUDE.md` (its `box.sh` line: the user runs `flash`) and
   `.claude/` (no mention of the backup found) stay true.
 - `firmware/src/main.rs` l.1-2, module comment: "reads its network setting" → adds the Wi-Fi and
   the server of the radio image; l.41, doc comment of `log_network`: "no link is started" → for
@@ -590,13 +590,13 @@ serve`, `with no network and no interface`, `127.0.0.1 only`, `box will`, `the b
   `power-on`, `pairing window` and `box.sh wifi`: this spec's R5.1 and R5.2 (`esp-idf-svc`'s
   `ws_handler`, `EspHttpWsConnection::New`, the detached sender) and `architecture.md` (the diagram,
   the Live sessions row, the `CONFIG_HTTPD_WS_SUPPORT` row, the `live_ws.rs` row, the risk on the
-  `New` variant), rewritten for D36; `firmware/sdkconfig.radio.defaults` (its comment on
+  `New` variant), rewritten for D37; `firmware/sdkconfig.radio.defaults` (its comment on
   `esp-idf-svc`'s handler); `docs/architecture.md` l.42 ("on ESP-IDF's WebSocket handler"); the
   living spec's "the pairing window of a power-on boot is unchanged" (the box's pairing route); the
   roadmap inbox lines "pairing a device still needs a power-on" and "pairing the ZBMINIR2 needs a
   power-on after 10 min", removed, and "Replace the pairing window opened at boot (... no input
   path)", rewritten; this spec's last sentence of the first run's result. D28, D32 and D33 stay as
-  dated history; D35 and D36 say what changed.
+  dated history; D36 and D37 say what changed.
 
 ## Acceptance criteria
 
@@ -720,7 +720,7 @@ and 431 from ESP-IDF.
    under, the work stops and the figures are reported (R9.3). The flash it needs still asks the
    user's yes (D6).
 5. **The backup of the original firmware is optional for `box.sh flash`** (2026-11-22, decision
-   D34): `flash` no longer requires `--backup` (a backup given is still checked: 16 MB, this box,
+   D35): `flash` no longer requires `--backup` (a backup given is still checked: 16 MB, this box,
    a proven row in `docs/hardware.md`) and asks no MAC question any more; `backup` and `restore`
    keep theirs. The way back to the original firmware is Sonoff's own reflash. Claude still never
    flashes without the user's yes (`CLAUDE.md`).
@@ -792,9 +792,9 @@ Decided during the run on the box (2026-11-22):
   started, the shell held it, and the test hung a `validate.sh` run.
 
 Decided after the run on the box (2026-11-22, in autonomy, the user away):
-- D35: the serial console's `pair` line opens the pairing window for 180 s whatever the boot, never
+- D36: the serial console's `pair` line opens the pairing window for 180 s whatever the boot, never
   the network (the API stays 404); `box.sh pair` sends it.
-- D36: `/ws` registered directly with ESP-IDF, with the post-handshake callback: `esp-idf-svc`'s
+- D37: `/ws` registered directly with ESP-IDF, with the post-handshake callback: `esp-idf-svc`'s
   `ws_handler` never saw the handshake with ESP-IDF 5.5.
 - `motionSince` is none while the clock reads before 2020-01-01 (`CLOCK_SET_AFTER_MS`): the box
   counts from 1970 until SNTP answers, and the interface showed 20779 days of calm.
@@ -890,17 +890,17 @@ features):
 
 Not run either: the power-on pairing with the access point on or off, the console's stack
 high-water mark, the Mac host refused on port 6638. Pairing the ZBMINIR2 needed a power-on more than
-10 minutes after a boot (a software restart opens no pairing window): answered by D35's `pair`
+10 minutes after a boot (a software restart opens no pairing window): answered by D36's `pair`
 (second run, below).
 
 Second run (2026-11-22, the radio image with the three changes made after the first run flashed,
 Wi-Fi 192.168.0.46, the SNZB-03PR2 and the ZBMINIR2 paired; the Mac host not running):
 
-- [x] `sh scripts/box.sh pair` (D35): `pairing: open for 180 s` after the reset of the port; the
+- [x] `sh scripts/box.sh pair` (D36): `pairing: open for 180 s` after the reset of the port; the
       ZBMINIR2 paired on the box in this run.
 - [x] the garage set up through the API (`demo-garage.sh`), the motion before the SNZB-03PR2
       switching the ZBMINIR2 (the relay heard clicking).
-- [x] `/ws` live in Chromium (D36): the welcome and the events, 7 reloads out of 7; 4003 for a
+- [x] `/ws` live in Chromium (D37): the welcome and the events, 7 reloads out of 7; 4003 for a
       foreign `Host` and a foreign `Origin`; the development origin `http://localhost:5173`
       welcomed; with a browser tab holding one slot, a script's 4th and 5th clients closed 1013, the
       same on a second try (the closed ones freed theirs); a message of 1025 bytes closed 1009.

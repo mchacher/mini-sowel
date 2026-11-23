@@ -8,7 +8,7 @@ CONFIG_UART_ISR_IN_IRAM=y
 # gated by this setting (`validate.sh` checks it is in this build only).
 CONFIG_HTTPD_WS_SUPPORT=y
 # ESP-IDF calls a WebSocket handler for the frames only: `live_ws.rs` checks a new client and sends
-# its welcome in the post-handshake callback, on the handshake's request (D36, checked by
+# its welcome in the post-handshake callback, on the handshake's request (D37, checked by
 # `validate.sh`).
 CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 # A browser's request head is about 500 to 800 bytes (512 by default); a longer one gets 431.

@@ -108,7 +108,7 @@ image settles those rows (section "Measured on the box").
 All of them run through `sh scripts/box.sh` (spec 020). Every step that writes is run by the user,
 in their terminal: `backup` and `restore` ask, on the terminal, for the last 6 hex digits of the box's
 MAC address, and no option skips the question; `flash` asks nothing beyond the command itself
-(decision D34). Entering the download mode **reboots the ESP32 and stops the original firmware's
+(decision D35). Entering the download mode **reboots the ESP32 and stops the original firmware's
 radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
 
 1. **Identify** (read-only): `sh scripts/box.sh identify`. It prints the chip and its revision, the
@@ -119,7 +119,7 @@ radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
 2. **Capture the original firmware's boot log** (read-only): `sh scripts/box.sh log --raw` (use
    `--replug` when the bridge does not reset the chip). It settles the PSRAM, the strapping state and the
    original firmware's version.
-3. **Back up the whole flash** (optional, decision D34: Sonoff's own reflash is the way back; the
+3. **Back up the whole flash** (optional, decision D35: Sonoff's own reflash is the way back; the
    user runs it, in their terminal):
    `sh scripts/box.sh backup --out <folder outside the repository>`. It reads the 16 MB twice, and keeps
    `dongle-max-<mac>-<date>.bin` (mode 0600, with its `.sha256`) when the two reads are equal and

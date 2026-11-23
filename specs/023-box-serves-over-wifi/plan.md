@@ -45,8 +45,8 @@ named in `spec.md` (context).
       server and the 33 requests (over 10 s); the rest NOT RUN (the column "Run 2026-11-22" below
       and "Result of the run" in `spec.md`).
 - [x] 8. Roadmap reviewed (E3c status, inbox).
-- [x] 9. After the run on the box (2026-11-22), tests first: the console's `pair` line (D35) in the
-      core, the firmware and `box.sh pair`; `/ws` registered directly with ESP-IDF (D36) and its
+- [x] 9. After the run on the box (2026-11-22), tests first: the console's `pair` line (D36) in the
+      core, the firmware and `box.sh pair`; `/ws` registered directly with ESP-IDF (D37) and its
       setting checked by `validate.sh`; `motionSince` waits for a clock that is set; the docs of
       "Added after the run on the box" in `spec.md`; `validate.sh` green; review (`code-reviewer`).
 
@@ -132,7 +132,7 @@ through the same `handle_stream`.
 | A `/ws` message sent in two fragments (a small Python client, `Origin` absent) | accepted as no concern (spec, "Decided in autonomy"): the box answers or closes the connection, no other client affected, the engine runs on | NOT RUN |
 | The SSID in the logs | `grep -c '<SSID>' <log file>` on the Mac prints 0 for every capture of the run | NOT RUN |
 | A 5th live client | closed 1013 | seen: with a browser tab holding one slot, the 4th and 5th clients of a script closed 1013, the same count on a second try (no slot kept by the closed ones) (second run) |
-| `sh scripts/box.sh pair` on the box (D35) | `pairing: open for 180 s` within 15 s of the reset | seen (second run) |
+| `sh scripts/box.sh pair` on the box (D36) | `pairing: open for 180 s` within 15 s of the reset | seen (second run) |
 | The radio `app.bin` | its size noted in the run's result, under the 4096 KB slot | seen: its size in `spec.md` |
 | The 33 requests | `measure-api.sh` passes (R10) | FAILED (second run, eight runs): never `Busy`, but totals 9.0 to 22.3 s, over 10 s in seven; one request with no answer in two runs (roadmap inbox) |
 | The internal RAM | `heap:` minimum ≥ 64 KB; `memory-network:`, the network's cost (234 KB − the first `heap:` minimum) and the projection written (R9.1, R9.3); below 64 KB: the knob `SPIRAM_MALLOC_ALWAYSINTERNAL` 2048, measured again; still below: stop and report | partly: `memory-network:` written; the minimum, the cost and the projection NOT RUN |

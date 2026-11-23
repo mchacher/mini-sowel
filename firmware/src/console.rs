@@ -2,7 +2,7 @@
 //! lines `scripts/box.sh wifi` and `pair` send on the USB serial port (UART0, the log's port), hands
 //! each to the core's `parse_console_line`. `wifi-set` and `wifi-forget` write or remove
 //! `/data/wifi.json`, then stop the engine (its files saved) and restart the ESP32; `pair` asks the
-//! engine for the pairing window (D35). A line itself is never logged.
+//! engine for the pairing window (D36). A line itself is never logged.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};

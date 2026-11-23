@@ -15,7 +15,7 @@
                          │                                            radio + engine::run
                          ▼
              EspHttpServer :80 (server task)
-             ├─ /ws  ──────────── live_ws.rs (registered directly, D36): post-handshake callback:
+             ├─ /ws  ──────────── live_ws.rs (registered directly, D37): post-handshake callback:
              │                    Host, Origin, LiveHub::connect, welcome; frames: subscribe
              │                    live thread: every 200 ms begin_batch/pop → httpd_queue_work
              ├─ / , /assets/* ─── core api::static_reply (Host, 405, route) → ui_files (flash, gzip)
@@ -65,7 +65,7 @@ Constants named in the firmware: `CLOCK_WAIT_MS` 20 000, `WORKER_STACK_BYTES` 10
 | Setting | Value | Why |
 | ------- | ----- | --- |
 | `CONFIG_HTTPD_WS_SUPPORT` | `y` | `/ws` (ESP-IDF's WebSocket support is gated by it) |
-| `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT` | `y` | the checks and the welcome of a new `/ws` client run in this callback: ESP-IDF 5.5 calls the URI handler for the frames only (D36, added after the run on the box) |
+| `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT` | `y` | the checks and the welcome of a new `/ws` client run in this callback: ESP-IDF 5.5 calls the URI handler for the frames only (D37, added after the run on the box) |
 | `CONFIG_HTTPD_MAX_REQ_HDR_LEN` | `1024` | a browser's head is about 500 to 800 bytes; 512 by default |
 | `CONFIG_LWIP_MAX_SOCKETS` | `16` | 10 by default; ESP-IDF's server needs `max_open_sockets` + 3 (its listener and two UDP control sockets) and `httpd_start` refuses fewer (`httpd_main.c` l.495-507): 12 + 3 = 15, one spare; DHCP, DNS and SNTP use lwIP's raw API, no socket; about 40 B static per slot, about 0.4 KB per open socket (estimate, R9.5) |
 | `CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0` | `y` | lwIP's tcpip task on core 0 (no core by default), off the engine's core 1 (R4.1) |
@@ -94,7 +94,7 @@ measured figures (as spec 021 did with `CONFIG_UART_ISR_IN_IRAM`). `validate.sh`
 | `firmware/src/main.rs` | radio image: the Wi-Fi settings, `wifi::start`, `sntp`, the console, the engine thread with a channel back, `http_server::start` once the home arrives, the `solite-ui` line, the comment on the `esp_idf_svc::wifi` log level; the module comment (l.1-2) and `log_network`'s (l.41); the other images unchanged |
 | `firmware/src/wifi.rs` (new, `radio`) | `EspWifi` station built with no NVS partition (`None`) and `esp_wifi_set_storage(WIFI_STORAGE_RAM)`, host name, `esp_wifi_set_ps(WIFI_PS_NONE)`, `esp_log_level_set("wifi", WARN)`, the event handler (connected, got IP, disconnected → `Backoff` and `wifi_reason`), the `wifi:` and `serving:` lines, `WIFI_STARTED` flag, SNTP start, the `CLOCK_SET` flag (the saver's gate) and the `clock:` lines, the `memory-network:` timer |
 | `firmware/src/http_server.rs` (new, `radio`) | `EspHttpServer` configuration (core 0, 12 sockets, `lru_purge_enable` true, keep-alive, 8 KB stack), the static handler on `/` and `/assets/*` for GET, POST, PUT, DELETE (the core's `static_reply`, then `find` in the embedded table, headers), the API handler: `Slots`, 503, `httpd_req_async_handler_begin`, the 4 worker threads (10 KB stacks in PSRAM through `esp_pthread_set_cfg`, core 0) and their queue (`sync_channel(MAX_WORKERS)`, 4), the 4 body buffers in PSRAM, the body read with 413 and 411, `handle_stream` and the replies (whole, chunked list, order wait), `httpd_req_async_handler_complete`; the small `unsafe` functions each with a `SAFETY` comment |
-| `firmware/src/live_ws.rs` (new, `radio`) | `/ws` registered directly with `httpd_register_uri_handler` (D36): the post-handshake callback (Host and Origin read from the raw `httpd_req_t` in one `unsafe` function, `connect`, the session context released by ESP-IDF with the socket, welcome, close codes), the frame handler (receive ≤ 1 KB, subscribe, 1009), the sessions table, the live thread (200 ms batches as fragments, pings, closes asked by the hub) |
+| `firmware/src/live_ws.rs` (new, `radio`) | `/ws` registered directly with `httpd_register_uri_handler` (D37): the post-handshake callback (Host and Origin read from the raw `httpd_req_t` in one `unsafe` function, `connect`, the session context released by ESP-IDF with the socket, welcome, close codes), the frame handler (receive ≤ 1 KB, subscribe, 1009), the sessions table, the live thread (200 ms batches as fragments, pings, closes asked by the hub) |
 | `firmware/src/console.rs` (new, `radio`) | UART0 driver for blocking reads, the byte reader (513 bytes kept, the rest of a line discarded), `parse_console_line` of the core, the actions of `WifiSet` (`to_json` written through `write_text`) / `WifiForget` (file removed), their lines, the stop-save-restart sequence |
 | `firmware/src/radio_engine.rs` | `spawn` takes a sender for `Shared` and the stop flag; `run` starts the radio, its network and the boot window at once and builds its `Saver` with the gate reading `CLOCK_SET` (the core's `with_gate`), keeps the home in an `Arc<Mutex<Home>>` with the orders' monotonic clock (as `crates/host/src/serve.rs` l.265-276), sends `Shared` after `load_home`, skips `with_entropy` when `WIFI_STARTED`, forces a save when stopped (`saver.tick(.., true)`); the heap line gets the workers' stack |
 | `firmware/src/storage.rs` | `write_text` and a `remove(name)` also for the console (already `radio`-gated) |
@@ -142,7 +142,7 @@ measured figures (as spec 021 did with `CONFIG_UART_ISR_IN_IRAM`). `validate.sh`
 - `esp-idf-svc` 0.53 gives no header of a WebSocket request, and on the box (2026-11-22) its
   `ws_handler` never saw the handshake: ESP-IDF 5.5 calls a WebSocket URI handler for the frames
   only, so no session was made and a browser got its 101 and nothing more. `/ws` is therefore
-  registered directly with ESP-IDF (D36): `Host` and `Origin` are read in the post-handshake
+  registered directly with ESP-IDF (D37): `Host` and `Origin` are read in the post-handshake
   callback, while the handshake's request is valid, with `httpd_req_get_hdr_value_str` in one
   `unsafe` function with its `SAFETY` comment (D11); the refusal codes are unchanged.
 - Reading UART0 while it is ESP-IDF's console needs its driver installed and the VFS switched to it;
@@ -173,7 +173,7 @@ measured figures (as spec 021 did with `CONFIG_UART_ISR_IN_IRAM`). `validate.sh`
 | `crates/core/src/network.rs` | `ConsoleCommand::Pair`, parsed from the line `pair` alone |
 | `crates/core/src/home/mod.rs` | `CLOCK_SET_AFTER_MS` (2020-01-01): `aggregate` gives no `motionSince` before it |
 | `firmware/src/console.rs` | `Pair` sets `PAIR_ASKED` and logs `pairing: asked from the console` |
-| `firmware/src/radio_engine.rs` | `PAIR_ASKED`; `start_pair_watch`, a thread of 4 KB started once the home is loaded, which every 500 ms turns the flag into `pairing_mut().request(PAIR_AT_BOOT_SECONDS)` (D35) |
-| `firmware/src/live_ws.rs`, `http_server.rs` | `/ws` registered directly with ESP-IDF, the server's raw handle passed by `http_server.rs` (D36) |
+| `firmware/src/radio_engine.rs` | `PAIR_ASKED`; `start_pair_watch`, a thread of 4 KB started once the home is loaded, which every 500 ms turns the flag into `pairing_mut().request(PAIR_AT_BOOT_SECONDS)` (D36) |
+| `firmware/src/live_ws.rs`, `http_server.rs` | `/ws` registered directly with ESP-IDF, the server's raw handle passed by `http_server.rs` (D37) |
 | `scripts/box.sh` | `pair`: `console_exchange` in mode `pair`, waits for `pairing: open for` (exit 0), `pairing: failed` (exit 1), no answer (exit 4) |
 | `scripts/validate.sh` | checks `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y` in the radio build |

@@ -23,7 +23,7 @@
 # backup, restore and flash print what they will do; backup and restore then ask for the last 6 hex
 # digits of the box's MAC address on the terminal (/dev/tty, never standard input): with no terminal,
 # or any other answer, nothing is done. flash asks nothing more than the command itself, and its
-# --backup is optional (decision D34). --dry-run prints the plan only. No option skips the question
+# --backup is optional (decision D35). --dry-run prints the plan only. No option skips the question
 # of backup and restore. No command writes an eFuse. `backup`, `restore` and `flash` are run by the user, in their terminal.
 #
 # `flash --image radio --keep-storage` erases nvs and otadata only: the home, the network's backup
