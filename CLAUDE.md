@@ -103,7 +103,7 @@ over TCP for development (decision D6).
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
 - **Agents (strict, read [docs/agents.md](docs/agents.md))**: Sonnet in the session, Opus only for
-  a spec, arbitration and `code-reviewer`; write `model:` on every agent; a command that can print
+  a hard spec, arbitration and `code-reviewer`; write `model:` on every agent; a command that can print
   more than a few lines runs as `sh scripts/quiet.sh <command>`; one agent, one subject, a brief
   naming files and lines, a report written to a file and a one-line answer.
 - **Roadmap**: `docs/roadmap.md`, planned with `/solite-roadmap`, reviewed after every feature.

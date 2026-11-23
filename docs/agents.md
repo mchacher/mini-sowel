@@ -4,10 +4,13 @@ The rules for models, command output, agent briefs and the project's agents (mov
 
 - **Models, to save tokens**: the session runs on Sonnet (`/model sonnet`); Opus is the exception.
   Whoever launches an agent writes `model:` explicitly (an agent without it inherits the session's).
-  **Opus**: writing a spec, arbitrating, `code-reviewer` (set in its file), an agent that loops
-  (e.g. EZSP). **Sonnet**: everything else: reading (`Explore`), code and tests (`implementer`,
-  following the approved `plan.md`, set in its file), `spec-reviewer`, `validate.sh`, roadmap, docs, small fixes. The user
-  switches with `/model opus` for a spec, then back; remind them when a session drifts to Opus.
+  **Opus**: a hard spec (a new block, a choice of architecture or data model, several options
+  to weigh), arbitrating, `code-reviewer` (set in its file), an agent that loops (e.g. EZSP).
+  **Sonnet**: everything else: a spec that follows an existing pattern, reading (`Explore`), code
+  and tests (`implementer`, following the approved `plan.md`, set in its file), `spec-reviewer`,
+  `validate.sh`, roadmap, docs, small fixes. For a spec, the user chooses by its difficulty
+  (`/model opus`, then back to `/model sonnet` after the approval); remind them when a session
+  drifts to Opus for routine work.
 - **Output out of the context (strict, you and every agent)**: a command that can print more than
   a few lines (tests, builds, QEMU, `npm`, `gh`, `validate.sh`) runs as `sh scripts/quiet.sh <command>`,
   never bare; read the full log only when its verdict lines are not enough. Every agent prompt

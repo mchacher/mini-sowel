@@ -16,8 +16,10 @@ The user decides **what**; you handle **how**. They review the spec before the c
 after it, not the code itself: the checks and the review agent do that. They often cannot see when
 a step was skipped, so **you never skip one**.
 
-**Models** (table in `CLAUDE.md`): Opus only for Phase 2's spec; ask the user to `/model opus`
-before it and `/model sonnet` after the approval. Every agent you launch names its `model:`.
+**Models** ([docs/agents.md](../../../docs/agents.md)): Phase 2's spec on Sonnet when it follows an
+existing pattern, on Opus when it is hard (a new block, a choice of architecture or data model,
+several options to weigh): say which, and ask the user to `/model opus` before it and
+`/model sonnet` after the approval. Every agent you launch names its `model:`.
 
 Follow EVERY phase below IN ORDER. Each phase ends with a GATE: a checklist that MUST be fully true
 before going on. Gates marked **STOP** wait for the user's explicit yes ("yes", "oui", "go"),
