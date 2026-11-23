@@ -206,6 +206,8 @@ report format. Give it the spec folder, not your conclusions, the branch, the fi
 start from, and a report path in the session's scratchpad. Read the report only when its one-line
 answer is not enough. Take the work back on Opus only if it stops on the same failure (see
 [docs/agents.md](../../../docs/agents.md)). Then you run the checks yourself.
+**Build it yourself instead** when the brief would cost more than the work: a change of two or
+three files, one that needs back-and-forth with the user, or a run on the box.
 
 Do only what the spec says. No unrelated refactor, no extra option, no "while I was there". If the
 spec turns out wrong or incomplete, stop, tell the user, update the spec, and get their yes again.
