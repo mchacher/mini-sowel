@@ -40,6 +40,8 @@ log = "0.4"
 
 [build-dependencies]
 embuild = "0.33"
+# The interface packed for the radio image's flash (spec 022 R7, spec 023 R7).
+solite-ui-embed = { path = "../crates/ui-embed" }
 
 [lints.rust]
 unsafe_code = "deny"

@@ -108,7 +108,12 @@ fw_missing_line() {
   grep -aqF "solite $(fw_version)" "$1" || { echo "the banner (solite $(fw_version))"; return; }
   grep -aq 'memory: internal' "$1" || { echo "the memory line (memory: internal ...)"; return; }
   grep -aq 'storage: /data, ' "$1" || { echo "the storage line (storage: /data, ...)"; return; }
-  grep -aq 'network: .* no link started' "$1" || { echo "the network line (network: ...)"; return; }
+  # The radio image starts its Wi-Fi link (spec 023 R1.2): its line has no `no link started`.
+  if [ "$2" = radio ]; then
+    grep -aqE 'network: (wifi|ethernet) \(setting ' "$1" || { echo "the network line (network: ...)"; return; }
+  else
+    grep -aq 'network: .* no link started' "$1" || { echo "the network line (network: ...)"; return; }
+  fi
   case "$2" in
     sim) grep -aq 'engine: ' "$1" || echo "the engine line (engine: ...)" ;;
     radio) fw_missing_radio_line "$1" ;;
@@ -117,7 +122,17 @@ fw_missing_line() {
 }
 
 # The first line of the radio image that is missing, named ($1 the log); empty when all show.
+# The link's lines first (spec 023 R8.1): a `wifi:` line, unless the setting `ethernet` started no
+# link; after a `wifi: connected` line, a `serving: http://` line.
 fw_missing_radio_line() {
+  if ! grep -aq 'network: ethernet (setting ' "$1"; then
+    grep -aq 'wifi: ' "$1" || { echo "the Wi-Fi line (wifi: ...)"; return; }
+  fi
+  connected=$(grep -anF -m 1 'wifi: connected' "$1" | cut -d: -f1)
+  if [ -n "$connected" ]; then
+    tail -n +"$((connected + 1))" "$1" | grep -aq 'serving: http://' \
+      || { echo "the serving line (serving: http://...)"; return; }
+  fi
   grep -aq 'radio: uart [0-9]* baud' "$1" || { echo "the radio line (radio: uart <baud> baud)"; return; }
   grep -aq 'ezsp: ' "$1" || { echo "the ezsp line (ezsp: ...)"; return; }
   grep -aqE 'network: (formed|resumed)' "$1" || { echo "the network line (network: formed or resumed)"; return; }
@@ -135,6 +150,8 @@ fw_check_radio() {
   failed=$(grep -a 'pairing: failed:' "$1" | tail -n 1)
   [ -z "$failed" ] || { echo "the radio refused to open joining: $failed"; return 1; }
   grep -aq 'task_wdt' "$1" && { echo "a task watchdog fired (task_wdt)."; return 1; }
+  refused=$(grep -a 'wifi: settings refused' "$1" | tail -n 1)
+  [ -z "$refused" ] || { echo "the Wi-Fi settings were refused: $refused"; return 1; }
   [ "$(grep -acF "solite $(fw_version)" "$1")" -le 1 ] || { echo "the box rebooted (the banner shows more than once)."; return 1; }
   heap=$(grep -a 'heap: internal' "$1" | tail -n 1)
   [ -n "$heap" ] || return 0

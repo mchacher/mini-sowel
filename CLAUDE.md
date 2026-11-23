@@ -51,12 +51,10 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 ## Commands
 
 ```
-cd ui && npm ci                                  # once, after a clone
-cd tools/z2m-coverage && npm ci                  # once, after a clone (same in tools/e2e, the browser test)
+cd ui && npm ci && cd ../tools/z2m-coverage && npm ci   # once, after a clone (same in tools/e2e, the browser test)
 cargo run -p solite-host                     # the host program (Mac)
 cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
-cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
-cargo run -p solite-host -- --radio tcp://<address>:6638 --listen # show the measures
+cargo run -p solite-host -- --radio tcp://<address>:6638 --pair|--listen   # start the network and pair | show the measures
 cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # no dongle
 cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API, interface :8080
 sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
@@ -67,6 +65,7 @@ cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.ts
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
 sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them)
+sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line

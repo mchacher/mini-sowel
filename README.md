@@ -56,18 +56,18 @@ sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through 
 sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)
 cd firmware && cargo build --release              # the ESP32 firmware (box image; --features sim: the QEMU image)
-cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio   # the radio image
+cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio   # the radio image (build the interface first: cd ui && npm run build)
 sh scripts/e2e-sim.sh                             # the simulated path driven in headless Chromium (cd tools/e2e && npm ci first)
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
-sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log, wifi; --image box|sim|radio)
+sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log, wifi, pair; --image box|sim|radio)
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check, the slow tests and QEMU included: must be green before a commit
 ```
 
-The firmware is flashed only through `sh scripts/box.sh flash`, with the user's yes for each write: the
-command asks, on the terminal, for the end of the box's MAC address, and refuses without a backup of the
-original firmware that was restored once (see [docs/decisions.md](docs/decisions.md), D6 and D31, and
-[docs/hardware.md](docs/hardware.md)). Without a flash, the Dongle Max keeps its original firmware.
+The firmware is flashed only through `sh scripts/box.sh flash`, run by the user. A backup of the original
+firmware is optional (`--backup <file>`, checked when given): the way back is Sonoff's own reflash (see
+[docs/decisions.md](docs/decisions.md), D6, D31 and D35, and [docs/hardware.md](docs/hardware.md)).
+Without a flash, the Dongle Max keeps its original firmware.
 
 ## How the project is worked on
 

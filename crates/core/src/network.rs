@@ -113,7 +113,8 @@ impl Link {
 
 /// The lines the firmware logs at boot for the setting's text: the fallback reason when the
 /// setting fell back to `auto`, then the choice, for example `network: wifi (setting auto), no
-/// link started` (the firmware starts no link and detects no cable: `cable` is what it passes).
+/// link started`: for the images without a link (the box's, QEMU's and the measuring one, which
+/// detect no cable: `cable` is what they pass). The radio image uses `boot_lines_radio`.
 pub fn boot_lines(text: Option<&str>, cable: bool) -> Vec<String> {
     let (setting, fallback) = parse(text);
     let mut lines = Vec::new();
@@ -172,6 +173,22 @@ impl WifiSettings {
     /// The passphrase (empty for an open network), for the radio only.
     pub fn password(&self) -> &str {
         &self.password
+    }
+
+    /// The text the console writes to `/data/wifi.json` (spec 023 R6.2): `{"ssid":..,
+    /// "password":..}`, which `wifi_settings` reads back to the same settings. Never logged.
+    pub fn to_json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct Written<'a> {
+            ssid: &'a str,
+            password: &'a str,
+        }
+        serde_json::to_string(&Written {
+            ssid: &self.ssid,
+            password: &self.password,
+        })
+        // Two strings never fail to serialise.
+        .unwrap_or_default()
     }
 
     /// What can be said about the password: `open network` or `password: <n> characters`.
@@ -368,6 +385,8 @@ pub enum ConsoleCommand {
     Refused(WifiRefusal),
     /// `wifi-forget`.
     WifiForget,
+    /// `pair`: open the pairing window for `PAIR_AT_BOOT_SECONDS`, whatever the boot was.
+    Pair,
     Empty,
     Unknown,
     /// More than `MAX_CONSOLE_LINE` bytes.
@@ -398,6 +417,7 @@ pub fn parse_console_line(line: &[u8]) -> ConsoleCommand {
             Err(refusal) => ConsoleCommand::Refused(refusal),
         },
         ("wifi-forget", None) => ConsoleCommand::WifiForget,
+        ("pair", None) => ConsoleCommand::Pair,
         _ => ConsoleCommand::Unknown,
     }
 }

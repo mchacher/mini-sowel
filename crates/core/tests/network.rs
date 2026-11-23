@@ -417,3 +417,33 @@ fn no_console_command_shows_the_password_or_the_ssid_in_debug() {
     );
     assert!(!refused.contains(SSID), "{refused}");
 }
+
+#[test]
+fn the_settings_written_by_the_console_are_read_back_the_same() {
+    for text in [
+        r#"{"ssid": "a \"quoted\" \\ name", "password": "pass\"word\\1"}"#,
+        r#"{"ssid": "Café à l'étage", "password": ""}"#,
+        // The longest SSID and password, all of characters that JSON escapes.
+        &format!(
+            r#"{{"ssid": "{}", "password": "{}"}}"#,
+            "\\\"".repeat(32),
+            "\\\\".repeat(63)
+        ),
+    ] {
+        let settings = wifi_settings(text).unwrap();
+        let written = settings.to_json();
+        assert!(written.len() <= MAX_WIFI_BYTES, "{} bytes", written.len());
+        assert_eq!(wifi_settings(&written), Ok(settings.clone()), "{text}");
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+        let mut keys: Vec<&String> = value.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["password", "ssid"]);
+    }
+}
+
+#[test]
+fn pair_alone_asks_for_the_pairing_window() {
+    assert_eq!(parse_console_line(b"pair"), ConsoleCommand::Pair);
+    assert_eq!(parse_console_line(b"pair\r"), ConsoleCommand::Pair);
+    assert_eq!(parse_console_line(b"pair now"), ConsoleCommand::Unknown);
+}

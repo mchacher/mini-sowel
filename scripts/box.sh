@@ -5,8 +5,9 @@
 #   sh scripts/box.sh identify [--port <device>] [--baud <rate>]
 #   sh scripts/box.sh backup --out <folder> [--dry-run]
 #   sh scripts/box.sh restore <backup file> [--dry-run]
-#   sh scripts/box.sh flash --image box|sim|radio --backup <backup file> [--keep-storage] [--dry-run]
+#   sh scripts/box.sh flash --image box|sim|radio [--backup <backup file>] [--keep-storage] [--dry-run]
 #   sh scripts/box.sh wifi [--forget] [--port <device>]
+#   sh scripts/box.sh pair [--port <device>]   (opens the pairing window for 180 s, on the radio image)
 #   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
 #   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
 #   sh scripts/box.sh log --raw [--seconds <n>]                              (no checks)
@@ -19,10 +20,11 @@
 # the box (`--after no_reset`): the first boot, and its pairing window, is the one `log --image
 # radio` captures, 300 s by default, shown live.
 #
-# backup, restore and flash print what they will do, then ask for the last 6 hex digits of the
-# box's MAC address on the terminal (/dev/tty, never standard input): with no terminal, or any
-# other answer, nothing is done. --dry-run prints the plan only. No option skips the question. No
-# command writes an eFuse. `backup`, `restore` and `flash` are run by the user, in their terminal.
+# backup, restore and flash print what they will do; backup and restore then ask for the last 6 hex
+# digits of the box's MAC address on the terminal (/dev/tty, never standard input): with no terminal,
+# or any other answer, nothing is done. flash asks nothing more than the command itself, and its
+# --backup is optional (decision D35). --dry-run prints the plan only. No option skips the question
+# of backup and restore. No command writes an eFuse. `backup`, `restore` and `flash` are run by the user, in their terminal.
 #
 # `flash --image radio --keep-storage` erases nvs and otadata only: the home, the network's backup
 # and the Wi-Fi settings (the files of `storage`) stay. `wifi` asks on the terminal for the Wi-Fi
@@ -39,8 +41,9 @@
 # SOLITE_ESPRESSIF (ESP-IDF's tools folder), SOLITE_PORT_PATTERNS (the glob patterns of the USB
 # bridges), SOLITE_REPLUG_SECONDS (the time allowed to plug the cable again, 60),
 # SOLITE_SERIAL_CONSOLE (a program `<program> <port>` that reads the console line on its standard
-# input and prints the answers, in place of the serial port), SOLITE_WIFI_WAIT_SECONDS (the time
-# `wifi` waits for the connection, 60).
+# input and prints the answers, in place of the serial port), SOLITE_WIFI_ANSWER_SECONDS (the time
+# `wifi` waits for the console's answer, 15: the console's write may wait behind an engine save),
+# SOLITE_WIFI_WAIT_SECONDS (the time `wifi` waits for the connection, 60).
 #
 # Output stays short: a build or a long tool output goes to $TMPDIR/solite-box/, and its path is
 # printed on a failure. Backups and serial logs never go into the repository.
@@ -54,7 +57,7 @@ fw_fail() { box_fail "$1"; }
 . "$ROOT/scripts/lib/firmware.sh"
 
 usage() {
-  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi [--port <device>] [--baud <rate>] [options]" >&2
+  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi|pair [--port <device>] [--baud <rate>] [options]" >&2
   [ -n "$1" ] && echo "box: $1" >&2
   exit 2
 }
@@ -226,7 +229,9 @@ go_on() {
     echo "box: --dry-run, nothing done"
     exit 0
   fi
-  confirm
+  # `flash` asks nothing more than the command itself (decision of the user, 2026-11-22);
+  # `backup` and `restore` keep the MAC question.
+  [ "$COMMAND" = flash ] || confirm
 }
 
 # The backup's checks, for restore and flash: 16 MB, its MAC (in its name) is the box's.
@@ -336,10 +341,13 @@ cmd_flash() {
   if $KEEP_STORAGE && [ "$IMAGE" != radio ]; then
     usage "--keep-storage is for the radio image: the sim image seeds /data"
   fi
-  [ -n "$BACKUP" ] || box_fail "flash needs --backup <file>: the backup of the original firmware, restored once."
   identify_box
-  check_backup_file "$BACKUP"
-  check_backup_row
+  # The backup is optional (decision of the user, 2026-11-22): the way back to Sonoff's firmware is
+  # Sonoff's own reflash. A backup that is given is still checked (16 MB, this box, proven row).
+  if [ -n "$BACKUP" ]; then
+    check_backup_file "$BACKUP"
+    check_backup_row
+  fi
 
   IMAGE_DIR=$TARGET_DIR
   AFTER=
@@ -357,6 +365,8 @@ cmd_flash() {
   [ -f "$ELF" ] || box_fail "$ELF not found: build it with ($BUILD)."
   if [ "$IMAGE" = radio ]; then
     grep -aqF 'radio: uart ' "$ELF" || box_fail "the build is not the radio image (feature radio): build it with ($BUILD)."
+    # The interface is embedded at build time from ui/dist (spec 023 R7.3).
+    grep -aqF 'solite-ui ' "$ELF" || box_fail "the radio build has no embedded interface (no solite-ui marker): build it with (cd ui && npm ci && npm run build), then ($BUILD)."
     # The UART interrupt must run from internal RAM (sdkconfig.radio.defaults): a build made with
     # another folder or settings misses it, and bytes are lost while a flash write stalls the caches.
     grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' "$IMAGE_DIR"/build/esp-idf-sys-*/out/sdkconfig \
@@ -379,7 +389,11 @@ cmd_flash() {
   # The partitions erased: with --keep-storage (radio image), storage stays.
   ERASED="nvs otadata storage"
   $KEEP_STORAGE && ERASED="nvs otadata"
-  echo "box: flash the $IMAGE image (the original firmware is saved in $(basename "$BACKUP")):"
+  if [ -n "$BACKUP" ]; then
+    echo "box: flash the $IMAGE image (the original firmware is saved in $(basename "$BACKUP")):"
+  else
+    echo "box: flash the $IMAGE image (no backup given: the way back is Sonoff's own reflash):"
+  fi
   for part in nvs otadata storage; do
     off=$(fw_part "$TABLE" "$part" 4)
     size=$(fw_bytes "$(fw_part "$TABLE" "$part" 5)")
@@ -529,7 +543,12 @@ cmd_log() {
   grep -aF "solite $VERSION" "$LOGF" | head -n 1
   grep -a 'memory: internal' "$LOGF" | head -n 1
   grep -a 'storage: ' "$LOGF" | tail -n 1
-  grep -a 'network: ' "$LOGF" | tail -n 1
+  if [ "$IMAGE" = radio ]; then
+    # The link chosen (the radio's own `network:` line is printed below).
+    grep -aE 'network: (wifi|ethernet) \(setting ' "$LOGF" | tail -n 1
+  else
+    grep -a 'network: ' "$LOGF" | tail -n 1
+  fi
   if [ "$IMAGE" = box ]; then
     grep -a 'radio: none' "$LOGF" | tail -n 1
   elif [ "$IMAGE" = radio ]; then
@@ -540,6 +559,11 @@ cmd_log() {
     grep -aE 'pairing: (open for|not opened)' "$LOGF" | head -n 1
     grep -a 'serial: ' "$LOGF" | tail -n 1
     grep -a 'heap: ' "$LOGF" | tail -n 1
+    # The link's lines (spec 023 R8.1), when they show.
+    grep -a 'wifi: ' "$LOGF" | tail -n 1
+    grep -a 'clock: ' "$LOGF" | tail -n 1
+    grep -a 'serving: ' "$LOGF" | tail -n 1
+    grep -a 'memory-network: ' "$LOGF" | tail -n 1
   else
     grep -a 'engine: ' "$LOGF" | tail -n 1
     grep -a 'saves: [0-9]* written to flash' "$LOGF" | tail -n 1
@@ -547,10 +571,11 @@ cmd_log() {
 }
 
 # Talks to the radio image's serial console (spec 022 R9). Standard input: the network's name and
-# its password, one per line (`set`), nothing (`forget`). The JSON is built here, from those two
-# lines: the password is in no argument, no environment variable and no file. DTR and RTS stay
-# low, so that opening the port does not reset the box. Exit 0 done, 1 refused or not connected,
-# 4 no answer. $1 the port, $2 `set` or `forget`.
+# its password, one per line (`set`), nothing (`forget`, `pair`). The JSON is built here, from those two
+# lines: the password is in no argument, no environment variable and no file. Opening the port
+# resets the box (the USB bridge), so the line is sent once the console says `console: ready`.
+# Exit 0 done, 1 refused, not connected or pairing failed, 4 no answer. $1 the port, $2 `set`,
+# `forget` or `pair` (waits for `pairing: open for`; the console's `pairing: asked` alone, exit 1).
 console_exchange() {
   [ -n "$SOLITE_SERIAL_CONSOLE" ] || fw_find_idf
   ${PY:-python3} -c '
@@ -559,12 +584,15 @@ import json, os, re, select, subprocess, sys, time
 port, mode = sys.argv[1], sys.argv[2]
 fake = os.environ.get("SOLITE_SERIAL_CONSOLE")
 wait = float(os.environ.get("SOLITE_WIFI_WAIT_SECONDS") or 60)
+answer_wait = float(os.environ.get("SOLITE_WIFI_ANSWER_SECONDS") or 15)
 secrets = []
 if mode == "set":
     ssid = sys.stdin.readline().rstrip("\r\n")
     password = sys.stdin.readline().rstrip("\r\n")
     secrets = [ssid] + ([password] if password else [])
     line = "wifi-set " + json.dumps({"ssid": ssid, "password": password})
+elif mode == "pair":
+    line = "pair"
 else:
     line = "wifi-forget"
 
@@ -609,7 +637,11 @@ def lines_until(deadline):
     while True:
         while b"\n" in buffer:
             one, buffer = buffer.split(b"\n", 1)
-            yield one.decode("utf-8", "replace").strip()
+            text = one.decode("utf-8", "replace").strip()
+            # The firmware answers through its log: its prefix (level, time, module) and colours
+            # are dropped.
+            logged = LOG_LINE.match(text)
+            yield logged.group(1) if logged else text
         left = deadline - time.time()
         if left <= 0:
             return
@@ -618,14 +650,40 @@ def lines_until(deadline):
             return
         buffer += data
 
+LOG_LINE = re.compile(r"^(?:\x1b\[[0-9;]*m)?[EWIDV] \(\d+\) \S+: (.*?)(?:\x1b\[0m)?$")
+
 def no_answer():
     print("box: no answer from Solite\u0027s console on %s: is the radio image running?" % port)
     sys.exit(4)
 
+if not fake:
+    # Opening the serial port may reset the box (the DTR and RTS lines of the USB-serial chip): the console
+    # exists again about 1.5 s into the boot, and a line sent before is lost. Wait for its marker;
+    # a box that did not reset never prints it, so the wait is bounded.
+    ready_by = time.time() + 12
+    for text in lines_until(ready_by):
+        if text.endswith("console: ready"):
+            break
 send((line + "\n").encode())
+if mode == "pair":
+    asked = False
+    for text in lines_until(time.time() + answer_wait):
+        if text.startswith("pairing: asked from the console"):
+            asked = True
+        if text.startswith("pairing: open for"):
+            print("box: pairing is open (" + text[len("pairing: "):] + "): put the device in pairing mode now")
+            sys.exit(0)
+        if text.startswith("pairing: failed"):
+            print("box: " + text)
+            sys.exit(1)
+    if asked:
+        print("box: the console took the line but the engine opened no pairing window within "
+              + str(int(answer_wait)) + " s: is the radio running? (sh scripts/box.sh log --image radio)")
+        sys.exit(1)
+    no_answer()
 want = "wifi: settings saved" if mode == "set" else "wifi: settings removed"
 answer = None
-for text in lines_until(time.time() + 5):
+for text in lines_until(time.time() + answer_wait):
     if text.startswith("wifi: settings"):
         answer = text
         break
@@ -695,6 +753,13 @@ cmd_wifi() {
   exit "$code"
 }
 
+cmd_pair() {
+  resolve_port
+  code=0
+  : | console_exchange "$PORT" pair || code=$?
+  exit "$code"
+}
+
 case "$COMMAND" in
   identify) cmd_identify ;;
   backup) cmd_backup ;;
@@ -702,5 +767,6 @@ case "$COMMAND" in
   flash) cmd_flash ;;
   log) cmd_log ;;
   wifi) cmd_wifi ;;
+  pair) cmd_pair ;;
   *) usage "unknown command $COMMAND" ;;
 esac

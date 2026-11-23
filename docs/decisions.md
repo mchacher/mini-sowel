@@ -539,8 +539,11 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the box's name `solite-<6 hex>` (alone or with `.local`, `.lan`, `.home`, `.home.arpa`); the
   pairing route answers 404 (D28). ESP-IDF's HTTP server through `esp-idf-svc`, 4 workers by its
   asynchronous requests (their stacks and 16 KB body buffers in PSRAM), at most 12 connections in
-  a socket table of 24, TCP keep-alive; on `/ws` the refusals are close
-  codes after the upgrade (4003, 1013), only `bearer.none` is echoed, and a dead client is found by
+  a socket table of 16, TCP keep-alive; on `/ws` the refusals are close
+  codes after the upgrade (4003, 1013), the development origins of `live::session::origin_allowed`
+  (`http://localhost:5173`, `http://127.0.0.1:5173`) are accepted as the host does (decided by the
+  user, 2026-11-22: a development page on a machine of the home's network can open the live events),
+  only `bearer.none` is echoed, and a dead client is found by
   TCP keep-alive instead of 60 s of silence; a client that cannot be written to holds the server's
   task up to 5 s. The interface is embedded at build time, gzip only, from flash. Wi-Fi power save
   off; SNTP with `pool.ntp.org`; the engine's saves wait at most 20 s for the clock, the radio and
@@ -571,3 +574,57 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: the pull-request CI took about 8 minutes, most of it waiting (real pairing windows,
   production timeouts, QEMU's run); the user chose (2026-11-22) a fast verdict on each pull
   request and the slow checks every night and on the Mac, where each one still runs.
+
+## D35: The backup of the original firmware is optional for `flash`
+
+- **Date**: 2026-11-22
+- **Choice**: replaces, for `box.sh flash`, the mandatory backup and the MAC confirmation that
+  followed D6 (spec 020, D31's "refuses to flash without a backup that was restored once").
+  `flash` takes `--backup <file>` as an option: a backup given is still checked (16 MB, the name
+  holds this box's MAC, its SHA-256 in a row of `docs/hardware.md`'s backup table with a restore
+  date); without it the plan says the way back is Sonoff's own reflash. `flash` asks no question
+  beyond the command itself; `backup` and `restore` keep the question of the MAC's last 6 hex
+  digits. D6's rule that the box is not flashed without the user's yes stays, as a rule for Claude
+  in `CLAUDE.md`.
+- **Why**: the user does not need the original firmware's backup: Sonoff supplies its own reflash
+  (its web flasher, or its Home Assistant add-on), which brings the box back to its original
+  firmware. The backup and its proven restore stay available for whoever wants them.
+
+## D36: The pairing window also opens from the serial console, never from the network
+
+- **Date**: 2026-11-22
+- **Choice**: the radio image's serial console (spec 022 R9) takes a third line, `pair`, sent by
+  `sh scripts/box.sh pair` over the USB cable: the engine opens the pairing window for 180 s
+  (`PAIR_AT_BOOT_SECONDS`), whatever the boot was and whether the marker `/data/booting` is there,
+  and logs `pairing: open for 180 s` (or `pairing: failed: <reason>`). It completes D32's window
+  at a power-on boot, which stays as it is, and keeps D28's rule for the box: the pairing route
+  answers 404 on the network until J4's password. D32's "a console command shares the log's port"
+  is no longer a reason against it: the console of D33 already reads that port. The window still
+  opens only from what a person does by hand at the box (power, or the cable), never from the
+  local network.
+- **Why**: on the real box (2026-11-22), pairing the ZBMINIR2 needed a power-on more than 10
+  minutes after the previous boot: opening the serial port resets the box and, within 10 minutes,
+  the marker refuses the window; a software restart opens none. A line on the cable that already
+  carries the Wi-Fi settings opens it at once, with no new input path and no exposure on the
+  network (the API has no authentication, D13).
+
+## D37: `/ws` is registered directly with ESP-IDF on the box
+
+- **Date**: 2026-11-22
+- **Choice**: the radio image registers `/ws` itself with `httpd_register_uri_handler`
+  (`is_websocket`, the subprotocol `bearer.none`, `ws_post_handshake_cb`), with
+  `CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y` in `sdkconfig.radio.defaults` (checked by
+  `validate.sh`), instead of `esp-idf-svc`'s `ws_handler`. The post-handshake callback, on the
+  handshake's request, reads `Host` and `Origin`, takes a slot of the core's `LiveHub` or closes
+  (4003, 4003, 1013), sets a session context released by ESP-IDF when it deletes the socket (which
+  frees the slot) and sends the welcome. The live thread hands each frame to the server's task
+  with `httpd_queue_work` and `httpd_ws_send_frame_async`, and waits for its result; a frame for a
+  session already closed is not sent (its socket number may belong to a new connection), and a
+  close asked by the live thread is a shutdown of the socket run on the server's task, for a
+  session still open. The rest
+  of the server stays `esp-idf-svc`'s. D33's other `/ws` rules are unchanged.
+- **Why**: with ESP-IDF 5.5, the WebSocket handshake never calls the URI handler, only the frames
+  that follow do, and `esp-idf-svc` 0.53 builds its session (its `New` case) on the handshake's
+  call: on the box (2026-11-22) a browser got its 101 and then nothing, no welcome and no event.
+  The post-handshake callback is ESP-IDF's own place for that work, on the request that still holds
+  the headers.

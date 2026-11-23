@@ -61,10 +61,11 @@ bootloader pins must be driven in a fixed order, which the firmware's radio adap
 
 - The CP2102(N) reaches the ESP32: ESPHome is flashed over USB (confirmed, ESPHome guide).
 - Whether it also reaches the EFR32's UART is **unknown**.
-- Whether DTR and RTS reset the ESP32 and enter its download mode automatically is **unknown**.
+- DTR and RTS reset the ESP32 and enter its download mode automatically (measured, see "Measured on
+  the box"); opening the serial port also resets the box (seen with `box.sh wifi` and `box.sh pair`, 2026-11-22).
 - A user reports holding the button while plugging the USB cable to enter download mode
   ([forum thread](https://forum.ewelink.cc/t/is-the-dongle-m-cursed/207730), reported, not
-  verified). Until the box is tried, the procedure below assumes this manual entry.
+  verified); the procedure below keeps it for a box whose bridge does not reset it.
 
 ## The original firmware
 
@@ -95,7 +96,7 @@ bootloader pins must be driven in a fixed order, which the firmware's radio adap
 | Secure boot, flash encryption | If enabled, a flashed image must be signed or encrypted, and a backup read from flash is encrypted. | `espefuse.py summary` (reads eFuses only). |
 | Radio baud rate | The original firmware's UART speed is not published; a wrong speed gives no answer from the radio. | The original firmware's boot log, or its web console; the host program already speaks to the radio through it. |
 | LED and PHY power levels | Active levels are not published. | Read from the original firmware's behaviour, or try with the LED only (an LED cannot be damaged by the wrong level). |
-| The Wi-Fi antenna | Not described by Sonoff's pages found. | Not needed before Wi-Fi is built. |
+| The Wi-Fi antenna | Not described by Sonoff's pages found. | Settled by the run of spec 023 (2026-11-22): `wifi: connected` at RSSI -56 dBm on channel 6; the box's position in the home is not recorded. |
 
 Only the radio image (feature `radio`, spec 021) drives pins: GPIO12 (the bootloader line, never set
 active), GPIO15 (reset) and the UART's GPIO13 and GPIO17, all named in `firmware/src/radio_uart.rs`
@@ -104,9 +105,10 @@ image settles those rows (section "Measured on the box").
 
 ## Procedures
 
-All of them run through `sh scripts/box.sh` (spec 020). Every step that writes needs the user's yes:
-the script asks, on the terminal, for the last 6 hex digits of the box's MAC address, and no option
-skips the question. Entering the download mode **reboots the ESP32 and stops the original firmware's
+All of them run through `sh scripts/box.sh` (spec 020). Every step that writes is run by the user,
+in their terminal: `backup` and `restore` ask, on the terminal, for the last 6 hex digits of the box's
+MAC address, and no option skips the question; `flash` asks nothing beyond the command itself
+(decision D35). Entering the download mode **reboots the ESP32 and stops the original firmware's
 radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
 
 1. **Identify** (read-only): `sh scripts/box.sh identify`. It prints the chip and its revision, the
@@ -117,7 +119,8 @@ radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
 2. **Capture the original firmware's boot log** (read-only): `sh scripts/box.sh log --raw` (use
    `--replug` when the bridge does not reset the chip). It settles the PSRAM, the strapping state and the
    original firmware's version.
-3. **Back up the whole flash first, before any other write** (the user runs it, in their terminal):
+3. **Back up the whole flash** (optional, decision D35: Sonoff's own reflash is the way back; the
+   user runs it, in their terminal):
    `sh scripts/box.sh backup --out <folder outside the repository>`. It reads the 16 MB twice, and keeps
    `dongle-max-<mac>-<date>.bin` (mode 0600, with its `.sha256`) when the two reads are equal and
    not one repeated byte; it prints the row to paste below. When a read is invalid, both files are
@@ -133,25 +136,27 @@ radio bridge on TCP 6638** for as long as it lasts. No command writes an eFuse.
    The date is the backup's (YYYY-MM-DD), the revision the one `esptool.py` reads (`v3.x`), the version
    the one the web console shows, the SHA-256 the 64 hex digits in lower case; the last column holds
    the date of the proof of step 4, empty until then. `flash` reads the fourth and fifth columns.
-4. **Restore, once, and prove it** (needs the user's yes): `sh scripts/box.sh restore <backup file>`
+4. **Restore, once, and prove it** (with a backup only; needs the user's yes): `sh scripts/box.sh restore <backup file>`
    writes the backup back; the box runs its original firmware again. The way back is proven when the host
    identifies the radio over TCP again: `cargo run -p solite-host -- --radio tcp://<address>:6638`. Write
    the date in the backup's row. The second way back is Sonoff's own web flasher, or its Home Assistant
    add-on (see "The original firmware"); a failed restore is run again at `--baud 115200`.
-5. **Flash Solite** (needs the user's yes, once the backup's row has its restore date): build the
+5. **Flash Solite** (needs the user's yes): build the
    image (`cd firmware && cargo build --release`, or `--features flash-saves` for the measuring image,
    or the radio image with the command in the README), then
-   `sh scripts/box.sh flash --image box|sim|radio --backup <backup file>`. It refuses without the backup,
-   when the build is not the image asked for or does not fit the `ota_0` slot, erases `nvs`, `otadata`
-   and `storage` (unless `--keep-storage`, radio image only; the original firmware's settings, which may hold Wi-Fi credentials, are in the backup),
+   `sh scripts/box.sh flash --image box|sim|radio [--backup <backup file>]`. A backup given is refused
+   unless its row above has a restore date; the command also refuses when the build is not the image asked for or does not fit the `ota_0` slot, erases `nvs`, `otadata`
+   and `storage` (unless `--keep-storage`, radio image only; the original firmware's settings, which may hold Wi-Fi credentials, are lost unless a backup was made),
    writes the bootloader, the table of `firmware/partitions.csv` (decision D25) and the application, then
    resets the box; the radio image is read from `firmware/target/radio` and leaves the box unreset
    (`--after no_reset`), so that its first boot, and its pairing window, are the ones of `log`.
 6. **Check the boot**: `sh scripts/box.sh log --image box|sim|radio` checks the serial log as
    `scripts/qemu.sh` checks QEMU's (the radio image's 300 seconds are shown as they come); `--expect-kept` on the second boot of the box's image checks that the partition was
-   kept. A boot loop or a panic fails with the last lines: restore the backup, or flash the other image.
-7. **Restore the original firmware** (optional, on the user's request), so the Mac's TCP development
-   path works; the box can end on the radio image.
+   kept. A boot loop or a panic fails with the last lines: flash the other image, restore a backup, or
+   reflash Sonoff's firmware.
+7. **Bring the original firmware back** (optional, on the user's request), so the Mac's TCP development
+   path works: Sonoff's own reflash (see "The original firmware"), or `restore` of a backup made at
+   step 3; the box can end on the radio image.
 
 ## Measured on the box
 

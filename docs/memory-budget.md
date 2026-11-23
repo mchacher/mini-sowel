@@ -31,7 +31,7 @@ MAX_*` of the core and how it is reached; a test fails when one is missing.
 | Item | Bound | Worst case | Where | M / E |
 | ---- | ----- | ---------- | ----- | ----- |
 | The engine: devices, zones, equipments, recipes, events, live queues, orders, largest answer, save path | the core's `MAX_*` (`devices::MAX_DEVICES` 64, `zones::MAX_ZONES` 32, `equipments::MAX_EQUIPMENTS` 64, `recipes::MAX_INSTANCES` 16, ...) | 1024 KB (ceiling; measured 987 KB). Realistic home: 300 KB (ceiling; measured 194 KB), shown beside, not added | Large allocations in PSRAM; small ones first in internal RAM, see below | M |
-| Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes |
+| Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes; the box holds no `tungstenite` buffers (the Mac host's WebSocket library): its WebSocket is ESP-IDF's, inside the server's own buffers |
 | The radio image's HTTP body buffers: one per worker, `MAX_BODY_BYTES` + 1 each, allocated once in PSRAM (spec 023) | 4 workers × 16 KB | 64 KB, **not added**: the engine's worst case already counts 4 bodies of 16 KB (above); beside the realistic home, which does not count them, they add 64 KB | PSRAM | E, from the bound |
 | The radio image's HTTP workers' stacks (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023) | 4 workers × 10 KB | 40 KB | PSRAM | E, from the setting |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
@@ -71,7 +71,7 @@ fallback above), which has room. Consequences, to read again with the box's own 
 the firmware under QEMU, then on the Dongle Max, "On the box" below):
 
 - the stack, TLS and network figures are estimates: the box's figures ("On the box", below) cover the
-  boot and the engine; the network rows need Wi-Fi (E3c); the serial link's rings and the engine thread's stack are the radio image's (spec 021), their figures come from its run on the box (below);
+  boot and the engine; the network rows stay estimates: the run of spec 023 measured one snapshot with Wi-Fi up ("On the box", below), not the network's cost as a difference of two `heap:` minima; the serial link's rings and the engine thread's stack are the radio image's (spec 021), their figures come from its run on the box (below);
 - lowering `SPIRAM_MALLOC_ALWAYSINTERNAL` (for example to 512 bytes) moves more of the engine to
   PSRAM at the price of slower access: the knob to turn if the internal RAM runs short;
 - the internal RAM left after the network is what the firmware's memory line shows at boot.
@@ -107,7 +107,7 @@ the `engine:` line above. Reading it:
   with simulator" and measured on the box with the measuring image ("On the box", below).
 - **Internal RAM: 107 KB free at the lowest**, against the 64 KB floor of `scripts/qemu.sh`. This
   run starts no network: the 70 KB the budget sets for Wi-Fi are not in the figure, and the
-  margin that decides is the box's, with the network up (needs Wi-Fi, E3c).
+  margin that decides is the box's, with the network up ("On the box", below).
 - **`SPIRAM_MALLOC_ALWAYSINTERNAL`**: kept at 4096. At 512 the same run read a peak of 359 KB (sum
   of the whole run's watermarks, against 329 KB at 4096 by the same reading, in the first run) and 149 KB of
   internal RAM at the lowest: more of the engine goes to PSRAM, the total does not shrink. The
@@ -149,7 +149,7 @@ and becomes a line of the roadmap's inbox (or a decision for the ceiling): the l
 | Engine, realistic home: heap peak, internal RAM minimum, PSRAM minimum | Heap peak 312 KB (QEMU: 312 KB), internal RAM minimum 107 KB free, PSRAM minimum 1916 KB free; 50 devices, 10 zones, 50 equipments, 3 recipes (2026-11-22) | `sh scripts/box.sh log --image sim` (the `engine:` line) |
 | FAT partition: size, use after the realistic home | 7964 KB; 208 KB used after the realistic home, kept at the next boot (2026-11-22) | `sh scripts/box.sh log --image sim` (the `storage-after:` line, logged after the last save; `storage:` is the boot value) |
 | Save stall: the longest save (file, KB) and the total | Longest save 3770 ms (`devices.json`, 98 KB); 51 saves in 172 s in all; 3945 ms for the one save of a second boot (2026-11-22). Above the 1 s limit: a line of the roadmap inbox | `sh scripts/box.sh log --image sim` (the `saves:` line) |
-| Internal RAM with Wi-Fi up | needs Wi-Fi (E3c) | |
-| The 33 requests of an equipment with 16 + 16 bindings | needs Wi-Fi (E3c) | |
+| Internal RAM with Wi-Fi up | Measured on 2026-11-22, one device known, 10 s after `serving:`: `memory-network: internal 171 KB free (largest block 62 KB), psram 1904 KB free of 2048 KB`. The boot's `memory:` line showed 289 KB internal free, so Wi-Fi, the server and the engine's start took about 118 KB of internal RAM together (a difference of two snapshots, M). Not computed: the network's cost as a difference of two `heap:` minima (234 KB without Wi-Fi, minus a run's first `heap:` internal minimum) and the projection for the realistic home (107 KB minus that cost); until then, the network's cost is the estimate of the table above (70 KB, E) | `sh scripts/box.sh log --image radio` (the `heap:` and `memory-network:` lines) |
+| The 33 requests of an equipment with 16 + 16 bindings | Measured on 2026-11-22 over Wi-Fi, the garage's two devices known, a browser tab open on the box: eight runs, never a 503 `Busy`, totals 14.4, 9.0, 10.5, 10.7, 16.1, 19.1, 22.3 and 20.6 s (slowest request 0.8 to 1.1 s); in two runs (9.0 and 10.5 s) one request got no answer (curl status 000), the other 32 answered 201. Over the 10 s limit in seven of the eight: each creation takes 0.15 to 0.65 s against about 0.05 s for a GET (a line of the roadmap inbox) | `sh scripts/measure-api.sh <box address>` |
 | The serial link's buffers | 115200 baud, receive ring 4096 B, highest use 262 B, full 0 times, in 4 minutes with one device (2026-11-22) | `sh scripts/box.sh log --image radio` (the `serial:` line, every 240 s) |
 | The radio image's internal RAM: minimum free and the engine stack's high-water mark | Boot of the radio image: internal 352 KB free (largest block 160 KB), PSRAM 2046 KB free. After 4 minutes with one device: internal 303 KB free (minimum 234 KB), PSRAM 2020 KB free (minimum 2016 KB), engine stack 27 KB unused of 32 KB. Nothing against D27: the home holds one device (2026-11-22) | `sh scripts/box.sh log --image radio` (the `heap:` line) |

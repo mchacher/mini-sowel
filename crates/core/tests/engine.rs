@@ -938,3 +938,70 @@ fn a_wall_clock_that_jumps_forward_by_56_years_does_not_stop_the_engine() {
         .expect("the temperature is saved");
     assert_eq!(saved_temperature["value"], json!(30));
 }
+
+/// A home with a zone and a device changed, a storage, a saver behind a gate the test opens, and
+/// what the saver showed (spec 023 R3.2).
+type Gated = (
+    Mutex<Home>,
+    MemStorage,
+    Rc<Cell<bool>>,
+    Rc<RefCell<Vec<String>>>,
+);
+
+fn gated() -> Gated {
+    let mut rig = Rig::new();
+    rig.zone("Attic");
+    rig.sensor(1);
+    let home = Mutex::new(rig.home);
+    assert!(lock(&home).changes().0 && lock(&home).devices.changes().0);
+    (
+        home,
+        MemStorage::default(),
+        Rc::new(Cell::new(false)),
+        Rc::new(RefCell::new(Vec::new())),
+    )
+}
+
+#[test]
+fn a_closed_gate_writes_nothing_and_keeps_every_file_due() {
+    let (home, storage, open, shown) = gated();
+    let (gate, sink) = (Rc::clone(&open), Rc::clone(&shown));
+    let mut saver = Saver::new(&storage, 0)
+        .with_sink(move |message| sink.borrow_mut().push(message.to_string()))
+        .with_gate(move || gate.get());
+    for now in [1_000, 61_000, 121_000] {
+        saver.tick(&home, now, false).unwrap();
+    }
+    assert_eq!(storage.attempts.get(), 0, "nothing written");
+    assert!(shown.borrow().is_empty(), "{:?}", shown.borrow());
+    assert!(lock(&home).changes().0, "the zones still due");
+    assert!(lock(&home).devices.changes().0, "the devices still due");
+}
+
+#[test]
+fn the_tick_after_the_gate_opens_writes_the_files_due_at_once() {
+    let (home, storage, open, shown) = gated();
+    let (gate, sink) = (Rc::clone(&open), Rc::clone(&shown));
+    let mut saver = Saver::new(&storage, 0)
+        .with_sink(move |message| sink.borrow_mut().push(message.to_string()))
+        .with_gate(move || gate.get());
+    saver.tick(&home, 1_000, false).unwrap();
+    open.set(true);
+    saver.tick(&home, 31_000, false).unwrap();
+    assert!(storage.text(ZONES_FILE).unwrap().contains("Attic"));
+    assert!(storage.text(DEVICES_FILE).is_some());
+    assert!(
+        shown.borrow().is_empty(),
+        "no failure: {:?}",
+        shown.borrow()
+    );
+}
+
+#[test]
+fn a_stop_writes_the_files_due_whatever_the_gate() {
+    let (home, storage, _open, _shown) = gated();
+    let mut saver = Saver::new(&storage, 0).with_gate(|| false);
+    saver.tick(&home, 1_000, true).unwrap();
+    assert!(storage.text(ZONES_FILE).unwrap().contains("Attic"));
+    assert!(storage.text(DEVICES_FILE).is_some());
+}

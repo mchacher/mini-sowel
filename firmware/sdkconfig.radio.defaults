@@ -3,3 +3,26 @@
 # The UART interrupt runs from internal RAM, so bytes keep arriving while a flash write stalls the
 # caches (ESP_INTR_FLAG_IRAM needs it). The other images keep their settings and their figures.
 CONFIG_UART_ISR_IN_IRAM=y
+
+# The server of the radio image (spec 023, decision D33). `/ws`: ESP-IDF's WebSocket support is
+# gated by this setting (`validate.sh` checks it is in this build only).
+CONFIG_HTTPD_WS_SUPPORT=y
+# ESP-IDF calls a WebSocket handler for the frames only: `live_ws.rs` checks a new client and sends
+# its welcome in the post-handshake callback, on the handshake's request (D37, checked by
+# `validate.sh`).
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
+# A browser's request head is about 500 to 800 bytes (512 by default); a longer one gets 431.
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# The server uses its 12 connections plus 3 sockets of its own (its listener and two UDP control
+# sockets), and refuses to start on a smaller table: 15, one spare (10 by default). DHCP, DNS and
+# SNTP use lwIP's raw API, no socket.
+CONFIG_LWIP_MAX_SOCKETS=16
+# lwIP's task on core 0, with Wi-Fi and the server, off the engine's core 1.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+# The 4 API workers' stacks are in PSRAM (they never write the flash).
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+# Wi-Fi's and lwIP's buffers in PSRAM when they can be: internal RAM is the tight resource.
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+# SNTP: `pool.ntp.org` and the time server the DHCP server gives, when it gives one.
+CONFIG_LWIP_DHCP_GET_NTP_SRV=y
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
