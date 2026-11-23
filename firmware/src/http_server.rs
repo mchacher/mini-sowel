@@ -591,9 +591,9 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
         }),
         ..Default::default()
     };
-    let mut server = EspHttpServer::new(&configuration).map_err(|e| e.to_string())?;
-    live_ws::register(&mut server, shared.hub, name, port)?;
+    let server = EspHttpServer::new(&configuration).map_err(|e| e.to_string())?;
     let handle = server.handle();
+    live_ws::register(handle, shared.hub, name, port)?;
     for method in [
         http_method_HTTP_GET,
         http_method_HTTP_POST,

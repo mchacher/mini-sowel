@@ -4,9 +4,13 @@
 # caches (ESP_INTR_FLAG_IRAM needs it). The other images keep their settings and their figures.
 CONFIG_UART_ISR_IN_IRAM=y
 
-# The server of the radio image (spec 023, decision D33). `/ws`: esp-idf-svc's WebSocket handler is
+# The server of the radio image (spec 023, decision D33). `/ws`: ESP-IDF's WebSocket support is
 # gated by this setting (`validate.sh` checks it is in this build only).
 CONFIG_HTTPD_WS_SUPPORT=y
+# ESP-IDF calls a WebSocket handler for the frames only: `live_ws.rs` checks a new client and sends
+# its welcome in the post-handshake callback, on the handshake's request (D36, checked by
+# `validate.sh`).
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 # A browser's request head is about 500 to 800 bytes (512 by default); a longer one gets 431.
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
 # The server uses its 12 connections plus 3 sockets of its own (its listener and two UDP control
