@@ -16,8 +16,10 @@ The user decides **what**; you handle **how**. They review the spec before the c
 after it, not the code itself: the checks and the review agent do that. They often cannot see when
 a step was skipped, so **you never skip one**.
 
-**Models** (table in `CLAUDE.md`): Opus only for Phase 2's spec; ask the user to `/model opus`
-before it and `/model sonnet` after the approval. Every agent you launch names its `model:`.
+**Models** ([docs/agents.md](../../../docs/agents.md)): Phase 2's spec on Sonnet when it follows an
+existing pattern, on Opus when it is hard (a new block, a choice of architecture or data model,
+several options to weigh): say which, and ask the user to `/model opus` before it and
+`/model sonnet` after the approval. Every agent you launch names its `model:`.
 
 Follow EVERY phase below IN ORDER. Each phase ends with a GATE: a checklist that MUST be fully true
 before going on. Gates marked **STOP** wait for the user's explicit yes ("yes", "oui", "go"),
@@ -199,11 +201,15 @@ git branch --show-current                 # must NOT be main
 3. **Tests**: see 3.3.
 4. **Docs**: see 3.4.
 
-**To save tokens**, steps 2 to 4 go to one agent (Agent tool, `model: "sonnet"`) that follows the
-approved `plan.md` and the rules of 3.2 to 3.4; give it the spec folder, not your conclusions, and
-ask for a short report (what changed, tests run, anything the spec did not cover). Put this in its prompt, as a strict rule: every test, build, QEMU run or install goes through `sh scripts/quiet.sh <command>` (see `CLAUDE.md`), never bare, and no long output is pasted back; targeted tests while it iterates, the full check once at the end. Take the work
-back on Opus only if it loops on the same failure (see "Models" in `CLAUDE.md`). Then you run
-the checks yourself.
+**To save tokens**, steps 2 to 4 go to the `implementer` agent (Agent tool,
+`subagent_type: implementer`, Sonnet, set in its file): it holds the strict rules (output through
+`quiet.sh`, nothing outside the spec, no commit, stop after three identical failures) and the
+report format. Give it the spec folder, not your conclusions, the branch, the files and lines to
+start from, and a report path in the session's scratchpad. Read the report only when its one-line
+answer is not enough. Take the work back on Opus only if it stops on the same failure (see
+[docs/agents.md](../../../docs/agents.md)). Then you run the checks yourself.
+**Build it yourself instead** when the brief would cost more than the work: a change of two or
+three files, one that needs back-and-forth with the user, or a run on the box.
 
 Do only what the spec says. No unrelated refactor, no extra option, no "while I was there". If the
 spec turns out wrong or incomplete, stop, tell the user, update the spec, and get their yes again.

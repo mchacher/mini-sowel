@@ -16,7 +16,7 @@ about 150 lines**: a subject that grows moves to `docs/` or becomes a check.
 | The design of one change                     | `specs/NNN-name/{spec,architecture,plan}.md` |
 | The documents the project started from       | [inputs/](inputs/README.md)                 |
 | How the interface looks                      | [docs/design-system.md](docs/design-system.md) |
-| How specs and code are reviewed              | [.claude/agents/](.claude/agents/)          |
+| How specs are reviewed, code built and reviewed | [.claude/agents/](.claude/agents/)       |
 | How agents are run (models, output, briefs) | [docs/agents.md](docs/agents.md)             |
 | Sowel's model, API and recipes (the contract) | The Sowel repository, see "Sowel contract" below |
 
@@ -103,7 +103,7 @@ over TCP for development (decision D6).
   `Co-Authored-By`, no "Generated with"); never push, merge or publish without the user's explicit
   yes.
 - **Agents (strict, read [docs/agents.md](docs/agents.md))**: Sonnet in the session, Opus only for
-  a spec, arbitration and `code-reviewer`; write `model:` on every agent; a command that can print
+  a hard spec, arbitration and `code-reviewer`; write `model:` on every agent; a command that can print
   more than a few lines runs as `sh scripts/quiet.sh <command>`; one agent, one subject, a brief
   naming files and lines, a report written to a file and a one-line answer.
 - **Roadmap**: `docs/roadmap.md`, planned with `/solite-roadmap`, reviewed after every feature.
