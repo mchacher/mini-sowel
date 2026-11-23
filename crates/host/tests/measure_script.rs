@@ -321,6 +321,7 @@ fn a_503_busy_is_counted_the_first_bad_answer_is_shown_and_everything_is_deleted
 }
 
 #[test]
+#[ignore = "slow (13 s, over the production limit of 10 s): sh scripts/validate.sh runs it"]
 fn a_total_over_10_seconds_fails_and_prints_the_time() {
     // 33 answers of 400 ms: about 13 s.
     let (port, fake) = fake(None, 400);

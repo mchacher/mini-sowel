@@ -1,19 +1,27 @@
-# The verdict of CLAUDE.md, on every pull request and on main: sh scripts/validate.sh, cut into
-# three jobs that run side by side (`--only rust`, `--only ui`, `--only firmware`): together they
-# are exactly the full run, and the slowest one sets the time.
+# The verdict of CLAUDE.md: sh scripts/validate.sh, cut into three jobs that run side by side
+# (`--only rust`, `--only ui`, `--only firmware`): together they are exactly the full run, and the
+# slowest one sets the time. Pull requests and pushes to main run it with `--skip-slow` (no slow
+# Rust test, no QEMU run); every night, and by hand (Run workflow), the full verdict runs on main.
 name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # Empty for the nightly and manual runs (the full verdict), `--skip-slow` otherwise.
+  SKIP_SLOW: ${{ (github.event_name != 'schedule' && github.event_name != 'workflow_dispatch') && '--skip-slow' || '' }}
 
 jobs:
   rust:
@@ -32,7 +40,7 @@ jobs:
             . -> target
 
       - name: Validate
-        run: sh scripts/validate.sh --only rust
+        run: sh scripts/validate.sh --only rust $SKIP_SLOW
 
   ui:
     name: validate (ui)
@@ -58,7 +66,7 @@ jobs:
         run: npm ci
 
       - name: Validate
-        run: sh scripts/validate.sh --only ui
+        run: sh scripts/validate.sh --only ui $SKIP_SLOW
 
   firmware:
     name: validate (firmware)
@@ -73,6 +81,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build python3-venv
 
       - name: System libraries for QEMU
+        if: env.SKIP_SLOW == ''
         run: sudo apt-get install -y libgcrypt20 libglib2.0-0 libpixman-1-0 libsdl2-2.0-0 libslirp0
 
       - name: Rust, at the version pinned in rust-toolchain.toml
@@ -94,7 +103,21 @@ jobs:
           workspaces: |
             firmware -> target
 
+      # The Xtensa toolchain espup installs (about 1.4 GB, a minute to download and unpack) and its
+      # export file: restored from the cache when espup's version and the firmware's toolchain
+      # file have not changed.
+      - name: ESP32 toolchain cache
+        id: esp-toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains/esp
+            ~/.cargo/bin/ldproxy
+            ~/export-esp.sh
+          key: esp-toolchain-${{ runner.os }}-${{ env.ESPUP_VERSION }}-${{ hashFiles('firmware/rust-toolchain.toml') }}
+
       - name: ESP32 toolchain (espup, ldproxy)
+        if: steps.esp-toolchain.outputs.cache-hit != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -114,10 +137,11 @@ jobs:
       # it would be downloaded on every run. On a miss, scripts/qemu.sh installs it (after the
       # firmware build has downloaded ESP-IDF, which the installer needs) and this step saves it.
       - name: QEMU download cache
+        if: env.SKIP_SLOW == ''
         uses: actions/cache@v4
         with:
           path: firmware/.embuild/espressif/tools/qemu-xtensa
           key: qemu-xtensa-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}
 
       - name: Validate
-        run: sh scripts/validate.sh --only firmware
+        run: sh scripts/validate.sh --only firmware $SKIP_SLOW

@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -38,15 +39,41 @@ fn host() -> Command {
     Command::new(env!("CARGO_BIN_EXE_solite-host"))
 }
 
-/// `--pair` on the garage scenario: three devices, written to `devices.json`.
+/// `--pair` on the garage scenario: three devices, written to `devices.json`. The pairing runs
+/// once for the whole file (it takes `PAIR_SECONDS` of real time); each test gets a copy of the
+/// folder it wrote, the same files a pairing of its own would leave.
 fn pair(dir: &Path) {
-    pair_scenario(dir, GARAGE);
+    static PAIRED: OnceLock<PathBuf> = OnceLock::new();
+    let paired = PAIRED.get_or_init(|| {
+        let paired = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("serve-paired-garage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&paired);
+        pair_scenario(&paired, GARAGE);
+        paired
+    });
+    std::fs::create_dir_all(dir).unwrap();
+    for entry in std::fs::read_dir(paired).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
+    }
 }
+
+/// The pairing time of the tests, in seconds. The pairing window runs in real time (the speed
+/// scales the scenario, not the window): at speed 100, eight seconds play 13 minutes 20 of the
+/// scenario, so the whole garage (its last report at 10 minutes, its last motion cleared at
+/// 4 minutes) is played and stored, as a longer window would leave it.
+const PAIR_SECONDS: &str = "8";
 
 fn pair_scenario(dir: &Path, scenario: &str) {
     let output = host()
         .args([
-            "--sim", scenario, "--pair", "30", "--speed", "100", "--data",
+            "--sim",
+            scenario,
+            "--pair",
+            PAIR_SECONDS,
+            "--speed",
+            "100",
+            "--data",
         ])
         .arg(dir)
         .output()
@@ -66,7 +93,19 @@ fn serve(dir: &Path, speed: &str, extra: &[&str]) -> Serving {
     serve_scenario(dir, GARAGE, speed, extra)
 }
 
+/// Starts `--serve` on a free port. The port is chosen before the host binds it, so another
+/// test can take it in between: a host that exits before it serves because it cannot listen is
+/// started again on another port.
 fn serve_scenario(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Serving {
+    for _ in 0..5 {
+        if let Some(serving) = try_serve(dir, scenario, speed, extra) {
+            return serving;
+        }
+    }
+    panic!("the host could not listen on a free port in five tries");
+}
+
+fn try_serve(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Option<Serving> {
     let port = free_port();
     let mut child = host()
         .args([
@@ -105,12 +144,25 @@ fn serve_scenario(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Se
                 let ready = line.starts_with("serving:");
                 serving.shown.push(line);
                 if ready {
-                    return serving;
+                    return Some(serving);
                 }
             }
-            Err(_) => {
+            Err(error) => {
                 let _ = serving.child.kill();
-                panic!("the host stopped or stayed silent: {:?}", serving.shown);
+                let _ = serving.child.wait();
+                let mut stderr = String::new();
+                if let Some(mut pipe) = serving.child.stderr.take() {
+                    let _ = pipe.read_to_string(&mut stderr);
+                }
+                if error == mpsc::RecvTimeoutError::Disconnected
+                    && stderr.starts_with("serve: cannot listen on ")
+                {
+                    return None;
+                }
+                panic!(
+                    "the host stopped or stayed silent: {:?}, stderr: {stderr}",
+                    serving.shown
+                );
             }
         }
     }
@@ -1122,6 +1174,7 @@ fn a_relay_not_heard_since_the_start_is_reached_at_the_address_devices_json_keep
 }
 
 #[test]
+#[ignore = "slow (12 s, the production deadline of an order): sh scripts/validate.sh runs it"]
 fn a_silenced_relay_is_a_502_device_did_not_answer_after_the_retry() {
     let dir = data_dir();
     pair(&dir);
@@ -1175,6 +1228,7 @@ fn a_post_that_is_not_json_is_a_415_and_an_order_of_that_kind_sends_nothing() {
 }
 
 #[test]
+#[ignore = "slow (12 s, the production deadline of an order): sh scripts/validate.sh runs it"]
 fn a_third_order_is_busy_and_reads_are_still_served_while_two_wait_on_a_silenced_relay() {
     let dir = data_dir();
     pair(&dir);
