@@ -61,13 +61,14 @@ describe("EquipmentForm", () => {
     expect(next().disabled).toBe(true);
   });
 
-  it("offers the seven types sorted by label", () => {
+  it("offers the eight types sorted by label, light_color among them", () => {
     setup();
     const labels = Array.from((screen.getByLabelText("Type") as HTMLSelectElement).options).map(
       (o) => o.textContent,
     );
     expect(labels).toEqual([
       "Button or remote",
+      "Light (Color)",
       "Light (Dimmable)",
       "Light (On/Off)",
       "Plug or relay",
@@ -76,6 +77,19 @@ describe("EquipmentForm", () => {
       "Thermostat",
     ]);
     expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
+  });
+
+  it("keeps the type of an equipment of a type it does not offer, shown as written", async () => {
+    const { onSubmit, onClose } = setup({
+      title: "Edit equipment",
+      initial: { name: "Portail", type: "door", zoneId: "garage" },
+    });
+    const select = screen.getByLabelText("Type") as HTMLSelectElement;
+    expect(select.value).toBe("door");
+    expect(Array.from(select.options).map((o) => o.textContent)).toContain("door");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ type: "door" }));
   });
 
   it("gives the devices ticked and read to onSubmit, and closes", async () => {

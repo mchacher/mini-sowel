@@ -128,6 +128,24 @@ pub enum DeviceStatus {
     Unknown,
 }
 
+impl DeviceStatus {
+    /// Every value, with its JSON string (the contract check reads them).
+    pub const ALL: [DeviceStatus; 3] = [
+        DeviceStatus::Online,
+        DeviceStatus::Offline,
+        DeviceStatus::Unknown,
+    ];
+
+    /// The value as Sowel writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeviceStatus::Online => "online",
+            DeviceStatus::Offline => "offline",
+            DeviceStatus::Unknown => "unknown",
+        }
+    }
+}
+
 /// Sowel's `PowerSource` (`dc` is not used here).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -137,12 +155,43 @@ pub enum PowerSource {
     Unknown,
 }
 
+impl PowerSource {
+    /// Every value, with its JSON string (the contract check reads them).
+    pub const ALL: [PowerSource; 3] = [
+        PowerSource::Mains,
+        PowerSource::Battery,
+        PowerSource::Unknown,
+    ];
+
+    /// The value as Sowel writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PowerSource::Mains => "mains",
+            PowerSource::Battery => "battery",
+            PowerSource::Unknown => "unknown",
+        }
+    }
+}
+
 /// Sowel's `DataType`, the two values Solite uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValueType {
     Boolean,
     Number,
+}
+
+impl ValueType {
+    /// Every value, with its JSON string (the contract check reads them).
+    pub const ALL: [ValueType; 2] = [ValueType::Boolean, ValueType::Number];
+
+    /// The value as Sowel writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ValueType::Boolean => "boolean",
+            ValueType::Number => "number",
+        }
+    }
 }
 
 /// Sowel's `Device`. Memory: strings are exact-size `Box<str>`; what is the same for every device

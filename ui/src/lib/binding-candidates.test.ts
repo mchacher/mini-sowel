@@ -26,6 +26,19 @@ describe("computeBindingCandidates", () => {
     expect(candidate.dataKeys).toEqual(["state", "brightness"]);
   });
 
+  it("gives a colour bulb one candidate for light_color, with its colour temperature order", () => {
+    const [data, orders] = of(fixtures.colorBulb());
+    const candidates = computeBindingCandidates("light_color", data, orders);
+    expect(candidates).toEqual([
+      {
+        id: "state",
+        label: "state",
+        dataKeys: ["state", "brightness"],
+        orderKeys: ["state", "brightness", "color_temp"],
+      },
+    ]);
+  });
+
   it("gives the ZBMINIR2 one on/off candidate for light_dimmable, as Sowel", () => {
     const [data, orders] = of(fixtures.zbminir2());
     const candidates = computeBindingCandidates("light_dimmable", data, orders);

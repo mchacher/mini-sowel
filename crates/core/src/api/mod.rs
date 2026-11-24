@@ -13,6 +13,7 @@ mod recipes;
 mod settings;
 mod slots;
 pub mod static_files;
+mod system;
 mod zones;
 
 pub use crate::home::{CHUNK_ITEMS, ListCursor};
@@ -31,6 +32,52 @@ use crate::orders::OrderWait;
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
 
 const PREFIX: &str = "/api/v1";
+
+/// The routes this module serves, as (method, path): a segment starting with `:` is a
+/// parameter. The `/ws` upgrade is the host's, not listed. The router is a `match` on path
+/// segments, so a route added there and missing here is not caught by a test (the contract check
+/// of spec 027 reads this table); every route listed is tested to answer something other than
+/// the route-level `Not found`.
+pub const ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/v1/devices"),
+    ("GET", "/api/v1/devices/:id"),
+    ("PUT", "/api/v1/devices/:id"),
+    ("DELETE", "/api/v1/devices/:id"),
+    ("GET", "/api/v1/zones"),
+    ("POST", "/api/v1/zones"),
+    ("GET", "/api/v1/zones/aggregation"),
+    ("GET", "/api/v1/zones/:id"),
+    ("PUT", "/api/v1/zones/:id"),
+    ("DELETE", "/api/v1/zones/:id"),
+    ("GET", "/api/v1/equipments"),
+    ("POST", "/api/v1/equipments"),
+    ("GET", "/api/v1/equipments/:id"),
+    ("PUT", "/api/v1/equipments/:id"),
+    ("DELETE", "/api/v1/equipments/:id"),
+    ("POST", "/api/v1/equipments/:id/data-bindings"),
+    ("DELETE", "/api/v1/equipments/:id/data-bindings/:bindingId"),
+    ("POST", "/api/v1/equipments/:id/order-bindings"),
+    ("DELETE", "/api/v1/equipments/:id/order-bindings/:bindingId"),
+    ("POST", "/api/v1/equipments/:id/orders/:alias"),
+    ("GET", "/api/v1/recipes"),
+    ("GET", "/api/v1/recipes/:id"),
+    ("GET", "/api/v1/recipe-instances"),
+    ("POST", "/api/v1/recipe-instances"),
+    ("PUT", "/api/v1/recipe-instances/:id"),
+    ("DELETE", "/api/v1/recipe-instances/:id"),
+    ("POST", "/api/v1/recipe-instances/:id/enable"),
+    ("POST", "/api/v1/recipe-instances/:id/disable"),
+    ("POST", "/api/v1/recipe-instances/:id/actions"),
+    ("GET", "/api/v1/recipe-instances/:id/log"),
+    ("GET", "/api/v1/settings"),
+    ("PUT", "/api/v1/settings"),
+    ("GET", "/api/v1/settings/timezones"),
+    ("GET", "/api/v1/system/timezone"),
+    ("GET", "/api/v1/backup"),
+    ("POST", "/api/v1/backup"),
+    ("GET", "/api/v1/integrations/solite/permit-join"),
+    ("POST", "/api/v1/integrations/solite/permit-join"),
+];
 
 /// Who can reach the server: it decides which `Host` headers are accepted and whether the
 /// pairing route is open (spec 022, D33).
@@ -95,7 +142,19 @@ pub(crate) fn error(status: u16, message: &str) -> Response {
 }
 
 pub(crate) fn failure(failure: &Failure) -> Response {
-    error(failure.status, &failure.message)
+    match failure.code {
+        None => error(failure.status, &failure.message),
+        Some(code) => Response {
+            status: failure.status,
+            body: Some(
+                Value::Object(Map::from_iter([
+                    ("error".into(), code.into()),
+                    ("message".into(), failure.message.as_str().into()),
+                ]))
+                .to_string(),
+            ),
+        },
+    }
 }
 
 pub(crate) fn json<T: serde::Serialize>(status: u16, value: &T) -> Response {
@@ -313,6 +372,7 @@ fn dispatch(
             recipes::route(home, &segments, request, now, random)
         }
         Some("settings") => settings::route(home, &segments, request),
+        Some("system") => system::route(home, &segments, request, now),
         Some("backup") => backup::route(home, &segments, request, now),
         _ => error(404, "Not found"),
     };

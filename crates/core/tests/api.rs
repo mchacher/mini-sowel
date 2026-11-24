@@ -301,3 +301,56 @@ fn a_post_or_put_without_a_json_content_type_is_a_415_whatever_the_route() {
     // Nothing was created, and a GET or DELETE has no body to type.
     assert_eq!(local(&mut home, "GET", "/api/v1/zones", "").status, 200);
 }
+
+#[test]
+fn every_route_of_the_table_answers_something_other_than_the_route_level_not_found() {
+    use solite_core::api::ROUTES;
+    // The body of a path the router does not know.
+    let unknown = r#"{"error":"Not found"}"#;
+    let (mut home, _, _) = two_devices();
+    let unknown_id = "11111111-1111-4111-8111-111111111111";
+    for (method, pattern) in ROUTES {
+        // A parameter is an id that no entity has: the answer is the entity's own 404.
+        let path: String = pattern
+            .split('/')
+            .map(|part| {
+                if part.starts_with(':') {
+                    unknown_id
+                } else {
+                    part
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        let response = local(&mut home, method, &path, "{}");
+        assert_ne!(
+            response.body.as_deref(),
+            Some(unknown),
+            "{method} {pattern} is served"
+        );
+        assert_ne!(response.status, 405, "{method} {pattern} is allowed");
+    }
+    // The check itself sees an unlisted path: the router answers it with the route-level body.
+    let response = local(&mut home, "GET", "/api/v1/nothing-here", "");
+    assert_eq!(response.body.as_deref(), Some(unknown));
+}
+
+#[test]
+fn the_routes_of_the_table_are_written_with_the_prefix_and_colon_parameters() {
+    use solite_core::api::ROUTES;
+    for (method, pattern) in ROUTES {
+        assert!(
+            ["GET", "POST", "PUT", "DELETE"].contains(method),
+            "{method}"
+        );
+        assert!(pattern.starts_with("/api/v1/"), "{pattern}");
+        assert!(
+            !pattern.contains('{') && !pattern.contains('?'),
+            "{pattern}"
+        );
+    }
+    let mut seen = ROUTES.to_vec();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), ROUTES.len(), "no route twice");
+}

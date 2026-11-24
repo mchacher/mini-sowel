@@ -61,8 +61,8 @@ fn is_streaming(category: &str) -> bool {
     )
 }
 
-/// `ELECTRICAL_STREAMING_CATEGORIES`: judged only on metering equipments, and none of the six
-/// kinds of decision D3 meters.
+/// `ELECTRICAL_STREAMING_CATEGORIES`: Sowel judges them only on metering equipments; Solite has
+/// no behaviour for the metering types (spec 027), so it never judges them.
 fn is_electrical(category: &str) -> bool {
     matches!(category, "power" | "energy" | "voltage" | "current")
 }

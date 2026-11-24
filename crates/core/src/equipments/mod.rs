@@ -3,6 +3,9 @@
 //! equipment-manager.ts`. An equipment binds device data and orders under aliases; recipes, the
 //! interface and the zone aggregation read equipments, never devices. No I/O: the caller writes.
 
+mod extras;
+pub mod propose;
+pub mod rules;
 mod status;
 mod status_tracker;
 mod view;
@@ -14,6 +17,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::devices::{Id, iso};
 
+pub use extras::{
+    EquipmentFamily, Extras, Field, MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, MAX_ID_CHARS, Piece,
+    RawObject,
+};
+pub use propose::{Proposal, propose};
 pub use status::{EquipmentStatus, StatusReason, is_stale, stale_window_ms};
 pub use status_tracker::{StatusTracker, Transition};
 pub use view::status_of;
@@ -28,50 +36,83 @@ pub const MAX_BINDINGS: usize = 16;
 /// The longest alias, in characters (Sowel sets none).
 pub const MAX_ALIAS_CHARS: usize = 32;
 
-/// Sowel's `EquipmentType`, the seven values of decision D3's six kinds (a light has two).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EquipmentType {
-    LightOnoff,
-    LightDimmable,
-    Shutter,
-    Sensor,
-    Switch,
-    Thermostat,
-    Button,
+/// Defines `EquipmentType` from one list of (variant, Sowel's name), so the enum, `ALL`, `as_str`
+/// and `parse` cannot disagree.
+macro_rules! equipment_types {
+    ($($variant:ident => $name:literal,)+) => {
+        /// Sowel's `EquipmentType` (`src/shared/types.ts` T:339): its 31 values, written as Sowel
+        /// writes them. Eight have binding rules (`rules.rs`); the others are accepted, stored
+        /// and served.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        pub enum EquipmentType {
+            $(
+                #[serde(rename = $name)]
+                $variant,
+            )+
+        }
+
+        impl EquipmentType {
+            /// Every value, in Sowel's order.
+            pub const ALL: [EquipmentType; 31] = [$(EquipmentType::$variant),+];
+
+            pub fn parse(text: &str) -> Option<EquipmentType> {
+                match text {
+                    $($name => Some(EquipmentType::$variant),)+
+                    _ => None,
+                }
+            }
+
+            /// The type as Sowel writes it (`light_onoff`).
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(EquipmentType::$variant => $name,)+
+                }
+            }
+        }
+    };
+}
+
+equipment_types! {
+    LightOnoff => "light_onoff",
+    LightDimmable => "light_dimmable",
+    LightColor => "light_color",
+    Shutter => "shutter",
+    Awning => "awning",
+    Door => "door",
+    Switch => "switch",
+    Sensor => "sensor",
+    Button => "button",
+    Thermostat => "thermostat",
+    Weather => "weather",
+    WeatherForecast => "weather_forecast",
+    Gate => "gate",
+    Heater => "heater",
+    WaterHeater => "water_heater",
+    EnergyMeter => "energy_meter",
+    MainEnergyMeter => "main_energy_meter",
+    EnergyProductionMeter => "energy_production_meter",
+    SolarPanel => "solar_panel",
+    MediaPlayer => "media_player",
+    Appliance => "appliance",
+    WaterValve => "water_valve",
+    PoolPump => "pool_pump",
+    PoolCover => "pool_cover",
+    PoolHeatPump => "pool_heat_pump",
+    Display => "display",
+    Camera => "camera",
+    Vmc => "vmc",
+    Ups => "ups",
+    EvCharger => "ev_charger",
+    ElectricVehicle => "electric_vehicle",
 }
 
 impl EquipmentType {
-    pub fn parse(text: &str) -> Option<EquipmentType> {
-        Some(match text {
-            "light_onoff" => EquipmentType::LightOnoff,
-            "light_dimmable" => EquipmentType::LightDimmable,
-            "shutter" => EquipmentType::Shutter,
-            "sensor" => EquipmentType::Sensor,
-            "switch" => EquipmentType::Switch,
-            "thermostat" => EquipmentType::Thermostat,
-            "button" => EquipmentType::Button,
-            _ => return None,
-        })
-    }
-
-    /// The type as Sowel writes it (`light_onoff`).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EquipmentType::LightOnoff => "light_onoff",
-            EquipmentType::LightDimmable => "light_dimmable",
-            EquipmentType::Shutter => "shutter",
-            EquipmentType::Sensor => "sensor",
-            EquipmentType::Switch => "switch",
-            EquipmentType::Thermostat => "thermostat",
-            EquipmentType::Button => "button",
-        }
-    }
-
+    /// Sowel's `LIGHT_EQUIPMENT_TYPES` (`src/zones/zone-aggregator.ts`): what counts as a light
+    /// in the zone aggregation.
     pub fn is_light(self) -> bool {
         matches!(
             self,
-            EquipmentType::LightOnoff | EquipmentType::LightDimmable
+            EquipmentType::LightOnoff | EquipmentType::LightDimmable | EquipmentType::LightColor
         )
     }
 }
@@ -132,8 +173,9 @@ impl<'de> Deserialize<'de> for Alias {
     }
 }
 
-/// Sowel's `Equipment`; its optional flags (energy, timed actions...) are left out.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Sowel's `Equipment`, with its twelve optional fields kept in `extras` (spec 027 R2.3): an
+/// equipment without them pays 8 bytes. `StoredEquipment` reads it from `equipments.json`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Equipment {
     pub id: Id,
@@ -150,6 +192,9 @@ pub struct Equipment {
     pub created_at: u64,
     #[serde(with = "iso")]
     pub updated_at: u64,
+    /// Sowel's optional fields (`requireConfirmation`, `family`...), written flat in the JSON.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<Box<Extras>>,
 }
 
 /// Sowel's `DataBinding` (`historize` is left out), without its `equipmentId`: the equipment
@@ -212,15 +257,64 @@ impl Serialize for OrderBindings<'_> {
 }
 
 /// An equipment with its bindings, as `equipments.json` keeps it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StoredEquipment {
-    #[serde(flatten)]
     pub equipment: Equipment,
     /// At most `MAX_BINDINGS`, aliases distinct.
     pub data_bindings: Vec<DataBinding>,
     /// At most `MAX_BINDINGS`, aliases distinct.
     pub order_bindings: Vec<OrderBinding>,
+}
+
+/// The fields of an equipment but its twelve optional ones (`RawExtras` reads those).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredIn {
+    id: Id,
+    name: Box<str>,
+    zone_id: Id,
+    #[serde(rename = "type")]
+    kind: EquipmentType,
+    #[serde(default)]
+    icon: Option<Box<str>>,
+    #[serde(default)]
+    description: Option<Box<str>>,
+    enabled: bool,
+    #[serde(with = "iso")]
+    created_at: u64,
+    #[serde(with = "iso")]
+    updated_at: u64,
+    data_bindings: Vec<DataBinding>,
+    order_bindings: Vec<OrderBinding>,
+}
+
+impl<'de> Deserialize<'de> for StoredEquipment {
+    /// Read in two passes over the element's text: `RawValue` (the objects of the optional
+    /// fields, kept as written) does not work through `flatten`. A field of the wrong shape is
+    /// dropped with a warning, the rest of the equipment is kept; bounds: `Equipments::from_list`.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let text = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        let core: StoredIn = serde_json::from_str(text.get()).map_err(D::Error::custom)?;
+        let raw: extras::RawExtras = serde_json::from_str(text.get()).map_err(D::Error::custom)?;
+        let extras = Extras::from_raw(&raw, &core.name);
+        Ok(StoredEquipment {
+            equipment: Equipment {
+                id: core.id,
+                name: core.name,
+                zone_id: core.zone_id,
+                kind: core.kind,
+                icon: core.icon,
+                description: core.description,
+                enabled: core.enabled,
+                created_at: core.created_at,
+                updated_at: core.updated_at,
+                extras,
+            },
+            data_bindings: core.data_bindings,
+            order_bindings: core.order_bindings,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -260,7 +354,12 @@ impl Equipments {
     /// zones and the devices is the home's (`Home::from_parts`).
     pub fn from_list(mut list: Vec<StoredEquipment>) -> Self {
         list.truncate(MAX_EQUIPMENTS);
+        // The optional fields past their bounds are dropped, in the file's order.
+        let mut used = 0;
         for item in &mut list {
+            if let Some(extras) = item.equipment.extras.take() {
+                item.equipment.extras = extras.bounded(&item.equipment.name, &mut used);
+            }
             item.data_bindings.truncate(MAX_BINDINGS);
             item.order_bindings.truncate(MAX_BINDINGS);
             item.data_bindings.shrink_to_fit();
@@ -298,6 +397,17 @@ impl Equipments {
             .iter()
             .filter(|e| e.equipment.zone_id == *zone)
             .count()
+    }
+
+    /// The bytes the optional fields of all equipments take, as written in JSON, but those of
+    /// the equipment `except` (when it is given): what a change of that one is counted against.
+    pub fn extras_bytes(&self, except: Option<&Id>) -> usize {
+        self.items
+            .iter()
+            .filter(|e| Some(&e.equipment.id) != except)
+            .filter_map(|e| e.equipment.extras.as_deref())
+            .map(Extras::json_len)
+            .sum()
     }
 
     /// The equipments as the JSON list that is saved.

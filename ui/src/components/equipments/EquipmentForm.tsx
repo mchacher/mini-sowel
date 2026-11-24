@@ -1,5 +1,7 @@
 // Ported from Sowel ui/src/components/equipments/EquipmentForm.tsx (Sowel commit 5da84dc1, UI 1.87.0).
-// Changes (spec 018): decision D3's seven types; names capped at 64 (the API's bound, Sowel 100);
+// Changes (specs 018, 027): the eight types that have Sowel's binding rules, and an equipment of
+// another type of Sowel's keeps it when edited, shown as written; names capped at 64 (the API's
+// bound, Sowel 100);
 // edit is one step with the type locked (Sowel's type change among shutter, awning and door is
 // out of scope); the pool heat pump rule, `excludeTypes` and the bound keys cut; the modal closes
 // on Escape and on a click outside. Spec 019 (decision D30): the form returns the devices ticked
@@ -79,12 +81,16 @@ export function EquipmentForm({
   const [error, setError] = useState<string | null>(null);
 
   const flatZones = useMemo(() => flattenZonesWithPath(zones), [zones]);
+  // The types offered, plus the type of the equipment being edited when it is none of them (a
+  // `door`): it stays selected, its name as written, and is sent back unchanged.
+  const editedType = initial?.type;
   const sortedTypes = useMemo(
     () =>
-      [...SOLITE_EQUIPMENT_TYPES].sort((a, b) =>
-        t(TYPE_LABELS[a] ?? a).localeCompare(t(TYPE_LABELS[b] ?? b)),
-      ),
-    [t],
+      [
+        ...SOLITE_EQUIPMENT_TYPES,
+        ...(editedType && !SOLITE_EQUIPMENT_TYPES.includes(editedType) ? [editedType] : []),
+      ].sort((a, b) => t(TYPE_LABELS[a] ?? a).localeCompare(t(TYPE_LABELS[b] ?? b))),
+    [t, editedType],
   );
 
   // What the type would bind from the devices ticked, as last read.

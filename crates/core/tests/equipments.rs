@@ -140,7 +140,7 @@ fn an_unknown_device_in_device_ids_is_skipped_and_the_equipment_is_created() {
 fn creating_refuses_a_bad_type_an_unknown_zone_with_sowels_texts() {
     let (mut rig, zone, th, _, _) = garage();
     let unknown = "11111111-1111-4111-8111-111111111111";
-    for bad in ["light_color", "awning", "", "Sensor"] {
+    for bad in ["lamp", "", "Sensor"] {
         assert_eq!(
             rig.refused(
                 "POST",
@@ -291,8 +291,8 @@ fn put_refuses_with_sowels_texts_and_changes_nothing() {
     let id = rig.equipment("Climate", "sensor", &zone, &[&th]);
     let path = format!("/api/v1/equipments/{id}");
     assert_eq!(
-        rig.refused("PUT", &path, r#"{"type":"light_color"}"#),
-        (400, "Invalid equipment type: light_color".to_string())
+        rig.refused("PUT", &path, r#"{"type":"lamp"}"#),
+        (400, "Invalid equipment type: lamp".to_string())
     );
     assert_eq!(
         rig.refused("PUT", &path, r#"{"zoneId":"nope"}"#),
@@ -792,11 +792,12 @@ fn unknown_fields_are_ignored_on_post_and_put_of_equipments() {
     let id = text(&body["id"]).to_string();
     let (status, body) = rig.put(
         &format!("/api/v1/equipments/{id}"),
-        json!({"name": "F", "invertDirection": true, "timedCommand": null, "meteringParentId": null}),
+        json!({"name": "F", "bogus": true, "timedCommand": null, "meteringParentId": null}),
     );
     assert_eq!(status, 200);
     assert_eq!(body["name"], "F");
-    assert!(body.get("invertDirection").is_none());
+    assert!(body.get("bogus").is_none());
+    assert!(body.get("timedCommand").is_none() && body.get("meteringParentId").is_none());
 }
 
 #[test]
@@ -895,7 +896,7 @@ fn stale_follows_sowels_streaming_windows_strictly() {
         // A boolean on a streaming category is a state, not a stream.
         ("temperature", ValueType::Boolean, 2 * day, false),
         ("humidity", ValueType::Boolean, 2 * day, false),
-        // The electrical categories only on metering equipment: none of the six kinds.
+        // The electrical categories only on metering equipment: none of the types tested here.
         ("voltage", ValueType::Number, 2 * day, false),
         ("power", ValueType::Number, 2 * day, false),
         ("energy", ValueType::Number, 2 * day, false),
@@ -1298,4 +1299,661 @@ fn the_other_methods_and_paths_of_equipments_are_refused() {
         (413, "Body too large".to_string())
     );
     assert_eq!(rig.refused("POST", "/api/v1/zones", &big).0, 413);
+}
+
+// ---- Every type of Sowel, the optional fields (spec 027 R2) ----
+
+/// A rig with a zone and one equipment of each of Sowel's 31 types; the zone's id.
+fn every_type() -> (Rig, String) {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Everything");
+    for kind in EquipmentType::ALL {
+        let name = kind.as_str();
+        let (status, body) = rig.post(
+            "/api/v1/equipments",
+            json!({"name": name, "type": name, "zoneId": zone}),
+        );
+        assert_eq!(status, 201, "{name}: {body}");
+        assert_eq!(body["type"], name, "the type as written");
+    }
+    (rig, zone)
+}
+
+#[test]
+fn post_accepts_each_of_the_31_types_of_sowel() {
+    assert_eq!(EquipmentType::ALL.len(), 31);
+    let (rig, _) = every_type();
+    assert_eq!(rig.home.equipments().list().len(), 31);
+}
+
+#[test]
+fn the_list_is_filtered_by_each_of_the_31_types() {
+    let (mut rig, _) = every_type();
+    for kind in EquipmentType::ALL {
+        let name = kind.as_str();
+        let (status, body) = rig.get(&format!("/api/v1/equipments?type={name}"));
+        assert_eq!(status, 200);
+        let list = body.as_array().unwrap();
+        assert_eq!(list.len(), 1, "{name}");
+        assert_eq!(list[0]["type"], name);
+    }
+}
+
+#[test]
+fn a_door_equipment_given_as_a_light_is_refused_as_decision_d17_says() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let door = rig.equipment("Door", "door", &g.zone, &[&g.relay_device]);
+    let (status, body) = rig.instance(json!({"zone": g.zone, "lights": [door], "timeout": "20s"}));
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        body["error"],
+        "Invalid params: Light \"Door\" is type \"door\" but this recipe requires light_onoff"
+    );
+}
+
+// The log lines of the tests of this file, to see a warning (the equipment's name is unique to
+// its test).
+struct Capture;
+static LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if let Ok(mut lines) = LINES.lock() {
+            lines.push(format!("{}: {}", record.level(), record.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn capture_warnings() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+}
+
+/// The warnings that name this text.
+fn warnings_about(text: &str) -> Vec<String> {
+    LINES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("WARN") && line.contains(text))
+        .cloned()
+        .collect()
+}
+
+/// The twelve fields as a file can hold them: the three objects with their own key order and
+/// spacing.
+const TWELVE: &str = r#","energyProfile":{"z": 1, "a":2},"requireConfirmation":true,"trackOrderOutcome":false,"meteringParentId":"parent-1","separateSupply":true,"localProduction":false,"family":"climate","plugInHybrid":true,"usualVehicleId":"car-1","solarProfile":{"planes":[ {"tiltDeg":30} ]},"invertDirection":true,"timedCommand":{"value":"ON","alias":"state"}"#;
+
+/// Puts these fields (JSON text of `,"key":value` pairs) into the stored equipment of the rig, as
+/// a file written by hand would, and reloads the home from it.
+fn reload_with(rig: &mut Rig, fields: &str) {
+    rig.home.mark_equipments_changed();
+    let json = rig.home.take_equipments_json().unwrap();
+    // One equipment: its object ends with `}` then the list's `]`.
+    let json = json.trim_end().strip_suffix("}]").unwrap().to_string() + fields + "}]";
+    let parsed = parse_list(&json).unwrap();
+    rig.home = Home::from_parts(
+        Devices::from_list(rig.home.devices.snapshot()),
+        rig.home.zones().list().to_vec(),
+        parsed,
+        T0,
+    );
+}
+
+/// A rig with one equipment of this type, named `name`, holding these stored fields; its path.
+fn with_stored(kind: &str, name: &str, fields: &str) -> (Rig, String) {
+    capture_warnings();
+    let mut rig = Rig::new();
+    let zone = rig.zone("Zone");
+    let id = rig.equipment(name, kind, &zone, &[]);
+    reload_with(&mut rig, fields);
+    (rig, format!("/api/v1/equipments/{id}"))
+}
+
+#[test]
+fn the_twelve_optional_fields_are_read_served_and_written_back_as_they_were() {
+    let (mut rig, path) = with_stored("switch", "Twelve", TWELVE);
+    let (status, body) = rig.get(&path);
+    assert_eq!(status, 200);
+    assert_eq!(body["energyProfile"], json!({"z": 1, "a": 2}));
+    assert_eq!(body["requireConfirmation"], true);
+    assert_eq!(body["trackOrderOutcome"], false);
+    assert_eq!(body["meteringParentId"], "parent-1");
+    assert_eq!(body["separateSupply"], true);
+    assert_eq!(body["localProduction"], false);
+    assert_eq!(body["family"], "climate");
+    assert_eq!(body["plugInHybrid"], true);
+    assert_eq!(body["usualVehicleId"], "car-1");
+    assert_eq!(body["solarProfile"], json!({"planes": [{"tiltDeg": 30}]}));
+    assert_eq!(body["invertDirection"], true);
+    assert_eq!(
+        body["timedCommand"],
+        json!({"value": "ON", "alias": "state"})
+    );
+    // Written back: the same values, the objects with their own bytes.
+    rig.home.mark_equipments_changed();
+    let written = rig.home.take_equipments_json().unwrap();
+    for piece in [
+        r#""energyProfile":{"z": 1, "a":2}"#,
+        r#""solarProfile":{"planes":[ {"tiltDeg":30} ]}"#,
+        r#""timedCommand":{"value":"ON","alias":"state"}"#,
+        r#""requireConfirmation":true"#,
+        r#""trackOrderOutcome":false"#,
+        r#""meteringParentId":"parent-1""#,
+        r#""separateSupply":true"#,
+        r#""localProduction":false"#,
+        r#""family":"climate""#,
+        r#""plugInHybrid":true"#,
+        r#""usualVehicleId":"car-1""#,
+        r#""invertDirection":true"#,
+    ] {
+        assert!(written.contains(piece), "{piece} in {written}");
+    }
+    let (_, list) = rig.get("/api/v1/equipments");
+    assert_eq!(list[0]["family"], "climate", "the list shows them too");
+}
+
+#[test]
+fn a_field_of_the_wrong_shape_or_past_1024_bytes_is_dropped_with_a_warning_and_the_rest_kept() {
+    let huge = format!(r#","timedCommand":{{"alias":"{}"}}"#, "x".repeat(1100));
+    let fields = format!(
+        r#","requireConfirmation":"yes","family":"nope","meteringParentId":"","usualVehicleId":"{}","energyProfile":[1],"plugInHybrid":true,"separateSupply":null{huge}"#,
+        "u".repeat(65)
+    );
+    let (mut rig, path) = with_stored("switch", "Shape check", &fields);
+    let (_, body) = rig.get(&path);
+    for gone in [
+        "requireConfirmation",
+        "family",
+        "meteringParentId",
+        "usualVehicleId",
+        "energyProfile",
+        "separateSupply",
+        "timedCommand",
+    ] {
+        assert!(body.get(gone).is_none(), "{gone} is dropped: {body}");
+    }
+    assert_eq!(body["plugInHybrid"], true, "the rest is kept");
+    assert_eq!(body["name"], "Shape check");
+    let warnings = warnings_about("Shape check");
+    for field in [
+        "requireConfirmation",
+        "family",
+        "meteringParentId",
+        "usualVehicleId",
+        "energyProfile",
+        "timedCommand",
+    ] {
+        assert!(
+            warnings.iter().any(|w| w.contains(field)),
+            "a warning names {field}: {warnings:?}"
+        );
+    }
+}
+
+#[test]
+fn an_equipment_file_with_an_unknown_key_is_read_without_it() {
+    let (mut rig, path) = with_stored(
+        "sensor",
+        "Unknown key",
+        r#","somethingNew":{"a":1},"invertDirection":true"#,
+    );
+    let (status, body) = rig.get(&path);
+    assert_eq!(status, 200);
+    assert_eq!(body["invertDirection"], true);
+    assert!(body.get("somethingNew").is_none());
+}
+
+/// Extras that are one timed command whose alias has `alias_chars` characters: that many bytes
+/// plus 29 of JSON around them.
+fn timed_command(alias_chars: usize) -> Box<solite_core::equipments::Extras> {
+    use solite_core::equipments::{Extras, Field, Piece, RawObject};
+    let mut extras = Extras::default();
+    let object = RawObject::new(&format!(r#"{{"alias":"{}"}}"#, "t".repeat(alias_chars))).unwrap();
+    extras.set(Field::TimedCommand, Some(Piece::Object(object)));
+    assert_eq!(extras.json_len(), alias_chars + 29);
+    Box::new(extras)
+}
+
+/// Reloads the home with these fields (or none) on its equipments, in the file's order, as a file
+/// would give them.
+fn reload_extras(rig: &mut Rig, extras: Vec<Option<Box<solite_core::equipments::Extras>>>) {
+    rig.home.mark_equipments_changed();
+    let json = rig.home.take_equipments_json().unwrap();
+    let mut parsed = parse_list(&json).unwrap();
+    assert_eq!(parsed.len(), extras.len());
+    for (item, extras) in parsed.iter_mut().zip(extras) {
+        item.equipment.extras = extras;
+    }
+    rig.home = Home::from_parts(
+        Devices::from_list(rig.home.devices.snapshot()),
+        rig.home.zones().list().to_vec(),
+        parsed,
+        T0,
+    );
+}
+
+#[test]
+fn equipments_whose_fields_total_past_8192_bytes_lose_the_fields_past_the_total() {
+    capture_warnings();
+    let mut rig = Rig::new();
+    let zone = rig.zone("Zone");
+    for i in 0..12 {
+        rig.equipment(&format!("Total {i:02}"), "switch", &zone, &[]);
+    }
+    // 909 bytes each: nine fit under 8192 (8181), the tenth would make 9090.
+    reload_extras(
+        &mut rig,
+        (0..12).map(|_| Some(timed_command(880))).collect(),
+    );
+    let kept: Vec<bool> = rig
+        .home
+        .equipments()
+        .list()
+        .iter()
+        .map(|e| e.equipment.extras.is_some())
+        .collect();
+    assert_eq!(
+        kept[..9],
+        [true; 9],
+        "the first nine, in the file's order: {kept:?}"
+    );
+    assert_eq!(kept[9..], [false; 3], "the rest lose the field");
+    assert_eq!(rig.home.equipments().extras_bytes(None), 9 * 909);
+    for name in ["Total 09", "Total 10", "Total 11"] {
+        assert!(!warnings_about(name).is_empty(), "a warning names {name}");
+    }
+    assert!(warnings_about("Total 08").is_empty());
+}
+
+#[test]
+fn a_put_sets_the_booleans_and_clears_track_order_outcome_with_null() {
+    let (mut rig, path) = with_stored("shutter", "Booleans", r#","trackOrderOutcome":true"#);
+    let (status, body) = rig.put(
+        &path,
+        json!({"requireConfirmation": true, "invertDirection": true, "plugInHybrid": false, "trackOrderOutcome": null}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["requireConfirmation"], true);
+    assert_eq!(body["invertDirection"], true);
+    assert_eq!(body["plugInHybrid"], false);
+    assert!(
+        body.get("trackOrderOutcome").is_none(),
+        "null is not stored"
+    );
+    let (_, again) = rig.get(&path);
+    assert_eq!(again["invertDirection"], true);
+    assert!(rig.home.changes().1, "written");
+}
+
+#[test]
+fn a_put_with_a_field_of_the_wrong_shape_is_refused_and_changes_nothing() {
+    let (mut rig, path) = with_stored("sensor", "Wrong shape", "");
+    rig.home.take_equipments_json();
+    for (body, field) in [
+        (r#"{"requireConfirmation":"yes"}"#, "requireConfirmation"),
+        (r#"{"invertDirection":null}"#, "invertDirection"),
+        (r#"{"plugInHybrid":1}"#, "plugInHybrid"),
+        (r#"{"trackOrderOutcome":"no"}"#, "trackOrderOutcome"),
+        (r#"{"family":"kitchen"}"#, "family"),
+        (r#"{"energyProfile":5}"#, "energyProfile"),
+        (r#"{"meteringParentId":""}"#, "meteringParentId"),
+    ] {
+        assert_eq!(
+            rig.refused(
+                "PUT",
+                &path,
+                &format!(r#"{{"name":"Changed",{}"#, &body[1..])
+            ),
+            (400, format!("Invalid {field}")),
+            "{body}"
+        );
+    }
+    let (_, now) = rig.get(&path);
+    assert_eq!(now["name"], "Wrong shape");
+    assert_eq!(rig.home.changes(), (false, false));
+}
+
+#[test]
+fn a_family_is_kept_on_a_switch_and_goes_with_null() {
+    let (mut rig, path) = with_stored("switch", "Plug", "");
+    let (status, body) = rig.put(&path, json!({"family": "climate"}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["family"], "climate");
+    let (status, body) = rig.put(&path, json!({"family": null}));
+    assert_eq!(status, 200);
+    assert!(body.get("family").is_none());
+}
+
+#[test]
+fn a_family_on_another_type_is_refused_with_sowels_code_and_text() {
+    let (mut rig, path) = with_stored("light_onoff", "Lamp", "");
+    rig.home.take_equipments_json();
+    let (status, body) = rig.put(&path, json!({"family": "climate", "name": "Other"}));
+    assert_eq!(status, 400);
+    assert_eq!(
+        body,
+        json!({
+            "error": "FamilyNotApplicable",
+            "message": "Lamp is a light_onoff — only a switch can be given a family"
+        })
+    );
+    let (_, now) = rig.get(&path);
+    assert_eq!(now["name"], "Lamp");
+    assert!(now.get("family").is_none());
+    assert_eq!(rig.home.changes(), (false, false));
+    // The family of the type it becomes counts: a switch made a light in the same request.
+    let (mut rig, path) = with_stored("switch", "Plug", "");
+    let (status, body) = rig.put(&path, json!({"family": "climate", "type": "heater"}));
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "FamilyNotApplicable");
+    assert_eq!(
+        body["message"],
+        "Plug is a heater — only a switch can be given a family"
+    );
+}
+
+#[test]
+fn a_switch_made_something_else_loses_its_family() {
+    let (mut rig, path) = with_stored("switch", "Plug", r#","family":"climate""#);
+    let (status, body) = rig.put(&path, json!({"type": "light_onoff"}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["type"], "light_onoff");
+    assert!(body.get("family").is_none());
+    let (_, stored) = rig.get(&path);
+    assert!(stored.get("family").is_none());
+}
+
+#[test]
+fn a_type_change_that_leaves_separate_supply_outside_a_submeter_is_refused() {
+    let (mut rig, path) = with_stored("energy_meter", "Meter", r#","separateSupply":true"#);
+    let (status, body) = rig.put(&path, json!({"type": "solar_panel"}));
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "SeparateSupplyNotApplicable");
+    assert_eq!(
+        body["message"],
+        "Meter is the house total or a production meter — the reconciliation reference cannot be outside itself"
+    );
+    let (_, now) = rig.get(&path);
+    assert_eq!(now["type"], "energy_meter", "nothing changed");
+    // Given back as stored it is no change, and the type that is not a total passes.
+    let (status, _) = rig.put(&path, json!({"separateSupply": true, "type": "appliance"}));
+    assert_eq!(status, 200);
+}
+
+#[test]
+fn a_type_change_that_leaves_local_production_on_a_total_or_a_separate_supply_is_refused() {
+    let (mut rig, path) = with_stored("energy_meter", "Clamp", r#","localProduction":true"#);
+    let (status, body) = rig.put(&path, json!({"type": "main_energy_meter"}));
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "LocalProductionNotApplicable");
+    assert_eq!(
+        body["message"],
+        "Clamp is the house total or a production meter — it cannot also carry local production"
+    );
+    let (mut rig2, path2) = with_stored(
+        "energy_meter",
+        "Remote",
+        r#","localProduction":true,"separateSupply":true"#,
+    );
+    let (status, body) = rig2.put(&path2, json!({"separateSupply": true}));
+    assert_eq!(status, 400);
+    assert_eq!(body["error"], "LocalProductionNotApplicable");
+    assert_eq!(
+        body["message"],
+        "Remote is fed by a separate supply — its production never reaches the house"
+    );
+    // The same request on the equipment without the other flag passes.
+    let (status, _) = rig.put(&path, json!({"type": "appliance"}));
+    assert_eq!(status, 200);
+}
+
+#[test]
+fn the_seven_fields_solite_cannot_check_are_refused_unless_they_are_given_as_stored() {
+    let (mut rig, path) = with_stored("energy_meter", "Seven", TWELVE);
+    rig.home.take_equipments_json();
+    // A new value, `null` with one stored, and a new flag.
+    for body in [
+        r#"{"energyProfile":null}"#,
+        r#"{"energyProfile":{"a":2,"z":1}}"#,
+        r#"{"solarProfile":{"planes":[]}}"#,
+        r#"{"timedCommand":null}"#,
+        r#"{"meteringParentId":"parent-2"}"#,
+        r#"{"usualVehicleId":null}"#,
+        r#"{"separateSupply":false}"#,
+        r#"{"localProduction":true}"#,
+    ] {
+        let name = body
+            .trim_start_matches("{\"")
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            rig.refused(
+                "PUT",
+                &path,
+                &format!(r#"{{"name":"Changed",{}"#, &body[1..])
+            ),
+            (400, format!("Not supported: {name}")),
+            "{body}"
+        );
+    }
+    let (_, now) = rig.get(&path);
+    assert_eq!(now["name"], "Seven", "nothing changed");
+    assert_eq!(rig.home.changes(), (false, false));
+}
+
+#[test]
+fn an_object_field_given_back_with_its_stored_bytes_and_a_null_with_nothing_stored_change_nothing()
+{
+    let (mut rig, path) = with_stored(
+        "energy_meter",
+        "Same",
+        r#","energyProfile":{"z": 1, "a":2}"#,
+    );
+    let (status, body) = rig.call(
+        "PUT",
+        &path,
+        r#"{"energyProfile":{"z": 1, "a":2},"solarProfile":null,"separateSupply":false,"name":"Same 2"}"#,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["name"], "Same 2");
+    assert_eq!(body["energyProfile"], json!({"z": 1, "a": 2}));
+    assert!(body.get("solarProfile").is_none() && body.get("separateSupply").is_none());
+    rig.home.mark_equipments_changed();
+    let written = rig.home.take_equipments_json().unwrap();
+    assert!(
+        written.contains(r#""energyProfile":{"z": 1, "a":2}"#),
+        "{written}"
+    );
+}
+
+#[test]
+fn a_put_that_makes_the_fields_pass_a_bound_is_refused() {
+    const TOO_LARGE: &str = "Equipment fields too large (1024 bytes each, 8192 in all)";
+    // One equipment: 1016 bytes of fields, and a family (19 more) would pass 1024.
+    let big = format!(r#","energyProfile":{{"a":"{}"}}"#, "e".repeat(990));
+    let (mut rig, path) = with_stored("switch", "Large", &big);
+    rig.home.take_equipments_json();
+    assert_eq!(
+        rig.refused("PUT", &path, r#"{"family":"climate"}"#),
+        (400, TOO_LARGE.to_string())
+    );
+    let (_, now) = rig.get(&path);
+    assert!(now.get("family").is_none(), "nothing changed");
+    assert_eq!(rig.home.changes(), (false, false));
+
+    // All equipments: nine of 909 bytes leave 11 of the 8192, and a family needs 20.
+    let (mut rig, path) = with_stored("switch", "Last", "");
+    let zone = rig.zone("Other");
+    for i in 0..9 {
+        rig.equipment(&format!("Filler {i}"), "switch", &zone, &[]);
+    }
+    let mut extras: Vec<_> = vec![None];
+    extras.extend((0..9).map(|_| Some(timed_command(880))));
+    reload_extras(&mut rig, extras);
+    assert_eq!(rig.home.equipments().extras_bytes(None), 9 * 909);
+    assert_eq!(
+        rig.refused("PUT", &path, r#"{"family":"climate"}"#),
+        (400, TOO_LARGE.to_string())
+    );
+}
+
+#[test]
+fn the_per_equipment_bound_is_1024_bytes_of_json_with_the_keys() {
+    use solite_core::equipments::{EquipmentFamily, Extras, Field, Piece};
+    let mut extras = Extras::default();
+    assert_eq!(extras.json_len(), 0, "none costs nothing");
+    extras.set(Field::Family, Some(Piece::Family(EquipmentFamily::Climate)));
+    assert_eq!(
+        extras.json_len(),
+        serde_json::to_string(&extras).unwrap().len(),
+        "the bytes are the JSON's, keys, braces and commas included"
+    );
+    assert_eq!(extras.json_len(), r#"{"family":"climate"}"#.len());
+}
+
+#[test]
+fn post_ignores_the_optional_fields() {
+    let (mut rig, zone, _, _, _) = garage();
+    let (status, body) = rig.post(
+        "/api/v1/equipments",
+        json!({"name": "Plain", "type": "switch", "zoneId": zone, "requireConfirmation": true,
+               "family": "climate", "energyProfile": {"class": "comfort"}, "invertDirection": true}),
+    );
+    assert_eq!(status, 201, "{body}");
+    for field in [
+        "requireConfirmation",
+        "family",
+        "energyProfile",
+        "invertDirection",
+    ] {
+        assert!(body.get(field).is_none(), "{field}");
+    }
+}
+
+#[test]
+fn the_events_carry_the_fields_as_stored() {
+    let (mut rig, path) = with_stored("switch", "Evented", r#","requireConfirmation":true"#);
+    let hub = rig.home.live();
+    let c = hub.connect().expect("a free slot");
+    assert!(hub.subscribe(
+        c,
+        &json!({"type": "subscribe", "topics": ["equipments"]}).to_string()
+    ));
+    let (status, _) = rig.put(&path, json!({"family": "water"}));
+    assert_eq!(status, 200);
+    let events: Value = serde_json::from_str(&hub.take_batch(c).unwrap()).unwrap();
+    let updated = &events[0];
+    assert_eq!(updated["type"], "equipment.updated");
+    assert_eq!(updated["equipment"]["requireConfirmation"], true);
+    assert_eq!(updated["equipment"]["family"], "water");
+    // The same for an equipment created and removed: created has none (create takes none).
+    let zone = rig.zone("Z2");
+    let created = rig.equipment("Evented 2", "switch", &zone, &[]);
+    let (status, _) = rig.delete(&format!("/api/v1/equipments/{created}"));
+    assert_eq!(status, 204);
+    let events: Value = serde_json::from_str(&hub.take_batch(c).unwrap()).unwrap();
+    let events = events.as_array().unwrap();
+    let created_event = events
+        .iter()
+        .find(|e| e["type"] == "equipment.created")
+        .unwrap();
+    assert!(
+        created_event["equipment"]
+            .get("requireConfirmation")
+            .is_none()
+    );
+    let removed = events
+        .iter()
+        .find(|e| e["type"] == "equipment.removed")
+        .unwrap();
+    assert_eq!(removed["equipmentName"], "Evented 2");
+}
+
+#[test]
+fn a_light_color_counts_as_a_light_and_a_door_with_a_light_state_does_not() {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Hall");
+    let state = |n: u8, name: &str| {
+        device_json(
+            n,
+            name,
+            false,
+            &[("state", "light_state", "boolean", json!(true), Some(T0))],
+        )
+    };
+    let bulb = state(1, "Bulb");
+    let relay = state(2, "Relay");
+    let (bulb_id, relay_id) = (device_json_id(&bulb), device_json_id(&relay));
+    rig.add_devices(vec![bulb, relay]);
+    rig.equipment("Colour", "light_color", &zone, &[&bulb_id]);
+    let (_, all) = rig.get("/api/v1/zones/aggregation");
+    assert_eq!(all[zone.as_str()]["lightsOn"], 1);
+    assert_eq!(all[zone.as_str()]["lightsTotal"], 1);
+    rig.equipment("Gate", "door", &zone, &[&relay_id]);
+    let (_, all) = rig.get("/api/v1/zones/aggregation");
+    assert_eq!(all[zone.as_str()]["lightsTotal"], 1, "a door is no light");
+    assert_eq!(all[zone.as_str()]["lightsOn"], 1);
+}
+
+// ---- The lists of values the contract check reads (spec 027 R1.3) ----
+
+/// Each value of `all`, as JSON, is the text `as_str` gives, and the texts are distinct.
+fn assert_listed<T: serde::Serialize + Copy>(all: &[T], as_str: impl Fn(T) -> &'static str) {
+    let mut seen = Vec::new();
+    for value in all {
+        let wire = serde_json::to_value(value).unwrap();
+        assert_eq!(wire, as_str(*value), "serde and `as_str` agree");
+        assert!(!seen.contains(&wire), "{wire} twice");
+        seen.push(wire);
+    }
+}
+
+#[test]
+fn the_all_lists_hold_every_value_with_its_json_string() {
+    use solite_core::devices::{DeviceStatus, PowerSource};
+    use solite_core::equipments::EquipmentFamily;
+    assert_eq!(EquipmentType::ALL.len(), 31);
+    assert_listed(&EquipmentType::ALL, EquipmentType::as_str);
+    for kind in EquipmentType::ALL {
+        assert_eq!(EquipmentType::parse(kind.as_str()), Some(kind));
+    }
+    assert_eq!(EquipmentFamily::ALL.len(), 6);
+    assert_listed(&EquipmentFamily::ALL, EquipmentFamily::as_str);
+    assert_listed(&DeviceStatus::ALL, DeviceStatus::as_str);
+    assert_listed(&PowerSource::ALL, PowerSource::as_str);
+    assert_listed(&ValueType::ALL, ValueType::as_str);
+}
+
+#[test]
+fn the_catalog_lists_every_data_and_order_spec() {
+    use solite_core::devices::{all_data, all_orders, data_for_cluster, orders_for_cluster};
+    let data: Vec<&str> = all_data().map(|d| d.key).collect();
+    for cluster in [
+        0x0001, 0x0006, 0x0008, 0x0400, 0x0402, 0x0403, 0x0405, 0x0406,
+    ] {
+        for spec in data_for_cluster(cluster) {
+            assert!(data.contains(&spec.key), "{}", spec.key);
+        }
+    }
+    // The zone types' and the zone flags' too.
+    for key in ["contact", "water_leak", "smoke", "tamper", "battery_low"] {
+        assert!(data.contains(&key), "{key}");
+    }
+    let orders: Vec<&str> = all_orders().map(|o| o.key).collect();
+    assert_eq!(
+        orders.len(),
+        orders_for_cluster(0x0006).len() + orders_for_cluster(0x0008).len()
+    );
+    assert!(orders.contains(&"state") && orders.contains(&"brightness"));
 }

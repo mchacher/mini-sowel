@@ -116,11 +116,33 @@ pub fn data_for_zone_type(zone_type: u16) -> &'static [DataSpec] {
 
 /// The data a zone status bit adds the first time a notification has it set (spec 009, R4.5).
 pub fn data_for_zone_flag(kind: &str) -> Option<DataSpec> {
+    zone_flag_spec(kind).copied()
+}
+
+/// The kinds of zone status bit `data_for_zone_flag` knows.
+const ZONE_FLAGS: [&str; 2] = ["tamper", "battery_low"];
+
+fn zone_flag_spec(kind: &str) -> Option<&'static DataSpec> {
     match kind {
-        "tamper" => Some(TAMPER),
-        "battery_low" => Some(BATTERY_LOW),
+        "tamper" => Some(&TAMPER),
+        "battery_low" => Some(&BATTERY_LOW),
         _ => None,
     }
+}
+
+/// Every data spec of the catalog: the clusters' (every cluster number is tried, so one added to
+/// `data_for_cluster` is found), the IAS zone types' and the zone flags'. The contract check
+/// (spec 027) reads their categories.
+pub fn all_data() -> impl Iterator<Item = &'static DataSpec> {
+    (0..=u16::MAX)
+        .flat_map(|cluster| data_for_cluster(cluster).iter())
+        .chain((0..=u16::MAX).flat_map(|zone_type| data_for_zone_type(zone_type).iter()))
+        .chain(ZONE_FLAGS.iter().filter_map(|kind| zone_flag_spec(kind)))
+}
+
+/// Every order spec of the catalog (every cluster number is tried).
+pub fn all_orders() -> impl Iterator<Item = &'static OrderSpec> {
+    (0..=u16::MAX).flat_map(|cluster| orders_for_cluster(cluster).iter())
 }
 
 /// The data keys the `alarm` of a zone sets, whichever the device has.

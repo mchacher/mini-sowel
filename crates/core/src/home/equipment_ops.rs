@@ -4,8 +4,8 @@
 use super::{Home, new_id};
 use crate::devices::{Id, Random};
 use crate::equipments::{
-    Alias, DataBinding, Equipment, EquipmentType, MAX_BINDINGS, MAX_EQUIPMENTS, OrderBinding,
-    StoredEquipment,
+    Alias, DataBinding, Equipment, EquipmentType, Extras, Field, MAX_BINDINGS, MAX_EQUIPMENTS,
+    MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, OrderBinding, Piece, StoredEquipment,
 };
 use crate::failure::{Failure, Outcome};
 use crate::live::{EngineEvent, Topic};
@@ -32,6 +32,121 @@ pub struct EquipmentUpdate {
     pub icon: Option<Option<String>>,
     pub description: Option<Option<String>>,
     pub enabled: Option<bool>,
+    /// The optional fields the body gave, each with its value or `None` for JSON `null`, of the
+    /// shape `Field::parse` checked. Absent from the list: kept.
+    pub extras: Vec<(Field, Option<Piece>)>,
+}
+
+/// The fields whose rules need what Solite does not have (Sowel's energy arbitration, metering
+/// graph, solar forecast, timed commands, vehicles): they are kept as stored, never changed.
+const REFUSED: [Field; 7] = [
+    Field::EnergyProfile,
+    Field::SolarProfile,
+    Field::TimedCommand,
+    Field::MeteringParentId,
+    Field::UsualVehicleId,
+    Field::SeparateSupply,
+    Field::LocalProduction,
+];
+
+/// Sowel's `NON_SUBMETER_TYPES` (`src/equipments/metering.ts`): the house total, the two
+/// production surfaces and a vehicle.
+fn non_submeter(kind: EquipmentType) -> bool {
+    matches!(
+        kind,
+        EquipmentType::MainEnergyMeter
+            | EquipmentType::EnergyProductionMeter
+            | EquipmentType::SolarPanel
+            | EquipmentType::ElectricVehicle
+    )
+}
+
+/// What a `PUT` makes of the optional fields: `kind` is the resulting type, `type_given` whether
+/// the body had a `type`. Sowel's rules on the resulting type and flags, with Sowel's codes
+/// (`src/api/routes/equipments.ts`, `equipment-manager.ts`); nothing is changed here. `Ok(None)`:
+/// the equipment ends with none.
+fn resulting_extras(
+    stored: &Equipment,
+    kind: EquipmentType,
+    type_given: bool,
+    given: &[(Field, Option<Piece>)],
+) -> Outcome<Option<Box<Extras>>> {
+    let mut extras: Extras = stored.extras.as_deref().cloned().unwrap_or_default();
+    let name = &stored.name;
+    for (field, piece) in given {
+        if !REFUSED.contains(field) {
+            continue;
+        }
+        // Given back as stored is no change: so is `null` with nothing stored, and `false` for
+        // the two flags whose default is `false`. Anything else would change what Solite cannot
+        // check.
+        let same = match (extras.get(*field), piece) {
+            (None, None) => true,
+            (None, Some(Piece::Bool(false))) => {
+                matches!(field, Field::SeparateSupply | Field::LocalProduction)
+            }
+            (held, piece) => held == *piece,
+        };
+        if !same {
+            return Err(Failure::new(
+                400,
+                format!("Not supported: {}", field.name()),
+            ));
+        }
+    }
+    let gave_true = |field: Field| {
+        given
+            .iter()
+            .any(|(f, piece)| *f == field && *piece == Some(Piece::Bool(true)))
+    };
+    // Sowel checks the resulting (type, flag) pair when the body gives the flag or a type.
+    let separate = extras.separate_supply == Some(true);
+    let local = extras.local_production == Some(true);
+    if (gave_true(Field::SeparateSupply) || type_given) && separate && non_submeter(kind) {
+        return Err(Failure::coded(
+            400,
+            "SeparateSupplyNotApplicable",
+            format!(
+                "{name} is the house total or a production meter — the reconciliation reference \
+                 cannot be outside itself"
+            ),
+        ));
+    }
+    if (gave_true(Field::LocalProduction) || gave_true(Field::SeparateSupply) || type_given)
+        && local
+        && (non_submeter(kind) || separate)
+    {
+        let message = if separate {
+            format!("{name} is fed by a separate supply — its production never reaches the house")
+        } else {
+            format!(
+                "{name} is the house total or a production meter — it cannot also carry local \
+                 production"
+            )
+        };
+        return Err(Failure::coded(400, "LocalProductionNotApplicable", message));
+    }
+    for (field, piece) in given {
+        if REFUSED.contains(field) {
+            continue;
+        }
+        if *field == Field::Family && piece.is_some() && kind != EquipmentType::Switch {
+            return Err(Failure::coded(
+                400,
+                "FamilyNotApplicable",
+                format!(
+                    "{name} is a {} — only a switch can be given a family",
+                    kind.as_str()
+                ),
+            ));
+        }
+        extras.set(*field, piece.clone());
+    }
+    // Only a switch carries a family: whatever stops being a switch loses it.
+    if kind != EquipmentType::Switch {
+        extras.family = None;
+    }
+    Ok(extras.into_option())
 }
 
 fn invalid_type(text: &str) -> Failure {
@@ -86,6 +201,8 @@ impl Home {
                 enabled: true,
                 created_at: now,
                 updated_at: now,
+                // Sowel's create takes none of the optional fields.
+                extras: None,
             },
             data_bindings: Vec::new(),
             order_bindings: Vec::new(),
@@ -165,10 +282,37 @@ impl Home {
                     .ok_or_else(|| Failure::new(404, format!("Zone not found: {text}")))?,
             ),
         };
+        // The optional fields are settled, with Sowel's rules, before anything is changed.
+        let extras = {
+            let Some(item) = self.equipments.get(id) else {
+                return Err(not_found());
+            };
+            let stored = &item.equipment;
+            let extras = resulting_extras(
+                stored,
+                kind.unwrap_or(stored.kind),
+                kind.is_some(),
+                &input.extras,
+            )?;
+            let bytes = extras.as_deref().map_or(0, Extras::json_len);
+            if bytes > MAX_EXTRAS_BYTES
+                || self.equipments.extras_bytes(Some(&stored.id)) + bytes > MAX_EXTRAS_TOTAL_BYTES
+            {
+                return Err(Failure::new(
+                    400,
+                    format!(
+                        "Equipment fields too large ({MAX_EXTRAS_BYTES} bytes each, \
+                         {MAX_EXTRAS_TOTAL_BYTES} in all)"
+                    ),
+                ));
+            }
+            extras
+        };
         let Some(item) = self.equipments.get_mut(id) else {
             return Err(not_found());
         };
         let equipment = &mut item.equipment;
+        equipment.extras = extras;
         if let Some(name) = input.name {
             equipment.name = name.into();
         }

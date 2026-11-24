@@ -21,6 +21,11 @@
 //!   devices each; the 16 data bindings are bound on all 64.
 //! - `equipments/mod.rs::MAX_ALIAS_CHARS`: aliases of 32 characters (the device keys), more
 //!   distinct ones than the table that shares aliases holds, so none is shared.
+//! - `equipments/extras.rs::MAX_EXTRAS_BYTES`, `equipments/extras.rs::MAX_EXTRAS_TOTAL_BYTES`,
+//!   `equipments/extras.rs::MAX_ID_CHARS`: Sowel's optional equipment fields, 64 sets of 128
+//!   bytes (8192 in all, a vehicle id of 64 characters and a padded object in each), held beside
+//!   the home since the API cannot set an object; the 1024 bytes of one equipment are far under
+//!   the total's share, the total is the bound that counts.
 //! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances of `motion-light`; a 17th is refused.
 //! - `recipes/mod.rs::MAX_PARAMS_BYTES`: params of 2 KB each (nested padding, as
 //!   `recipe_params_memory.rs`); the API refuses more, so this is the largest accepted size.
@@ -74,7 +79,9 @@ use solite_core::devices::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Devices, Id, MAX_DATA,
     MAX_DEVICES, MAX_ORDERS, PowerSource, Route, ValueType,
 };
-use solite_core::equipments::Alias;
+use solite_core::equipments::{
+    Alias, Extras, Field, MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, MAX_ID_CHARS, Piece, RawObject,
+};
 use solite_core::home::events::{Event, EventQueue, EventValue, MAX_EVENTS, MAX_TEXT_BYTES};
 use solite_core::home::{Home, ListCursor};
 use solite_core::live::{MAX_CLIENTS, MAX_QUEUED_BYTES};
@@ -354,6 +361,34 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
             201
         );
     }
+
+    // The optional fields of Sowel's equipments (spec 027) at their total bound: 64 equipments of
+    // 128 bytes each, 8192 in all, each with a vehicle id of the longest length and an object
+    // padded to the size. They are held here beside the home, not in it (the API cannot set an
+    // object, a file can), so their heap bytes are counted the same.
+    let extras: Vec<Box<Extras>> = (0..MAX_EQUIPMENTS_API)
+        .map(|i| {
+            let mut extras = Extras::default();
+            extras.set(
+                Field::UsualVehicleId,
+                Some(Piece::Text("v".repeat(MAX_ID_CHARS).into())),
+            );
+            let pad = |n: usize| RawObject::new(&format!(r#"{{"a":"{}"}}"#, "p".repeat(n)));
+            let mut padding = 0;
+            loop {
+                extras.set(Field::EnergyProfile, pad(padding).map(Piece::Object));
+                match extras.json_len().cmp(&128) {
+                    std::cmp::Ordering::Less => padding += 1,
+                    _ => break,
+                }
+            }
+            assert_eq!(extras.json_len(), 128, "equipment {i}");
+            Box::new(extras)
+        })
+        .collect();
+    let extras_json_bytes: usize = extras.iter().map(|e| e.json_len()).sum();
+    assert_eq!(extras_json_bytes, MAX_EXTRAS_TOTAL_BYTES);
+    assert!(extras.iter().all(|e| e.json_len() <= MAX_EXTRAS_BYTES));
 
     // Recipes: 16 instances, each with 16 lights, 16 buttons and params padded to 2 KB.
     let mut instance_ids = Vec::new();
@@ -647,8 +682,9 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert_eq!(waits.len(), MAX_API_ORDERS);
     assert_eq!(bodies.len(), HTTP_WORKERS);
     assert_eq!(texts.len(), MAX_EVENTS);
+    assert_eq!(extras.len(), MAX_EQUIPMENTS_API);
     println!(
-        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB); {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); settings.json {} bytes; backup document {backup_bytes} bytes (refused over {MAX_BODY_BYTES}); ceiling {CEILING_BYTES}",
+        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), of which the optional equipment fields {extras_json_bytes} bytes of JSON; {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); settings.json {} bytes; backup document {backup_bytes} bytes (refused over {MAX_BODY_BYTES}); ceiling {CEILING_BYTES}",
         measured / 1024,
         peak / 1024,
         worst / 1024,

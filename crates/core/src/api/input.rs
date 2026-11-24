@@ -21,6 +21,11 @@ pub fn object(body: &[u8]) -> Outcome<Fields> {
     }
 }
 
+/// The refusal of a body that is no JSON object.
+pub fn object_error() -> Failure {
+    bad("Invalid JSON".into())
+}
+
 /// Refuses the first field that is not in `allowed`.
 pub fn refuse_unknown(fields: &Fields, allowed: &[&str]) -> Outcome<()> {
     match fields.keys().find(|k| !allowed.contains(&k.as_str())) {
