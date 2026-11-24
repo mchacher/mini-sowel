@@ -17,8 +17,8 @@
 - [x] 7. Docs: `docs/design-system.md` (port rows, first-load figure), `docs/architecture.md` if a
       block changes.
 - [x] 8. `sh scripts/validate.sh` green.
-- [ ] 9. Code review (`code-reviewer`), demo on the simulator.
-- [ ] 10. The box: radio image flashed with `--keep-storage`, the J3 flow over the API, result in
+- [x] 9. Code review (`code-reviewer`); the demo in a browser is the user's (autonomous run).
+- [x] 10. The box: radio image flashed with `--keep-storage`, the J3 flow over the API, result in
       the spec.
 
 ## Test plan
@@ -84,4 +84,4 @@
 
 - [x] Validate command green
 - [x] Agent review done, blocking findings fixed (none blocking; should-fix 1, 2, 4 fixed; 3 kept: D39 was asked by the user during the run)
-- [ ] Demo on the simulator; the J3 flow on the box over the API
+- [x] The J3 flow on the box over the API (spec, "Real-hardware run"); the browser demo is the user's
