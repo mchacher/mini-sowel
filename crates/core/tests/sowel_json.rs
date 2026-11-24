@@ -463,3 +463,45 @@ fn an_unavailable_equipment_serialises_the_two_maps_of_sowels_type() {
         json!({"light_state": ["Light"]})
     );
 }
+
+// ---- Spec 026: the settings' events, the root zone's sun data ----
+
+#[test]
+fn the_settings_and_sunlight_events_serialise_as_sowels_engine_event() {
+    use solite_core::live::EngineEvent;
+    // `{ type: "settings.changed"; keys: string[] }` and `{ type: "sunlight.changed" }`.
+    let changed = EngineEvent::SettingsChanged {
+        keys: vec!["home.latitude".into(), "home.longitude".into()],
+    };
+    assert_eq!(
+        serde_json::to_string(&changed).unwrap(),
+        r#"{"type":"settings.changed","keys":["home.latitude","home.longitude"]}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&EngineEvent::SunlightChanged).unwrap(),
+        r#"{"type":"sunlight.changed"}"#
+    );
+}
+
+#[test]
+fn the_root_zone_carries_the_sun_data_of_sowels_zone_aggregated_data() {
+    let mut rig = Rig::new();
+    rig.now = 1_782_043_200_000; // 2026-06-21T12:00:00Z
+    let (status, _) = rig.put(
+        "/api/v1/settings",
+        json!({
+            "home.latitude": "48.8566",
+            "home.longitude": "2.3522",
+            "home.timezone": "Europe/Paris",
+        }),
+    );
+    assert_eq!(status, 200);
+    let text = rig
+        .raw("GET", "/api/v1/zones/aggregation", "")
+        .body
+        .unwrap();
+    assert!(
+        text.contains(r#""sunrise":"05:46","sunset":"21:57","isDaylight":true"#),
+        "{text}"
+    );
+}

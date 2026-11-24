@@ -59,8 +59,9 @@ pub struct ZoneUpdate {
     pub display_order: Option<i64>,
 }
 
-/// The zones, at most `MAX_ZONES`, the root always among them.
-#[derive(Debug)]
+/// The zones, at most `MAX_ZONES`, the root always among them. A clone is the copy an import of
+/// a backup works on (spec 026 R3.2).
+#[derive(Debug, Clone)]
 pub struct Zones {
     items: Vec<Zone>,
 }

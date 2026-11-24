@@ -3,6 +3,7 @@
 //! it is at that moment, so a whole list is never built. The same cursor serves the API's long
 //! lists (`GET /devices`, `GET /equipments`) and the files written to storage. A client or a file
 //! sees one JSON array; an item deleted between two chunks is skipped, one added is not listed.
+//! `settings.json` is the one object among them: six short values, written whole in one chunk.
 
 use std::io::{self, Write};
 
@@ -32,6 +33,8 @@ enum Kind {
     RecipeInstances,
     /// `recipes.json`.
     SavedRecipes,
+    /// `settings.json`: one JSON object, written whole in one chunk (six values at most).
+    SavedSettings,
 }
 
 /// Where a streamed list stands. At most 64 ids (devices, equipments and zones are bounded, and
@@ -145,6 +148,11 @@ impl ListCursor {
         ListCursor::new(Kind::SavedRecipes, ids, 0)
     }
 
+    /// `settings.json`: the settings as they are when the chunk is written.
+    pub fn saved_settings() -> Self {
+        ListCursor::new(Kind::SavedSettings, Vec::new(), 0)
+    }
+
     fn new(kind: Kind, ids: Vec<Id>, now: u64) -> Self {
         ListCursor {
             kind,
@@ -164,6 +172,10 @@ impl ListCursor {
         home: &Home,
         w: &mut W,
     ) -> io::Result<(usize, bool, bool)> {
+        if self.kind == Kind::SavedSettings {
+            w.write_all(home.settings().to_json().as_bytes())?;
+            return Ok((0, true, true));
+        }
         let mut wrote_any = self.wrote_any;
         if !self.opened {
             w.write_all(b"[")?;
@@ -189,6 +201,7 @@ impl ListCursor {
     fn exists(&self, home: &Home, id: &Id) -> bool {
         match self.kind {
             Kind::Devices | Kind::SavedDevices => home.devices.get_by_id(id).is_some(),
+            Kind::SavedSettings => false,
             Kind::SavedZones => home.zones().get(id).is_some(),
             Kind::RecipeInstances | Kind::SavedRecipes => home.recipes().get(id).is_some(),
             Kind::Equipments | Kind::SavedEquipments => {
@@ -221,6 +234,7 @@ impl ListCursor {
                 Some(item) => item.serialize(&mut serde_json::Serializer::new(&mut *w)),
                 None => return Ok(()),
             },
+            Kind::SavedSettings => return Ok(()),
             Kind::SavedRecipes => match home.recipes().get(id) {
                 Some(instance) => serde_json::to_writer(&mut *w, instance),
                 None => return Ok(()),

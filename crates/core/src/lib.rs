@@ -29,4 +29,5 @@ pub mod live;
 pub mod network;
 pub mod orders;
 pub mod recipes;
+pub mod settings;
 pub mod zones;

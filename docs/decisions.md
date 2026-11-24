@@ -686,3 +686,36 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   seconds is shorter than any action a person repeats by hand, and a power cut within two seconds
   of a change is rare; the hold and the counter make the budget of D39 something a script checks,
   not a promise.
+
+## D41: The home's time zone is a setting picked from a fixed list, with POSIX rules in the core
+
+- **Date**: 2026-11-24 (spec 026, decided in an autonomous run, for the user's review)
+- **Choice**: Sowel's settings keys (`home.name`, `home.latitude`, `home.longitude`,
+  `home.sunriseOffset`, `home.sunsetOffset`) plus Solite's own `home.timezone`, a name from a fixed
+  list of 59 IANA names compiled in the core, each with its POSIX rule
+  (`CET-1CEST,M3.5.0,M10.5.0/3`), served by Solite's own `GET /api/v1/settings/timezones`. The core
+  parses the rule and converts UTC to local time itself; the sun times are a port of suncalc 2, as
+  Sowel's sunlight manager uses, on the root zone only. Unknown keys and values that break a strict
+  pattern are refused (Sowel accepts any key and parses with `parseFloat`); `""` is stored and reads as unset (as Sowel); a
+  new location or time zone applies at once (no `system.restart_required`). Until this, the root
+  zone's `isDaylight` was always `null` (D-history of spec 012).
+- **Why**: Sowel takes its time zone from `TZ` or derives it from the location with `tz-lookup`,
+  whose database does not fit the box, and the box has no `TZ` to set. A short list with today's
+  rules covers the homes the box is for; a rule changed by law, or a zone without a fixed yearly
+  rule (Casablanca, Cairo), is out until a list update. The sun times decide motion-light's
+  "Inactive during day", the J6 test.
+
+## D42: The backup is the home's settings and zones, as one JSON document of at most 16 KB
+
+- **Date**: 2026-11-24 (spec 026, decided in an autonomous run, for the user's review)
+- **Choice**: `GET /api/v1/backup` gives `{"version":1,"settings":{...},"zones":[...]}`;
+  `POST /api/v1/backup` takes it as a JSON body, checks it whole, and only then replaces the
+  settings whole and creates or updates the document's zones by id (none deleted; equipments,
+  devices and recipes untouched; an unchanged zone not rewritten). Both ways at most
+  `MAX_BODY_BYTES` (16384 bytes): an export beyond is refused with 413, so that every export can be
+  imported back. Sowel's backup (its SQLite tables, a ZIP, a file upload) is not mirrored.
+- **Why**: equipments, recipes and devices depend on the devices paired to one box and on its
+  radio network's keys; a backup of them is a different feature (secrets, a body beyond the box's
+  16 KB worker buffers, a streamed import). The settings and the rooms are what can be prepared on
+  the Mac and moved to a box, and fit the existing bound. Merging zones rather than replacing them
+  avoids deleting a room that holds equipments.

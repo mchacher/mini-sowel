@@ -6,6 +6,7 @@ import { DevicesPage } from "./components/devices/DevicesPage";
 import { DiscoveryPage } from "./components/discovery/DiscoveryPage";
 import { adminPageFromHash } from "./components/layout/admin-nav-items";
 import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
+import { SettingsPage } from "./components/settings/SettingsPage";
 import { ZonesPage } from "./components/zones/ZonesPage";
 import { useTranslation } from "react-i18next";
 import { connect, useLive } from "./store/useLive";
@@ -73,6 +74,8 @@ export function App() {
             <ZonesPage />
           ) : page === "discovery" ? (
             <DiscoveryPage hash={hash} />
+          ) : page === "settings" ? (
+            <SettingsPage />
           ) : zone ? (
             <ZonePage
               zone={zone}

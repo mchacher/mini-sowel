@@ -152,10 +152,10 @@ fn send(home: &Home, instance: Id, lights: &[Id], on: bool, now: u64) -> Vec<Str
     errors
 }
 
-/// The root zone's `isDaylight`: Solite computes no sunrise or sunset, so it is always
-/// `null`, read as night (spec 012, R6).
-fn root_is_daylight(_home: &Home) -> Option<bool> {
-    None
+/// The root zone's `isDaylight` at `wall` (spec 026 R2.4), from the home's settings: `null` without
+/// a location or before the clock is set, read as night.
+fn root_is_daylight(home: &Home, wall: u64) -> Option<bool> {
+    home.sunlight(wall).is_daylight
 }
 
 impl MotionLight {
@@ -209,7 +209,7 @@ impl MotionLight {
 
     /// Only the automatic turn-on and the start sync look at the daylight.
     fn is_daytime(&self, cx: &Cx<'_>) -> bool {
-        self.p.disable_when_daylight && root_is_daylight(cx.home) == Some(true)
+        self.p.disable_when_daylight && root_is_daylight(cx.home, cx.wall) == Some(true)
     }
 
     // ---- Timers and state keys ----

@@ -9,10 +9,13 @@ mod equipment_ops;
 pub mod events;
 pub mod pairing;
 mod recipe_ops;
+mod settings_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
 pub use pairing::{CLOSE_GRACE_MS, PairingWindow, Phase};
+pub use settings_ops::ImportSummary;
 
+use std::cell::{Cell, RefCell};
 use std::io::{self, Write};
 
 use serde::{Serialize, Serializer};
@@ -24,6 +27,8 @@ use crate::live::{EngineEvent, LiveHandle, LiveHub, Topic};
 use crate::orders::OrderQueue;
 use crate::radio::MeasureEvent;
 use crate::recipes::{RecipeEngine, Settle};
+use crate::settings::Settings;
+use crate::settings::sun::Sunlight;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
 use events::{Event, EventQueue, EventValue, Interest};
@@ -41,7 +46,7 @@ pub(crate) fn new_id(random: Random) -> Outcome<Id> {
 }
 
 /// A wall-clock time before 2020-01-01 is a clock that was never set (the box starts at 1970).
-const CLOCK_SET_AFTER_MS: u64 = 1_577_836_800_000;
+pub const CLOCK_SET_AFTER_MS: u64 = 1_577_836_800_000;
 
 /// What the home remembers of the last aggregate it computed for a zone: its motion and
 /// luminosity (what recipes read), `motionSince`, and a fingerprint of the rest to tell whether
@@ -109,6 +114,16 @@ pub struct Home {
     recomputed_at: u64,
     /// The pairing window (spec 017): what the API asked, what the radio loop did.
     pairing: PairingWindow,
+    /// The home's settings (spec 026): six values at most.
+    settings: Settings,
+    settings_changed: bool,
+    /// The sun data and the wall-clock minute it was computed for: one value, cleared by any
+    /// settings change (spec 026 R2.3).
+    sun_cache: RefCell<Option<(u64, Sunlight)>>,
+    /// How many times the sun data was computed (a count that stops at its maximum).
+    sun_computations: Cell<u32>,
+    /// The last sun data the aggregation saw, for `sunlight.changed`: one value.
+    sun_seen: Sunlight,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -199,6 +214,11 @@ impl Home {
             tracker: StatusTracker::new(),
             recomputed_at: now,
             pairing: PairingWindow::new(),
+            settings: Settings::default(),
+            settings_changed: false,
+            sun_cache: RefCell::new(None),
+            sun_computations: Cell::new(0),
+            sun_seen: Sunlight::default(),
         }
     }
 
@@ -286,13 +306,18 @@ impl Home {
 
     // ---- Zone aggregation ----
 
-    /// The aggregated data of every zone as of `now`, with `motionSince`: the time of the first
+    /// The aggregated data of every zone as of `now` (the root zone with the sun data), with `motionSince`: the time of the first
     /// computation that saw `motion` change (after a restart, the first computation's time),
     /// unchanged while `motion` stays the same, `null` without motion sensors. Kept per zone, at
     /// most 32. A zone whose aggregate differs from the last one computed (every zone the first
     /// time) gives a `zone.data.changed` event when a running recipe listens to it.
     pub fn aggregate(&mut self, now: u64) -> Vec<(Id, ZoneAggregatedData)> {
         let mut all = compute(&self.zones, &self.equipments, &self.devices, now);
+        // The sun data first: `sunlight.changed` comes before the root zone's `zone.data.changed`.
+        self.note_sunlight(now);
+        for (zone, data) in &mut all {
+            self.inject_sunlight(zone, data, now);
+        }
         let mut next: Vec<Motion> = Vec::with_capacity(all.len());
         for (zone, data) in &mut all {
             let previous = self.motion.iter().find(|m| m.zone == *zone);
@@ -368,10 +393,12 @@ impl Home {
 
     /// The aggregate of one zone computed now, without remembering it.
     pub fn zone_aggregate(&self, zone: &Id, now: u64) -> Option<ZoneAggregatedData> {
-        compute(&self.zones, &self.equipments, &self.devices, now)
+        let mut data = compute(&self.zones, &self.equipments, &self.devices, now)
             .into_iter()
             .find(|(id, _)| id == zone)
-            .map(|(_, data)| data)
+            .map(|(_, data)| data)?;
+        self.inject_sunlight(zone, &mut data, now);
+        Some(data)
     }
 
     /// `(motion, luminosity)` of a zone as of the last aggregate (computed now when there is none

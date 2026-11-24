@@ -8,6 +8,7 @@ use crate::devices::{Devices, parse_list};
 use crate::equipments::{self, StoredEquipment};
 use crate::home::Home;
 use crate::recipes::RecipeInstance;
+use crate::settings::Settings;
 use crate::zones::{self, Zone};
 
 /// The devices, as Sowel's `DeviceWithDetails` list.
@@ -18,6 +19,8 @@ pub const ZONES_FILE: &str = "zones.json";
 pub const EQUIPMENTS_FILE: &str = "equipments.json";
 /// The recipe instances.
 pub const RECIPES_FILE: &str = "recipes.json";
+/// The home's settings (spec 026), a JSON object of at most six strings.
+pub const SETTINGS_FILE: &str = "settings.json";
 
 /// The writes of a storage to its medium since boot (spec 025 R2): a 32-bit count that stops at
 /// its maximum instead of wrapping, so nothing grows with the writes. The firmware keeps one in a
@@ -170,6 +173,15 @@ pub fn load_devices(
     parse_list(&text).map_err(|e| cannot_read(storage, "devices", DEVICES_FILE, e))
 }
 
+/// The settings, and true when an entry was dropped (spec 026 R1.4); none when there is no file. A
+/// file that is not a JSON object of strings is an error.
+pub fn load_settings(storage: &dyn Storage) -> Result<(Settings, bool), String> {
+    let Some(text) = storage.read(SETTINGS_FILE)? else {
+        return Ok((Settings::default(), false));
+    };
+    Settings::parse_file(&text).map_err(|e| cannot_read(storage, "settings", SETTINGS_FILE, e))
+}
+
 /// The whole home, made consistent; a file that cannot be read stops everything. The recipe
 /// instances are loaded, not started: the caller starts them (`Home::start_recipes`).
 pub fn load_home(storage: &dyn Storage, now: u64) -> Result<Home, String> {
@@ -181,5 +193,7 @@ pub fn load_home(storage: &dyn Storage, now: u64) -> Result<Home, String> {
         now,
     );
     home.load_recipes(load_recipes(storage)?);
+    let (settings, repaired) = load_settings(storage)?;
+    home.load_settings(settings, repaired);
     Ok(home)
 }

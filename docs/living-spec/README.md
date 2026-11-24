@@ -330,7 +330,7 @@ the last event of a device data, an equipment binding, a status or a zone within
 Fed topics: `devices` (discovered, data updated, status changed, removed), `zones` (created, updated,
 removed, aggregate changed), `equipments` (created, updated, removed, data changed, status
 changed, order executed or failed, with the recipe as source when a recipe sent it), `recipes`
-(instance created, removed, started, stopped, state changed, error). At most 4 clients; a client
+(instance created, removed, started, stopped, state changed, error), `system` (settings changed, sunlight changed). At most 4 clients; a client
 whose queue passes 256 events or 8 KB is closed (1013) and reconnects; one silent for 60 s, or
 that cannot be written to for 5 s, is dropped; a message over 1 KB closes it (1009); an `Origin`
 other than the API's own address or the interface's development server closes it (4003).
@@ -407,12 +407,51 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   number of motion sensors and `motionSince` (none while the clock is not set, that is before
   2020-01-01, as on a box that has not reached the time server: the first computation after the
   clock is set gives the time); open doors and windows; water leak, smoke; lights
-  on and in total; shutters; equipments unavailable by category. It is recomputed after every batch of measures, status change and edit.
+  on and in total; shutters; equipments unavailable by category. The root zone also carries `sunrise`, `sunset` and `isDaylight` (see "Keeps the home's settings"); the other zones `null`. It is recomputed after every batch of measures, status change and edit.
 
-Zones and equipments are kept in `zones.json` and `equipments.json` beside `devices.json`, written
+Zones, equipments and the home's settings are kept in `zones.json`, `equipments.json` and `settings.json` beside `devices.json`, written
 within 2 seconds of a change (one write for a burst of changes; at once on stop); on load, references to things that no longer exist are dropped or moved
-under the root. A `zones.json` or `equipments.json` that cannot be read stops the host, like
+under the root. A `zones.json`, `equipments.json` or `settings.json` that cannot be read stops the host, like
 `devices.json`.
+
+### Keeps the home's settings
+
+The home's name, location, time zone and sun offsets, through Sowel's settings routes, and the sun
+times computed from them, as Sowel's sunlight manager does.
+
+- **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, six
+  keys: `home.name` (64 characters at most), `home.latitude` (−90 to 90) and `home.longitude`
+  (−180 to 180), written `48.8566` (digits, an optional `-` and decimals; no exponent, `+` or
+  `inf`), `home.timezone` (a name of `GET /api/v1/settings/timezones`, `UTC` when unset),
+  `home.sunriseOffset` and `home.sunsetOffset` (whole minutes, −180 to 180; 30 and 45 when unset).
+  A PUT changes the keys it gives and keeps the others; `""` is kept and reads as unset (as Sowel); it is checked whole
+  first: 400 `Invalid body`, `Unknown setting: <key>` or `Invalid value for <key>`, nothing
+  changed; else `{"success":true}` and Sowel's `settings.changed` event with the keys. The settings
+  are kept in `settings.json`, written within 2 seconds of a change, and not written when a PUT
+  changes nothing; an entry of the file that breaks its rule (a time zone the list no longer has)
+  is dropped at load, with a warning.
+- **Time zones**: a fixed list of 59 names (`UTC`, Europe, the French overseas departments and
+  territories, the Americas, Africa, Asia, Oceania), each with today's daylight-saving rule.
+- **Sun times**: on the root zone of the zone aggregation, `sunrise` and `sunset` in local
+  `HH:MM` (suncalc's times, as Sowel), and `isDaylight`, true from sunrise + the sunrise offset to
+  sunset − the sunset offset. Where the sun neither rises nor sets that day (polar day or night),
+  `"--:--"` and `isDaylight` from the sun's height. `null` without a location, or while the clock
+  is not set (before 2020). Computed at most once a minute and at once after a setting changes;
+  when they change, Sowel's `sunlight.changed` event, and the root zone's `zone.data.changed`; a
+  change of day or night shows within about 2 minutes without any measure.
+- **Export** (`GET /api/v1/backup`): `{"version":1,"settings":{...},"zones":[...]}`, the settings
+  and every zone (Sowel's `Zone`); no secret in it (no radio key, no Wi-Fi password). Over 16384
+  bytes (32 rooms with long descriptions) it is refused, 413 `Backup too large: <n> bytes, 16384
+  at most (shorten the rooms' descriptions)`, so that every export can be imported back.
+- **Import** (`POST /api/v1/backup`, at most 16384 bytes): checked whole first, else 400
+  `Invalid backup: <reason>` and nothing changed (bad version, unknown field, a bad setting, a zone
+  id that is not a UUID or appears twice, a zone breaking the rules of the zone routes, a parent
+  found nowhere, a zone under itself, more than 32 zones in all). It replaces the settings whole
+  (a key absent from the document is unset); it creates the document's zones the home does not
+  have, with their ids, and updates those that differ; it deletes no zone and touches no
+  equipment, device or recipe. Answer `{"success":true,"settings":<n>,"zonesCreated":<n>,
+  "zonesUpdated":<n>,"zonesUnchanged":<n>}`, with the events of the settings and zones changed; an
+  import that changes nothing writes nothing.
 
 ### Runs the motion-light recipe
 
@@ -426,8 +465,9 @@ Sowel's 1.1.2), through Sowel's routes:
   override until the zone has been still for the timeout; a light switched on by hand with no
   motion goes off after the timeout. The safety auto-off forces the lights off after its duration
   without fresh motion. A button press switches the lights off (override) or on. "Inactive during
-  day" has no effect: the tool does not know the sun's times (the root zone's `isDaylight` is
-  `null`, night). At every start it sets the lights to what the zone calls for (off with no
+  day" keeps the lights off, on motion and at the start, while the root zone's `isDaylight` is
+  true (sunrise + offset to sunset − offset, from the home's settings); with no location, or the
+  clock not set, it is `null`, read as night. At every start it sets the lights to what the zone calls for (off with no
   motion).
 - **Routes**: `GET /api/v1/recipes`, `GET /api/v1/recipes/:id`; `GET`/`POST
   /api/v1/recipe-instances`, `PUT`/`DELETE /api/v1/recipe-instances/:id`, `POST .../enable`,
@@ -468,14 +508,14 @@ still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, 
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
 it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
 the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
-equipment", a device's "Create equipment") and sets the recipes (a room's Recipes panel), as well
+equipment", a device's "Create equipment"), sets the recipes (a room's Recipes panel) and the home's location and time zone (Settings), as well
 as showing them. The interface also opens at
 `http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
 copy embedded in the radio image at build time.
 
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
-  Topology, Discovery; open on an administration page, opened or closed by its title; the room shown is kept in the address
+  Topology, Discovery, Settings; open on an administration page, opened or closed by its title; the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
@@ -526,6 +566,15 @@ copy embedded in the radio image at build time.
   button, sensor) and its name; the room is chosen there. A refusal keeps the form open with its
   text. At most 64 devices chosen; a warning when they give more than
   16 values, of which only 16 are bound.
+- **Settings** (`#/settings`): the **Home** card (Sowel's): name, latitude, longitude (a typed `,`
+  becomes `.`), sunrise and sunset offsets, and the time zone, picked in the list (`UTC` when
+  unset); Save shows when something changed and sends the six keys; a refusal shows the host's
+  text. Under it, **Today**: sunrise, sunset and "Day" or "Night", live from the root zone; "Set
+  the location to get the sun times" when unknown. The **Backup** card: "Export" downloads
+  `solite-backup-<date>.json`; "Import" takes a `.json` file of 16384 bytes at most ("File too
+  large (16 KB at most)" otherwise, nothing sent), asks to confirm what it replaces, then shows
+  "Imported: <n> settings, <c> rooms created, <u> rooms updated" or the host's refusal, and reads
+  the rooms and settings again.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
@@ -765,3 +814,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 023 | The radio image joins Wi-Fi and serves Sowel's API, its live events and the interface from its flash |
 | 024 | Recipes from a room's page (list, form from the slots, enable and disable, journal, settings, delete); a recipe settles when what it uses changes |
 | 025 | Saves held and flushed from the serial console and `box.sh saves`, every flash write counted and checked against a budget, a burst of definition changes written once |
+| 026 | The home's settings (location, time zone, sun offsets) and the sun times on the root zone, so "Inactive during day" works; a Settings page; export and import of the settings and zones |

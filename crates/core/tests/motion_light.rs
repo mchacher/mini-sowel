@@ -2,9 +2,12 @@
 //! and the state machine driven through the home as the radio loop drives it, with a fake time.
 //! "Light ON" is the relay's `state` reported by the test, as the device's echo would be.
 
+mod mem_storage;
 mod support;
 
+use mem_storage::MemStorage;
 use serde_json::{Value, json};
+use solite_core::home::Home;
 use solite_core::home::events::EventValue;
 use solite_core::radio::zcl::Command;
 use solite_core::recipes::motion_light::{info, is_motion_active, resolve_motion_sources};
@@ -727,6 +730,122 @@ fn disable_when_daylight_has_no_effect_because_the_daylight_is_unknown() {
     rig.report(&motion(PIR, true));
     assert_eq!(rig.sent(), [Command::On]);
     assert!(!rig.messages(&id).iter().any(|m| m.contains("daytime")));
+}
+
+// ---- Inactive during day (spec 026 R2.4) ----
+
+/// 2026-06-21T12:00Z, 14:00 in Paris: day.
+const JUNE_NOON: u64 = 1_782_043_200_000;
+/// 2026-06-21T21:30Z, 23:30 in Paris: night.
+const JUNE_NIGHT: u64 = 1_782_077_400_000;
+
+fn paris(rig: &mut Rig) {
+    let (status, body) = rig.put(
+        "/api/v1/settings",
+        json!({
+            "home.latitude": "48.8566",
+            "home.longitude": "2.3522",
+            "home.timezone": "Europe/Paris",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// The garage at `now`, Paris's location set when `located`.
+fn garage_at(now: u64, located: bool) -> (Rig, Garage) {
+    let mut rig = Rig::new();
+    rig.now = now;
+    let g = rig.garage();
+    if located {
+        paris(&mut rig);
+    }
+    (rig, g)
+}
+
+#[test]
+fn by_day_motion_does_not_switch_the_light_on() {
+    let (mut rig, g) = garage_at(JUNE_NOON, true);
+    let id = rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), []);
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Motion detected but daytime — not turning on"
+    );
+}
+
+#[test]
+fn by_night_motion_switches_the_light_on() {
+    let (mut rig, g) = garage_at(JUNE_NIGHT, true);
+    rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), [Command::On]);
+}
+
+#[test]
+fn by_day_motion_switches_the_light_on_when_the_option_is_off() {
+    let (mut rig, g) = garage_at(JUNE_NOON, true);
+    rig.garage_instance(&g, json!({"disableWhenDaylight": false}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), [Command::On]);
+}
+
+#[test]
+fn the_start_sync_by_day_with_motion_does_not_switch_the_light_on() {
+    let (mut rig, g) = garage_at(JUNE_NOON, true);
+    rig.report(&motion(PIR, true));
+    let id = rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    assert!(!rig.sent().contains(&Command::On));
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Recipe activated — daytime, lights off"
+    );
+}
+
+#[test]
+fn with_the_clock_not_set_the_daylight_is_unknown_and_motion_switches_the_light_on() {
+    let (mut rig, g) = garage_at(3_600_000, true);
+    rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), [Command::On]);
+}
+
+#[test]
+fn a_location_set_then_motion_in_the_same_minute_reads_day_at_once() {
+    let (mut rig, g) = garage_at(JUNE_NOON, false);
+    rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    rig.sent();
+    // The instance read the daylight (unknown) in this minute; the location clears it.
+    paris(&mut rig);
+    rig.now += 1_000;
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), []);
+}
+
+#[test]
+fn a_boot_by_day_starts_the_recipe_with_the_daylight_before_any_aggregate() {
+    use solite_core::engine::{Saver, load_home};
+    let (mut rig, g) = garage_at(JUNE_NOON, true);
+    rig.report(&motion(PIR, true));
+    let id = rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    let storage = MemStorage::default();
+    let home = std::sync::Mutex::new(std::mem::replace(&mut rig.home, Home::new(0)));
+    Saver::new(&storage, rig.now)
+        .tick(&home, rig.now, true)
+        .unwrap();
+    // The boot: the home read back, the recipes started before the first aggregate.
+    rig.now += 1_000;
+    rig.home = load_home(&&storage, rig.now).unwrap();
+    rig.home.start_recipes(rig.now, rig.now);
+    assert!(!rig.sent().contains(&Command::On));
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Recipe activated — daytime, lights off"
+    );
 }
 
 #[test]

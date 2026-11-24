@@ -5,3 +5,4 @@ export * from "./equipments";
 export * from "./devices";
 export * from "./pairing";
 export * from "./recipes";
+export * from "./settings";

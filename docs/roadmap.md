@@ -43,7 +43,7 @@ in a real annex without intervention (the true north's test).
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
-| J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | |
+| J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | built 2026-11-24 (spec 026): settings, sun times on the root zone, Settings page, export and import of the settings and zones; the box run is pending (inbox) |
 
 ## Built, waiting for the real hardware
 
@@ -149,10 +149,15 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | A device that speaks during the clock wait keeps a `lastSeen` of 1970 until it speaks again (seen on the box: the ZBMINIR2 at 4.6 s, the clock set at 19.5 s), so the interface shows it from 1970 and a save after the clock writes that date to the flash: R3.2's "a normal boot writes no 1970 date" holds only for what is stamped after the clock. Shift the dates taken before the clock by the jump, or treat them as unknown, as `motionSince` now is | Spec 023 run |
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
 | 2026-11-22 | `set_device_zone` emits nothing (Sowel's `EngineEvent` has no `device.updated`: check what Sowel's interface reads instead). The `remove_device` half is done (spec 024) | Architecture review 2026-11-22 |
-| 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); look again in J6 | Architecture review 2026-11-22 |
+| 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); looked at again in J6 (spec 026): kept, and the aggregation, GET included, also emits `sunlight.changed` when the sun data changed | Architecture review 2026-11-22 |
 | 2026-11-23 | A motion sensor (or its binding) deleted under a running motion-light is not settled: the instance keeps its resolved sources until its next start; resolve them again on an equipment change, if Sowel does | Spec 024 |
 | 2026-11-23 | A motion-light whose button loses its device or its `action` binding is disabled whole (D38's validation), so the garage stops lighting on motion until the button is taken out: prune such a button instead, for a box that runs a month alone | Spec 024 review |
 | 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
+| 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 2`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
+| 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
+| 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
+| 2026-11-24 | Sowel alignment: Solite's `home.timezone` key and `GET /api/v1/settings/timezones` have no Sowel counterpart (D41); mirror Sowel's `GET /api/v1/system/timezone` (`{tz, source, offsetHours}`), and settle the key with Sowel (issue below) | Spec 026 |
+| 2026-11-24 | A "current time" pill in the header (Sowel's `CurrentTimePill`) and local time in the logs, from `home.timezone` | Spec 026 |
 | 2026-11-22 | The home lock is held for a whole batch of measures, aggregation included: measure it before device recognition adds work per measure | Architecture review 2026-11-22 |
 | 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
 
@@ -166,6 +171,7 @@ Needs on the Sowel side, for the user to open as Sowel issues (never changed fro
 | 2026-11-21 | motion-light's failsafe leaves override mode set; the button's ON arms no off timer | Spec 012 |
 | 2026-11-21 | motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
 | 2026-11-21 | `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
+| 2026-11-24 | A `home.timezone` setting (an IANA name), read before `TZ` and `tz-lookup`, so a home without a `TZ` variable (Solite's box) shares the key with Sowel (D41) | Spec 026 |
 
 ## Done
 
@@ -288,3 +294,7 @@ Every change to this roadmap: date, what changed, why.
   boot`, `--budget`), definitions coalesced over 2 s (D40), `measure-api.sh` on the Mac; D39
   finalised. The budget-rule inbox line is done and removed; a line for its run on the box is
   added.
+- 2026-11-24: spec 026 (J6) built on the Mac (the user away): the home's settings (Sowel's keys and
+  `home.timezone`, D41), the sun times on the root zone so "Inactive during day" works, a Settings
+  page, export and import of the settings and zones (D42). New lines: its run on the box, a full
+  backup, a current-time pill; the GET-recompute line looked at again and kept.
