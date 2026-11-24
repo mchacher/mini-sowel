@@ -7,8 +7,16 @@
 
 cd "${CLAUDE_PROJECT_DIR:-.}" || exit 0
 
+input=$(cat)
+
+# The branch checked below is the one where the command runs (an agent's worktree), not the main
+# checkout's. The validate command runs in the main checkout: a worktree nested in it has no ESP-IDF
+# tools installed, and its first build hangs for hours.
+dir=$(printf '%s' "$input" | tr '\n' ' ' | sed -nE 's/.*"cwd" *: *"([^"]*)".*/\1/p')
+[ -d "$dir" ] || dir=.
+
 # Look at the command only, not at its description: the hook receives the whole tool call as JSON.
-cmd=$(tr '\n' ' ' | sed -nE 's/.*"command" *: *"(([^"\\]|\\.)*)".*/\1/p')
+cmd=$(printf '%s' "$input" | tr '\n' ' ' | sed -nE 's/.*"command" *: *"(([^"\\]|\\.)*)".*/\1/p')
 case "$cmd" in
   *"git commit"*|*"git -C "*" commit"*) ;;
   *) exit 0 ;;
@@ -32,7 +40,7 @@ gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 [ -d .githooks ] && [ "$(git config core.hooksPath)" != ".githooks" ] && git config core.hooksPath .githooks
 
 # On main, a commit is allowed only for a trivial fix: the user is asked to confirm.
-branch=$(git branch --show-current 2>/dev/null)
+branch=$(git -C "$dir" branch --show-current 2>/dev/null)
 if [ "$branch" = "main" ] && git rev-parse --verify -q HEAD >/dev/null && [ ! -f "$gitdir/SQUASH_MSG" ]; then
   cat <<'EOF'
 {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "Commit on main: only for a trivial fix (typo, one-line doc). Anything else goes on a branch (feat/, fix/, docs/, chore/), see CLAUDE.md."}}
