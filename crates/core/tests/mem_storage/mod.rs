@@ -16,6 +16,10 @@ pub struct MemStorage {
     pub unreadable: RefCell<Option<String>>,
     /// Writes attempted, failed ones included.
     pub attempts: Cell<usize>,
+    /// Writes attempted per file, failed ones included.
+    pub per_file: RefCell<BTreeMap<String, usize>>,
+    /// Writes of this file fail while it is set.
+    pub fail_file: RefCell<Option<String>>,
 }
 
 impl MemStorage {
@@ -28,6 +32,11 @@ impl MemStorage {
                 .insert((*name).to_string(), (*text).to_string());
         }
         storage
+    }
+
+    /// The writes attempted of one file.
+    pub fn writes(&self, name: &str) -> usize {
+        self.per_file.borrow().get(name).copied().unwrap_or(0)
     }
 
     pub fn text(&self, name: &str) -> Option<String> {
@@ -49,12 +58,17 @@ impl Storage for &MemStorage {
         next: &mut dyn FnMut() -> io::Result<Option<String>>,
     ) -> Result<(), String> {
         self.attempts.set(self.attempts.get() + 1);
+        *self
+            .per_file
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_default() += 1;
         let what = name.trim_end_matches(".json");
         let mut text = String::new();
         while let Some(chunk) = next().map_err(|e| format!("{what}: cannot write: {e}"))? {
             text.push_str(&chunk);
         }
-        if self.fail_writes.get() {
+        if self.fail_writes.get() || self.fail_file.borrow().as_deref() == Some(name) {
             return Err(format!("{what}: memory://{name}: cannot write: full"));
         }
         self.files.borrow_mut().insert(name.to_string(), text);

@@ -2,7 +2,8 @@
 //! lines `scripts/box.sh wifi` and `pair` send on the USB serial port (UART0, the log's port), hands
 //! each to the core's `parse_console_line`. `wifi-set` and `wifi-forget` write or remove
 //! `/data/wifi.json`, then stop the engine (its files saved) and restart the ESP32; `pair` asks the
-//! engine for the pairing window (D36). A line itself is never logged.
+//! engine for the pairing window (D36); `saves hold` and `saves flush` hold the engine's saves and
+//! flush them (spec 025, D40). A line itself is never logged.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -13,9 +14,10 @@ use esp_idf_svc::sys::{
     TickType_t, configTICK_RATE_HZ, esp_restart, uart_driver_install, uart_read_bytes,
     uart_vfs_dev_use_driver, uxTaskGetStackHighWaterMark2,
 };
+use solite_core::engine::{FLUSH_ASKED_LINE, HOLD_LINE};
 use solite_core::network::{ConsoleCommand, MAX_CONSOLE_LINE, parse_console_line};
 
-use crate::radio_engine::{PAIR_ASKED, STOP, STOPPED};
+use crate::radio_engine::{PAIR_ASKED, SAVES, STOP, STOPPED};
 use crate::storage;
 
 /// The console thread's stack, in internal RAM: it writes the flash.
@@ -114,6 +116,14 @@ fn act(line: &[u8]) {
         ConsoleCommand::Pair => {
             PAIR_ASKED.store(true, Ordering::SeqCst);
             log::info!("pairing: asked from the console");
+        }
+        ConsoleCommand::SavesHold => {
+            SAVES.hold();
+            log::info!("{HOLD_LINE}");
+        }
+        ConsoleCommand::SavesFlush => {
+            SAVES.ask_flush();
+            log::info!("{FLUSH_ASKED_LINE}");
         }
         ConsoleCommand::WifiForget => match storage::remove(WIFI_FILE) {
             Ok(()) => {

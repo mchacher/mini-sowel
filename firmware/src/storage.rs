@@ -1,5 +1,5 @@
 //! The data partition: FAT with wear levelling, mounted at `/data`, and the engine's `Storage`
-//! on it.
+//! on it. Every write to it is counted and logged (`flash: <n> writes since boot`, spec 025).
 
 use std::ffi::{CStr, CString};
 use std::fs::{self, File};
@@ -10,12 +10,23 @@ use esp_idf_svc::sys::{
     WL_INVALID_HANDLE, esp_err_to_name, esp_vfs_fat_info, esp_vfs_fat_mount_config_t,
     esp_vfs_fat_spiflash_mount_rw_wl, wl_handle_t,
 };
-use solite_core::engine::{Storage, complete_name, recover_interrupted_save, temporary_name};
+use solite_core::engine::{
+    Storage, WriteCounter, complete_name, flash_line, recover_interrupted_save, temporary_name,
+};
 
 /// Where the data partition is mounted.
 pub const BASE: &str = "/data";
 /// The partition's name in `partitions.csv`.
 const LABEL: &str = "storage";
+
+/// The writes to `/data` since boot (spec 025 R2): 4 bytes, stops at its maximum.
+static WRITES: WriteCounter = WriteCounter::new();
+
+/// Counts one write (attempted, failed or not) and logs `flash: <n> writes since boot`.
+fn counted<T>(result: T) -> T {
+    log::info!("{}", flash_line(WRITES.record()));
+    result
+}
 
 /// The name of an ESP-IDF error code.
 #[allow(unsafe_code)]
@@ -148,8 +159,8 @@ impl Storage for FatStorage {
             complete.as_path(),
             temporary.as_path(),
             Path::exists,
-            |from, to| fs::rename(from, to),
-            |file| fs::remove_file(file),
+            |from, to| counted(fs::rename(from, to)),
+            |file| counted(fs::remove_file(file)),
         )
         .map_err(|e| format!("{}: {}: cannot recover: {e}", what(name), path.display()))?;
         match fs::read_to_string(&path) {
@@ -170,8 +181,10 @@ impl Storage for FatStorage {
     ) -> Result<(), String> {
         let path = self.dir.join(name);
         let temporary = self.dir.join(temporary_name(name));
-        put(&path, &temporary, next)
-            .map_err(|e| format!("{}: {}: cannot write: {e}", what(name), path.display()))
+        counted(
+            put(&path, &temporary, next)
+                .map_err(|e| format!("{}: {}: cannot write: {e}", what(name), path.display())),
+        )
     }
 
     fn locate(&self, name: &str) -> String {
@@ -204,19 +217,30 @@ pub fn write_text(name: &str, text: &str) -> Result<(), String> {
 #[cfg(feature = "radio")]
 pub fn rename(from: &str, to: &str) -> Result<(), String> {
     let (from_path, to_path) = (Path::new(BASE).join(from), Path::new(BASE).join(to));
-    let _ = fs::remove_file(&to_path);
-    fs::rename(&from_path, &to_path)
-        .map_err(|e| format!("{}: cannot rename to {}: {e}", from_path.display(), to))
+    if fs::remove_file(&to_path).is_ok() {
+        counted(());
+    }
+    counted(
+        fs::rename(&from_path, &to_path)
+            .map_err(|e| format!("{}: cannot rename to {}: {e}", from_path.display(), to)),
+    )
 }
 
-/// Removes a file of the data partition (the console's `wifi-forget`); a file already absent is
-/// removed too.
+/// Removes a file of the data partition (the console's `wifi-forget`, the boot marker); a file
+/// already absent is removed too, and that is not counted as a write.
 #[cfg(feature = "radio")]
 pub fn remove(name: &str) -> Result<(), String> {
     let path = Path::new(BASE).join(name);
     match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
+        Ok(()) => counted(Ok(())),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+        Err(e) => counted(Err(format!("{}: cannot remove: {e}", path.display()))),
     }
+}
+
+/// Writes an empty file in the data partition (the boot marker), counted.
+#[cfg(feature = "radio")]
+pub fn touch(name: &str) -> Result<(), String> {
+    let path = Path::new(BASE).join(name);
+    counted(fs::write(&path, b"").map_err(|e| format!("{}: cannot write: {e}", path.display())))
 }

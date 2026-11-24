@@ -26,7 +26,7 @@ use solite_core::api::{
     order_response,
 };
 use solite_core::devices::lock;
-use solite_core::engine::{self, Clocks, Saver};
+use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use tiny_http::{Header, Response, Server};
@@ -309,7 +309,10 @@ pub fn serve<T: RadioTransport>(
     if !static_files::is_built(ui) {
         println!("{}", static_files::missing_line(ui));
     }
-    let mut saver = Saver::new(store, now_ms()).with_sink(show_on_stderr);
+    // A burst of the API's changes gives one write per file (spec 025 R3).
+    let mut saver = Saver::new(store, now_ms())
+        .with_sink(show_on_stderr)
+        .with_definition_delay(DEFINITION_DELAY_MS);
     let result = radio_loop(
         transport, label, port, verbose, data, stop, &home, &random, &mut saver,
     );

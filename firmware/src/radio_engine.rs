@@ -29,7 +29,9 @@ use esp_idf_svc::sys::{
 };
 use solite_core::HeapStats;
 use solite_core::devices::lock;
-use solite_core::engine::{self, Clocks, RunError, Saver, Storage, load_home};
+use solite_core::engine::{
+    self, Clocks, DEFINITION_DELAY_MS, RunError, SaveControl, Saver, Storage, load_home,
+};
 use solite_core::heap_line;
 use solite_core::home::Home;
 use solite_core::live::LiveHandle;
@@ -56,6 +58,10 @@ const BACKUP_FILE: &str = "zigbee.json";
 /// Set by the console's `pair` line: the engine opens the pairing window for the same time as at a
 /// power-on boot, whatever the boot was (taken by `start_pair_watch`).
 pub static PAIR_ASKED: AtomicBool = AtomicBool::new(false);
+
+/// The saves held and flushed by the console's `saves hold` and `saves flush` (spec 025): in RAM
+/// only, so every boot starts with saves not held.
+pub static SAVES: SaveControl = SaveControl::new();
 
 /// The marker written at each boot and removed after `STABLE_MS` of running.
 const MARKER_FILE: &str = "booting";
@@ -248,7 +254,7 @@ fn make_radio(link: &Link, start: Instant) -> Result<Wired, RadioError> {
 fn boot_pairing() -> BootPairing {
     let marker = Path::new(BASE).join(MARKER_FILE);
     let present = marker.exists();
-    if let Err(e) = std::fs::write(&marker, b"") {
+    if let Err(e) = storage::touch(MARKER_FILE) {
         log::warn!("boot: cannot write the marker: {e}");
     }
     pairing_at_boot(present, reset_reason())
@@ -306,9 +312,12 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
             }))
             .is_ok();
     }
-    // The saves wait for the clock (spec 023 R3.2); a stop writes whatever the gate says.
-    let mut saver =
-        Saver::new(FatStorage::new(), wall_ms()).with_gate(|| CLOCK_SET.load(Ordering::SeqCst));
+    // The saves wait for the clock (spec 023 R3.2); a stop writes whatever the gate says. The
+    // console holds and flushes them, and a burst of changes gives one write (spec 025).
+    let mut saver = Saver::new(FatStorage::new(), wall_ms())
+        .with_gate(|| CLOCK_SET.load(Ordering::SeqCst))
+        .with_control(&SAVES)
+        .with_definition_delay(DEFINITION_DELAY_MS);
     let boot = boot_pairing();
 
     reset_radio()?;
@@ -427,7 +436,7 @@ fn start_marker_timer() {
         .stack_size(4096)
         .spawn(|| {
             std::thread::sleep(Duration::from_millis(marker_wait_ms(0)));
-            match std::fs::remove_file(Path::new(BASE).join(MARKER_FILE)) {
+            match storage::remove(MARKER_FILE) {
                 Ok(()) => log::info!("boot: marker removed after 10 min of running"),
                 Err(e) => log::warn!("boot: cannot remove the marker: {e}"),
             }

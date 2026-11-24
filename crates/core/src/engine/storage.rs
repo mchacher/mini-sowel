@@ -2,6 +2,7 @@
 //! the engine reads and writes them by name through this trait and never touches a file itself.
 
 use std::io;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::devices::{Devices, parse_list};
 use crate::equipments::{self, StoredEquipment};
@@ -17,6 +18,51 @@ pub const ZONES_FILE: &str = "zones.json";
 pub const EQUIPMENTS_FILE: &str = "equipments.json";
 /// The recipe instances.
 pub const RECIPES_FILE: &str = "recipes.json";
+
+/// The writes of a storage to its medium since boot (spec 025 R2): a 32-bit count that stops at
+/// its maximum instead of wrapping, so nothing grows with the writes. The firmware keeps one in a
+/// `static` and logs `flash_line` after each write.
+#[derive(Debug, Default)]
+pub struct WriteCounter(AtomicU32);
+
+impl WriteCounter {
+    pub const fn new() -> Self {
+        WriteCounter(AtomicU32::new(0))
+    }
+
+    /// A counter that starts at `count` (to test its bound).
+    pub const fn starting_at(count: u32) -> Self {
+        WriteCounter(AtomicU32::new(count))
+    }
+
+    /// One write more; the count after it.
+    pub fn record(&self) -> u32 {
+        let mut current = self.0.load(Ordering::SeqCst);
+        loop {
+            if current == u32::MAX {
+                return u32::MAX;
+            }
+            match self.0.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return current + 1,
+                Err(seen) => current = seen,
+            }
+        }
+    }
+
+    pub fn count(&self) -> u32 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// The line logged after each write: `flash: <n> writes since boot`.
+pub fn flash_line(count: u32) -> String {
+    format!("flash: {count} writes since boot")
+}
 
 /// The engine's named files.
 pub trait Storage {

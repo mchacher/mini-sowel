@@ -62,6 +62,22 @@ Each of the three programs starts and says which tool it is, with its version:
   logs `serial: <baud> baud, rx buffer 4096 B, highest <n> B, full <k> times` and `heap: internal
   <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB, http stack <s> KB unused of <t> KB`.
   The radio image is a development image: its API is open on the local network (decision D33).
+  It writes a change of definitions (a device, a zone, an equipment, a binding, a recipe instance)
+  2 seconds after it first sees it unsaved, so a burst of changes gives one write per file; a stop
+  (the console's restart) writes at once. A power cut loses at most the definitions of those last
+  2 seconds (and one loop turn) and the devices' values of the last 10 minutes (decision D40). Its
+  serial console also reads two lines (never from the network): `saves hold` (logs `saves: held,
+  nothing is written until saves flush or a restart`; from then on nothing is written, every change
+  stays in RAM, and a restart, the serial port being opened included, forgets the hold) and `saves
+  flush` (logs `saves: flush asked`; at its next turn, once the clock is set, the engine writes each
+  file that has unsaved changes once, ends the hold and logs `saves: flushed, <k> files written`; a
+  failed write is retried as any save). A stop still writes while held; a restart of the radio
+  inside the engine does not. When the clock is set, the 10 minutes of the devices' values start
+  from that moment (the saver started in 1970), so a boot writes no `devices.json` for its values
+  alone.
+  Every firmware image logs `flash: <n> writes since boot` after each write to `/data` (a save of a
+  file, whatever its size, a removal, a rename, the boot marker's write and removal; counted once
+  attempted, even when it fails; a 32-bit count that stops at its maximum).
 - **On the Mac, in an emulated ESP32**: `sh scripts/qemu.sh` boots the firmware in Espressif's
   QEMU, with 2 MB of PSRAM, and runs the engine in it with the simulated radio and a realistic
   home (50 devices, 10 zones, 50 equipments, 3 `motion-light` instances, the files of
@@ -255,8 +271,9 @@ zone: `occupancy` (motion), `contact` (contact_door, true when closed), `water_l
 before this was possible keep only their battery data until paired again.
 
 The host keeps them in `devices.json` in its data folder (owner-only): a device paired, renamed
-or deleted is written at once, the latest values every 10 minutes and when the host stops, so a
-restart keeps them. At most 64 devices, 16 data and 4 orders each; beyond: `pairing: device store
+or deleted is written within 2 seconds under `--serve` (a burst of changes gives one write) and at
+once with `--pair`, the latest values every 10 minutes, and everything at once when the host stops,
+so a restart keeps them. At most 64 devices, 16 data and 4 orders each; beyond: `pairing: device store
 full (64), <address> ignored`. A `devices.json` that cannot be read stops the host
 (`devices: <file>: cannot read: <reason>`), never overwritten. One host at a time per data folder.
 
@@ -393,7 +410,7 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   on and in total; shutters; equipments unavailable by category. It is recomputed after every batch of measures, status change and edit.
 
 Zones and equipments are kept in `zones.json` and `equipments.json` beside `devices.json`, written
-at once when they change; on load, references to things that no longer exist are dropped or moved
+within 2 seconds of a change (one write for a burst of changes; at once on stop); on load, references to things that no longer exist are dropped or moved
 under the root. A `zones.json` or `equipments.json` that cannot be read stops the host, like
 `devices.json`.
 
@@ -419,8 +436,8 @@ Sowel's 1.1.2), through Sowel's routes:
   `Invalid body`).
 - **Its log**: the last 50 lines of each instance, newest first, each message at most 200 bytes;
   its state (`overrideMode`, `timerExpiresAt`, `failsafeExpiresAt`) is shown with the instance.
-- **What survives a restart**: the instances, in `recipes.json` beside the other files, written at
-  once; each enabled one is started again (one that no longer validates logs `Failed to restore:
+- **What survives a restart**: the instances, in `recipes.json` beside the other files, written
+  within 2 seconds of a change; each enabled one is started again (one that no longer validates logs `Failed to restore:
   <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
   read stops the host; an entry beyond 16, or with an id already seen, is dropped.
 - **When what it uses changes** (decision D38; Sowel keeps the stale ids): right after an
@@ -550,7 +567,9 @@ times each one, and prints `measure: 33 requests, <k> answered 201, <b> Busy, to
 <t> s (request <i>)`; it exits 0 only when the 33 answered 201, none was 503 and the total is at
 most 10 s, else 1 with the first answer that was not 201. It needs a device with an order (`no
 device with an order: pair a relay first`, exit 1), refuses when a zone `Measure 33` exists, and
-deletes its zone and equipment afterwards (kept with `--keep`).
+deletes its zone and equipment afterwards (kept with `--keep`). It is run on the Mac against the
+simulator (`--sim scenarios/garage.json --serve`, then `sh scripts/measure-api.sh 8080`); against
+the box at most once per milestone, inside `box.sh saves` (decision D39), and no script loops it.
 
 ### Flashes the box and brings it back
 
@@ -627,7 +646,36 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   `pairing: failed: <reason>` (printed, exit 1); the console's `pairing: asked from the console`
   with no window after it: `box: the console took the line but the engine opened no pairing window
   within 15 s: is the radio running?`, exit 1; no answer: the message of `wifi`, exit 4. It asks
-  nothing and needs no backup: it writes nothing to the flash.
+  nothing and needs no backup: it writes nothing to the flash but the boot marker of the reset it
+  causes.
+- `saves [--budget <n>] [--no-flush] [-- <command> [<args>]]` runs one test on the box with its saves
+  held, in one session of the serial port (opening the port resets the box, so a hold and its
+  flush are never sent in two sessions): it opens the port, keeps every line read from then on in
+  a log under `$TMPDIR/solite-box/` (path printed), waits for `console: ready`, sends `saves hold`
+  and reads `saves: held` within 15 s (none: the message of `wifi`, exit 4), waits for
+  `serving: http://<address>/` (60 s; none: `box: the box serves nothing within 60 s: the command is
+  not run, the saves stay held until the next restart`, exit 1) and prints `box: saves held;
+  serving at http://<address>/`. It then runs the command with `SOLITE_BOX_ADDRESS=<address>`, or,
+  without one, asks on the terminal `box: saves held: run the test, then press Enter to flush`
+  (neither a command nor a terminal: `box: saves needs a command after -- or a terminal`, exit 2,
+  the port never opened). Then it sends `saves flush` and reads `saves: flushed, <k> files written`
+  within 30 s (printed `box: saves flushed (<k> files written)`; only `saves: flush asked`: `box:
+  the console took the line but the engine flushed nothing within 30 s: is the engine running, and
+  the clock set?`, exit 1); with `--no-flush` it sends nothing and prints `box: saves still held:
+  the changes stay in RAM and are lost at the next restart`. It prints the last `flash:` count of
+  the session, `box: flash: <m> writes since boot` (0 when none), and with `--budget <n>` fails
+  when `m > n` (`box: flash: <m> writes since boot, over the budget of <n>`, exit 1). A second
+  `console: ready` after the hold (the box restarted) gives `box: the box restarted during the
+  session: the hold was lost and the count is not the session's`, exit 1, no flush. A command that
+  fails, or cannot start (`box: cannot run the command: <reason>`, exit 127), still gets the flush
+  and the count, then `box: the command failed (exit <c>)`, exit 1; the command runs from the
+  caller's folder. Ctrl-C at the terminal (or a SIGTERM to its Python helper), from the hold on,
+  stops the command, sends the flush and exits 130; a SIGTERM to `box.sh` alone ends the script,
+  and its helper still flushes once the command ends.
+- `log --budget <n>` (any image, from the port or `--from-file`), after the log's checks, prints
+  the last `flash:` line (`flash: 0 writes since boot` when there is none) and fails (exit 1, the
+  message of `saves`) when its count is over `n`; a `--budget` that is not a whole number is a
+  usage error (exit 2).
 - `backup`, `restore` and `flash` print what they will do; `backup` and `restore` then ask, on the
   terminal (never on standard input), for the last 6 hex digits of the box's MAC address; anything
   else, or no terminal, writes nothing. `flash` asks nothing beyond the command itself (D35).
@@ -716,3 +764,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 022 | The rules for serving on the local network in the core, the interface packed for the flash, the scripts on an address, the 33 requests measured |
 | 023 | The radio image joins Wi-Fi and serves Sowel's API, its live events and the interface from its flash |
 | 024 | Recipes from a room's page (list, form from the slots, enable and disable, journal, settings, delete); a recipe settles when what it uses changes |
+| 025 | Saves held and flushed from the serial console and `box.sh saves`, every flash write counted and checked against a budget, a burst of definition changes written once |

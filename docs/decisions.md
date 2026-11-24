@@ -647,13 +647,42 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   new id) and would be shown nowhere, so it goes with its zone. The settle walks at most 16
   instances x 32 ids and never fails the request that caused it.
 
-## D39: A budget of flash writes for the tests on the box (proposed)
+## D39: A budget of flash writes for the tests on the box
 
-- **Date**: 2026-11-23 (proposed in an autonomous run, from the user's instruction; to confirm)
-- **Choice**: a run on the real box is one pass of the flow being shown, never a loop: no repeated
-  `measure-api.sh`, no burst or stress against the box. Loops, measures and stress run on the Mac
-  (`--sim`) or under QEMU. Each spec that runs on the box writes in its result the approximate
-  number of flash writes the run caused (saves of `/data` files, images flashed).
+- **Date**: 2026-11-23, proposed in an autonomous run from the user's instruction; finalised
+  2026-11-24 by spec 025, which gives it its means (D40)
+- **Choice**: a test on the real box causes at most one flash write per file the flow changes, or
+  one write and a restart to check that it persists. A run on the box is one pass of the flow being
+  shown, never a loop: no repeated `measure-api.sh` (at most once per milestone), no burst or
+  stress against the box. Loops, measures and stress run on the Mac (`--sim`) or under QEMU. The
+  flow runs inside `sh scripts/box.sh saves --budget <n>` (saves held, one flush at the end), with
+  `n` = 1 (the boot marker, written because opening the port resets the box) + the number of files
+  the flow changes (4 at most: devices, zones, equipments, recipes) + 1 if the session lasts over
+  10 minutes (the marker's removal); a restart to check persistence is one `box.sh log --budget 1`.
+  Each spec that runs on the box writes in its result the `flash: <n> writes since boot` count of
+  its run and the images it flashed.
 - **Why**: the box's flash wears with writes (each save of a JSON file rewrites it, and a flash
   of an image rewrites megabytes); the box is meant to run for years in an annex, and the test
-  runs should not spend its endurance.
+  runs should not spend its endurance. On 2026-11-22 eight runs of `measure-api.sh` and 60 zone
+  creations and deletions cost hundreds of saves.
+
+## D40: Saves held from the serial console, writes counted, definitions coalesced over 2 s
+
+- **Date**: 2026-11-24 (spec 025, decided in an autonomous run, for the user's review)
+- **Choice**: the radio image's serial console reads `saves hold` (nothing written, everything in
+  RAM, forgotten at a restart) and `saves flush` (one write per changed file, then the hold ends),
+  never from the network (as `pair`, D36). Because opening the serial port resets the box, the
+  hold and its flush are sent in one session of the port by `box.sh saves`, which runs the test's
+  command in between; there is no separate `flush` command. Every firmware image counts its writes
+  to `/data` and logs `flash: <n> writes since boot`; `box.sh saves` and `box.sh log` check it
+  against `--budget`. In the radio image and the host's `--serve`, a change of definitions is
+  written 2 s (`DEFINITION_DELAY_MS`) after the saver first sees it unsaved, counted from the
+  first change so that a stream of changes is still written every 2 s; a stop writes at once.
+  This replaces D13's "definitions at once (the user's choice)": a power cut now loses at most the
+  definitions of the last 2 s (and one loop turn), the values of the last 10 minutes as before, and
+  everything since a hold. A delay of 0 gives back the former rule.
+- **Why**: the 33 requests of the interface's largest creation gave 33 rewrites of
+  `equipments.json`; with the delay they give one per 2 s, and inside a held test one in all. Two
+  seconds is shorter than any action a person repeats by hand, and a power cut within two seconds
+  of a change is rare; the hold and the counter make the budget of D39 something a script checks,
+  not a promise.

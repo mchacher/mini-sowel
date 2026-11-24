@@ -1,5 +1,6 @@
 //! When the devices are written to storage, so the box's flash lasts: a change of definitions at
-//! once, values and `lastSeen` every 10 minutes when they changed, and on stop. The storage is an
+//! the saver's next write (after its definition delay when one is set, spec 025), values and
+//! `lastSeen` every 10 minutes when they changed, and on stop or a flush. The storage is an
 //! adapter; only one thread (the radio loop) writes.
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -43,6 +44,12 @@ impl WritePolicy {
         WritePolicy { last_write: now }
     }
 
+    /// The values' interval starts again from `now` (the clock was just set: the time it started
+    /// from is meaningless).
+    pub fn restart(&mut self, now: u64) {
+        self.last_write = now;
+    }
+
     /// True when a write is due now: a change of definitions at once, changed values after the
     /// interval since the last write, or when `stopping`.
     fn is_due(&self, devices: &Devices, now: u64, stopping: bool) -> bool {
@@ -54,8 +61,9 @@ impl WritePolicy {
 
     /// Like `due`, but the file is written chunk by chunk from a cursor (nothing is ever built
     /// whole), the flags being cleared at once: a change made while it is written is due again.
-    pub fn due_stream(&mut self, home: &mut Home, now: u64, stopping: bool) -> Option<ListCursor> {
-        if !self.is_due(&home.devices, now, stopping) {
+    /// `forced` (a stop or a flush) makes changed values due before their interval.
+    pub fn due_stream(&mut self, home: &mut Home, now: u64, forced: bool) -> Option<ListCursor> {
+        if !self.is_due(&home.devices, now, forced) {
             return None;
         }
         home.devices.clear_changes();

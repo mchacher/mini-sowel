@@ -387,6 +387,10 @@ pub enum ConsoleCommand {
     WifiForget,
     /// `pair`: open the pairing window for `PAIR_AT_BOOT_SECONDS`, whatever the boot was.
     Pair,
+    /// `saves hold`: nothing written until `saves flush` or a restart (spec 025 R1).
+    SavesHold,
+    /// `saves flush`: each file with unsaved changes written once, then the hold ended.
+    SavesFlush,
     Empty,
     Unknown,
     /// More than `MAX_CONSOLE_LINE` bytes.
@@ -418,6 +422,8 @@ pub fn parse_console_line(line: &[u8]) -> ConsoleCommand {
         },
         ("wifi-forget", None) => ConsoleCommand::WifiForget,
         ("pair", None) => ConsoleCommand::Pair,
+        ("saves", Some("hold")) => ConsoleCommand::SavesHold,
+        ("saves", Some("flush")) => ConsoleCommand::SavesFlush,
         _ => ConsoleCommand::Unknown,
     }
 }

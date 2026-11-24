@@ -45,3 +45,7 @@ solite-ui-embed = { path = "../crates/ui-embed" }
 
 [lints.rust]
 unsafe_code = "deny"
+
+# Its own workspace, also when the repository is checked out inside another checkout (an agent's
+# worktree under .claude/worktrees/), where Cargo would otherwise take the outer workspace.
+[workspace]

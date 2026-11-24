@@ -447,3 +447,38 @@ fn pair_alone_asks_for_the_pairing_window() {
     assert_eq!(parse_console_line(b"pair\r"), ConsoleCommand::Pair);
     assert_eq!(parse_console_line(b"pair now"), ConsoleCommand::Unknown);
 }
+
+#[test]
+fn saves_hold_and_saves_flush_are_read_with_or_without_a_carriage_return() {
+    for (line, expected) in [
+        (&b"saves hold"[..], ConsoleCommand::SavesHold),
+        (b"saves hold\r", ConsoleCommand::SavesHold),
+        (b"saves flush", ConsoleCommand::SavesFlush),
+        (b"saves flush\r\n", ConsoleCommand::SavesFlush),
+    ] {
+        assert_eq!(parse_console_line(line), expected, "{line:?}");
+    }
+}
+
+#[test]
+fn saves_alone_or_with_other_words_is_unknown() {
+    for line in [
+        &b"saves"[..],
+        b"saves hold now",
+        b"saves stop",
+        b"saves  hold",
+        b"saves hold ",
+        b"SAVES HOLD",
+    ] {
+        assert_eq!(
+            parse_console_line(line),
+            ConsoleCommand::Unknown,
+            "{line:?}"
+        );
+    }
+    assert_eq!(parse_console_line(b"pair"), ConsoleCommand::Pair);
+    assert_eq!(
+        parse_console_line(b"wifi-forget"),
+        ConsoleCommand::WifiForget
+    );
+}

@@ -513,7 +513,7 @@ impl Devices {
     }
 
     /// How a device is reached, as its messages told: a change is a change of definitions (written
-    /// at once; it is rare). A device not in the store is ignored.
+    /// by the saver's next write; it is rare). A device not in the store is ignored.
     pub fn set_route(&mut self, update: &RouteUpdate) {
         let Some(index) = self.index_of(&update.eui64) else {
             return;

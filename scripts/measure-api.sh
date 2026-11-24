@@ -11,6 +11,12 @@
 #
 # usage: sh scripts/measure-api.sh <address>[:<port>] [--keep]
 #   port 80 by default; a number alone is a port on 127.0.0.1.
+#
+# Run it on the Mac against the simulator (`cargo run -p solite-host -- --sim scenarios/garage.json
+# --serve`, then `sh scripts/measure-api.sh 8080`), as often as needed. Against the box, at most once
+# per milestone and inside `box.sh saves` (decision D39: each run rewrites the box's files in
+# flash), for example: sh scripts/box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh
+# "$SOLITE_BOX_ADDRESS"'. Never in a loop.
 set -eu
 
 KEEP=false
@@ -24,6 +30,7 @@ for arg in "$@"; do
 done
 if [ -z "$TARGET" ]; then
   echo "usage: sh scripts/measure-api.sh <address>[:<port>] [--keep]" >&2
+  echo "  on the Mac: sh scripts/measure-api.sh 8080 (host --sim --serve); on the box: once per milestone, inside sh scripts/box.sh saves (D39)" >&2
   exit 2
 fi
 case "$TARGET" in
