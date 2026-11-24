@@ -19,4 +19,5 @@ pub use persist::{
 };
 pub(crate) use registry::json_number;
 pub use registry::{Devices, MAX_DATA, MAX_DEVICES, MAX_NAME_CHARS, MAX_ORDERS, Random};
+pub(crate) use time::{civil_from_days, days_from_civil};
 pub use time::{format_iso, parse_iso};

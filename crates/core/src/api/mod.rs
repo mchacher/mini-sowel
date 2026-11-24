@@ -1,14 +1,16 @@
-//! Sowel's routes for devices, zones, equipments and recipes (`src/api/routes/{devices,zones,
-//! equipments,recipes}.ts` of the Sowel repository), as a pure function: a request in, a status and a
-//! JSON body out. The host (or the box) only moves bytes. The time and the random bytes come from
-//! the caller.
+//! Sowel's routes for devices, zones, equipments, recipes and settings (`src/api/routes/{devices,
+//! zones,equipments,recipes,settings}.ts` of the Sowel repository), and Solite's backup, as a pure
+//! function: a request in, a status and a JSON body out. The host (or the box) only moves bytes.
+//! The time and the random bytes come from the caller.
 
+mod backup;
 mod devices;
 mod equipments;
-mod input;
+pub(crate) mod input;
 mod orders;
 mod pairing;
 mod recipes;
+mod settings;
 mod slots;
 pub mod static_files;
 mod zones;
@@ -310,6 +312,8 @@ fn dispatch(
         Some("recipes" | "recipe-instances") => {
             recipes::route(home, &segments, request, now, random)
         }
+        Some("settings") => settings::route(home, &segments, request),
+        Some("backup") => backup::route(home, &segments, request, now),
         _ => error(404, "Not found"),
     };
     if request.method != "GET" && response.status < 300 {

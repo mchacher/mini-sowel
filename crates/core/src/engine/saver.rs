@@ -6,15 +6,17 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::storage::{DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, Storage, ZONES_FILE};
+use super::storage::{
+    DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, ZONES_FILE,
+};
 use crate::devices::{WritePolicy, lock};
 use crate::home::{Home, ListCursor};
 
-/// A zones, equipments or recipes file that could not be written is tried again after this, in
+/// A zones, equipments, recipes or settings file that could not be written is tried again after this, in
 /// milliseconds (never in a tight loop).
 pub const RETRY_MS: u64 = 60 * 1000;
 
-/// A change of definitions (devices, zones, equipments, recipes) is written this long after the
+/// A change of definitions (devices, zones, equipments, recipes, settings) is written this long after the
 /// saver first sees it unsaved, in milliseconds, so that a burst of changes gives one write
 /// (decision D40). Bound: at most this long, plus one turn of the engine's loop, a change of
 /// definitions is in RAM only (lost on a power cut); a stop writes at once.
@@ -76,7 +78,8 @@ pub fn flushed_line(files: usize) -> String {
 pub struct Saver<S: Storage> {
     store: S,
     policy: WritePolicy,
-    /// `pair` writes the devices only: zones and equipments are written by `--serve`.
+    /// `pair` writes the devices only: zones, equipments, recipes and settings are written by
+    /// `--serve`.
     devices_only: bool,
     /// Not before this time are the zones and equipments tried again after a failure.
     retry_at: u64,
@@ -191,7 +194,8 @@ impl<S: Storage> Saver<S> {
         let home = lock(home);
         let (zones, equipments) = home.changes();
         home.devices.changes().0
-            || (!self.devices_only && (zones || equipments || home.recipes_changed()))
+            || (!self.devices_only
+                && (zones || equipments || home.recipes_changed() || home.settings_changed()))
     }
 
     /// False while unsaved definitions wait for the delay; true when they may be written (or there
@@ -237,7 +241,7 @@ impl<S: Storage> Saver<S> {
         }
         type Take = fn(&mut Home) -> Option<ListCursor>;
         type Mark = fn(&mut Home);
-        let files: [(&str, Take, Mark); 3] = [
+        let files: [(&str, Take, Mark); 4] = [
             (
                 ZONES_FILE,
                 Home::take_zones_cursor,
@@ -252,6 +256,11 @@ impl<S: Storage> Saver<S> {
                 RECIPES_FILE,
                 Home::take_recipes_cursor,
                 Home::mark_recipes_changed,
+            ),
+            (
+                SETTINGS_FILE,
+                Home::take_settings_cursor,
+                Home::mark_settings_changed,
             ),
         ];
         for (name, take, mark) in files {

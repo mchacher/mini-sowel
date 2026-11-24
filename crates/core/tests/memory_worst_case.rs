@@ -58,6 +58,9 @@
 //!   multiplies.
 //! - `live/session.rs::MAX_INCOMING_BYTES`: a client's incoming frame, 1 KB, inside the 2 KB read
 //!   buffer counted with `live/mod.rs::MAX_QUEUED_BYTES`.
+//! - `settings/mod.rs::MAX_HOME_NAME_CHARS`: the six settings at their longest (a name of 64
+//!   characters, numbers at the length of their pattern), `settings.json` written and the backup
+//!   document built (it is refused, over `api/mod.rs::MAX_BODY_BYTES`).
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -65,6 +68,7 @@ use std::sync::Mutex;
 
 use peak_alloc::PeakAlloc;
 use serde_json::{Value, json};
+use solite_core::api::MAX_BODY_BYTES;
 use solite_core::api::{Reach, Reply, Request, handle, handle_stream};
 use solite_core::devices::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Devices, Id, MAX_DATA,
@@ -81,6 +85,7 @@ use solite_core::radio::measures::{Measure, Value as MeasureValue};
 use solite_core::radio::zcl::Command;
 use solite_core::radio::{MeasureEvent, Sender};
 use solite_core::recipes::MAX_INSTANCES;
+use solite_core::settings::MAX_HOME_NAME_CHARS;
 use solite_core::zones::MAX_ZONES;
 
 #[global_allocator]
@@ -548,6 +553,41 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         .expect("the recipes are to be written");
     while cursor.next_chunk(&home).unwrap().is_some() {}
 
+    // The settings (spec 026): the six keys at their longest, `settings.json` written, the sun
+    // computed, the backup asked (its document is built, then refused: over 16 KB).
+    let settings = json!({
+        "home.name": "n".repeat(MAX_HOME_NAME_CHARS),
+        "home.latitude": "-89.123456789012",
+        "home.longitude": "-179.123456789012",
+        "home.timezone": "America/Los_Angeles",
+        "home.sunriseOffset": "-180",
+        "home.sunsetOffset": "-180",
+    })
+    .to_string();
+    let put = handle(
+        &mut home,
+        &request("PUT", "/api/v1/settings", settings.as_bytes()),
+        T0,
+        &mut random,
+    );
+    assert_eq!(put.status, 200, "{put:?}");
+    let mut cursor = home
+        .take_settings_cursor()
+        .expect("the settings are to be written");
+    let mut settings_json = String::new();
+    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+        settings_json.push_str(&chunk);
+    }
+    let backup_bytes = home.export_backup().unwrap().len();
+    let backup = handle(
+        &mut home,
+        &request("GET", "/api/v1/backup", b""),
+        T0,
+        &mut random,
+    );
+    assert_eq!(backup.status, 413, "{backup:?}");
+    assert!(backup.body.as_ref().unwrap().len() <= MAX_BODY_BYTES);
+
     let measured = ALLOCATOR.peak_usage().saturating_sub(base);
     let peak = measured + RADIO_ESTIMATE_BYTES.saturating_sub(radio.len());
     let worst = peak + worst_log_bytes.saturating_sub(log_bytes);
@@ -608,13 +648,15 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert_eq!(bodies.len(), HTTP_WORKERS);
     assert_eq!(texts.len(), MAX_EVENTS);
     println!(
-        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB); {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); ceiling {CEILING_BYTES}",
+        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB); {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); settings.json {} bytes; backup document {backup_bytes} bytes (refused over {MAX_BODY_BYTES}); ceiling {CEILING_BYTES}",
         measured / 1024,
         peak / 1024,
         worst / 1024,
         sizes[0],
         sizes[1],
+        settings_json.len(),
     );
+    assert!(settings_json.len() < 1024, "{settings_json}");
     assert!(worst < CEILING_BYTES, "worst case {worst} bytes");
 }
 

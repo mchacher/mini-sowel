@@ -1,6 +1,6 @@
 //! Sowel's `EngineEvent`s that Solite sends over the WebSocket, with Sowel's names and
 //! fields (`src/shared/types.ts` T:1819-1974). The events of what Solite does not have
-//! (modes, activity, energy, system...) are not here: see decision D18.
+//! (modes, activity, energy, most of system...) are not here: see decision D18.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -108,6 +108,12 @@ pub enum EngineEvent {
         recipe_id: String,
         error: String,
     },
+    /// The keys of an accepted `PUT /settings`, or those an import changed (topic `system`).
+    #[serde(rename = "settings.changed")]
+    SettingsChanged { keys: Vec<String> },
+    /// The root zone's sun data changed (topic `system`).
+    #[serde(rename = "sunlight.changed")]
+    SunlightChanged,
 }
 
 impl EngineEvent {
@@ -135,6 +141,8 @@ impl EngineEvent {
             EngineEvent::RecipeInstanceStopped { .. } => "recipe.instance.stopped",
             EngineEvent::RecipeInstanceStateChanged { .. } => "recipe.instance.state.changed",
             EngineEvent::RecipeInstanceError { .. } => "recipe.instance.error",
+            EngineEvent::SettingsChanged { .. } => "settings.changed",
+            EngineEvent::SunlightChanged => "sunlight.changed",
         }
     }
 

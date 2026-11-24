@@ -13,8 +13,8 @@ use mem_storage::MemStorage;
 use serde_json::json;
 use solite_core::devices::{VALUE_WRITE_INTERVAL_MS, lock};
 use solite_core::engine::{
-    DEFINITION_DELAY_MS, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, RETRY_MS, SaveControl, Saver,
-    WriteCounter, ZONES_FILE, flash_line, flushed_line,
+    DEFINITION_DELAY_MS, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, RETRY_MS, SETTINGS_FILE,
+    SaveControl, Saver, WriteCounter, ZONES_FILE, flash_line, flushed_line,
 };
 use solite_core::home::Home;
 use support::{Garage, HOUR, MINUTE, Rig, T0, temperature};
@@ -349,6 +349,32 @@ fn a_flush_writes_each_changed_file_once_and_ends_the_hold() {
     assert_eq!(storage.writes(EQUIPMENTS_FILE), 1);
     saver.tick(&bench.home, T + 3_000, false).unwrap();
     assert_eq!(storage.writes(EQUIPMENTS_FILE), 2);
+}
+
+#[test]
+fn a_flush_writes_the_settings_among_the_changed_files() {
+    let mut bench = Bench::new();
+    let storage = std::mem::take(&mut bench.storage);
+    let control = control();
+    let mut saver = delayed(&storage).with_control(control);
+    control.hold();
+    let (status, body) = bench.with_rig(T, |rig| {
+        rig.put("/api/v1/settings", json!({"home.name": "Annexe"}))
+    });
+    assert_eq!(status, 200, "{body}");
+    bench.rename_zone(T, "Garage 2");
+    saver.tick(&bench.home, T + 5_000, false).unwrap();
+    assert_eq!(storage.attempts.get(), 0, "held");
+    control.ask_flush();
+    saver.tick(&bench.home, T + 5_100, false).unwrap();
+    assert_eq!(storage.writes(SETTINGS_FILE), 1);
+    assert_eq!(storage.writes(ZONES_FILE), 1);
+    assert_eq!(storage.attempts.get(), 2, "the two files the flush counts");
+    assert_eq!(
+        storage.text(SETTINGS_FILE).unwrap(),
+        r#"{"home.name":"Annexe"}"#
+    );
+    assert!(!control.is_held());
 }
 
 #[test]

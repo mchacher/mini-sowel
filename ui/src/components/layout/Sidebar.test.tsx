@@ -33,7 +33,13 @@ describe("Sidebar, Administration section", () => {
   it("opens and closes on a click of its title, entries in order", () => {
     show();
     fireEvent.click(title());
-    expect(entries().slice(-4)).toEqual(["Devices", "Equipments", "Topology", "Discovery"]);
+    expect(entries().slice(-5)).toEqual([
+      "Devices",
+      "Equipments",
+      "Topology",
+      "Discovery",
+      "Settings",
+    ]);
     expect(title().getAttribute("aria-expanded")).toBe("true");
     fireEvent.click(title());
     expect(entries()).toEqual(["Home", "Garage", "House"]);
@@ -52,6 +58,7 @@ describe("Sidebar, Administration section", () => {
     ["equipments", "Equipments"],
     ["zones", "Topology"],
     ["discovery", "Discovery"],
+    ["settings", "Settings"],
   ] as const)(
     "is open at %s with its entry marked, no room, and one mark in all",
     (page, label) => {
@@ -71,6 +78,7 @@ describe("Sidebar, Administration section", () => {
     expect(hrefs.Equipments).toBe("#/equipments");
     expect(hrefs.Topology).toBe("#/zones");
     expect(hrefs.Discovery).toBe("#/discovery/solite");
+    expect(hrefs.Settings).toBe("#/settings");
   });
 
   it("closes the drawer when an entry is picked, after setting the hash", () => {

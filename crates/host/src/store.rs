@@ -1,6 +1,7 @@
 //! The home on disk, in the data folder: `devices.json` (a JSON list of Sowel's
 //! `DeviceWithDetails`), `zones.json` (`Zone`s), `equipments.json` (equipments with their
-//! bindings) and `recipes.json` (the recipe instances), each readable by its owner only. Written under a temporary name, then renamed, so
+//! bindings), `recipes.json` (the recipe instances) and `settings.json` (the home's settings), each
+//! readable by its owner only. Written under a temporary name, then renamed, so
 //! a stop in the middle never leaves half a file. Only the radio loop writes (`Saver`, in the
 //! core's `engine`); this file is the Mac's `Storage`.
 
