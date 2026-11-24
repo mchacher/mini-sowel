@@ -95,6 +95,13 @@ fw_broken() {
   fi
 }
 
+# The count of the last `flash: <n> writes since boot` line of a log (spec 025 R2), 0 when there is
+# none. $1 the log.
+fw_flash_writes() {
+  n=$(grep -aoE 'flash: [0-9]+ writes since boot' "$1" | tail -n 1 | sed -E 's/flash: ([0-9]+) .*/\1/')
+  echo "${n:-0}"
+}
+
 # The lines that must show: the banner, the memory, the storage and the network; then the engine's
 # (sim image) or `radio: none` (box image). $1 the log, $2 the mode, `sim` or `box`.
 fw_lines_ok() {

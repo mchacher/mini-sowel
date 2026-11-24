@@ -152,7 +152,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); look again in J6 | Architecture review 2026-11-22 |
 | 2026-11-23 | A motion sensor (or its binding) deleted under a running motion-light is not settled: the instance keeps its resolved sources until its next start; resolve them again on an equipment change, if Sowel does | Spec 024 |
 | 2026-11-23 | A motion-light whose button loses its device or its `action` binding is disabled whole (D38's validation), so the garage stops lighting on motion until the button is taken out: prune such a button instead, for a box that runs a month alone | Spec 024 review |
-| 2026-11-23 | Rule: a budget of flash writes for the tests on the box (see D39, proposed): one pass of a flow on the real box, loops and measures on the Mac or in QEMU; each box run notes its writes | User, 2026-11-23 |
+| 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
 | 2026-11-22 | The home lock is held for a whole batch of measures, aggregation included: measure it before device recognition adds work per measure | Architecture review 2026-11-22 |
 | 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
 
@@ -283,3 +283,8 @@ Every change to this roadmap: date, what changed, why.
   changes (D38). The stale-ids inbox line is done and removed; the missing-events line keeps its
   `set_device_zone` half; the GET line is kept for J6. New lines: a deleted motion sensor is not
   settled; the flash-write budget rule for box tests (D39, proposed).
+- 2026-11-24: spec 025 built on the Mac (the user away): saves held and flushed from the serial
+  console in one `box.sh saves` session, every flash write counted (`flash: <n> writes since
+  boot`, `--budget`), definitions coalesced over 2 s (D40), `measure-api.sh` on the Mac; D39
+  finalised. The budget-rule inbox line is done and removed; a line for its run on the box is
+  added.

@@ -321,7 +321,9 @@ spec's example. On the Mac: `cargo run -p solite-host` (with the simulated radio
 or the Dongle Max's radio over TCP, as the spec says), and show its output or the API's answers.
 Interface: `cd ui && npm run dev`, open the screen, and show screenshots of every screen changed,
 in the Hybrid and Dark themes. ESP32: the firmware build and, only with the user's yes to flash,
-`cd firmware && cargo run --release` (flashes and opens the serial log). With real hardware, say
+`cd firmware && cargo run --release` (flashes and opens the serial log). A run on the box is one
+pass of the flow, never a loop, inside `sh scripts/box.sh saves --budget <n>` (decision D39), and
+its `flash:` count goes into the spec's result. With real hardware, say
 which device was used and write the result in the spec. Compare out loud with what the spec
 promised. If something differs, say it plainly.
 

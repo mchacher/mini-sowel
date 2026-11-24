@@ -2408,3 +2408,301 @@ fn wifi_waits_15_s_for_the_console_and_reads_its_log_lines() {
         run.text
     );
 }
+
+// ---- Saves held for one test, and the flash-write budget (spec 025) ------------------------------
+
+/// A console that stays up, reads every line and answers `saves hold` and `saves flush` with the
+/// text of their files; with `FAKE_CONSOLE_SILENT` it answers nothing.
+const FAKE_SAVES_CONSOLE: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$FAKE_CONSOLE_LINES"
+  [ -n "$FAKE_CONSOLE_SILENT" ] && continue
+  case "$line" in
+    "saves hold") cat "$FAKE_SAVES_HOLD" ;;
+    "saves flush") cat "$FAKE_SAVES_FLUSH" ;;
+  esac
+done
+"#;
+
+const HELD: &str = "I (1500) solite: flash: 1 writes since boot\n\
+    I (1600) solite: saves: held, nothing is written until saves flush or a restart\n\
+    I (9000) solite: serving: http://192.168.1.20/\n";
+const FLUSHED: &str = "I (20000) solite: saves: flush asked\n\
+    I (20100) solite: flash: 2 writes since boot\n\
+    I (20200) solite: flash: 3 writes since boot\n\
+    I (20300) solite: saves: flushed, 2 files written\n";
+
+/// Runs `box.sh saves <args>` with the fake console answering `hold` and `flush`; the environment
+/// is returned so the test can read what the console received.
+fn saves(hold: &str, flush: &str, args: &[&str], extra: &[(&str, &str)]) -> (Env, Out) {
+    let env = Env::new();
+    let console = env.path("saves-console.sh");
+    write_exec(&console, FAKE_SAVES_CONSOLE);
+    fs::write(env.path("hold.txt"), hold).unwrap();
+    fs::write(env.path("flush.txt"), flush).unwrap();
+    let lines = env.path("console-lines.txt").display().to_string();
+    let hold_file = env.path("hold.txt").display().to_string();
+    let flush_file = env.path("flush.txt").display().to_string();
+    let mut env = env
+        .with("SOLITE_SERIAL_CONSOLE", &console.display().to_string())
+        .with("FAKE_CONSOLE_LINES", &lines)
+        .with("FAKE_SAVES_HOLD", &hold_file)
+        .with("FAKE_SAVES_FLUSH", &flush_file)
+        .with("SOLITE_WIFI_WAIT_SECONDS", "3")
+        .with("SOLITE_SAVES_FLUSH_SECONDS", "3");
+    for (k, v) in extra {
+        env = env.with(k, v);
+    }
+    let mut all = vec!["saves"];
+    all.extend_from_slice(args);
+    let out = env.run(&all, Tty::NoTty, "");
+    (env, out)
+}
+
+#[test]
+fn saves_holds_runs_the_command_flushes_and_prints_the_count() {
+    let env_probe = Env::new();
+    let probe = env_probe.path("address.txt");
+    let command = format!("echo \"$SOLITE_BOX_ADDRESS\" > {}", probe.display());
+    let (env, out) = saves(HELD, FLUSHED, &["--", "sh", "-c", &command], &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert_eq!(env.console_lines(), ["saves hold", "saves flush"]);
+    assert_eq!(fs::read_to_string(&probe).unwrap().trim(), "192.168.1.20");
+    for line in [
+        "box: saves held; serving at http://192.168.1.20/",
+        "box: saves flushed (2 files written)",
+        "box: flash: 3 writes since boot",
+        "box: serial log: ",
+    ] {
+        assert!(out.text.contains(line), "{line}: {}", out.text);
+    }
+}
+
+#[test]
+fn saves_fails_over_its_budget_and_passes_at_it() {
+    let (env, out) = saves(HELD, FLUSHED, &["--budget", "2", "--", "true"], &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: flash: 3 writes since boot, over the budget of 2"),
+        "{}",
+        out.text
+    );
+    assert_eq!(
+        env.console_lines(),
+        ["saves hold", "saves flush"],
+        "flushed all the same"
+    );
+    let (_, out) = saves(HELD, FLUSHED, &["--budget", "3", "--", "true"], &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+}
+
+#[test]
+fn saves_no_flush_sends_only_the_hold_and_counts_the_boot_marker_read_before_it() {
+    let (env, out) = saves(HELD, FLUSHED, &["--no-flush", "--", "true"], &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert_eq!(env.console_lines(), ["saves hold"]);
+    assert!(
+        out.text
+            .contains("box: saves still held: the changes stay in RAM"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text.contains("box: flash: 1 writes since boot"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn saves_with_a_silent_console_says_so_and_exits_4() {
+    let (_, out) = saves(
+        HELD,
+        FLUSHED,
+        &["--", "true"],
+        &[
+            ("FAKE_CONSOLE_SILENT", "1"),
+            ("SOLITE_WIFI_ANSWER_SECONDS", "1"),
+        ],
+    );
+    assert_eq!(out.code, 4, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: no answer from Solite's console on "),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn saves_without_a_serving_line_runs_nothing_and_flushes_nothing() {
+    let env_probe = Env::new();
+    let probe = env_probe.path("ran.txt");
+    let command = format!("touch {}", probe.display());
+    let (env, out) = saves(
+        "saves: held, nothing is written until saves flush or a restart\n",
+        FLUSHED,
+        &["--", "sh", "-c", &command],
+        &[("SOLITE_WIFI_WAIT_SECONDS", "1")],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text.contains("box: the box serves nothing within 1 s"),
+        "{}",
+        out.text
+    );
+    assert!(!probe.exists(), "the command was not run");
+    assert_eq!(env.console_lines(), ["saves hold"]);
+}
+
+#[test]
+fn saves_flushes_even_when_the_command_fails_and_exits_1() {
+    let (env, out) = saves(HELD, FLUSHED, &["--", "sh", "-c", "exit 3"], &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert_eq!(env.console_lines(), ["saves hold", "saves flush"]);
+    assert!(
+        out.text.contains("box: the command failed (exit 3)"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text.contains("box: saves flushed (2 files written)"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn saves_with_a_command_that_cannot_start_still_flushes_and_exits_1() {
+    let (env, out) = saves(HELD, FLUSHED, &["--", "/nonexistent/solite-command"], &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text.contains("box: cannot run the command"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text.contains("box: the command failed (exit 127)"),
+        "{}",
+        out.text
+    );
+    assert_eq!(env.console_lines(), ["saves hold", "saves flush"]);
+}
+
+#[test]
+fn saves_with_a_flush_asked_but_never_done_names_the_engine_and_exits_1() {
+    let (_, out) = saves(
+        HELD,
+        "saves: flush asked\n",
+        &["--", "true"],
+        &[("SOLITE_SAVES_FLUSH_SECONDS", "1")],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: the console took the line but the engine flushed nothing within 1 s"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn saves_fails_when_the_box_restarted_during_the_session_and_sends_no_flush() {
+    let restarted = format!("{HELD}I (300) solite: console: ready\n");
+    let (env, out) = saves(&restarted, FLUSHED, &["--", "true"], &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: the box restarted during the session: the hold was lost"),
+        "{}",
+        out.text
+    );
+    assert_eq!(env.console_lines(), ["saves hold"]);
+}
+
+#[test]
+fn saves_interrupted_stops_the_command_flushes_and_exits_130() {
+    let (env, out) = saves(
+        HELD,
+        FLUSHED,
+        &["--", "sh", "-c", "kill -TERM $PPID; sleep 5"],
+        &[],
+    );
+    assert_eq!(out.code, 130, "{}", out.text);
+    assert_eq!(env.console_lines(), ["saves hold", "saves flush"]);
+}
+
+#[test]
+fn saves_with_neither_a_command_nor_a_terminal_does_nothing_and_exits_2() {
+    let (env, out) = saves(HELD, FLUSHED, &[], &[]);
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: saves needs a command after -- or a terminal"),
+        "{}",
+        out.text
+    );
+    assert!(env.console_lines().is_empty(), "the console never started");
+}
+
+fn box_log_with_writes() -> String {
+    format!(
+        "{}I (900) solite: flash: 3 writes since boot\nI (950) solite: flash: 4 writes since boot\n",
+        box_log()
+    )
+}
+
+#[test]
+fn log_budget_passes_at_the_budget_and_prints_the_count() {
+    let env = Env::new();
+    let out = log_from(
+        &env,
+        &box_log_with_writes(),
+        &["--image", "box", "--budget", "4"],
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text.contains("flash: 4 writes since boot"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_budget_fails_over_the_budget() {
+    let env = Env::new();
+    let out = log_from(
+        &env,
+        &box_log_with_writes(),
+        &["--image", "box", "--budget", "3"],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.text
+            .contains("box: flash: 4 writes since boot, over the budget of 3"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn log_budget_counts_0_without_a_flash_line() {
+    let env = Env::new();
+    let out = log_from(&env, &box_log(), &["--image", "box", "--budget", "0"]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    assert!(
+        out.text.contains("flash: 0 writes since boot"),
+        "{}",
+        out.text
+    );
+}
+
+#[test]
+fn a_budget_that_is_not_a_whole_number_is_a_usage_error() {
+    let env = Env::new();
+    for budget in ["x", "-1", "2.5", ""] {
+        let out = log_from(&env, &box_log(), &["--image", "box", "--budget", budget]);
+        assert_eq!(out.code, 2, "{budget}: {}", out.text);
+    }
+}

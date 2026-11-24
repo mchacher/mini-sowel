@@ -11,6 +11,14 @@
 #   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
 #   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
 #   sh scripts/box.sh log --raw [--seconds <n>]                              (no checks)
+#   sh scripts/box.sh saves [--budget <n>] [--no-flush] [--port <device>] [-- <command> [<args>]]
+#   (`log` also takes --budget <n>: fails when the log's last `flash: <m> writes since boot` is over n)
+#
+# `saves` runs one test on the radio image with its saves held, in one session of the serial port
+# (opening it resets the box, so a hold and its flush are never sent in two sessions; spec 025,
+# decisions D39 and D40): `saves hold`, wait for `serving:`, the command (with
+# SOLITE_BOX_ADDRESS=<address>; without one, Enter on the terminal), `saves flush`, then the
+# session's last `flash:` count against --budget. Never loop a test against the box (D39).
 #
 # The port is --port, or the only USB bridge found (/dev/cu.usbserial*, /dev/cu.SLAB_USBtoUART*,
 # /dev/ttyUSB*); the baud rate is 921600. identify, backup, restore and flash need the box in
@@ -43,7 +51,8 @@
 # SOLITE_SERIAL_CONSOLE (a program `<program> <port>` that reads the console line on its standard
 # input and prints the answers, in place of the serial port), SOLITE_WIFI_ANSWER_SECONDS (the time
 # `wifi` waits for the console's answer, 15: the console's write may wait behind an engine save),
-# SOLITE_WIFI_WAIT_SECONDS (the time `wifi` waits for the connection, 60).
+# SOLITE_WIFI_WAIT_SECONDS (the time `wifi` waits for the connection, and `saves` for `serving:`, 60),
+# SOLITE_SAVES_FLUSH_SECONDS (the time `saves` waits for `saves: flushed`, 30).
 #
 # Output stays short: a build or a long tool output goes to $TMPDIR/solite-box/, and its path is
 # printed on a failure. Backups and serial logs never go into the repository.
@@ -57,7 +66,7 @@ fw_fail() { box_fail "$1"; }
 . "$ROOT/scripts/lib/firmware.sh"
 
 usage() {
-  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi|pair [--port <device>] [--baud <rate>] [options]" >&2
+  echo "usage: sh scripts/box.sh identify|backup|restore|flash|log|wifi|pair|saves [--port <device>] [--baud <rate>] [options] [-- <command>]" >&2
   [ -n "$1" ] && echo "box: $1" >&2
   exit 2
 }
@@ -82,6 +91,8 @@ FORGET=false
 FROM_FILE=
 RAW=false
 FILE=
+BUDGET=
+FLUSH=true
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) [ $# -ge 2 ] || usage "--port needs a value"; PORT=$2; shift 2 ;;
@@ -97,6 +108,9 @@ while [ $# -gt 0 ]; do
     --raw) RAW=true; shift ;;
     --keep-storage) KEEP_STORAGE=true; shift ;;
     --forget) FORGET=true; shift ;;
+    --budget) [ $# -ge 2 ] && [ -n "$2" ] || usage "--budget needs a value"; BUDGET=$2; shift 2 ;;
+    --no-flush) FLUSH=false; shift ;;
+    --) shift; break ;;
     -*) usage "unknown option $1" ;;
     *) [ -z "$FILE" ] || usage "one file only"; FILE=$1; shift ;;
   esac
@@ -108,6 +122,7 @@ BACKUP=$(abs_path "$BACKUP")
 FROM_FILE=$(abs_path "$FROM_FILE")
 FILE=$(abs_path "$FILE")
 case "$BAUD" in '' | *[!0-9]*) usage "--baud takes a number" ;; esac
+case "$BUDGET" in *[!0-9]*) usage "--budget takes a whole number" ;; esac
 case "$IMAGE" in '' | box | sim | radio) ;; *) usage "--image is box, sim or radio" ;; esac
 
 TARGET_DIR=${SOLITE_TARGET_DIR:-$ROOT/firmware/target/xtensa-esp32-espidf/release}
@@ -492,6 +507,14 @@ log_fail() {
   exit 1
 }
 
+# The log's last `flash:` count against --budget, when one is given (spec 025 R2.3).
+check_budget() {
+  [ -n "$BUDGET" ] || return 0
+  writes=$(fw_flash_writes "$LOGF")
+  echo "flash: $writes writes since boot"
+  [ "$writes" -le "$BUDGET" ] || box_fail "flash: $writes writes since boot, over the budget of $BUDGET"
+}
+
 cmd_log() {
   if ! $RAW; then [ -n "$IMAGE" ] || usage "log needs --image box|sim|radio (or --raw)"; fi
   if [ -n "$FROM_FILE" ]; then
@@ -517,6 +540,7 @@ cmd_log() {
     echo "box: serial log: $LOGF"
   fi
   if $RAW; then
+    check_budget
     exit 0
   fi
 
@@ -568,6 +592,7 @@ cmd_log() {
     grep -a 'engine: ' "$LOGF" | tail -n 1
     grep -a 'saves: [0-9]* written to flash' "$LOGF" | tail -n 1
   fi
+  check_budget
 }
 
 # Talks to the radio image's serial console (spec 022 R9). Standard input: the network's name and
@@ -575,7 +600,9 @@ cmd_log() {
 # lines: the password is in no argument, no environment variable and no file. Opening the port
 # resets the box (the USB bridge), so the line is sent once the console says `console: ready`.
 # Exit 0 done, 1 refused, not connected or pairing failed, 4 no answer. $1 the port, $2 `set`,
-# `forget` or `pair` (waits for `pairing: open for`; the console's `pairing: asked` alone, exit 1).
+# `forget` or `pair` (waits for `pairing: open for`; the console's `pairing: asked` alone, exit 1),
+# or `saves` (then $3 the budget or empty, $4 `true` to flush, $5 the session's log file, and the
+# command after them; see cmd_saves).
 console_exchange() {
   [ -n "$SOLITE_SERIAL_CONSOLE" ] || fw_find_idf
   ${PY:-python3} -c '
@@ -593,6 +620,12 @@ if mode == "set":
     line = "wifi-set " + json.dumps({"ssid": ssid, "password": password})
 elif mode == "pair":
     line = "pair"
+elif mode == "saves":
+    line = "saves hold"
+    budget, flush, session_log = sys.argv[3], sys.argv[4] == "true", sys.argv[5]
+    command = sys.argv[6:]
+    flush_wait = float(os.environ.get("SOLITE_SAVES_FLUSH_SECONDS") or 30)
+    sys.stdout.reconfigure(line_buffering=True)
 else:
     line = "wifi-forget"
 
@@ -631,6 +664,8 @@ else:
         return s.read(4096)
 
 buffer = b""
+# Every line of the session, from the moment the port opens (spec 025 R4.1).
+session = []
 def lines_until(deadline):
     # The complete lines that arrive before the deadline, one at a time.
     global buffer
@@ -641,7 +676,9 @@ def lines_until(deadline):
             # The firmware answers through its log: its prefix (level, time, module) and colours
             # are dropped.
             logged = LOG_LINE.match(text)
-            yield logged.group(1) if logged else text
+            text = logged.group(1) if logged else text
+            session.append(text)
+            yield text
         left = deadline - time.time()
         if left <= 0:
             return
@@ -665,6 +702,122 @@ if not fake:
         if text.endswith("console: ready"):
             break
 send((line + "\n").encode())
+if mode == "saves":
+    import atexit, signal
+    def keep_log():
+        for _ in lines_until(time.time()):
+            pass
+        with open(session_log, "w") as f:
+            f.write("\n".join(session) + "\n")
+    atexit.register(keep_log)
+    held = False
+    for text in lines_until(time.time() + answer_wait):
+        if text.startswith("saves: held"):
+            held = True
+            break
+    if not held:
+        no_answer()
+    held_at = len(session)
+    # From the hold on, Ctrl-C or SIGTERM never leaves the box held: the flush still goes.
+    interrupted = []
+    child = []
+    def on_signal(number, frame):
+        interrupted.append(number)
+        if child and child[0].poll() is None:
+            child[0].terminate()
+    signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGTERM, on_signal)
+    def serving():
+        for text in session:
+            found = re.match(r"serving: http://([^/\s]+)/", text)
+            if found:
+                return found.group(1)
+        return None
+    address = serving()
+    if address is None:
+        give_up = time.time() + wait
+        while address is None and not interrupted and time.time() < give_up:
+            for _ in lines_until(min(give_up, time.time() + 0.3)):
+                pass
+            address = serving()
+    if address is None and not interrupted:
+        print("box: the box serves nothing within %d s: the command is not run, the saves stay "
+              "held until the next restart" % int(wait))
+        sys.exit(1)
+    failed = 0
+    if interrupted:
+        pass
+    elif command:
+        print("box: saves held; serving at http://%s/" % address)
+        try:
+            child.append(subprocess.Popen(command, cwd=os.environ.get("SOLITE_CALLER_DIR") or None,
+                                          env=dict(os.environ, SOLITE_BOX_ADDRESS=address)))
+        except OSError as error:
+            print("box: cannot run the command: %s" % error)
+            failed = 127
+        while child and child[0].poll() is None:
+            for _ in lines_until(time.time() + 0.3):
+                pass
+        if child:
+            failed = child[0].returncode
+    else:
+        print("box: saves held; serving at http://%s/" % address)
+        tty = open("/dev/tty")
+        tty_out = open("/dev/tty", "w")
+        tty_out.write("box: saves held: run the test, then press Enter to flush\n")
+        tty_out.flush()
+        while not interrupted:
+            ready, _, _ = select.select([tty], [], [], 0)
+            if ready:
+                tty.readline()
+                break
+            for _ in lines_until(time.time() + 0.3):
+                pass
+    code = 0
+    restarted = any(text.endswith("console: ready") for text in session[held_at:])
+    if restarted:
+        print("box: the box restarted during the session: the hold was lost and the count is not "
+              "the session\u0027s")
+        code = 1
+    elif flush:
+        send(b"saves flush\n")
+        asked = False
+        flushed = None
+        for text in lines_until(time.time() + flush_wait):
+            if text.startswith("saves: flush asked"):
+                asked = True
+            found = re.match(r"saves: flushed, (\d+) files written", text)
+            if found:
+                flushed = found.group(1)
+                break
+        if flushed is not None:
+            print("box: saves flushed (%s files written)" % flushed)
+        elif asked:
+            print("box: the console took the line but the engine flushed nothing within %d s: is "
+                  "the engine running, and the clock set?" % int(flush_wait))
+            code = 1
+        else:
+            print("box: no answer from Solite\u0027s console on %s to saves flush" % port)
+            code = 4
+    else:
+        print("box: saves still held: the changes stay in RAM and are lost at the next restart")
+    for _ in lines_until(time.time()):
+        pass
+    writes = 0
+    for text in session:
+        found = re.search(r"flash: (\d+) writes since boot", text)
+        if found:
+            writes = int(found.group(1))
+    print("box: flash: %d writes since boot" % writes)
+    if budget and writes > int(budget):
+        print("box: flash: %d writes since boot, over the budget of %s" % (writes, budget))
+        code = code or 1
+    if failed and not interrupted:
+        print("box: the command failed (exit %d)" % failed)
+        code = code or 1
+    if interrupted:
+        code = 130
+    sys.exit(code)
 if mode == "pair":
     asked = False
     for text in lines_until(time.time() + answer_wait):
@@ -707,7 +860,7 @@ for text in lines_until(time.time() + wait):
         sys.exit(0)
 print("box: " + clean(last))
 sys.exit(1)
-' "$1" "$2"
+' "$@"
 }
 
 # Restores the terminal's echo, whatever way the script ends.
@@ -760,6 +913,24 @@ cmd_pair() {
   exit "$code"
 }
 
+# One test with the saves held (spec 025 R4): the command is what follows `--`.
+cmd_saves() {
+  [ -z "$FILE" ] || usage "saves takes its command after --"
+  if [ $# -eq 0 ] && ! (exec </dev/tty) 2>/dev/null; then
+    echo "box: saves needs a command after -- or a terminal" >&2
+    exit 2
+  fi
+  resolve_port
+  LOGF=$WORK/saves-$(date +%Y%m%d-%H%M%S).log
+  code=0
+  # The command runs from the caller's folder, as typed.
+  SOLITE_CALLER_DIR=$CALLER_DIR
+  export SOLITE_CALLER_DIR
+  console_exchange "$PORT" saves "$BUDGET" "$FLUSH" "$LOGF" "$@" || code=$?
+  echo "box: serial log: $LOGF"
+  exit "$code"
+}
+
 case "$COMMAND" in
   identify) cmd_identify ;;
   backup) cmd_backup ;;
@@ -768,5 +939,6 @@ case "$COMMAND" in
   log) cmd_log ;;
   wifi) cmd_wifi ;;
   pair) cmd_pair ;;
+  saves) cmd_saves "$@" ;;
   *) usage "unknown command $COMMAND" ;;
 esac

@@ -58,13 +58,14 @@ cargo run -p solite-host -- --radio tcp://<address>:6638 --pair|--listen   # sta
 cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # no dongle
 cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API, interface :8080
 sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
-sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings
+sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
 cargo test --workspace [-- --include-ignored]     # Rust tests (core, host); the ignored ones are the slow ones
 cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.tsx   # one Rust, one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
 sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them)
+sh scripts/box.sh saves --budget <n> -- <command>  # one test on the box, saves held then flushed once (D39: no loop on the box)
 sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)

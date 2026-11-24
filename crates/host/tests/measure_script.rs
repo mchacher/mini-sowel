@@ -197,6 +197,21 @@ fn with_no_device_with_an_order_it_refuses_before_creating_anything() {
 }
 
 #[test]
+fn without_an_address_the_usage_names_the_mac_and_the_box_rule() {
+    let (ok, _, err) = run(&[]);
+    assert!(!ok);
+    assert!(err.contains("usage: sh scripts/measure-api.sh"), "{err}");
+    assert!(
+        err.contains("on the Mac: sh scripts/measure-api.sh 8080"),
+        "{err}"
+    );
+    assert!(
+        err.contains("once per milestone, inside sh scripts/box.sh saves"),
+        "{err}"
+    );
+}
+
+#[test]
 fn with_no_api_answering_it_says_so() {
     let (ok, _, err) = run(&[&format!("127.0.0.1:{}", free_port())]);
     assert!(!ok);
