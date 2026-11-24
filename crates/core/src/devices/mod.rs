@@ -2,13 +2,16 @@
 //! catalog that says which data and orders a cluster gives, the registry that keeps them up to
 //! date from the radio's events, and the rules for writing them to storage.
 
-mod catalog;
+pub mod catalog;
 mod model;
 mod persist;
 mod registry;
 mod time;
 
-pub use catalog::{DataSpec, OrderSpec, data_for_cluster, key_for_measure, orders_for_cluster};
+pub use catalog::{
+    DataSpec, OrderSpec, all_data, all_orders, data_for_cluster, key_for_measure,
+    orders_for_cluster,
+};
 pub use model::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, INTEGRATION_ID, Id,
     PowerSource, Route, ValueType,

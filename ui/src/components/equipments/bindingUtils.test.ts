@@ -47,6 +47,16 @@ describe("computeBindingPlan", () => {
     ]);
   });
 
+  it("binds a colour bulb's state, brightness and colour temperature for light_color", () => {
+    expect(summary(computeBindingPlan([fixtures.colorBulb()], "light_color"))).toEqual([
+      "data:state>state",
+      "data:brightness>brightness",
+      "order:state>state",
+      "order:brightness>brightness",
+      "order:color_temp>color_temp",
+    ]);
+  });
+
   it("binds a thermostat's data by category and every order", () => {
     const thermostat = deviceWithData(
       "t",

@@ -1,9 +1,19 @@
 // Ported from Sowel ui/src/components/equipments/equipment-type-meta.tsx (Sowel commit 5da84dc1, UI
-// 1.87.0). Cut (spec 018): everything but decision D3's seven types (`light_onoff`,
-// `light_dimmable`, `shutter`, `sensor`, `switch`, `thermostat`, `button`); the categories, icons
-// and labels of those seven are Sowel's; Sowel's shutter icon (`ShutterClosedIcon`, a custom SVG)
-// is Lucide's `Blinds`.
-import { Blinds, CircleDot, Gauge, Lightbulb, SunDim, Thermometer, ToggleLeft } from "lucide-react";
+// 1.87.0). Cut (specs 018, 027): everything but the eight types that have Sowel's binding rules
+// (`light_onoff`, `light_dimmable`, `light_color`, `shutter`, `sensor`, `switch`, `thermostat`,
+// `button`); the categories, icons and labels of those eight are Sowel's; Sowel's shutter icon
+// (`ShutterClosedIcon`, a custom SVG) is Lucide's `Blinds`. The API accepts Sowel's 23 other
+// types: the form does not offer them, and shows one as written.
+import {
+  Blinds,
+  CircleDot,
+  Gauge,
+  Lightbulb,
+  Palette,
+  SunDim,
+  Thermometer,
+  ToggleLeft,
+} from "lucide-react";
 import type { DataCategory, EquipmentType } from "../../types";
 import type { DeviceWithData } from "../../api/devices";
 import {
@@ -12,10 +22,11 @@ import {
   isThermostatDevice,
 } from "../../lib/binding-candidates";
 
-/** The equipment types Solite makes (decision D3). */
+/** The equipment types the form offers: the eight that have Sowel's binding rules. */
 export const SOLITE_EQUIPMENT_TYPES: EquipmentType[] = [
   "light_onoff",
   "light_dimmable",
+  "light_color",
   "shutter",
   "sensor",
   "switch",
@@ -26,6 +37,7 @@ export const SOLITE_EQUIPMENT_TYPES: EquipmentType[] = [
 export const EQUIPMENT_TYPE_CATEGORIES: Partial<Record<EquipmentType, DataCategory[]>> = {
   light_onoff: ["light_state"],
   light_dimmable: ["light_state", "light_brightness"],
+  light_color: ["light_state", "light_brightness", "light_color"],
   shutter: ["shutter_position"],
   switch: ["light_state"],
   sensor: [
@@ -50,6 +62,7 @@ export const EQUIPMENT_TYPE_CATEGORIES: Partial<Record<EquipmentType, DataCatego
 export const TYPE_ICONS: Partial<Record<EquipmentType, React.ReactNode>> = {
   light_onoff: <Lightbulb size={18} strokeWidth={1.5} />,
   light_dimmable: <SunDim size={18} strokeWidth={1.5} />,
+  light_color: <Palette size={18} strokeWidth={1.5} />,
   shutter: <Blinds size={18} strokeWidth={1.5} />,
   switch: <ToggleLeft size={18} strokeWidth={1.5} />,
   sensor: <Gauge size={18} strokeWidth={1.5} />,
@@ -62,8 +75,8 @@ export const TYPE_LABELS: Partial<Record<EquipmentType, string>> = Object.fromEn
 );
 
 /**
- * Whether a device fits an equipment type, as Sowel's `DeviceSelector` decides it for D3's types
- * (spec 019): lights, switches and shutters by their binding candidates, a thermostat by its
+ * Whether a device fits an equipment type, as Sowel's `DeviceSelector` decides it for the eight
+ * types the form offers (spec 019): lights, switches and shutters by their binding candidates, a thermostat by its
  * contract (a `setpoint` data or a `set_setpoint` order), a sensor or a button by a data of the
  * type's categories.
  */
@@ -78,8 +91,21 @@ export function isCompatible(type: EquipmentType, device: DeviceWithData): boole
   return data.some((d) => categories.includes(d.category));
 }
 
-/** The type to offer for a device (spec 019, R4): the first that fits, else `null`. */
+/**
+ * The type to offer for a device (spec 019, R4; spec 027): the first that fits, else `null`. A
+ * light with a colour or colour temperature, data or order, is `light_color` (the core's
+ * `equipments::propose` decides the same).
+ */
 export function deduceType(device: DeviceWithData): EquipmentType | null {
+  const colour =
+    isCompatible("light_color", device) &&
+    ((device.data ?? []).some(
+      (d) => d.category === "light_color" || d.category === "light_color_temp",
+    ) ||
+      (device.orders ?? []).some(
+        (o) => o.category === "set_color" || o.category === "set_color_temp",
+      ));
+  if (colour) return "light_color";
   const dimmable =
     isCompatible("light_dimmable", device) &&
     (device.data ?? []).some((d) => d.category === "light_brightness");

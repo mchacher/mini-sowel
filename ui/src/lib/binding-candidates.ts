@@ -1,6 +1,7 @@
 // Ported from Sowel's `src/shared/binding-candidates.ts` and `thermostat-contract.ts` (Sowel
-// commit 5da84dc1), for decision D3's seven types (spec 019). Cut: every type but `light_onoff`,
-// `light_dimmable`, `switch` and `shutter`; the metering attach of a single-channel switch; the
+// commit 5da84dc1), for the eight types that have Sowel's binding rules (specs 019 and 027). Cut:
+// every type but `light_onoff`, `light_dimmable`, `light_color`, `switch` and `shutter`; the
+// metering attach of a single-channel switch; the
 // `shutter_*` key convention (no Solite device has it: only Sowel's category fallback stays); the
 // door, VMC and solar rules. Structural input types, as in Sowel.
 import type { DataCategory, DataType, EquipmentType, OrderCategory } from "../types";
@@ -29,10 +30,11 @@ export interface BindingCandidate {
   orderKeys: string[];
 }
 
-/** The types whose compatibility and binding follow the candidates (Sowel's list, cut to D3's). */
+/** The types whose compatibility and binding follow the candidates (Sowel's list, cut to the eight). */
 export const CANDIDATE_BASED_TYPES: ReadonlySet<EquipmentType> = new Set<EquipmentType>([
   "light_onoff",
   "light_dimmable",
+  "light_color",
   "switch",
   "shutter",
 ]);
@@ -81,10 +83,18 @@ export function computeBindingCandidates(
       }
       return candidates;
     }
-    case "light_dimmable": {
-      // An on/off order, with the brightness orders and the data of the same keys attached.
+    case "light_dimmable":
+    case "light_color": {
+      // An on/off order, with the brightness orders and the data of the same keys attached and,
+      // for a colour light, the colour temperature and colour orders (Sowel's rule).
       const candidates: BindingCandidate[] = [];
       const brightnessOrders = deviceOrders.filter((o) => o.key.includes("brightness"));
+      const colorTempOrders = deviceOrders.filter(
+        (o) => o.key.includes("color_temp") || o.key.includes("color_temperature"),
+      );
+      const colorOrders = deviceOrders.filter(
+        (o) => o.key === "color" || (o.key.includes("color_") && !colorTempOrders.includes(o)),
+      );
       for (const o of deviceOrders) {
         if (!isOnOffOrder(o)) continue;
         const dataKeys: string[] = [];
@@ -95,6 +105,10 @@ export function computeBindingCandidates(
           orderKeys.push(b.key);
           const bd = deviceData.find((d) => d.key === b.key);
           if (bd) dataKeys.push(bd.key);
+        }
+        if (equipmentType === "light_color") {
+          for (const ct of colorTempOrders) orderKeys.push(ct.key);
+          for (const c of colorOrders) orderKeys.push(c.key);
         }
         candidates.push({ id: o.key, label: o.key, dataKeys, orderKeys });
       }

@@ -279,6 +279,10 @@ pub fn compute(
         .map(|z| (z.id, Sum::default()))
         .collect();
     for item in equipments.list() {
+        // Sowel's `computeDirectAccumulator`: a weather station is out of the room's figures.
+        if item.equipment.kind == EquipmentType::Weather {
+            continue;
+        }
         let Some((_, sum)) = own.iter_mut().find(|(id, _)| *id == item.equipment.zone_id) else {
             continue;
         };
@@ -292,7 +296,11 @@ pub fn compute(
             }
             continue;
         }
-        accumulate(sum, &index, item);
+        // A water valve has counts of its own in Sowel (`accumulateWaterValve`, not in Solite's
+        // subset): its bindings are not added to the room's.
+        if item.equipment.kind != EquipmentType::WaterValve {
+            accumulate(sum, &index, item);
+        }
     }
     // Each zone adds up its own and those of the zones below it.
     own.iter()

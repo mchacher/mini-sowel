@@ -1,9 +1,9 @@
 // Subset of Sowel ui/src/components/equipments/bindingUtils.ts (Sowel commit 5da84dc1, UI 1.87.0):
 // `findOrderByCategory`, `findMainOnOffOrder` and `relayStateOn`, copied unchanged with the
-// minimal binding types they take; and, for decision D3's seven types (spec 019), the binding
-// plan: `RELEVANT_DATA`, `RELEVANT_ORDERS`, `BIND_ALL_ORDER_TYPES`, `STANDARD_ALIASES`,
-// `ORDER_CATEGORY_ALIASES`, `DATA_CATEGORY_ALIASES`, `TYPE_CATEGORY_ALIASES` (the entries of those
-// types), `resolveAlias`, `isRelevantData`, `isRelevantOrder`, `uniqueAlias` and
+// minimal binding types they take; and, for the eight types that have Sowel's binding rules (specs
+// 019 and 027), the binding plan: `RELEVANT_DATA`, `RELEVANT_ORDERS`, `BIND_ALL_ORDER_TYPES`,
+// `STANDARD_ALIASES`, `ORDER_CATEGORY_ALIASES`, `DATA_CATEGORY_ALIASES`, `TYPE_CATEGORY_ALIASES`
+// (the entries of those types), `resolveAlias`, `isRelevantData`, `isRelevantOrder`, `uniqueAlias` and
 // `computeBindingPlan` (candidate path for lights, switches and shutters, legacy path for the
 // rest). Changes: no VMC, door, contract, historize or skip options; the plan keeps at most 16 data
 // and 16 order bindings and aliases of at most 32 characters (the API's bounds); `applyBindingPlan`
@@ -120,6 +120,7 @@ export const MAX_ALIAS = 32;
 const RELEVANT_DATA: Record<string, string[]> = {
   light_onoff: ["light_state"],
   light_dimmable: ["light_state", "light_brightness"],
+  light_color: ["light_state", "light_brightness", "light_color", "light_color_temp"],
   shutter: ["shutter_position"],
   switch: ["light_state"],
   sensor: [
@@ -152,6 +153,7 @@ const RELEVANT_DATA: Record<string, string[]> = {
 const RELEVANT_ORDERS: Record<string, string[]> = {
   light_onoff: ["state", "on", "R1", "R2", "R3", "R4"],
   light_dimmable: ["state", "on", "brightness", "R1", "R2", "R3", "R4"],
+  light_color: ["state", "on", "brightness", "color", "color_temp", "R1", "R2", "R3", "R4"],
   shutter: ["position", "state", "target_position"],
   switch: ["state", "on", "R1", "R2", "R3", "R4"],
   button: [],
@@ -169,6 +171,7 @@ const STANDARD_ALIASES: Record<string, Record<string, string>> = {
   },
   light_onoff: { R1: "state", R2: "state", R3: "state", R4: "state" },
   light_dimmable: { R1: "state", R2: "state", R3: "state", R4: "state" },
+  light_color: { R1: "state", R2: "state", R3: "state", R4: "state" },
   switch: { R1: "state", R2: "state", R3: "state", R4: "state" },
 };
 
@@ -179,6 +182,8 @@ export const ORDER_CATEGORY_ALIASES: Record<string, string> = {
   shutter_move: "state",
   set_shutter_position: "position",
   set_brightness: "brightness",
+  set_color_temp: "color_temp",
+  set_color: "color",
   set_setpoint: "setpoint",
 };
 
@@ -187,6 +192,8 @@ export const DATA_CATEGORY_ALIASES: Record<string, string> = {
   light_state: "state",
   shutter_position: "position",
   light_brightness: "brightness",
+  light_color_temp: "color_temp",
+  light_color: "color",
   setpoint: "setpoint",
   battery: "battery",
 };

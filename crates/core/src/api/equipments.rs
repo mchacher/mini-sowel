@@ -1,14 +1,20 @@
 //! `/equipments` and their bindings (Sowel's `src/api/routes/equipments.ts`). Unknown fields are
 //! refused on the binding routes and ignored on `POST` and `PUT /equipments`: Sowel's interface
-//! and `sowel-plugin-mini` may send Sowel's other flags.
+//! and `sowel-plugin-mini` may send Sowel's other flags. Of Sowel's twelve optional fields,
+//! `POST` ignores all, and `PUT` takes five (`requireConfirmation`, `invertDirection`,
+//! `plugInHybrid`, `trackOrderOutcome`, `family`) and refuses the seven whose rules Solite does
+//! not have unless they are given as stored (spec 027 R2.4).
+
+use std::collections::BTreeMap;
 
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use super::input::{self, Fields};
 use super::{Request, Response, error, failure, json, method_not_allowed, no_content};
 use crate::devices::{Id, MAX_DEVICES, Random};
-use crate::equipments::{DataBindingOut, EquipmentType, OrderBindingOut, details};
-use crate::failure::Outcome;
+use crate::equipments::{DataBindingOut, EquipmentType, Field, OrderBindingOut, Piece, details};
+use crate::failure::{Failure, Outcome};
 use crate::home::{EquipmentUpdate, Home, NewEquipment};
 
 pub fn route(
@@ -118,6 +124,7 @@ fn update(home: &mut Home, id: &str, body: &[u8], now: u64) -> Response {
             Some(text) => Some(input::name(&text)?),
             None => None,
         };
+        let extras = extras_fields(body)?;
         home.update_equipment(
             id,
             EquipmentUpdate {
@@ -127,6 +134,7 @@ fn update(home: &mut Home, id: &str, body: &[u8], now: u64) -> Response {
                 icon,
                 description,
                 enabled,
+                extras,
             },
             now,
         )
@@ -135,6 +143,35 @@ fn update(home: &mut Home, id: &str, body: &[u8], now: u64) -> Response {
         Ok(equipment) => json(200, &equipment),
         Err(e) => failure(&e),
     }
+}
+
+/// The optional fields of a `PUT` body (Sowel's twelve), each as written: `None` for `null`,
+/// which only the fields that can be cleared take. A value of the wrong shape is 400
+/// `Invalid <field>`. Read from the bytes of the body, so an object is kept as written.
+fn extras_fields(body: &[u8]) -> Outcome<Vec<(Field, Option<Piece>)>> {
+    let raw: BTreeMap<String, Box<RawValue>> =
+        serde_json::from_slice(body).map_err(|_| input::object_error())?;
+    let mut given = Vec::new();
+    for (name, value) in &raw {
+        let Some(field) = Field::from_name(name) else {
+            continue;
+        };
+        let invalid = || Failure::new(400, format!("Invalid {name}"));
+        if value.get() == "null" {
+            // `requireConfirmation`, `invertDirection` and `plugInHybrid` are booleans only; the
+            // seven fields Solite keeps as stored take `null` (refused unless nothing is stored).
+            if matches!(
+                field,
+                Field::RequireConfirmation | Field::InvertDirection | Field::PlugInHybrid
+            ) {
+                return Err(invalid());
+            }
+            given.push((field, None));
+            continue;
+        }
+        given.push((field, Some(field.parse(value.get()).ok_or_else(invalid)?)));
+    }
+    Ok(given)
 }
 
 /// The two fields of a binding body: the id of the data (or order), and the alias.

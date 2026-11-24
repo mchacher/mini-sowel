@@ -1,5 +1,5 @@
 #!/bin/sh
-# The verdict, one command: docs, format, lint, types, tests, UI budget, the four ESP32 firmware
+# The verdict, one command: docs, format, lint, types, the Sowel contract, tests, UI budget, the four ESP32 firmware
 # images (the box's, the one QEMU runs, the measuring one, the radio one) and the engine's run in QEMU.
 #
 #   sh scripts/validate.sh          everything (before a commit, in the nightly CI)
@@ -77,6 +77,10 @@ if $fast; then
 fi
 
 if want rust; then
+  # Spec 027: Solite's names against Sowel's (the snapshot, and ../sowel when present).
+  step "Sowel contract"
+  cargo test -p solite-core --quiet --test sowel_contract -- --nocapture solite_is_a_subset_of_sowel
+
   if $slow; then
     # The slow tests are the ignored ones: no test is ignored for any other reason.
     step "Rust: tests (core, host), the slow ones included"

@@ -104,7 +104,7 @@ are D1, D2...
 - **I. Device recognition beyond the standard clusters**: Zigbee2MQTT definitions export (Tuya
   datapoint interpreter included), Philips' brand library, hand-written definitions for the
   common Legrand, Sonoff and Aqara devices, Philips' functions counted per brand first; equipment
-  types beyond D3's six, zone orders, window contacts; alarm devices beyond motion, contact, leak
+  types with behaviour beyond the eight of D43, zone orders, window contacts; alarm devices beyond motion, contact, leak
   and smoke (sirens, keypads, CO, vibration).
 - **H. Daily use**: 24 h history (bounded by constants), MQTT export, mini PWA, languages beyond
   French and English, radio firmware update, recipe logs and state kept across a restart.
@@ -142,7 +142,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | A device removal in the API: an unwanted device that joined during a window stays in the store | Spec 021 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
 | 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
-| 2026-11-22 | The binding plan in the core (Rust), when the box makes equipments itself (milestone C's proposals); the interface's plan (spec 019) is its reference | Spec 019 |
 | 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
 | 2026-11-22 | Spec 023 review: move the /ws welcome text into the core's live::session (the host and the firmware each write it today) | Spec 023 |
 | 2026-11-22 | Run the pending box checks of spec 023: the lost link (access point off), no 1970 date on the flash after a boot with the access point off, a wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered relay, the console's long and unknown lines, a client that stops reading, the power-on cases with the access point or its Internet off | Spec 023 |
@@ -156,9 +155,12 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 2`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
 | 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
 | 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
-| 2026-11-24 | Sowel alignment: Solite's `home.timezone` key and `GET /api/v1/settings/timezones` have no Sowel counterpart (D41); mirror Sowel's `GET /api/v1/system/timezone` (`{tz, source, offsetHours}`), and settle the key with Sowel (issue below) | Spec 026 |
+| 2026-11-24 | Sowel alignment, what is left of D41 (D44): `GET /api/v1/settings/timezones` has no Sowel counterpart; `GET /api/v1/system/timezone` answers `source: "env"` for the setting, `fallback` with a location, and the offset now | Spec 026, spec 027 |
 | 2026-11-24 | A "current time" pill in the header (Sowel's `CurrentTimePill`) and local time in the logs, from `home.timezone` | Spec 026 |
-| 2026-11-22 | The home lock is held for a whole batch of measures, aggregation included: measure it before device recognition adds work per measure | Architecture review 2026-11-22 |
+| 2026-11-24 | Read the colour cluster (`0x0300`: colour temperature, colour) and send its commands, so a real colour bulb shows `color_temp` and `color` and is proposed as `light_color` (today `light_dimmable`) | Spec 027 |
+| 2026-11-24 | Run spec 027's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 1`, one `PUT /api/v1/settings` of the time zone, then `GET /api/v1/system/timezone`; the home lock per batch of measures timed on the box (a log line to add); note the figures in spec 027 and `docs/memory-budget.md` | Spec 027 |
+| 2026-11-24 | Behaviour for more of Sowel's types (door, gate, awning, water valve, heater, meters): their binding rules, Sowel's zone counts (`doorsTotal`, `waterValvesTotal`...), and the rules of the seven equipment fields refused on `PUT` (D43) | Spec 027 |
+| 2026-11-24 | Proposals exposed when milestone C starts (pair a sensor, pick the room): `equipments::propose` is internal until then, Sowel has no route for it | Spec 027 |
 | 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
 
 ## Sowel issues to open
@@ -298,3 +300,9 @@ Every change to this roadmap: date, what changed, why.
   `home.timezone`, D41), the sun times on the root zone so "Inactive during day" works, a Settings
   page, export and import of the settings and zones (D42). New lines: its run on the box, a full
   backup, a current-time pill; the GET-recompute line looked at again and kept.
+- 2026-11-24: spec 027 (milestone I, aligned on Sowel) built on the Mac (the user away): the Sowel
+  contract check (snapshot, `docs/sowel-subset.md`, D43), Sowel's 31 equipment types and its
+  optional equipment fields, `light_color`'s rules, the proposal of a type and bindings in the
+  core, `GET /api/v1/system/timezone` (D44); the home lock per batch measured on the Mac (70 µs).
+  Lines removed: the binding plan in the core, the home lock measure; the D41 line narrowed. New
+  lines: the colour cluster, the box run, more types with behaviour, proposals exposed.

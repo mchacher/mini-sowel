@@ -35,6 +35,7 @@ describe("deduceType", () => {
   it("guesses the type of each fixture, null when none fits", () => {
     expect(deduceType(fixtures.zbminir2())).toBe("light_onoff");
     expect(deduceType(fixtures.bulb())).toBe("light_dimmable");
+    expect(deduceType(fixtures.colorBulb())).toBe("light_color");
     expect(deduceType(fixtures.th01())).toBe("sensor");
     expect(deduceType(fixtures.ms01())).toBe("sensor");
     expect(deduceType(fixtures.voltageOnly())).toBeNull();

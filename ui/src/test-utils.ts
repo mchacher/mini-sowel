@@ -455,6 +455,23 @@ export const fixtures = {
         { key: "brightness", category: "set_brightness", type: "number" },
       ],
     ),
+  /** A colour bulb (synthetic: the catalog has no colour cluster): dimmable, with a colour temperature. */
+  colorBulb: (id = "color") =>
+    deviceWithData(
+      id,
+      "Colour bulb",
+      [
+        ["state", "light_state", "boolean"],
+        ["brightness", "light_brightness"],
+        ["color_temp", "light_color_temp"],
+      ],
+      {},
+      [
+        { key: "state", category: "light_toggle" },
+        { key: "brightness", category: "set_brightness", type: "number" },
+        { key: "color_temp", category: "set_color_temp", type: "number" },
+      ],
+    ),
   /** A device with only `voltage`: nothing any type uses. */
   voltageOnly: (id = "volt") => deviceWithData(id, "Voltage only", [["voltage", "voltage"]]),
 };

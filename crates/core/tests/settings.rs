@@ -546,3 +546,97 @@ fn the_pairing_saver_does_not_write_the_settings() {
     saver.tick(&home, T + 1_000, true).unwrap();
     assert_eq!(storage.writes(SETTINGS_FILE), 0);
 }
+
+// ---- GET /system/timezone (spec 027 R4) ----
+
+const SYSTEM_TIMEZONE: &str = "/api/v1/system/timezone";
+
+#[test]
+fn the_system_timezone_without_a_setting_is_utc_as_a_fallback() {
+    let mut rig = Rig::new();
+    assert_eq!(
+        rig.get(SYSTEM_TIMEZONE),
+        (
+            200,
+            json!({"tz": "UTC", "source": "fallback", "offsetHours": 0})
+        )
+    );
+}
+
+#[test]
+fn the_system_timezone_follows_the_offset_of_the_date() {
+    let mut rig = Rig::new();
+    assert_eq!(
+        put(&mut rig, json!({"home.timezone": "Europe/Paris"})).0,
+        200
+    );
+    rig.now = at("2026-01-15T12:00:00.000Z");
+    assert_eq!(
+        rig.get(SYSTEM_TIMEZONE),
+        (
+            200,
+            json!({"tz": "Europe/Paris", "source": "env", "offsetHours": 1})
+        )
+    );
+    rig.now = at("2026-07-15T12:00:00.000Z");
+    let (_, body) = rig.get(SYSTEM_TIMEZONE);
+    assert_eq!(body["offsetHours"], 2, "daylight saving time");
+    assert_eq!(body["source"], "env");
+    assert_eq!(body["tz"], "Europe/Paris");
+    // A whole number is written without a fraction.
+    assert!(
+        rig.raw("GET", SYSTEM_TIMEZONE, "")
+            .body
+            .unwrap()
+            .contains(r#""offsetHours":2}"#)
+    );
+}
+
+#[test]
+fn the_system_timezone_has_fractions_of_an_hour_and_negative_offsets() {
+    let mut rig = Rig::new();
+    assert_eq!(
+        put(&mut rig, json!({"home.timezone": "Asia/Kolkata"})).0,
+        200
+    );
+    let (_, body) = rig.get(SYSTEM_TIMEZONE);
+    assert_eq!(body["offsetHours"], 5.5);
+    assert_eq!(
+        put(&mut rig, json!({"home.timezone": "America/Sao_Paulo"})).0,
+        200
+    );
+    let (_, body) = rig.get(SYSTEM_TIMEZONE);
+    assert_eq!(body["offsetHours"], -3);
+}
+
+#[test]
+fn the_system_timezone_accepts_get_only() {
+    let mut rig = Rig::new();
+    for method in ["POST", "PUT", "DELETE"] {
+        assert_eq!(
+            rig.refused(method, SYSTEM_TIMEZONE, "{}").0,
+            405,
+            "{method}"
+        );
+    }
+}
+
+#[test]
+fn a_location_without_a_time_zone_is_still_the_fallback() {
+    let mut rig = Rig::new();
+    assert_eq!(
+        put(
+            &mut rig,
+            json!({"home.latitude": "48.8566", "home.longitude": "2.3522"})
+        )
+        .0,
+        200
+    );
+    assert_eq!(
+        rig.get(SYSTEM_TIMEZONE),
+        (
+            200,
+            json!({"tz": "UTC", "source": "fallback", "offsetHours": 0})
+        )
+    );
+}

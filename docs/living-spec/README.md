@@ -378,8 +378,13 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   zone cannot move under itself or a descendant. Deleting a zone returns its devices to no zone.
   At most 32 zones (the root included).
 - **Equipments**: a device removed takes its bindings away from the equipments, each of which then
-  gets `equipment.updated`. Types `light_onoff`, `light_dimmable`, `shutter`, `sensor`, `switch`,
-  `thermostat`, `button`. `POST /api/v1/equipments {name, type, zoneId, deviceIds}` binds every
+  gets `equipment.updated`. Every one of Sowel's 31 types is accepted, stored, served and filtered
+  by (`GET /api/v1/equipments?type=`); eight have Sowel's binding rules (`light_onoff`,
+  `light_dimmable`, `light_color`, `shutter`, `sensor`, `switch`, `thermostat`, `button`), and
+  `light_color` counts as a light in the zone aggregation; the other 23 have no rule and no zone
+  count of their own (a `door` or a `display` adds nothing to `doorsTotal` or `displaysTotal`);
+  as in Sowel, a `weather` equipment and a `water_valve`'s bindings stay out of the room's
+  figures. `POST /api/v1/equipments {name, type, zoneId, deviceIds}` binds every
   data and order of the given devices under their key as alias (`temperature`, `state`...) (the
   interface binds otherwise: see "Shows the home in the browser");
   bindings are added or removed one by one under `.../data-bindings` and `.../order-bindings`.
@@ -387,6 +392,31 @@ rooms of the equipments that bind it. Zones and equipments are also made from th
   humidity, pressure or luminosity silent for 65 minutes), and its `status`: `online`,
   `degraded` (a device offline among several, or a binding stale) or `offline` (all its devices
   offline, or no binding), with the reason. At most 64 equipments, 16 bindings of each kind.
+- **Sowel's optional equipment fields** (`energyProfile`, `requireConfirmation`,
+  `trackOrderOutcome`, `meteringParentId`, `separateSupply`, `localProduction`, `family`,
+  `plugInHybrid`, `usualVehicleId`, `solarProfile`, `invertDirection`, `timedCommand`): kept in
+  `equipments.json` as written and shown wherever the equipment is (`GET`, the `equipment.*`
+  events); a `null` is not stored (the field is absent, Sowel's default). `PUT` takes
+  `requireConfirmation`, `plugInHybrid` (booleans), `trackOrderOutcome` (a
+  boolean or `null`) and `family` (one of Sowel's six families or `null`), else 400 `Invalid
+  <field>`; Sowel's rules on the resulting type, with Sowel's body `{"error","message"}`: a family
+  on a type other than `switch` is 400 `FamilyNotApplicable`, a switch made another type loses its
+  family, `SeparateSupplyNotApplicable` and `LocalProductionNotApplicable` for a separate supply or
+  local production on a house total, a production meter, a solar panel or a vehicle. The other
+  eight fields are refused when given with a value other than the stored one (`false` counts as
+  stored for the three flags whose default is `false`; an object is compared by its bytes): 400
+  `Not supported: <field>`, nothing changed. `POST` ignores all twelve, as Sowel's create. One
+  equipment's fields take at most 1024 bytes of JSON, all equipments' 8192: past either, 400
+  `Equipment fields too large (1024 bytes each, 8192 in all)`; at load, a field of the wrong shape
+  or past a bound is dropped with a warning.
+- **Proposals**: from a paired device's data and orders, the core proposes an equipment type and
+  its bindings, with Sowel's binding rules (every data and order the type may bind; the
+  interface's form instead binds one channel of a lighting relay or shutter, Sowel's candidates): `light_color` (an on/off order and a colour
+  data or order), `light_dimmable` (with a brightness), `light_onoff` (on/off only, the
+  ZBMINIR2), `shutter`, `thermostat`, `button`, `sensor` (a measure of Sowel's sensor
+  categories), or none (battery only); bindings under Sowel's aliases, `state_2` for a second
+  `state`, at most 16 of each kind. Not exposed by the API (Sowel has no such route); nothing
+  computes it per measure.
 - **Orders**: `POST /api/v1/equipments/:id/orders/:alias {"value": ...}` sends the order bound
   under that alias to its devices, as Sowel: `state` takes `true`/`false`, `"on"`/`"off"`,
   `"true"`/`"false"`, `1`/`0` (any case, spaces ignored; empty means on) or `"toggle"`;
@@ -422,7 +452,8 @@ times computed from them, as Sowel's sunlight manager does.
 - **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, six
   keys: `home.name` (64 characters at most), `home.latitude` (−90 to 90) and `home.longitude`
   (−180 to 180), written `48.8566` (digits, an optional `-` and decimals; no exponent, `+` or
-  `inf`), `home.timezone` (a name of `GET /api/v1/settings/timezones`, `UTC` when unset),
+  `inf`), `home.timezone` (a key Sowel names among its global ones; a name of `GET
+  /api/v1/settings/timezones`, Solite's own list, `UTC` when unset),
   `home.sunriseOffset` and `home.sunsetOffset` (whole minutes, −180 to 180; 30 and 45 when unset).
   A PUT changes the keys it gives and keeps the others; `""` is kept and reads as unset (as Sowel); it is checked whole
   first: 400 `Invalid body`, `Unknown setting: <key>` or `Invalid value for <key>`, nothing
@@ -430,6 +461,10 @@ times computed from them, as Sowel's sunlight manager does.
   are kept in `settings.json`, written within 2 seconds of a change, and not written when a PUT
   changes nothing; an entry of the file that breaks its rule (a time zone the list no longer has)
   is dropped at load, with a warning.
+- **The home's time zone** (`GET /api/v1/system/timezone`, Sowel's): `{"tz","source",
+  "offsetHours"}`; with `home.timezone` set, `source` is `env` and `offsetHours` the offset now
+  (`1` in a Paris winter, `2` in summer, `5.5` in Kolkata); unset, `{"tz":"UTC","source":
+  "fallback","offsetHours":0}`, a location set or not.
 - **Time zones**: a fixed list of 59 names (`UTC`, Europe, the French overseas departments and
   territories, the Americas, Africa, Asia, Oceania), each with today's daylight-saving rule.
 - **Sun times**: on the root zone of the zone aggregation, `sunrise` and `sunset` in local
@@ -452,6 +487,22 @@ times computed from them, as Sowel's sunlight manager does.
   equipment, device or recipe. Answer `{"success":true,"settings":<n>,"zonesCreated":<n>,
   "zonesUpdated":<n>,"zonesUnchanged":<n>}`, with the events of the settings and zones changed; an
   import that changes nothing writes nothing.
+
+### Checks the Sowel contract
+
+Solite is a subset of Sowel: its names and values are Sowel's (`types.ts` wins), or a deviation
+kept by a decision. `sh scripts/validate.sh` runs the check (step `Sowel contract`,
+`crates/core/tests/sowel_contract.rs`); it compares Solite's code with
+`contract/sowel-snapshot.json` (Sowel's unions, interface fields, recipe slot types, events,
+`home.*` settings keys and routes, with the Sowel commit) and, when Sowel's repository is present
+(`SOWEL_REPO`, else `../sowel`), with that repository too: a snapshot that differs is a warning,
+Solite not fitting Sowel's repository is a failure. It fails on: an equipment type of Sowel's
+missing in Solite or one Sowel does not have; a Sowel equipment field Solite does not keep; a data
+or order category, data type, status, power source, family, event, settings key, route or JSON
+field of a device, zone, aggregation, equipment, binding or recipe that Sowel does not have and
+that `docs/sowel-subset.md` does not list as a deviation; a deviation row that is stale or whose
+decision does not exist; a table of `docs/sowel-subset.md` that differs from the code. Its last
+line: `sowel contract: OK (...)`, naming what it was checked against.
 
 ### Runs the motion-light recipe
 
@@ -556,14 +607,15 @@ copy embedded in the radio image at build time.
   its name, parent (never under itself or a descendant) and description; delete it (confirmed;
   refused with Sowel's text when it has sub-zones or equipments, shown 5 s). The root is renamed but never deleted or moved.
 - **Equipments** (`#/equipments`): grouped by room, each with its type, status and number of
-  devices; "Add equipment" in two steps: type (light on/off, dimmable light, shutter, sensor,
-  switch, thermostat, button), name and room, then the devices (at least one; those ticked first,
+  devices; "Add equipment" in two steps: type (light on/off, dimmable light, colour light,
+  shutter, sensor, switch, thermostat, button), name and room, then the devices (at least one; those ticked first,
   then the compatible ones, all on demand); only what the type uses is bound, under Sowel's names
   (`state`, `brightness`, `position`, `battery`; `battery_2` for a second one), one request per
   binding after the equipment's; if one is refused the equipment is deleted again and the form
   shows the text; edit the name and room; delete (confirmed). A device's "Create equipment" opens
-  the form with the device ticked, its type guessed (dimmable light, light, shutter, thermostat,
-  button, sensor) and its name; the room is chosen there. A refusal keeps the form open with its
+  the form with the device ticked, its type guessed (colour light, dimmable light, light,
+  shutter, thermostat, button, sensor) and its name; an equipment of a type the form does not
+  offer (made through the API, `door`...) keeps its type when edited, shown as written; the room is chosen there. A refusal keeps the form open with its
   text. At most 64 devices chosen; a warning when they give more than
   16 values, of which only 16 are bound.
 - **Settings** (`#/settings`): the **Home** card (Sowel's): name, latitude, longitude (a typed `,`
@@ -762,7 +814,7 @@ In the emulated ESP32 it stays under 350 KB for the realistic home with the fixt
 playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
 fills them). It stays
 under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
-equipments of 16 bindings, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
+equipments of 16 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
@@ -774,7 +826,8 @@ log --image radio` fails when its internal RAM minimum is below the 64 KB reserv
 `docs/memory-budget.md` has a row for the internal RAM with Wi-Fi up (the `memory-network:`
 snapshot measured on the box; the network's cost as a difference of two `heap:` minima and the
 projection for the realistic home are not computed) and one for the 33 requests' time on the box,
-not measured (it needs a relay paired). It shares the box's 2 MB
+not measured (it needs a relay paired). `docs/memory-budget.md` also has the time the engine holds the home lock for one batch of
+measures, measured on the Mac. It shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
 wiring and its risks.
 
@@ -815,3 +868,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 024 | Recipes from a room's page (list, form from the slots, enable and disable, journal, settings, delete); a recipe settles when what it uses changes |
 | 025 | Saves held and flushed from the serial console and `box.sh saves`, every flash write counted and checked against a budget, a burst of definition changes written once |
 | 026 | The home's settings (location, time zone, sun offsets) and the sun times on the root zone, so "Inactive during day" works; a Settings page; export and import of the settings and zones |
+| 027 | The Sowel contract checked (snapshot, subset and deviations); Sowel's 31 equipment types and optional equipment fields; `light_color`; a paired device's type and bindings proposed in the core; `GET /api/v1/system/timezone` |
