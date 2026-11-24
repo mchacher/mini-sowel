@@ -211,20 +211,24 @@ Searched for `curl`, `recipe`, `motion-light`, `J3`, `stale`, `Light equipment n
 
 ## Acceptance criteria
 
+The four criteria below on the interface are checked by the component tests (Vitest) and, on the
+box, by the same calls over the API; seeing them clicked in a browser is the user's demo (the run
+was autonomous).
+
 - [ ] On the garage's page, "+" → Motion Light → tick the light, timeout 1 → Create: the instance
       appears, its journal shows "Instance created" and its start line.
 - [ ] The switch disables then enables it; the row dims, then not; the journal shows each.
 - [ ] Settings → change the timeout → Save: the instance restarts with it; Delete removes it.
 - [ ] A required slot left empty shows "Lights is required" and sends nothing; a refusal from the
       host shows its text under the form.
-- [ ] Deleting the light of a running instance: the instance is disabled with "Disabled: At least
+- [x] Deleting the light of a running instance: the instance is disabled with "Disabled: At least
       one light is required" and "Equipment removed from settings: <name>" in its log; no order is
       sent to the deleted light; nothing crashes.
-- [ ] Deleting one of two lights of a running instance: it restarts with the other light only.
-- [ ] A device removed emits `equipment.updated` for the equipment that lost its bindings, and the
+- [x] Deleting one of two lights of a running instance: it restarts with the other light only.
+- [x] A device removed emits `equipment.updated` for the equipment that lost its bindings, and the
       recipe using it is disabled.
-- [ ] The first load of the interface stays under the budget (170 KB gzip).
-- [ ] On the box: the J3 flow over the API (below).
+- [x] The first load of the interface stays under the budget (170 KB gzip).
+- [x] On the box: the J3 flow over the API (below).
 
 ## Edge cases
 
@@ -298,4 +302,23 @@ Result of the run: see "Real-hardware run" below.
 
 ### Real-hardware run
 
-(written at the end of the run)
+2026-11-23, the Dongle Max at 192.168.0.46 (ZBMINIR2 relay as "Garage light", SNZB-03PR2 motion
+sensor, the garage's own `motion-light` instance of spec 023), one pass, no loop (D39, proposed):
+
+- The radio image of this spec flashed with `box.sh flash --image radio --keep-storage`, booted:
+  `solite-ui 4 files, 57 KB`, storage 20 KB used, Wi-Fi joined; the home, the network and the
+  garage kept.
+- `GET /recipes`: motion-light with its 7 slots (the form's source).
+- Create a test instance (garage light, timeout `1m`, the form's body with empty optional slots):
+  201; log `Instance created`, `Recipe activated — no motion, lights off`.
+- Disable, enable: `{"success":true}` each. Settings (timeout `2m`): saved, restarted.
+- A throwaway `J3 test light` made on the same relay and added to the instance, then deleted: 204;
+  the instance stays enabled with the garage light only, its log `Equipment removed from settings:
+  J3 test light` then a new start line (R4.1, R4.3).
+- The test instance deleted: 204. The garage's own instance untouched (enabled, `20s`). `GET /`
+  answers 200 (the interface with the Recipes panel is in the image).
+- **Flash writes caused**: one image flash (bootloader, partition table, the 1.8 MB application;
+  `nvs` and `otadata` erased; storage kept) and about 9 file saves on `/data` (7 of
+  `recipes.json`, 2 of `equipments.json`), besides the home's usual saves of device data.
+- Not run on the box: a deleted light disabling the instance (the garage light stays), a device
+  removal, the interface clicked in a browser.
