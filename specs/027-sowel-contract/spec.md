@@ -37,7 +37,7 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
   as stored, and refused on `PUT` (R2.4).
 - A route that proposes an equipment for a device: Sowel has none (its `GET /devices/suggest` goes
   the other way, a type to devices); the proposal stays internal, for milestone C.
-- D42 (the backup document): unchanged, listed as a deviation (R1.5).
+- D42 (the backup document): unchanged; its paths are Sowel's, so it is no name deviation: D43 records it.
 - Sowel's modes, history, energy, users: Solite has none; nothing to check.
 
 ## Requirements
@@ -52,8 +52,9 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
    `DeviceOrder`, `Zone`, `ZoneAggregatedData`, `Equipment`, `DataBinding`, `OrderBinding`,
    `RecipeInfo`, `RecipeSlotDef`, `RecipeInstance` and `RecipeLogEntry`; the slot types of
    `RecipeSlotDef.type`; the `type` of every member of `EngineEvent`; the settings keys
-   (`home.*` string literals in `src/`, tests excluded); and every route `app.<method>("<path>")`
-   of `src/api/routes/*.ts` (method in capitals, `:name` parameters written `:`), plus `GET /ws`.
+   (`home.*` string literals in `src/` and `ui/src/`, tests excluded: Sowel's interface is what
+   writes `home.name`); and every route `app.<method>("<path>")` of `src/api/` (method in capitals,
+   `:name` parameters written `:`; `GET /ws` among them).
    The snapshot records the Sowel commit it was taken from.
 2. **Against Sowel's repository**: when the Sowel repository is present (`SOWEL_REPO`, else
    `../sowel` beside the Solite repository), the check extracts the same from it and fails if it
@@ -81,7 +82,8 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
      `EngineEvent` type;
    - every settings key is one of Sowel's;
    - every route Solite serves (a table in the core, `api::ROUTES`, checked by a test to answer
-     something other than the route-level `Not found`) is one of Sowel's. The table is checked one
+     something other than the route-level `Not found`; `GET /ws` is served by the host and the
+     box, not by the core's router, so it is not in the table) is one of Sowel's. The table is checked one
      way only (a route in the table is served); a route served and missing from the table is
      caught by the code review, not by the check (the router is a `match` on path segments).
 4. **Subset table**: `docs/sowel-subset.md` lists, per entity, what Solite has, in one table per
@@ -94,10 +96,10 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
    `docs/decisions.md`; a row whose name is no longer in Solite, or is now Sowel's, fails the
    check (no stale row). Listed today: the route `GET /api/v1/settings/timezones` (D41), the routes
    `GET` and `POST /api/v1/integrations/solite/permit-join` (D28), the document of
-   `GET` and `POST /api/v1/backup` (D42: same paths as Sowel, its own body, so not caught by the
-   route names; listed for the record and checked as a route that exists), and every other one
-   the check finds once built: each gets its decision, or is fixed, and the final list is
-   written here before the pull request. Value-level differences (bounds, texts of errors,
+   and every other one
+   the check finds once built: each gets its decision, or is fixed. Found once built: none
+   beyond these three names (every JSON field, category, event and settings key of Solite is
+   Sowel's). Value-level differences (bounds, texts of errors,
    `null` not stored, refused fields) are not names: D43 lists them.
 6. The check is one Rust test file, `crates/core/tests/sowel_contract.rs`, so `cargo test`
    (validate's Rust group, CI) runs it; `scripts/validate.sh` also runs it as its own step,
@@ -128,7 +130,7 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
    `null` (Sowel's "absent / null = default") is not stored: the field is absent. An object is
    compared as written (its bytes), key order included.
 4. `PUT /api/v1/equipments/:id` takes, with Sowel's shape: `requireConfirmation`,
-   `invertDirection`, `plugInHybrid` (boolean), `trackOrderOutcome` (boolean or `null`), `family`
+   `plugInHybrid` (boolean), `trackOrderOutcome` (boolean or `null`), `family`
    (a family or `null`). A wrong shape: 400 `Invalid <field>`. Sowel's rules on the resulting
    type, with Sowel's body `{"error": <code>, "message": <text>}`
    (`src/api/routes/equipments.ts`): a non-null `family` when the resulting type is not `switch`:
@@ -139,7 +141,7 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
    400 `SeparateSupplyNotApplicable`, `<name> is the house total or a production meter — the
    reconciliation reference cannot be outside itself`; a stored `localProduction: true` with such
    a type or with `separateSupply`: 400 `LocalProductionNotApplicable` with Sowel's two texts. The
-   seven
+   eight (with `invertDirection`, which Sowel applies to orders: found by the code review)
    fields whose rules need what Solite does not have (`energyProfile`, `solarProfile`,
    `timedCommand`, `meteringParentId`, `usualVehicleId`, `separateSupply`, `localProduction`) are
    refused when given with a value other than what is stored (`null` when one is stored
@@ -165,9 +167,10 @@ device recognition adds work per measure", and D41's `GET /api/v1/system/timezon
 ### R3: Recognition of a paired device
 
 1. `equipments::propose(device)` in the core gives, for a device with its data and orders,
-   `None` or a proposal: the equipment type and the bindings (device data id or device order id,
-   alias), the way the interface's equipment form plans them (spec 019: `deduceType`, then
-   `computeBindingPlan` for one device), extended to `light_color`. The type, first that fits:
+   `None` or a proposal: the equipment type (the interface's `deduceType`, spec 019, extended to
+   `light_color`) and the bindings (device data id or device order id, alias) by Sowel's
+   `RELEVANT_DATA` and `RELEVANT_ORDERS` (R3.2), not by the form's candidate path: a two-relay
+   device gets `state` and `state_2` here, one channel in the form. The type, first that fits:
    - `light_color`: an on/off order (`light_toggle` or `toggle_power`) and a `light_color` or
      `light_color_temp` data, or a `set_color` or `set_color_temp` order;
    - `light_dimmable`: an on/off order and a `light_brightness` data;
@@ -224,7 +227,7 @@ roughly 20 to 50 times slower, so 1.5 to 7 ms are expected there). Written in `d
   "Sowel's 31 types are accepted, stored and served; eight have Sowel's binding rules
   (`light_onoff`, `light_dimmable`, `light_color`, `shutter`, `sensor`, `switch`, `thermostat`,
   `button`); `light_color` counts as a light in the zone aggregation". Add Sowel's optional
-  equipment fields (R2.3 to R2.5), the PUT rules and texts, the 256-byte bound.
+  equipment fields (R2.3 to R2.5), the PUT rules and texts, the bounds (1024 bytes each, 8192 in all).
 - Same section, new bullet **Proposals**: a paired device's type and bindings proposed by the core
   (R3), not exposed by the API.
 - "Keeps the home's settings": add `GET /api/v1/system/timezone` (R4).
@@ -263,21 +266,21 @@ The subset and deviations tables (R1.4, R1.5).
 
 ## Acceptance criteria
 
-- [ ] `sh scripts/validate.sh --only rust` shows `Sowel contract` green, against the snapshot here
+- [x] `sh scripts/validate.sh --only rust` shows `Sowel contract` green, against the snapshot here
       and against `../sowel` on the user's Mac.
-- [ ] A value added on purpose outside Sowel (an event `device.renamed`) fails the check, naming
+- [x] A value added on purpose outside Sowel (an event `device.renamed`) fails the check, naming
       it; removed after.
-- [ ] A row of `docs/sowel-subset.md` removed, or a stale deviation row added, fails the check.
-- [ ] `POST /api/v1/equipments` with each of Sowel's 31 types answers 201; an unknown type 400.
-- [ ] An equipment with all twelve optional fields in `equipments.json` is read and written back
+- [x] A row of `docs/sowel-subset.md` removed, or a stale deviation row added, fails the check.
+- [x] `POST /api/v1/equipments` with each of Sowel's 31 types answers 201; an unknown type 400.
+- [x] An equipment with all twelve optional fields in `equipments.json` is read and written back
       byte-for-byte in its fields, and served by `GET`.
-- [ ] `PUT` with `requireConfirmation: true` keeps it; with `energyProfile` 400 `Not supported:
+- [x] `PUT` with `requireConfirmation: true` keeps it; with `energyProfile` 400 `Not supported:
       energyProfile`; `family` on a `light_onoff` 400 `FamilyNotApplicable`, as Sowel.
-- [ ] `propose` gives `light_onoff` with `state` bindings for the garage's ZBMINIR2, `sensor` for
+- [x] `propose` gives `light_onoff` with `state` bindings for the garage's ZBMINIR2, `sensor` for
       the SNZB-02 and the motion sensor, `light_color` for a synthetic colour bulb.
-- [ ] `GET /api/v1/system/timezone` answers Sowel's shape, set and unset.
-- [ ] The lock time is in `docs/memory-budget.md`.
-- [ ] The interface offers `light_color`; Vitest green; the size budget holds.
+- [x] `GET /api/v1/system/timezone` answers Sowel's shape, set and unset.
+- [x] The lock time is in `docs/memory-budget.md`.
+- [x] The interface offers `light_color`; Vitest green; the size budget holds.
 
 ## Edge cases
 

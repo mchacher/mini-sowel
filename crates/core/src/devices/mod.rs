@@ -2,7 +2,7 @@
 //! catalog that says which data and orders a cluster gives, the registry that keeps them up to
 //! date from the radio's events, and the rules for writing them to storage.
 
-mod catalog;
+pub mod catalog;
 mod model;
 mod persist;
 mod registry;

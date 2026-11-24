@@ -63,7 +63,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: the project starts on one computer; the remote and its CI come when the user wants to
   publish. Commits use the same identity as Sowel, set for this repository only.
 
-## D3: Sowel contract
+## D3: Sowel contract (equipment types: replaced by D43)
 
 - **Date**: 2026-11-20
 - **Choice**: everything mini-Sowel exposes takes the names, types and JSON of Sowel's API; the
@@ -188,7 +188,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   would wear it out within months. The divergences do not change what a Sowel client reads (the
   same fields, types and values).
 
-## D14: Zones and equipments, and their divergences from Sowel (replaces D13's "zoneId null")
+## D14: Zones and equipments, and their divergences from Sowel (replaces D13's "zoneId null"; types and optional fields: replaced by D43)
 
 - **Date**: 2026-11-21
 - **Choice**: zones, equipments, bindings and the zone aggregation follow Sowel's types, routes,
@@ -687,7 +687,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   of a change is rare; the hold and the counter make the budget of D39 something a script checks,
   not a promise.
 
-## D41: The home's time zone is a setting picked from a fixed list, with POSIX rules in the core
+## D41: The home's time zone is a setting picked from a fixed list, with POSIX rules in the core (the key: see D44)
 
 - **Date**: 2026-11-24 (spec 026, decided in an autonomous run, for the user's review)
 - **Choice**: Sowel's settings keys (`home.name`, `home.latitude`, `home.longitude`,
@@ -719,3 +719,49 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   16 KB worker buffers, a streamed import). The settings and the rooms are what can be prepared on
   the Mac and moved to a box, and fit the existing bound. Merging zones rather than replacing them
   avoids deleting a room that holds equipments.
+
+## D43: Solite is a checked subset of Sowel (replaces D3's equipment types and D14's kinds and flags)
+
+- **Date**: 2026-11-24 (spec 027, decided in an autonomous run, for the user's review)
+- **Choice**: every name and value Solite has is Sowel's (`src/shared/types.ts` wins), or a
+  deviation listed with its decision in `docs/sowel-subset.md`; anything outside the subset is
+  refused or kept untouched. A test (`crates/core/tests/sowel_contract.rs`, a step of
+  `scripts/validate.sh`) checks it against a snapshot of Sowel checked in
+  (`contract/sowel-snapshot.json`) and against Sowel's repository when present: a snapshot
+  behind Sowel is a warning, Solite not fitting Sowel's repository a failure. `EquipmentType` has
+  Sowel's 31 values; eight have Sowel's binding rules (D3's seven and `light_color`, the most
+  common Zigbee light), the others none. Sowel's twelve optional equipment fields are kept as
+  stored; `PUT` takes the four whose rules are shape only (`requireConfirmation`,
+  `plugInHybrid`, `trackOrderOutcome`, `family`, with Sowel's `FamilyNotApplicable` and the
+  separate-supply and local-production rules on the resulting type) and refuses the eight whose
+  rules need what Solite lacks (`energyProfile`, `solarProfile`, `timedCommand`,
+  `meteringParentId`, `usualVehicleId`, `separateSupply`, `localProduction`, and
+  `invertDirection`, which Sowel applies to orders). The zone aggregation leaves out a `weather`
+  equipment and a `water_valve`'s bindings as Sowel does, but has none of Sowel's own counts for
+  the types without behaviour (`doorsTotal`, `displaysTotal`, `waterValvesTotal` stay 0), nor
+  Sowel's stale rule for the electrical data of meters.
+  Value-level differences kept: `null` not stored (Sowel's "absent / null = default"); the texts
+  `Not supported: <field>` and `Invalid <field>` (Sowel answers with its schema validator's own
+  body); a string field at most 64 characters; one equipment's fields at most 1024 bytes of JSON
+  and all of them 8192 (Sowel has no bound), past which a `PUT` is refused and a field is dropped
+  at load with a warning; an object compared by its bytes. Names kept as deviations: the routes
+  of D28 (permit-join) and D41 (`/settings/timezones`); the backup document of D42 has Sowel's
+  paths and its own body.
+- **Why**: the user's rule (2026-11-24): Solite becomes an extension of the full Sowel, so a
+  client, an export or a future import must read the same model; a check catches a drift that
+  care alone misses. The bounds keep the worst case under D23's 1 MB (1004 KB with them).
+
+## D44: Sowel's `GET /api/v1/system/timezone`, and `home.timezone` as a Sowel key (narrows D41)
+
+- **Date**: 2026-11-24 (spec 027, decided in an autonomous run, for the user's review)
+- **Choice**: Solite serves Sowel's `GET /api/v1/system/timezone` (`{tz, source, offsetHours}`).
+  `home.timezone` is a name Sowel has (its `GLOBAL_READABLE_KEYS`, the keys every plugin may
+  read), so it is no longer Solite's own key; Sowel's own time zone does not read it yet, and the
+  Sowel issue asking it to stays open. Differences kept: with the setting, `source` is `env` (the
+  setting holds the POSIX rule a `TZ` variable would hold; Sowel's three values are `env`, `auto`,
+  `fallback`); without it, `fallback` even with a location (Sowel's `auto` needs `tz-lookup`'s
+  database, too large for the box); `offsetHours` is the offset now, Sowel's is taken at start.
+  `GET /api/v1/settings/timezones` stays (D41).
+- **Why**: Sowel's interface reads that route (its current-time pill, the rain summary); the
+  list route has no Sowel counterpart, and moving the list into the interface would duplicate the
+  core's table of POSIX rules.

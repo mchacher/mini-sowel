@@ -1579,18 +1579,17 @@ fn a_put_sets_the_booleans_and_clears_track_order_outcome_with_null() {
     let (mut rig, path) = with_stored("shutter", "Booleans", r#","trackOrderOutcome":true"#);
     let (status, body) = rig.put(
         &path,
-        json!({"requireConfirmation": true, "invertDirection": true, "plugInHybrid": false, "trackOrderOutcome": null}),
+        json!({"requireConfirmation": true, "plugInHybrid": false, "trackOrderOutcome": null}),
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["requireConfirmation"], true);
-    assert_eq!(body["invertDirection"], true);
     assert_eq!(body["plugInHybrid"], false);
     assert!(
         body.get("trackOrderOutcome").is_none(),
         "null is not stored"
     );
     let (_, again) = rig.get(&path);
-    assert_eq!(again["invertDirection"], true);
+    assert_eq!(again["requireConfirmation"], true);
     assert!(rig.home.changes().1, "written");
 }
 
@@ -1600,7 +1599,7 @@ fn a_put_with_a_field_of_the_wrong_shape_is_refused_and_changes_nothing() {
     rig.home.take_equipments_json();
     for (body, field) in [
         (r#"{"requireConfirmation":"yes"}"#, "requireConfirmation"),
-        (r#"{"invertDirection":null}"#, "invertDirection"),
+        (r#"{"requireConfirmation":null}"#, "requireConfirmation"),
         (r#"{"plugInHybrid":1}"#, "plugInHybrid"),
         (r#"{"trackOrderOutcome":"no"}"#, "trackOrderOutcome"),
         (r#"{"family":"kitchen"}"#, "family"),
@@ -1730,6 +1729,7 @@ fn the_seven_fields_solite_cannot_check_are_refused_unless_they_are_given_as_sto
         r#"{"usualVehicleId":null}"#,
         r#"{"separateSupply":false}"#,
         r#"{"localProduction":true}"#,
+        r#"{"invertDirection":false}"#,
     ] {
         let name = body
             .trim_start_matches("{\"")
@@ -1904,6 +1904,32 @@ fn a_light_color_counts_as_a_light_and_a_door_with_a_light_state_does_not() {
     let (_, all) = rig.get("/api/v1/zones/aggregation");
     assert_eq!(all[zone.as_str()]["lightsTotal"], 1, "a door is no light");
     assert_eq!(all[zone.as_str()]["lightsOn"], 1);
+}
+
+#[test]
+fn a_weather_station_and_a_water_valve_stay_out_of_the_rooms_figures() {
+    // Sowel's zone aggregator skips `weather` and counts a `water_valve` apart.
+    let mut rig = Rig::new();
+    let zone = rig.zone("Garden");
+    let station = device_json(
+        1,
+        "Station",
+        false,
+        &[("temperature", "temperature", "number", json!(4.0), Some(T0))],
+    );
+    let valve = device_json(
+        2,
+        "Valve",
+        false,
+        &[("water_leak", "water_leak", "boolean", json!(true), Some(T0))],
+    );
+    let (station_id, valve_id) = (device_json_id(&station), device_json_id(&valve));
+    rig.add_devices(vec![station, valve]);
+    rig.equipment("Station", "weather", &zone, &[&station_id]);
+    rig.equipment("Valve", "water_valve", &zone, &[&valve_id]);
+    let (_, all) = rig.get("/api/v1/zones/aggregation");
+    assert_eq!(all[zone.as_str()]["temperature"], serde_json::Value::Null);
+    assert_eq!(all[zone.as_str()]["waterLeak"], false);
 }
 
 // ---- The lists of values the contract check reads (spec 027 R1.3) ----

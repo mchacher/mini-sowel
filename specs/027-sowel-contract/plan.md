@@ -2,15 +2,15 @@
 
 ## Steps
 
-- [ ] 1. Living spec delta applied (`docs/living-spec/README.md`), `docs/sowel-subset.md` drafted.
-- [ ] 2. Core types: `EquipmentType` (31, `ALL`), `EquipmentFamily`, `Extras` with its bound.
-- [ ] 3. Core logic: `rules.rs`, `propose.rs`, the PUT rules, the load rule, `is_light`.
-- [ ] 4. Adapters: not applicable (no hardware; the host and firmware serve the core's API).
-- [ ] 5. API: `GET /system/timezone`, `api::ROUTES`, the PUT fields.
-- [ ] 6. The check: extractor, snapshot written from `../sowel`, Solite's lists, subset and
+- [x] 1. Living spec delta applied (`docs/living-spec/README.md`), `docs/sowel-subset.md` drafted.
+- [x] 2. Core types: `EquipmentType` (31, `ALL`), `EquipmentFamily`, `Extras` with its bound.
+- [x] 3. Core logic: `rules.rs`, `propose.rs`, the PUT rules, the load rule, `is_light`.
+- [x] 4. Adapters: not applicable (no hardware; the host and firmware serve the core's API).
+- [x] 5. API: `GET /system/timezone`, `api::ROUTES`, the PUT fields.
+- [x] 6. The check: extractor, snapshot written from `../sowel`, Solite's lists, subset and
       deviations tables; `validate.sh` step.
-- [ ] 7. Interface: `light_color` offered with its rules.
-- [ ] 8. Docs: decisions D43 and D44, memory budget (lock time, extras), roadmap, architecture,
+- [x] 7. Interface: `light_color` offered with its rules.
+- [x] 8. Docs: decisions D43 and D44, memory budget (lock time, extras), roadmap, architecture,
       what is no longer true.
 
 ## Test plan

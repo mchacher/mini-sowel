@@ -62,7 +62,7 @@ fn time_turns(
 }
 
 #[test]
-#[ignore = "measure: run in release with --nocapture, figures go to docs/memory-budget.md"]
+#[ignore = "slow: a measurement, run in release with --nocapture; figures in docs/memory-budget.md"]
 fn one_batch_of_measures_holds_the_home_lock() {
     let mut random = realistic::random();
     let mut built = realistic::build(&mut random);

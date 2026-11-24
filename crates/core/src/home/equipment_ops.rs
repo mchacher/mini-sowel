@@ -38,8 +38,10 @@ pub struct EquipmentUpdate {
 }
 
 /// The fields whose rules need what Solite does not have (Sowel's energy arbitration, metering
-/// graph, solar forecast, timed commands, vehicles): they are kept as stored, never changed.
-const REFUSED: [Field; 7] = [
+/// graph, solar forecast, timed commands, vehicles, and `invertDirection`, which Sowel applies to
+/// the shutter orders and to an on/off order sent without a value): they are kept as stored,
+/// never changed.
+const REFUSED: [Field; 8] = [
     Field::EnergyProfile,
     Field::SolarProfile,
     Field::TimedCommand,
@@ -47,6 +49,7 @@ const REFUSED: [Field; 7] = [
     Field::UsualVehicleId,
     Field::SeparateSupply,
     Field::LocalProduction,
+    Field::InvertDirection,
 ];
 
 /// Sowel's `NON_SUBMETER_TYPES` (`src/equipments/metering.ts`): the house total, the two
@@ -78,12 +81,15 @@ fn resulting_extras(
             continue;
         }
         // Given back as stored is no change: so is `null` with nothing stored, and `false` for
-        // the two flags whose default is `false`. Anything else would change what Solite cannot
+        // the three flags whose default is `false`. Anything else would change what Solite cannot
         // check.
         let same = match (extras.get(*field), piece) {
             (None, None) => true,
             (None, Some(Piece::Bool(false))) => {
-                matches!(field, Field::SeparateSupply | Field::LocalProduction)
+                matches!(
+                    field,
+                    Field::SeparateSupply | Field::LocalProduction | Field::InvertDirection
+                )
             }
             (held, piece) => held == *piece,
         };

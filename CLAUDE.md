@@ -73,7 +73,7 @@ sh scripts/quiet.sh <command>                    # ALWAYS for long output: log f
 sh scripts/validate.sh [--skip-slow] --only rust|ui|firmware|e2e  # a third (CI jobs); e2e: opt-in, no CI; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 ```
 
-`sh scripts/validate.sh` is the verdict: docs, format, lint, types, tests, UI size budget, the four
+`sh scripts/validate.sh` is the verdict: docs, format, lint, types, the Sowel contract, tests, UI size budget, the four
 ESP32 firmware images and the engine's run in QEMU. It must be green before any commit. After a
 fresh clone: `git config core.hooksPath .githooks` (Claude's commit hook also sets it). **Never
 flash the Dongle Max** without the user's explicit yes: its original firmware exposes the radio
@@ -126,7 +126,8 @@ reference is the Sowel repository (`github.com/mchacher/sowel`, usually cloned n
 - recipes: `docs/technical/recipe-development.md`, and the `sowel-recipe-*` repositories listed in
   Sowel's `plugins/registry.json`.
 
-A spec that adds a type, a field or an event names the Sowel file it mirrors. Something Solite
+A spec that adds a type, a field or an event names the Sowel file it mirrors. A subset, never a
+deviation: `docs/sowel-subset.md`, checked by `crates/core/tests/sowel_contract.rs`. Something Solite
 needs on the Sowel side becomes an ordinary Sowel issue, never a change made from here.
 
 ## Conventions

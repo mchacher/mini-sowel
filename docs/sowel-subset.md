@@ -1,0 +1,162 @@
+# Sowel subset
+
+What Solite has of Sowel's model and API, and why; and the names it has that Sowel does not, each
+kept by a decision. Solite is a subset of Sowel: what it has is Sowel's (names, values,
+semantics, JSON; Sowel's `src/shared/types.ts` wins), and what is outside the subset is refused
+or kept untouched (decision D43).
+
+`crates/core/tests/sowel_contract.rs` reads this file: the first column of each table below must
+list exactly what the code has, and every name of Solite outside Sowel must be in
+**Deviations**. It compares Solite with `contract/sowel-snapshot.json` (taken from Sowel's
+repository) and, when it is present, with Sowel's repository itself (`SOWEL_REPO`, else
+`../sowel`). The JSON fields of devices, zones, the zone aggregation, equipments, bindings and
+recipes are checked against Sowel's interfaces from the API's real answers; they need no table.
+Every one of Sowel's 31 equipment types is accepted, stored and served; Sowel's optional
+equipment fields are kept.
+
+To rewrite the snapshot after Sowel moved: `SOWEL_SNAPSHOT=write cargo test -p solite-core
+--test sowel_contract` with Sowel's repository beside this one.
+
+## Data categories
+
+The categories the device catalog gives a device's data (Sowel's `DataCategory`).
+
+| Category | Why |
+| -------- | --- |
+| `temperature` | Temperature cluster (0x0402) |
+| `humidity` | Humidity cluster (0x0405) |
+| `pressure` | Pressure cluster (0x0403) |
+| `luminosity` | Illuminance cluster (0x0400) |
+| `motion` | Occupancy cluster (0x0406) and IAS motion zones |
+| `contact_door` | IAS contact zones (Sowel's Zigbee2MQTT plugin gives `contact` this category) |
+| `water_leak` | IAS water leak zones |
+| `smoke` | IAS fire zones |
+| `light_state` | On/off cluster (0x0006) |
+| `light_brightness` | Level cluster (0x0008) |
+| `battery` | Power configuration cluster (0x0001), percentage |
+| `voltage` | Power configuration cluster (0x0001), battery voltage |
+| `generic` | IAS zone flags (`tamper`, `battery_low`) |
+
+## Order categories
+
+The categories of a device's orders (Sowel's `OrderCategory`).
+
+| Category | Why |
+| -------- | --- |
+| `light_toggle` | On/off cluster: on, off, toggle |
+| `set_brightness` | Level cluster: move to level |
+
+## Events
+
+The events Solite sends on `/ws` (Sowel's `EngineEvent`); the others are not sent (D18).
+
+| Event | Why |
+| ----- | --- |
+| `device.discovered` | A device joined |
+| `device.removed` | A device deleted |
+| `device.status_changed` | Online, offline |
+| `device.data.updated` | A measure |
+| `zone.created` | Zone routes |
+| `zone.updated` | Zone routes |
+| `zone.removed` | Zone routes |
+| `zone.data.changed` | Zone aggregation |
+| `equipment.created` | Equipment routes |
+| `equipment.updated` | Equipment routes, bindings |
+| `equipment.removed` | Equipment routes |
+| `equipment.data.changed` | A bound measure |
+| `equipment.status.changed` | Equipment status |
+| `equipment.order.executed` | An order answered |
+| `equipment.order.failed` | An order failed |
+| `recipe.instance.created` | Recipe routes |
+| `recipe.instance.removed` | Recipe routes |
+| `recipe.instance.started` | Recipe routes |
+| `recipe.instance.stopped` | Recipe routes |
+| `recipe.instance.state.changed` | motion-light's state |
+| `recipe.instance.error` | A recipe that cannot run |
+| `settings.changed` | Settings routes |
+| `sunlight.changed` | Sun times on the root zone |
+
+## Settings keys
+
+| Key | Why |
+| --- | --- |
+| `home.name` | The home's name (Sowel's interface writes it) |
+| `home.latitude` | Sun times |
+| `home.longitude` | Sun times |
+| `home.timezone` | Local time (Sowel's global key; D41, D44) |
+| `home.sunriseOffset` | motion-light's "Inactive during day" |
+| `home.sunsetOffset` | motion-light's "Inactive during day" |
+
+## Routes
+
+The routes of `api::ROUTES` (the host and the box also serve `GET /ws`, Sowel's, and the
+interface's files).
+
+| Route | Why |
+| ----- | --- |
+| `GET /api/v1/devices` | Devices |
+| `GET /api/v1/devices/:id` | Devices |
+| `PUT /api/v1/devices/:id` | Devices |
+| `DELETE /api/v1/devices/:id` | Devices |
+| `GET /api/v1/zones` | Zones |
+| `POST /api/v1/zones` | Zones |
+| `GET /api/v1/zones/aggregation` | Zone aggregation |
+| `GET /api/v1/zones/:id` | Zones |
+| `PUT /api/v1/zones/:id` | Zones |
+| `DELETE /api/v1/zones/:id` | Zones |
+| `GET /api/v1/equipments` | Equipments |
+| `POST /api/v1/equipments` | Equipments |
+| `GET /api/v1/equipments/:id` | Equipments |
+| `PUT /api/v1/equipments/:id` | Equipments |
+| `DELETE /api/v1/equipments/:id` | Equipments |
+| `POST /api/v1/equipments/:id/data-bindings` | Bindings |
+| `DELETE /api/v1/equipments/:id/data-bindings/:bindingId` | Bindings |
+| `POST /api/v1/equipments/:id/order-bindings` | Bindings |
+| `DELETE /api/v1/equipments/:id/order-bindings/:bindingId` | Bindings |
+| `POST /api/v1/equipments/:id/orders/:alias` | Orders |
+| `GET /api/v1/recipes` | Recipes |
+| `GET /api/v1/recipes/:id` | Recipes |
+| `GET /api/v1/recipe-instances` | Recipe instances |
+| `POST /api/v1/recipe-instances` | Recipe instances |
+| `PUT /api/v1/recipe-instances/:id` | Recipe instances |
+| `DELETE /api/v1/recipe-instances/:id` | Recipe instances |
+| `POST /api/v1/recipe-instances/:id/enable` | Recipe instances |
+| `POST /api/v1/recipe-instances/:id/disable` | Recipe instances |
+| `POST /api/v1/recipe-instances/:id/actions` | motion-light's actions |
+| `GET /api/v1/recipe-instances/:id/log` | Recipe journal |
+| `GET /api/v1/settings` | Settings |
+| `PUT /api/v1/settings` | Settings |
+| `GET /api/v1/settings/timezones` | The time zones the box knows (deviation, D41) |
+| `GET /api/v1/system/timezone` | The home's time zone |
+| `GET /api/v1/backup` | Export (Solite's document, D42) |
+| `POST /api/v1/backup` | Import (Solite's document, D42) |
+| `GET /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28) |
+| `POST /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28) |
+
+## Equipment types with behaviour
+
+The types with Sowel's binding rules (`equipments::rules`) and proposed by recognition; the other
+23 are accepted, stored and served, without rules.
+
+| Type | Why |
+| ---- | --- |
+| `light_onoff` | Relays and on/off lights (ZBMINIR2) |
+| `light_dimmable` | Dimmers |
+| `light_color` | Colour bulbs, the most common Zigbee lights (Philips, IKEA, Innr, Ledvance) |
+| `shutter` | Roller shutters |
+| `switch` | Plugs |
+| `sensor` | Temperature, motion, contact, leak, smoke sensors |
+| `button` | Remotes |
+| `thermostat` | Thermostats |
+
+## Deviations
+
+Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
+error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
+D44).
+
+| Kind | Name | Decision |
+| ---- | ---- | -------- |
+| route | `GET /api/v1/settings/timezones` | D41 |
+| route | `GET /api/v1/integrations/solite/permit-join` | D28 |
+| route | `POST /api/v1/integrations/solite/permit-join` | D28 |

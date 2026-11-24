@@ -18,7 +18,11 @@ import { getAllBatteryBindings, getSensorBindings, getSensorIcon } from "../equi
 export const ORDER_ERROR_MS = 5000;
 
 function icon(equipment: EquipmentWithDetails): React.ReactNode {
-  if (equipment.type === "light_onoff" || equipment.type === "light_dimmable") {
+  if (
+    equipment.type === "light_onoff" ||
+    equipment.type === "light_dimmable" ||
+    equipment.type === "light_color"
+  ) {
     return <Lightbulb size={16} strokeWidth={1.5} />;
   }
   if (equipment.type === "sensor") return getSensorIcon(equipment.dataBindings);
