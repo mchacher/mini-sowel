@@ -8,7 +8,6 @@ import {
   advance,
   dataBinding,
   device,
-  fixtures,
   homeRoutes,
   installFakeWebSocket,
   light,
@@ -78,8 +77,7 @@ describe("devices page", () => {
       "#/zone/garage",
     );
     expect(within(row("Alpha")).getAllByRole("cell")[4].textContent).toBe("—");
-    expect(within(row("Alpha")).getByRole("button", { name: "Create equipment" })).toBeTruthy();
-    expect(within(row("Relay")).queryByRole("button", { name: "Create equipment" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Create equipment" })).toBeNull();
     expect(screen.queryAllByRole("combobox")).toHaveLength(0);
   });
 
@@ -91,16 +89,15 @@ describe("devices page", () => {
     expect(screen.getByText("2 devices · 1 online")).toBeTruthy();
   });
 
-  it("changes the column and takes the button away when the equipment is made", async () => {
+  it("changes the column when the equipment is made", async () => {
     await boot([device("relay", "Relay")], {
       "GET /api/v1/equipments": [{ body: [] }, { body: [lamp()] }],
     });
-    expect(within(row("Relay")).getByRole("button", { name: "Create equipment" })).toBeTruthy();
+    expect(within(row("Relay")).getAllByRole("cell")[4].textContent).toBe("—");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     act(() => FakeWebSocket.last.receive({ type: "equipment.created" }));
     await advance(0);
     expect(within(row("Relay")).getAllByRole("cell")[4].textContent).toBe("Garage›Lumière");
-    expect(within(row("Relay")).queryByRole("button", { name: "Create equipment" })).toBeNull();
   });
 
   it("says there is no device and where to pair one", async () => {
@@ -144,7 +141,7 @@ describe("devices page", () => {
     expect(window.location.hash).toBe("#/devices");
   });
 
-  it("does not open the page on the name editor, Create equipment or Delete", async () => {
+  it("does not open the page on the name editor or Delete", async () => {
     await boot([device("a", "Relay")], { "DELETE /api/v1/devices/a": { status: 204 } });
     fireEvent.click(screen.getByText("Relay"));
     expect(window.location.hash).toBe("#/devices");
@@ -152,8 +149,6 @@ describe("devices page", () => {
     fireEvent.click(screen.getByRole("textbox"));
     expect(window.location.hash).toBe("#/devices");
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
-    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
-    expect(window.location.hash).toBe("#/devices");
     (window.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(window.location.hash).toBe("#/devices");
@@ -261,71 +256,5 @@ describe("devices page", () => {
     for (const call of api.calls) {
       expect(JSON.stringify(call.body ?? {})).not.toContain("zoneId");
     }
-  });
-});
-
-describe("Create equipment, from a row", () => {
-  const nextButton = () => screen.getByRole("button", { name: "Next: Select devices" });
-
-  it("opens the form with the device's type and name, the room to choose, the device ticked", async () => {
-    const relay = fixtures.zbminir2("relay");
-    await boot([device("relay", "ZBMINIR2 567A")], {
-      "GET /api/v1/devices/relay": { body: { ...relay, name: "ZBMINIR2 567A" } },
-      "GET /api/v1/devices": { body: [{ ...relay, name: "ZBMINIR2 567A" }] },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
-    const form = await screen.findByRole("dialog");
-    expect((within(form).getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
-    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("ZBMINIR2 567A");
-    expect((within(form).getByLabelText("Zone") as HTMLSelectElement).value).toBe("");
-    expect((nextButton() as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(within(form).getByLabelText("Zone"), { target: { value: "garage" } });
-    fireEvent.click(nextButton());
-    const box = await within(form).findByLabelText("ZBMINIR2 567A");
-    expect((box as HTMLInputElement).checked).toBe(true);
-    expect(
-      (within(form).getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled,
-    ).toBe(false);
-  });
-
-  it("shows the server's text under the row and removes it when the device is gone (404)", async () => {
-    await boot([device("a", "Relay")], {
-      "GET /api/v1/devices/a": { status: 404, body: { error: "Device not found: a" } },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    await waitFor(() => expect(screen.queryByText("Relay")).toBeNull());
-  });
-
-  it("opens the form with light_onoff for a device with only a voltage, Create disabled", async () => {
-    const volt = fixtures.voltageOnly("a");
-    await boot([device("a", "Voltage only")], {
-      "GET /api/v1/devices/a": { body: volt },
-      "GET /api/v1/devices": { body: [volt] },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
-    const form = await screen.findByRole("dialog");
-    expect((within(form).getByLabelText("Type") as HTMLSelectElement).value).toBe("light_onoff");
-    fireEvent.change(within(form).getByLabelText("Zone"), { target: { value: "garage" } });
-    fireEvent.click(nextButton());
-    const box = await within(form).findByLabelText("Voltage only");
-    expect((box as HTMLInputElement).checked).toBe(true);
-    expect(
-      (within(form).getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(within(form).getByText(/give nothing this type uses yet/)).toBeTruthy();
-  });
-
-  it("reads the device once and opens one form when the button is clicked twice", async () => {
-    const relay = fixtures.zbminir2("relay");
-    const api = await boot([device("relay", "Relay")], {
-      "GET /api/v1/devices/relay": { body: relay },
-    });
-    const button = screen.getByRole("button", { name: "Create equipment" });
-    fireEvent.click(button);
-    fireEvent.click(button);
-    await screen.findByRole("dialog");
-    expect(api.count("GET /api/v1/devices/relay")).toBe(1);
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 });

@@ -1176,3 +1176,40 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (saves one table, about 1.3 KB of stack, and adds a static table to the image: not enough
   alone); a Mac test of the stack (a Mac thread has at least 16 KB and other frame sizes: it
   proves nothing about the ESP32).
+
+## D61: No equipment is created from a device (replaces spec 019's "Create equipment" on a device's row)
+
+- **Date**: 2026-11-25 (spec 037, decided in an autonomous run on the author's note from the box)
+- **Choice**: the Devices page's rows, which Discovery also shows, offer no "Create equipment": a
+  device with no equipment shows "—" in the Equipment column and delete is its only action, as
+  Sowel's `DeviceList` (`EquipmentCell`). An equipment is created from the Equipments page or a
+  room's "Add equipment", whose form picks the devices. The form's props that only the device's
+  button used (type, name and devices given, the type guessed from the devices read) go with it.
+  D30's "the equipment is the entry point" now holds without exception. Discovery offers no next
+  step after pairing (an inbox line asks for a hint toward Equipments).
+- **Why**: the author, on the box (2026-11-25): in Sowel a device is never the entry point; two
+  paths to the same form made the interface differ from Sowel's for no gain the true north needs.
+- **Alternatives**: keep the button (refused by the author); a link from the row to the
+  Equipments page (not Sowel's; left to the inbox line).
+
+## D62: Sowel's top bar, with Solite's switch point and a location link
+
+- **Date**: 2026-11-25 (spec 037, decided in an autonomous run)
+- **Choice**: Sowel's top bar is ported (`TopBarFrame`, the header of `AppLayout` with its
+  breadcrumb and phone title, `SunTimes`, `HomeTimeNote`, `ConnectionStatus`, `useTopBarState`,
+  `useTimezone`, Sowel commit `2d360726`), fed by `GET /settings` (`home.name`, the location),
+  `GET /system/timezone` and the root zone's sun times. Differences from Sowel: the switch point is
+  `md` (Solite's sidebar, design-system.md), not `lg`; the link indicator replaces Solite's
+  "Connection lost" strip (`Banner`) with the same 3 s rule, and `useLive` now says `connecting`
+  at each attempt; where Sowel shows nothing without sun times, Solite shows a "Set the location"
+  link to Settings when no location is set (nothing when only the clock is missing); no alarms,
+  updates or restart pills, no user block (Solite has no data behind them; Log out stays under
+  Administration). The home's time is Sowel's `HomeTimeNote`: shown only when the browser sits in
+  another time zone than the home's; the `CurrentTimePill` named in the inbox no longer exists in
+  Sowel.
+- **Why**: the author noted the missing bar on the box; a box ships without a location, which
+  "Inactive during day" needs, so the bar says where to set it; Sowel's quiet clock rule avoids a
+  second clock beside the device's own.
+- **Alternatives**: an always-shown clock (Sowel's older `CurrentTimePill`, which Sowel replaced);
+  keeping the Banner beside the indicator (two signals for one fact); Sowel's `lg` switch point
+  (would change Solite's sidebar too).

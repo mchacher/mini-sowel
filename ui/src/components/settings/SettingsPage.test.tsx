@@ -85,6 +85,25 @@ describe("SettingsPage, Home card", () => {
     });
   });
 
+  it("reads the home settings and the time zone again after a successful save, for the top bar", async () => {
+    const api = await setup(
+      {},
+      {
+        "PUT /api/v1/settings": { body: { success: true } },
+        "GET /api/v1/system/timezone": {
+          body: { tz: "Europe/Paris", source: "env", offsetHours: 1 },
+        },
+      },
+    );
+    expect(api.count("GET /api/v1/system/timezone")).toBe(0);
+    const settingsReads = api.count("GET /api/v1/settings"); // the card's own read
+    fireEvent.input(field("Home name"), { target: { value: "Annex" } });
+    fireEvent.click(save()!);
+    await waitFor(() => expect(save()).toBeNull());
+    await waitFor(() => expect(api.count("GET /api/v1/system/timezone")).toBe(1));
+    expect(api.count("GET /api/v1/settings")).toBe(settingsReads + 1);
+  });
+
   it("shows the host's text when the PUT is refused, Save stays", async () => {
     await setup(
       {},

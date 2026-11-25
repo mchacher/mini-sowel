@@ -1,8 +1,7 @@
 // Ported from Sowel ui/src/api/auth.ts (Sowel commit 5da84dc1, UI 1.87.0), the device functions
 // `getDevices`, `getDevice`, `updateDevice` and `deleteDevice`, unchanged. The `data` of each
 // device is dropped by the store: the devices page shows none (spec 017); the equipment form's
-// device selector reads it (spec 018), and so does "Create equipment" through `getDevice`
-// (spec 019).
+// device selector reads it (spec 018).
 import type { Device, DeviceData, DeviceOrder } from "../types";
 import { fetchJSON, API_BASE } from "./client";
 

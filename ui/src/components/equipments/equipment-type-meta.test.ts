@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fixtures } from "../../test-utils";
-import { deduceType, isCompatible } from "./equipment-type-meta";
+import { isCompatible } from "./equipment-type-meta";
 import type { EquipmentType } from "../../types";
 
 const TYPES: EquipmentType[] = [
@@ -28,16 +28,5 @@ describe("isCompatible", () => {
   });
   it("fits a device with only voltage to nothing", () => {
     expect(fits(fixtures.voltageOnly())).toEqual([]);
-  });
-});
-
-describe("deduceType", () => {
-  it("guesses the type of each fixture, null when none fits", () => {
-    expect(deduceType(fixtures.zbminir2())).toBe("light_onoff");
-    expect(deduceType(fixtures.bulb())).toBe("light_dimmable");
-    expect(deduceType(fixtures.colorBulb())).toBe("light_color");
-    expect(deduceType(fixtures.th01())).toBe("sensor");
-    expect(deduceType(fixtures.ms01())).toBe("sensor");
-    expect(deduceType(fixtures.voltageOnly())).toBeNull();
   });
 });

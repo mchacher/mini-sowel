@@ -154,6 +154,34 @@ describe("live store", () => {
     expect(FakeWebSocket.instances.length).toBe(before + 1);
   });
 
+  it("shows connecting for each attempt and closed for the wait between two (spec 037)", async () => {
+    connect();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.drop();
+    expect(useLive.getState().status).toBe("closed");
+    await vi.advanceTimersByTimeAsync(1000); // the timer fires: a new socket
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(useLive.getState().status).toBe("connecting");
+    FakeWebSocket.last.drop(); // refused
+    expect(useLive.getState().status).toBe("closed");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(useLive.getState().status).toBe("connecting");
+    FakeWebSocket.last.open();
+    expect(useLive.getState().status).toBe("open");
+  });
+
+  it("reads the home settings and the time zone with the other stores, on every open (spec 037)", () => {
+    connect();
+    FakeWebSocket.last.open();
+    expect(api.count("GET /api/v1/settings")).toBe(1);
+    expect(api.count("GET /api/v1/system/timezone")).toBe(1);
+    FakeWebSocket.last.drop();
+    vi.advanceTimersByTime(1000);
+    FakeWebSocket.last.open();
+    expect(api.count("GET /api/v1/settings")).toBe(2);
+    expect(api.count("GET /api/v1/system/timezone")).toBe(2);
+  });
+
   it("adds the jitter of Sowel's client to each wait", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     expect(reconnectDelay(0)).toBe(1250);

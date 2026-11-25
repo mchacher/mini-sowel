@@ -146,7 +146,7 @@ describe("Discovery", () => {
     expect(screen.queryByText("Known")).toBeNull();
   });
 
-  it("shows a discovered device first, marked New, with its Equipment and Create equipment; a status change adds no mark", async () => {
+  it("shows a discovered device first, marked New, with its Equipment and no Create equipment; a status change adds no mark", async () => {
     await boot([device("a", "Known")]);
     act(() =>
       FakeWebSocket.last.receive({ type: "device.discovered", device: device("b", "Fresh") }),
@@ -160,7 +160,7 @@ describe("Discovery", () => {
       "FreshNew",
     ]);
     expect(within(rows[0]).getAllByRole("cell")[4].textContent).toBe("—");
-    expect(within(rows[0]).getByRole("button", { name: "Create equipment" })).toBeTruthy();
+    expect(within(rows[0]).queryByRole("button", { name: "Create equipment" })).toBeNull();
     act(() =>
       FakeWebSocket.last.receive({
         type: "device.status_changed",

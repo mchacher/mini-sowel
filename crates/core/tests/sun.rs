@@ -155,6 +155,24 @@ fn paris_at_noon_in_june_is_local_times_and_day() {
     assert_eq!(sun.is_daylight, Some(true));
 }
 
+/// Spec 037, R5: the sunrise and sunset shown for 2026-11-25 (Paris reads 08:14 and 17:00; the
+/// 07:58 once noted is Paris around 14 November), with the home's own time zone.
+#[test]
+fn late_november_sun_times_are_local_for_paris_and_new_york() {
+    let now = at("2026-11-25T12:00:00.000Z");
+    let sun = sunlight(&paris(json!({})), now);
+    assert_eq!(sun.sunrise.as_deref(), Some("08:14"));
+    assert_eq!(sun.sunset.as_deref(), Some("17:00"));
+    let new_york = settings(json!({
+        "home.latitude": "40.7128",
+        "home.longitude": "-74.006",
+        "home.timezone": "America/New_York",
+    }));
+    let sun = sunlight(&new_york, now);
+    assert_eq!(sun.sunrise.as_deref(), Some("06:54"));
+    assert_eq!(sun.sunset.as_deref(), Some("16:31"));
+}
+
 #[test]
 fn paris_before_sunrise_and_after_sunset_is_night() {
     let home = paris(json!({}));

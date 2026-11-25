@@ -18,12 +18,13 @@ import {
 } from "../../api";
 import { useAuth } from "../../store/useAuth";
 import { useZoneAggregation } from "../../store/useZoneAggregation";
+import { useHomeSettings } from "../../store/useHomeSettings";
+import { useTimezone } from "../../store/useTimezone";
+import { ROOT_ZONE_ID } from "../../zones";
 import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_LABEL, Modal } from "../ui/Modal";
 
-/** The root zone's id, the same in Sowel and in Solite. */
-const ROOT_ZONE_ID = "00000000-0000-0000-0000-000000000001";
 /** The backup password's length, in characters, as the host checks it (spec 035, R1). */
 const BACKUP_PASSWORD_MIN = 8;
 const BACKUP_PASSWORD_MAX = 128;
@@ -130,6 +131,9 @@ function HomeSettingsSection() {
       });
       setInitial(form);
       void useZoneAggregation.getState().fetchAggregation();
+      // The top bar shows the name, the location hint and the home's time: read them again.
+      void useHomeSettings.getState().fetch();
+      void useTimezone.getState().fetch();
     } catch (err) {
       setError(formErrorText(err, t));
     } finally {

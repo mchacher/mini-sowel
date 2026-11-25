@@ -11,6 +11,8 @@ import { useZones } from "./store/useZones";
 import { useRecipes } from "./store/useRecipes";
 import { useDevices } from "./store/useDevices";
 import { useDeviceDetail } from "./store/useDeviceDetail";
+import { useHomeSettings } from "./store/useHomeSettings";
+import { useTimezone } from "./store/useTimezone";
 import { resetPairingTimers, usePairing } from "./store/usePairing";
 import type {
   DataBindingWithValue,
@@ -276,6 +278,8 @@ export function resetStores(): void {
   useZoneAggregation.setState({ data: {}, loading: false, error: null });
   useLive.setState({ status: "connecting" });
   resetPairingTimers();
+  useHomeSettings.setState({ name: null, hasLocation: null });
+  useTimezone.setState({ tz: "UTC", source: "unknown", offsetHours: 0, loaded: false });
   localStorage.clear();
   setAccessToken(null);
   useAuth.setState({
@@ -342,6 +346,8 @@ export function homeRoutes(home: {
   equipments?: EquipmentWithDetails[];
   aggregation?: Record<string, ZoneAggregatedData>;
   devices?: Device[];
+  settings?: Record<string, string>;
+  timezone?: { tz: string; source: string; offsetHours: number };
 }): Record<string, Route> {
   return {
     "GET /api/v1/auth/status": { body: { setupRequired: false } },
@@ -350,6 +356,10 @@ export function homeRoutes(home: {
     "GET /api/v1/equipments": { body: home.equipments ?? [] },
     "GET /api/v1/zones/aggregation": { body: home.aggregation ?? {} },
     "GET /api/v1/devices": { body: home.devices ?? [] },
+    "GET /api/v1/settings": { body: home.settings ?? {} },
+    "GET /api/v1/system/timezone": {
+      body: home.timezone ?? { tz: "UTC", source: "fallback", offsetHours: 0 },
+    },
     "GET /api/v1/integrations/solite/permit-join": {
       body: { permitJoin: false, remaining: 0 },
     },

@@ -90,28 +90,3 @@ export function isCompatible(type: EquipmentType, device: DeviceWithData): boole
   if (!categories || categories.length === 0) return true;
   return data.some((d) => categories.includes(d.category));
 }
-
-/**
- * The type to offer for a device (spec 019, R4; spec 027): the first that fits, else `null`. A
- * light with a colour or colour temperature, data or order, is `light_color` (the core's
- * `equipments::propose` decides the same).
- */
-export function deduceType(device: DeviceWithData): EquipmentType | null {
-  const colour =
-    isCompatible("light_color", device) &&
-    ((device.data ?? []).some(
-      (d) => d.category === "light_color" || d.category === "light_color_temp",
-    ) ||
-      (device.orders ?? []).some(
-        (o) => o.category === "set_color" || o.category === "set_color_temp",
-      ));
-  if (colour) return "light_color";
-  const dimmable =
-    isCompatible("light_dimmable", device) &&
-    (device.data ?? []).some((d) => d.category === "light_brightness");
-  if (dimmable) return "light_dimmable";
-  for (const type of ["light_onoff", "shutter", "thermostat", "button", "sensor"] as const) {
-    if (isCompatible(type, device)) return type;
-  }
-  return null;
-}

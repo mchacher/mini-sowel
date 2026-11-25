@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Banner } from "./components/layout/Banner";
-import { MobileDrawer, MobileTopBar, Sidebar } from "./components/layout/Sidebar";
+import { MobileDrawer, Sidebar } from "./components/layout/Sidebar";
+import { TopBar } from "./components/layout/TopBar";
+import { TopBarFrame } from "./components/layout/TopBarFrame";
 import { ZonePage } from "./components/home/ZonePage";
 import { DevicesPage } from "./components/devices/DevicesPage";
 import { DiscoveryPage } from "./components/discovery/DiscoveryPage";
@@ -20,6 +21,8 @@ import { connect, disconnect, useLive } from "./store/useLive";
 import { useEquipments } from "./store/useEquipments";
 import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
+import { useHomeSettings } from "./store/useHomeSettings";
+import { useTimezone } from "./store/useTimezone";
 import { chooseZone, flattenZones, zoneIdFromHash } from "./zones";
 
 /** `location.hash`, followed through `hashchange`. */
@@ -90,8 +93,11 @@ function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
 
   // The stores fetch when the socket opens, the first time and after each reconnection. The
-  // socket closes with the home: a session that ended must not keep it.
+  // socket closes with the home: a session that ended must not keep it. The top bar's settings
+  // are also read once now, as Sowel's AppLayout does, so the name shows even if /ws never opens.
   useEffect(() => {
+    void useHomeSettings.getState().fetch();
+    void useTimezone.getState().fetch();
     connect();
     return disconnect;
   }, []);
@@ -113,9 +119,10 @@ function Home() {
         />
       )}
       <div className="flex flex-col flex-1 min-w-0">
-        <MobileTopBar onMenu={() => setMenuOpen(true)} />
+        <TopBarFrame>
+          <TopBar onMenu={() => setMenuOpen(true)} zoneId={zone?.id ?? null} page={page} />
+        </TopBarFrame>
         <main className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
-          <Banner />
           {error && <p className="text-body text-error">{error}</p>}
           {page === "devices" ? (
             deviceId ? (
