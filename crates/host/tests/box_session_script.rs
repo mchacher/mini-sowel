@@ -1023,7 +1023,7 @@ write_serial() {
     echo "I (200) storage: /data, 40 KB used of 8064 KB"
     [ -n "$FAKE_NO_RESUMED" ] || echo "I (300) network: resumed, channel 15, PAN 0x3C3D"
     echo "I (400) memory-network: internal 120 KB free (largest block 60 KB), psram 1800 KB free of 2048 KB"
-    echo "I (500) heap: internal 90 KB free (min 80 KB)"
+    echo "I (500) heap: internal 90 KB free (min 80 KB), largest block 45 KB, psram 1900 KB free (min 1850 KB), largest block 1800 KB, engine stack 20 KB unused of 32 KB"
     [ -z "$FAKE_LEAK" ] || echo "I (600) leak: $FAKE_LEAK"
   } > "$1"
 }
@@ -1456,6 +1456,7 @@ fn the_nominal_pass_flashes_once_runs_the_groups_inside_saves_and_gives_a_verdic
     assert!(
         b3.contains("psram 1800 KB free")
             && b3.contains("min 80 KB")
+            && b3.contains("largest block 45 KB")
             && b3.contains("40 KB used of 8064 KB"),
         "{b3}"
     );

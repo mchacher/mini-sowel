@@ -2,6 +2,8 @@
 //! are Zigbee2MQTT's property names, as Sowel's Zigbee2MQTT plugin uses them, so Sowel's aliases
 //! match; the categories are Sowel's `DataCategory` and `OrderCategory`.
 
+use std::borrow::Cow;
+
 use super::model::ValueType;
 
 /// A data a cluster gives.
@@ -236,5 +238,109 @@ pub fn order_rank(key: &str) -> usize {
         "color_temp" => 2,
         "color" => 3,
         _ => 4,
+    }
+}
+
+/// Every constant text a data or an order may carry: keys, categories, units, `valueOn` and
+/// `valueOff` of the specs above (spec 034). A constant list, bounded by the catalog; a test
+/// checks it misses no word of `all_data` and `all_orders`.
+/// A data category that is also a key (`temperature`, `humidity`...) is listed once, as a key.
+static WORDS: &[&str] = &[
+    // Data keys.
+    "temperature",
+    "humidity",
+    "pressure",
+    "illuminance",
+    "occupancy",
+    "contact",
+    "water_leak",
+    "smoke",
+    "tamper",
+    "battery_low",
+    "state",
+    "brightness",
+    "color_temp",
+    "color",
+    "battery",
+    "voltage",
+    // Data categories.
+    "luminosity",
+    "motion",
+    "contact_door",
+    "generic",
+    "light_state",
+    "light_brightness",
+    "light_color_temp",
+    "light_color",
+    // Units.
+    "°C",
+    "%",
+    "hPa",
+    "lx",
+    "mired",
+    "mV",
+    // Order categories.
+    "light_toggle",
+    "set_brightness",
+    "set_color_temp",
+    "set_color",
+    // Order values.
+    "ON",
+    "OFF",
+];
+
+/// The catalog's constant text equal to `text` (exact, case-sensitive), borrowed; an owned copy
+/// otherwise (a text of an older release, or one the catalog does not know). Read at boot only:
+/// a linear search over a few dozen words.
+pub(crate) fn shared(text: &str) -> Cow<'static, str> {
+    match WORDS.iter().find(|word| **word == text) {
+        Some(word) => Cow::Borrowed(*word),
+        None => Cow::Owned(text.to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_text_of_the_catalog_is_in_the_list() {
+        let mut texts: Vec<&str> = Vec::new();
+        for spec in all_data() {
+            texts.push(spec.key);
+            texts.push(spec.category);
+            texts.extend(spec.unit);
+        }
+        for spec in all_orders() {
+            texts.push(spec.key);
+            texts.push(spec.category);
+            texts.extend(spec.value_on);
+            texts.extend(spec.value_off);
+        }
+        for text in texts {
+            assert!(WORDS.contains(&text), "{text} is missing from WORDS");
+        }
+    }
+
+    #[test]
+    fn a_known_word_is_borrowed_from_the_constant() {
+        for word in ["temperature", "°C", "ON"] {
+            let shared = shared(word);
+            let Cow::Borrowed(borrowed) = shared else {
+                panic!("{word} should be borrowed");
+            };
+            assert_eq!(borrowed, word);
+            assert!(WORDS.iter().any(|w| std::ptr::eq(*w, borrowed)));
+        }
+    }
+
+    #[test]
+    fn an_unknown_word_or_another_case_is_owned() {
+        for word in ["co2", "Temperature", "\u{b0}c"] {
+            assert!(
+                matches!(shared(word), Cow::Owned(ref o) if o == word),
+                "{word}"
+            );
+        }
     }
 }

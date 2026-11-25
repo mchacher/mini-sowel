@@ -224,8 +224,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | Key rotation: several public keys per build, a revocation list, what a box does when its key is lost (a USB flash today) | Spec 032 |
 | 2026-11-25 | Decide what the QEMU ceiling measures: the engine without the simulator (the box's image has none) or the bench with it; if without, take the simulator's allocations out of the phase figures (`firmware/src/simulated.rs:228-259`, `measure.rs:73-86`) and set a new ceiling from the measured figure | Fix of the 363 KB peak |
 | 2026-11-25 | Stream the home's loading for real: `Storage` returns a reader and `devices.json` and `equipments.json` are parsed with `from_reader` (the texts of 94 KB and 71 KB are read whole today, `engine/storage.rs:145-195`) | Fix of the 363 KB peak |
-| 2026-11-25 | Intern the texts of `DeviceData` and `DeviceOrder` (`key`, `category`, `unit`) so about a thousand small blocks leave the internal RAM (`devices/model.rs:313-347`) | Fix of the 363 KB peak |
-| 2026-11-25 | An internal-RAM threshold measured on the box with Wi-Fi up: the periodic `heap:` line also prints the largest free block (`core/src/memory.rs:117`), a floor written in `docs/memory-budget.md` | Fix of the 363 KB peak |
+| 2026-11-25 | An internal-RAM floor measured on the box with Wi-Fi up and the realistic home, read in the `heap:` line (the largest block is now in it), written in `docs/memory-budget.md` | Fix of the 363 KB peak |
 
 ## Sowel issues to open
 
@@ -409,3 +408,4 @@ Every change to this roadmap: date, what changed, why.
   runs the tests with the box in hand in one command, on the user's `--yes-flash` (D55); the list
   above says, item by item, the step that runs it or that it stays a person's; `validate.sh`
   prints the firmware images' share of the slot. New inbox line: a raw console line in `box.sh`.
+- 2026-11-25: spec 034 built on the Mac (the user away, the box not run): the radio image's `heap:` line prints the largest free block of internal RAM and PSRAM; the devices read back share the catalog's texts and are read in one pass. The 50 devices hold 65 KB instead of 72 KB (Mac), QEMU 159 KB held and 311 KB peak instead of 176 and 327, internal RAM minimum 110 KB instead of 95; the JSON is unchanged.

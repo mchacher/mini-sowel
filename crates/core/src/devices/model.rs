@@ -116,6 +116,70 @@ pub(crate) mod iso_option {
     }
 }
 
+/// Reads a text through the catalog's constants (spec 034): a text the catalog knows is borrowed
+/// from it, so a device read back from storage holds no heap copy of it.
+mod shared_text {
+    use std::borrow::Cow;
+    use std::fmt;
+
+    use serde::Deserializer;
+    use serde::de::{self, Visitor};
+
+    use super::super::catalog::shared;
+
+    struct Shared;
+
+    impl<'de> Visitor<'de> for Shared {
+        type Value = Cow<'static, str>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a string")
+        }
+
+        fn visit_str<E: de::Error>(self, text: &str) -> Result<Self::Value, E> {
+            Ok(shared(text))
+        }
+
+        // An escaped text arrives owned: it is matched all the same, then dropped.
+        fn visit_string<E: de::Error>(self, text: String) -> Result<Self::Value, E> {
+            match shared(&text) {
+                Cow::Owned(_) => Ok(Cow::Owned(text)),
+                borrowed => Ok(borrowed),
+            }
+        }
+    }
+
+    struct SharedOption;
+
+    impl<'de> Visitor<'de> for SharedOption {
+        type Value = Option<Cow<'static, str>>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a string or null")
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+            d.deserialize_str(Shared).map(Some)
+        }
+    }
+
+    pub fn text<'de, D: Deserializer<'de>>(d: D) -> Result<Cow<'static, str>, D::Error> {
+        d.deserialize_str(Shared)
+    }
+
+    pub fn option<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Cow<'static, str>>, D::Error> {
+        d.deserialize_option(SharedOption)
+    }
+}
+
 /// The `integrationId` and the `source` of every device of Solite.
 pub const INTEGRATION_ID: &str = "solite";
 
@@ -310,20 +374,28 @@ impl<'de> Deserialize<'de> for Device {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceData {
     pub id: Id,
+    #[serde(deserialize_with = "shared_text::text")]
     pub key: Cow<'static, str>,
     #[serde(rename = "type")]
     pub value_type: ValueType,
+    #[serde(deserialize_with = "shared_text::text")]
     pub category: Cow<'static, str>,
     /// `null` until the first value.
     pub value: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "shared_text::option"
+    )]
     pub unit: Option<Cow<'static, str>>,
     #[serde(with = "iso_option")]
     pub last_updated: Option<u64>,
     /// The last time the value changed, not just was received (the equipment's
     /// `lastChanged`). Kept in `devices.json`, left out of the device API: Sowel's `DeviceData`
     /// has no such field.
-    #[serde(skip)]
+    ///
+    /// Read when present (`null` when a file written before spec 010 has none).
+    #[serde(default, skip_serializing, with = "iso_option")]
     pub last_changed: Option<u64>,
 }
 
@@ -332,18 +404,31 @@ pub struct DeviceData {
 #[serde(rename_all = "camelCase")]
 pub struct DeviceOrder {
     pub id: Id,
+    #[serde(deserialize_with = "shared_text::text")]
     pub key: Cow<'static, str>,
     #[serde(rename = "type")]
     pub value_type: ValueType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "shared_text::option"
+    )]
     pub category: Option<Cow<'static, str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "shared_text::option"
+    )]
     pub value_on: Option<Cow<'static, str>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "shared_text::option"
+    )]
     pub value_off: Option<Cow<'static, str>>,
 }
 

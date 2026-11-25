@@ -25,7 +25,8 @@ use esp_idf_svc::sys::{
     esp_reset_reason_t_ESP_RST_POWERON, esp_reset_reason_t_ESP_RST_PWR_GLITCH,
     esp_reset_reason_t_ESP_RST_SW, esp_reset_reason_t_ESP_RST_TASK_WDT,
     esp_reset_reason_t_ESP_RST_USB, esp_reset_reason_t_ESP_RST_WDT,
-    heap_caps_get_minimum_free_size, uxTaskGetStackHighWaterMark2,
+    heap_caps_get_largest_free_block, heap_caps_get_minimum_free_size,
+    uxTaskGetStackHighWaterMark2,
 };
 use solite_core::HeapStats;
 use solite_core::auth::BootPresence;
@@ -108,20 +109,24 @@ pub fn fill(buffer: &mut [u8]) -> Result<(), String> {
 #[allow(unsafe_code)]
 fn heap_stats() -> HeapStats {
     let now = memory::read();
-    // SAFETY: reads the heap's low-watermark counters for a capability mask, and the calling
-    // task's stack high-water mark (a null handle means the caller); no precondition.
-    let (internal_min, psram_min, stack_unused) = unsafe {
+    // SAFETY: reads the heap's low-watermark counters and largest free blocks for a capability
+    // mask, and the calling task's stack high-water mark (a null handle means the caller); no precondition.
+    let (internal_min, psram_min, internal_largest, psram_largest, stack_unused) = unsafe {
         (
             heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
             heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+            heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
             uxTaskGetStackHighWaterMark2(std::ptr::null_mut()),
         )
     };
     HeapStats {
         internal_free: now.internal_free,
         internal_min,
+        internal_largest,
         psram_free: now.psram.map_or(0, |p| p.free),
         psram_min,
+        psram_largest,
         stack_unused: stack_unused as usize,
         stack_total: STACK_BYTES,
         http_stack: http_server::http_stack(),
