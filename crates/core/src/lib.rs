@@ -21,6 +21,7 @@ pub mod radio;
 
 pub mod api;
 pub mod auth;
+pub mod backup;
 pub mod devices;
 pub mod engine;
 pub mod equipments;

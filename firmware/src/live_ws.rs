@@ -38,7 +38,7 @@ use solite_core::live::{ClientId, LiveHandle, MAX_CLIENTS};
 
 /// The live thread's stack, in internal RAM.
 const LIVE_STACK_BYTES: usize = 4 * 1024;
-/// The longest header read during the handshake (the head is at most 1024 bytes, R4.2).
+/// The longest handshake header read (R4.2); the whole head may be longer (4096 bytes).
 const MAX_HEADER_BYTES: usize = 1024;
 /// The subprotocol echoed. The interface offers `bearer.none` then `bearer.<token>`
 /// (`ui/src/store/useLive.ts`): ESP-IDF echoes only this fixed one, and reads at most 49

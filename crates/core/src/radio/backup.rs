@@ -40,3 +40,62 @@ pub fn pan_label(text: &str) -> String {
         .map(|p| p.trim_start_matches("0x").to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
+
+/// A network read back from a backup's text (spec 035, R7): what a restored box forms again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredNetwork {
+    pub pan_id: u16,
+    /// Most significant byte first, as the file shows it (the reverse of the frame's order).
+    pub extended_pan_id: [u8; 8],
+    pub channel: u8,
+    pub keys: NetworkKeys,
+}
+
+fn unhex<const N: usize>(text: &str) -> Option<[u8; N]> {
+    let digits = text.strip_prefix("0x").unwrap_or(text).as_bytes();
+    if digits.len() != N * 2 {
+        return None;
+    }
+    let mut out = [0u8; N];
+    for (byte, pair) in out.iter_mut().zip(digits.chunks(2)) {
+        let high = char::from(pair[0]).to_digit(16)?;
+        let low = char::from(pair[1]).to_digit(16)?;
+        *byte = u8::try_from(high * 16 + low).ok()?;
+    }
+    Some(out)
+}
+
+/// The number after `"channel":` in a backup's text.
+fn channel(text: &str) -> Option<u8> {
+    let after = text.split("\"channel\":").nth(1)?;
+    after
+        .trim_start()
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// The network of a backup's text: `None` when a field is missing or is not valid (a PAN id of
+/// 0x0000 or 0xFFFF, an extended PAN id of all 0x00 or all 0xFF, a channel outside 11 to 26, a
+/// key that is not 16 bytes in hexadecimal).
+pub fn parse(text: &str) -> Option<RestoredNetwork> {
+    let pan_id = u16::from_be_bytes(unhex::<2>(&field(text, "panId")?)?);
+    let extended_pan_id = unhex::<8>(&field(text, "extendedPanId")?)?;
+    let channel = channel(text)?;
+    let keys = NetworkKeys {
+        network_key: unhex::<16>(&field(text, "networkKey")?)?,
+        trust_center_key: unhex::<16>(&field(text, "trustCenterKey")?)?,
+    };
+    let valid = pan_id != 0x0000
+        && pan_id != 0xFFFF
+        && extended_pan_id != [0x00; 8]
+        && extended_pan_id != [0xFF; 8]
+        && (11..=26).contains(&channel);
+    valid.then_some(RestoredNetwork {
+        pan_id,
+        extended_pan_id,
+        channel,
+        keys,
+    })
+}

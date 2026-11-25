@@ -705,7 +705,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   rule (Casablanca, Cairo), is out until a list update. The sun times decide motion-light's
   "Inactive during day", the J6 test.
 
-## D42: The backup is the home's settings and zones, as one JSON document of at most 16 KB
+## D42: The backup is the home's settings and zones, as one JSON document of at most 16 KB (replaced by D56)
 
 - **Date**: 2026-11-24 (spec 026, decided in an autonomous run, for the user's review)
 - **Choice**: `GET /api/v1/backup` gives `{"version":1,"settings":{...},"zones":[...]}`;
@@ -1000,3 +1000,69 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   its own yes; one yes for one pass keeps D6's intent (nothing is flashed without the user's
   decision) and D39's (one pass, counted writes) while the session costs one command and one
   report.
+
+## D56: The full backup is one encrypted archive at `/api/v1/system/backup` (replaces D42)
+
+- **Date**: 2026-11-25 (spec 035, decided in an autonomous run, for the user's review)
+- **Choice**: `GET /api/v1/system/backup` streams one file, `POST` of it restores it; the password
+  is in the header `X-Backup-Password` (percent-encoded UTF-8, 8 to 128 characters), never in the
+  address or a body. `/api/v1/backup` (D42's document of the settings and zones, at Sowel's path
+  with another shape) is removed and answers 404; Sowel's own backup (a ZIP of its SQLite tables)
+  is not mirrored, and the sentence of D43 that the backup document "has Sowel's paths" no longer
+  holds. The archive holds `devices.json`, `zones.json`, `equipments.json`, `recipes.json` and
+  `settings.json` (plain), and the Zigbee network file and `wifi.json` (encrypted); never
+  `auth.json` (the account belongs to the box at hand: a restore keeps it) nor the network setting
+  (the box's hardware link); the Wi-Fi settings are restored only with `?wifi=true`, else the box
+  keeps its own. Format 1: the magic `SOLITEBK`, the format, the iterations, a salt, a nonce and a
+  key check; the files as chunks of at most 4096 bytes; a manifest (names, sizes, SHA-256 of the
+  stored bytes) and an HMAC-SHA256 over everything before it. Keys: PBKDF2-HMAC-SHA256 of the
+  password, 100,000 iterations at export (a restore accepts 10,000 to 400,000), split by two
+  HMACs into an encryption key and an authentication key; ChaCha20 for the secrets, encrypt then
+  MAC. Both ways are streamed through one 4 KB buffer (the archive is never held whole); a restore
+  is validated whole into staged copies (`<name>.restore`) and refuses a wrong password, a
+  truncated, altered, oversized or newer file with the live files untouched; the staged files
+  replace the live ones at the next start (`restore.pending` names them), so the Saver, which
+  writes the home in memory until the restart, never overwrites them. Bounds: 2 MiB the archive, 1
+  MiB a file, 7 files, 120 s an export, one job at a time; the key derivation pauses every 5,000
+  iterations for the box's watchdog.
+- **Why**: devices, equipments and recipes depend on the devices paired to one box and on its
+  radio network's keys: D42's document left all of them out, so a replaced box or a lost
+  partition meant pairing everything again; D42 itself said that a full backup was "a different
+  feature" (secrets, a body beyond the 16 KB buffers, a streamed import), and this is it. The file
+  leaves the box and can be attacked offline, so the key takes ten times the account's iterations
+  (D47) and the keys of the radio and the Wi-Fi password are encrypted. No AEAD (an authenticated
+  cipher) is among the dependencies: `chacha20` of RustCrypto is pure Rust, `no_std`, and pulls
+  only two small crates (`cipher`, `inout`) beside the `sha2` and `hmac` the core already has, and
+  HMAC over the ciphertext (encrypt then MAC) gives the authentication that a hand-made AEAD
+  would; AES would need a hardware driver or a larger crate. A path of Solite's own under
+  `/system`, like the update's (D53), ends the use of Sowel's path with a different shape (the
+  inbox line on D42's alignment). A restore applied at the start, not in place, keeps the
+  running engine and its Saver out of the way and lets an interruption finish at the next start. The account is kept because its hash and tokens are the box's, and a restore must not
+  lock the user out with a password they forgot.
+
+## D57: A restore's Zigbee network: the radio leaves the network it runs and forms the restored one
+
+- **Date**: 2026-11-25 (spec 035, decided in an autonomous run, for the user's review)
+- **Choice**: a restore that brings the network file writes a one-shot mark, `zigbee.restore`
+  (in the data folder, on the box and on the Mac). At the network start, with the mark, a radio that runs
+  another network **leaves it** (EZSP `leaveNetwork`, then the stack's network-down status) and
+  forms the restored one with the file's PAN, extended PAN, channel and keys (the extended PAN id
+  of the file is in display order, the reverse of the frame's); a radio already on the restored
+  network resumes it. The mark is removed once the network is up and kept when the start fails.
+  The network left keeps its keys in `zigbee-<PAN>.json` (`network-<PAN>.json` on the Mac), set
+  aside when the restore is applied. Without the mark, a radio on a network resumes it and is
+  never left, as before; a radio with no network and a parsable file forms the file's network
+  instead of a random one. This is **the one exception** to the rule (the living spec's "Pairs a device") that a network is never left: the user's
+  restore asks for it. Not carried: the radio's address (EUI64: Zigbee 3.0 devices keep the trust
+  centre's address; on an EmberZNet radio it is a token written once and never undone, so Solite
+  does not write it), its NWK frame counter (a new radio starts at 0, and a device that remembers a
+  higher one may drop its commands until it passes it) and its child table (end devices whose
+  parent was the coordinator rejoin by themselves or need pairing again). It is a best effort:
+  the box check of the full backup counts the devices that report again without pairing, and
+  the roadmap keeps the frame counter and the child table as a line.
+- **Why**: the point of a full backup is that the paired devices keep talking to the restored box;
+  a box forms its own network at its first start, and a factory reset keeps it, so without
+  leaving it the restored keys would sit unused. Setting the old network's keys aside rather
+  than discarding them keeps the rule that a network's keys are never lost. The
+  EUI64 is left alone because writing it cannot be undone; the counter and the child table need
+  EZSP values Solite does not read today, so the measure on the box decides what is worth adding.

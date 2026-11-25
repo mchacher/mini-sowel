@@ -3,12 +3,13 @@
 //! writes through the `Storage`, taking the snapshots under the lock and writing them after the
 //! lock is released. Saves can be held and flushed (`SaveControl`, spec 025).
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use super::storage::{
     AUTH_FILE, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, ZONES_FILE,
 };
+use crate::backup::{BackupState, WriteMark};
 use crate::devices::{WritePolicy, lock};
 use crate::home::{Home, ListCursor};
 
@@ -72,6 +73,15 @@ pub const FLUSH_ASKED_LINE: &str = "saves: flush asked";
 /// The engine's line once a flush is done.
 pub fn flushed_line(files: usize) -> String {
     format!("saves: flushed, {files} files written")
+}
+
+/// The `writing` mark of a file's write, or `None` while an export reads the files.
+fn write_mark(state: &Arc<BackupState>, stopping: bool) -> Option<WriteMark> {
+    if stopping {
+        Some(state.force_write())
+    } else {
+        state.try_write()
+    }
 }
 
 /// The single writer of the engine's files.
@@ -178,11 +188,13 @@ impl<S: Storage> Saver<S> {
         if !forced && !self.definitions_settled(home, now) {
             return Ok(());
         }
-        let (written, failed) = self.write_due(home, now, forced, stopping)?;
+        let (written, failed, skipped) = self.write_due(home, now, forced, stopping)?;
         // The wait ends with the writes (a change made while they ran waits its own delay). While
         // a failed file waits for its retry the wait stays over, so the retry comes at its own
         // time, never later (and a change meanwhile is written at the next turn).
-        if !failed && now >= self.retry_at {
+        // A file left due because an export reads the files is written at the next turn after the
+        // export, without a new wait.
+        if !failed && !skipped && now >= self.retry_at {
             self.pending_since = None;
         }
         if flush {
@@ -220,17 +232,25 @@ impl<S: Storage> Saver<S> {
         }
     }
 
-    /// Writes the files due; the number written, and whether one failed. `forced`: every file with unsaved changes;
-    /// `stopping`: a failure is the error.
+    /// Writes the files due; the number written, whether one failed, and whether one was left due
+    /// because an export is reading the files (spec 035, R4: the Saver starts no write then, the
+    /// files stay due; a stop writes all the same, the program ends). Each file's write, from the
+    /// taking of its cursor to its rename, holds the state's `writing` mark. `forced`: every file
+    /// with unsaved changes; `stopping`: a failure is the error.
     fn write_due(
         &mut self,
         home: &Mutex<Home>,
         now: u64,
         forced: bool,
         stopping: bool,
-    ) -> Result<(usize, bool), String> {
-        let (mut written, mut failed) = (0, false);
-        let devices = self.policy.due_stream(&mut lock(home), now, forced);
+    ) -> Result<(usize, bool, bool), String> {
+        let (mut written, mut failed, mut skipped) = (0, false, false);
+        let state = lock(home).backup_state();
+        let devices_mark = write_mark(&state, stopping);
+        skipped |= devices_mark.is_none();
+        let devices = devices_mark
+            .as_ref()
+            .and_then(|_| self.policy.due_stream(&mut lock(home), now, forced));
         if let Some(cursor) = devices {
             match self.write(home, cursor, DEVICES_FILE) {
                 Ok(()) => written += 1,
@@ -242,8 +262,9 @@ impl<S: Storage> Saver<S> {
                 }
             }
         }
+        drop(devices_mark);
         if self.devices_only || !(forced || now >= self.retry_at) {
-            return Ok((written, failed));
+            return Ok((written, failed, skipped));
         }
         type Take = fn(&mut Home) -> Option<ListCursor>;
         type Mark = fn(&mut Home);
@@ -271,6 +292,10 @@ impl<S: Storage> Saver<S> {
             (AUTH_FILE, Home::take_auth_cursor, Home::mark_auth_changed),
         ];
         for (name, take, mark) in files {
+            let Some(_writing) = write_mark(&state, stopping) else {
+                skipped = true;
+                continue;
+            };
             let cursor = take(&mut lock(home));
             let Some(cursor) = cursor else {
                 continue;
@@ -286,7 +311,7 @@ impl<S: Storage> Saver<S> {
                 }
             }
         }
-        Ok((written, failed))
+        Ok((written, failed, skipped))
     }
 
     fn write(&self, home: &Mutex<Home>, mut cursor: ListCursor, name: &str) -> Result<(), String> {

@@ -12,7 +12,9 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # `validate.sh`).
 CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
 # A browser's request head is about 500 to 800 bytes (512 by default); a longer one gets 431.
-CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+# 4096: the backup's password (up to 128 characters, percent-encoded in a header, up to 1536
+# bytes) rides in the head with the browser's own headers and the token (spec 035).
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
 # The server uses its 12 connections plus 3 sockets of its own (its listener and two UDP control
 # sockets), and refuses to start on a smaller table: 15, one spare (10 by default). DHCP, DNS and
 # SNTP use lwIP's raw API, no socket.

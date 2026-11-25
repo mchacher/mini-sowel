@@ -134,105 +134,224 @@ describe("SettingsPage, Home card", () => {
   });
 });
 
-const BACKUP = { version: 1, settings: { "home.name": "Annex" }, zones: [] };
+const GET = "GET /api/v1/system/backup";
+const POST = "POST /api/v1/system/backup";
+const PASSWORD = "correct horse";
 
-function fileOf(text: string, size = text.length) {
-  const file = new File([text], "backup.json", { type: "application/json" });
-  Object.defineProperty(file, "size", { value: size });
-  return file;
-}
-const pickFile = (file: File) =>
-  fireEvent.change(screen.getByLabelText("Import", { selector: "input" }), {
-    target: { files: [file] },
-  });
+const exportButton = () => screen.getByRole("button", { name: /^Export/ }) as HTMLButtonElement;
+const restoreButton = () => screen.getByRole("button", { name: /^Restor/ }) as HTMLButtonElement;
+const typeIn = (label: string, value: string) =>
+  fireEvent.input(screen.getByLabelText(label), { target: { value } });
+const fillExport = (password = PASSWORD, confirm = PASSWORD) => {
+  typeIn("Backup password", password);
+  typeIn("Confirm the backup password", confirm);
+};
+const slb = () => new File(["SOLITEBK"], "box.slb");
+const chooseBackup = (file = slb(), password = PASSWORD) => {
+  fireEvent.change(screen.getByLabelText("Backup file (.slb)"), { target: { files: [file] } });
+  typeIn("Password of the backup", password);
+};
 
 describe("SettingsPage, Backup card", () => {
-  it("exports: GET /backup, then a download named by the date", async () => {
-    const api = await setup({}, { "GET /api/v1/backup": { body: BACKUP } });
-    const create = vi.fn(() => "blob:x");
-    vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: vi.fn() });
+  it("keeps Export disabled until the two passwords are equal and 8 to 128 characters, with the reason", async () => {
+    await setup({}, { [GET]: { body: {} } });
+    expect(exportButton().disabled).toBe(true);
+    fillExport("short", "short");
+    expect(exportButton().disabled).toBe(true);
+    expect(screen.getByText("Password must be at least 8 characters")).toBeTruthy();
+    fillExport(PASSWORD, "correct horsE");
+    expect(exportButton().disabled).toBe(true);
+    expect(screen.getByText("Passwords do not match")).toBeTruthy();
+    fillExport("x".repeat(129), "x".repeat(129));
+    expect(exportButton().disabled).toBe(true);
+    expect(screen.getByText("Password must be at most 128 characters")).toBeTruthy();
+    fillExport("x".repeat(128), "x".repeat(128));
+    expect(exportButton().disabled).toBe(false);
+  });
+
+  it("exports: GET with the token and the percent-encoded password header, then a .slb download named by the date", async () => {
+    storeSession();
+    const api = await setup({}, { [GET]: { body: {} } });
+    const created: Blob[] = [];
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((b: Blob) => (created.push(b), "blob:x")),
+      revokeObjectURL: vi.fn(),
+    });
     const names: string[] = [];
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
       this: HTMLAnchorElement,
     ) {
       names.push(this.download);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    const password = "mot de passe é 😀";
+    fillExport(password, password);
+    fireEvent.click(exportButton());
     await waitFor(() => expect(click).toHaveBeenCalled());
-    expect(api.count("GET /api/v1/backup")).toBe(1);
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(names[0]).toMatch(/^solite-backup-\d{4}-\d{2}-\d{2}\.json$/);
+    expect(api.count(GET)).toBe(1);
+    const at = api.calls.findIndex((c) => c.key === GET);
+    expect(api.headersOf[at]!["Authorization"]).toMatch(/^Bearer /);
+    expect(api.headersOf[at]!["X-Backup-Password"]).toBe(encodeURIComponent(password));
+    expect(created).toHaveLength(1);
+    expect(created[0]).toBeInstanceOf(Blob);
+    expect(names[0]).toMatch(/^solite-backup-\d{4}-\d{2}-\d{2}\.slb$/);
   });
 
   it("shows the host's text when the export is refused", async () => {
-    await setup(
-      {},
-      { "GET /api/v1/backup": { status: 413, body: { error: "Backup too large: 20000 bytes" } } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
-    expect(await screen.findByText("Backup too large: 20000 bytes")).toBeTruthy();
+    await setup({}, { [GET]: { status: 409, body: { error: "Backup already in progress" } } });
+    fillExport();
+    fireEvent.click(exportButton());
+    expect(await screen.findByText("Backup already in progress")).toBeTruthy();
   });
 
-  it("refuses a file over 16384 bytes in the page, sends one of exactly 16384", async () => {
-    const api = await setup({}, { "POST /api/v1/backup": { body: importResult() } });
-    pickFile(fileOf(JSON.stringify(BACKUP), 16385));
-    expect(await screen.findByText("File too large (16 KB at most)")).toBeTruthy();
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(api.count("POST /api/v1/backup")).toBe(0);
-    pickFile(fileOf(JSON.stringify(BACKUP), 16384));
-    expect(await screen.findByRole("dialog")).toBeTruthy();
-    expect(screen.queryByText("File too large (16 KB at most)")).toBeNull();
-  });
-
-  it("imports after the confirmation: POST with the file's text, the counts, the stores read again", async () => {
-    const api = await setup({}, { "POST /api/v1/backup": { body: importResult() } });
-    pickFile(fileOf(JSON.stringify(BACKUP)));
-    const dialog = await screen.findByRole("dialog");
-    expect(api.count("POST /api/v1/backup")).toBe(0);
-    fireEvent.click(within(dialog).getByRole("button", { name: "Import" }));
-    expect(
-      await screen.findByText("Imported: 1 settings, 2 rooms created, 3 rooms updated"),
-    ).toBeTruthy();
-    expect(api.calls.find((c) => c.key === "POST /api/v1/backup")!.body).toEqual(BACKUP);
-    await waitFor(() => expect(api.count("GET /api/v1/zones")).toBe(1));
-    await waitFor(() => expect(api.count("GET /api/v1/settings")).toBe(2));
-  });
-
-  it("sends nothing when the confirmation is cancelled", async () => {
-    const api = await setup({}, { "POST /api/v1/backup": { body: importResult() } });
-    pickFile(fileOf(JSON.stringify(BACKUP)));
-    const dialog = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(api.count("POST /api/v1/backup")).toBe(0);
-  });
-
-  it("shows the host's refusal text when the import is refused", async () => {
+  it("shows the server's text for a 503 on the export and a 500 on the restore", async () => {
     await setup(
       {},
       {
-        "POST /api/v1/backup": {
-          status: 400,
-          body: { error: "Invalid backup: unsupported version 2" },
+        [GET]: { status: 503, body: { error: "Busy saving, try again" } },
+        [POST]: { status: 500, body: { error: "Restore failed: no space left" } },
+      },
+    );
+    fillExport();
+    fireEvent.click(exportButton());
+    // A GET answered 503 is retried once after 1 s by the client.
+    expect(await screen.findByText("Busy saving, try again", {}, { timeout: 4000 })).toBeTruthy();
+    chooseBackup();
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restore" }),
+    );
+    expect(await screen.findByText("Restore failed: no space left")).toBeTruthy();
+  });
+
+  it("keeps Restore disabled until a file and a password are given", async () => {
+    await setup();
+    expect(restoreButton().disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Backup file (.slb)"), { target: { files: [slb()] } });
+    await waitFor(() => expect(restoreButton().disabled).toBe(true));
+    typeIn("Password of the backup", PASSWORD);
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+  });
+
+  it("restores after the confirmation: POST of the file as octet-stream with the token and the password, the message shown", async () => {
+    storeSession();
+    const api = await setup(
+      {},
+      {
+        [POST]: {
+          body: {
+            success: true,
+            message: "Backup restored: the box restarts, log in again after it",
+            files: 5,
+            wifi: false,
+          },
         },
       },
     );
-    pickFile(fileOf(JSON.stringify(BACKUP)));
+    const file = slb();
+    chooseBackup(file);
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
     const dialog = await screen.findByRole("dialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Import" }));
-    expect(await screen.findByText("Invalid backup: unsupported version 2")).toBeTruthy();
+    expect(within(dialog).getByText(/The account is kept/)).toBeTruthy();
+    expect(api.count(POST)).toBe(0);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore" }));
+    expect(
+      await screen.findByText("Backup restored: the box restarts, log in again after it"),
+    ).toBeTruthy();
+    const at = api.calls.findIndex((c) => c.key === POST);
+    expect(api.headersOf[at]!["Content-Type"]).toBe("application/octet-stream");
+    expect(api.headersOf[at]!["Authorization"]).toMatch(/^Bearer /);
+    expect(api.headersOf[at]!["X-Backup-Password"]).toBe(encodeURIComponent(PASSWORD));
+    expect(api.calls[at]!.body).toBe(file);
+  });
+
+  it("asks for the Wi-Fi settings only when the box is ticked: ?wifi=true", async () => {
+    const api = await setup(
+      {},
+      {
+        "POST /api/v1/system/backup?wifi=true": {
+          body: { success: true, message: "Backup restored", files: 6, wifi: true },
+        },
+      },
+    );
+    chooseBackup();
+    fireEvent.click(screen.getByLabelText("Also restore the Wi-Fi settings"));
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("The Wi-Fi settings are replaced too.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Restore" }));
+    expect(await screen.findByText("Backup restored")).toBeTruthy();
+    expect(api.count("POST /api/v1/system/backup?wifi=true")).toBe(1);
+    expect(api.count(POST)).toBe(0);
+  });
+
+  it("sends nothing when the confirmation is cancelled", async () => {
+    const api = await setup({}, { [POST]: { body: {} } });
+    chooseBackup();
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.count(POST)).toBe(0);
+  });
+
+  it("shows Restoring... and disables the button while the upload runs", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await setup(
+      {},
+      {
+        [POST]: async () => {
+          await gate;
+          return { body: { success: true, message: "Backup restored", files: 1, wifi: false } };
+        },
+      },
+    );
+    chooseBackup();
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restore" }),
+    );
+    const busy = await screen.findByRole("button", { name: "Restoring..." });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    release();
+    expect(await screen.findByText("Backup restored")).toBeTruthy();
+  });
+
+  it("shows the host's text when the restore is refused (wrong password)", async () => {
+    await setup({}, { [POST]: { status: 400, body: { error: "Wrong backup password" } } });
+    chooseBackup();
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restore" }),
+    );
+    expect(await screen.findByText("Wrong backup password")).toBeTruthy();
+  });
+
+  it("shows the hint of a confirmRequired refusal", async () => {
+    await setup(
+      {},
+      {
+        [POST]: {
+          status: 403,
+          body: { error: "Press the button on the box, then try again", confirmRequired: true },
+        },
+      },
+    );
+    chooseBackup();
+    await waitFor(() => expect(restoreButton().disabled).toBe(false));
+    fireEvent.click(restoreButton());
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Restore" }),
+    );
+    expect(await screen.findByText("Press the button on the box, then try again")).toBeTruthy();
   });
 });
-
-function importResult() {
-  return {
-    success: true,
-    settings: 1,
-    zonesCreated: 2,
-    zonesUpdated: 3,
-    zonesUnchanged: 0,
-  };
-}
 
 describe("Settings in the navigation", () => {
   it("has its entry in Administration, and #/settings shows the page", async () => {

@@ -64,8 +64,7 @@
 //! - `live/session.rs::MAX_INCOMING_BYTES`: a client's incoming frame, 1 KB, inside the 2 KB read
 //!   buffer counted with `live/mod.rs::MAX_QUEUED_BYTES`.
 //! - `settings/mod.rs::MAX_HOME_NAME_CHARS`: the six settings at their longest (a name of 64
-//!   characters, numbers at the length of their pattern), `settings.json` written and the backup
-//!   document built (it is refused, over `api/mod.rs::MAX_BODY_BYTES`).
+//!   characters, numbers at the length of their pattern), `settings.json` written.
 //! - `auth/mod.rs::MAX_SESSIONS`, `auth/mod.rs::MAX_ATTEMPTS`: 8 sessions of 72 bytes and 10
 //!   attempt times of 8 bytes, in RAM only (spec 029); about 700 bytes in all, far below the
 //!   rest, so the worst case does not drive them (`tests/auth.rs` tests each bound).
@@ -75,6 +74,14 @@
 //!   keeps under 1 KB of stack and nothing on the heap that grows.
 //! - `auth/mod.rs::MAX_ITERATIONS`: the most iterations a stored hash may declare, a count of
 //!   rounds, no memory.
+//! - `backup/mod.rs::MAX_ARCHIVE_BYTES`, `backup/mod.rs::MAX_FILE_BYTES`: the worst case's files as
+//!   saved (devices, zones, equipments, recipes, settings) are summed: each under the file bound,
+//!   all under the archive bound. The archive itself is streamed through one 4 KB buffer, never
+//!   held (`full_backup_memory.rs` measures 1 MB each way under 32 KB), so it is not built here.
+//! - `backup/mod.rs::MAX_FILES`, `backup/mod.rs::MAX_MANIFEST_BYTES`,
+//!   `backup/mod.rs::MAX_BACKUP_ITERATIONS`, `backup/mod.rs::MAX_EXPORT_MS`: a count of files (the
+//!   seven names), the manifest's text (under 4 KB, on the heap of one HTTP worker, as the
+//!   update's buffer), a count of rounds and a time limit: no memory worth driving here.
 //! - `update/mod.rs::MAX_UPLOAD_BYTES`: the longest update file an upload may declare; it is
 //!   streamed through one 4096-byte buffer, never held (`update_memory.rs` measures a 1 MB
 //!   installation under 32 KB), so the worst case does not drive it.
@@ -85,8 +92,8 @@ use std::sync::Mutex;
 
 use peak_alloc::PeakAlloc;
 use serde_json::{Value, json};
-use solite_core::api::MAX_BODY_BYTES;
 use solite_core::api::{Reach, Reply, Request, handle, handle_stream};
+use solite_core::backup::{MAX_ARCHIVE_BYTES, MAX_FILE_BYTES};
 use solite_core::devices::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Devices, Id, MAX_DATA,
     MAX_DEVICES, MAX_ORDERS, PowerSource, Route, ValueType,
@@ -605,18 +612,28 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         home.take_zones_cursor().expect("zones to write"),
         home.take_equipments_cursor().expect("equipments to write"),
     ];
+    // The bytes of each file as saved: the archive of spec 035 must hold them (R9).
+    let mut file_bytes: Vec<usize> = Vec::new();
     for cursor in &mut cursors {
-        while cursor.next_chunk(&home).unwrap().is_some() {}
+        let mut bytes = 0;
+        while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+            bytes += chunk.len();
+        }
+        file_bytes.push(bytes);
     }
     let mut cursor = ListCursor::recipe_instances(&home);
     while cursor.next_chunk(&home).unwrap().is_some() {}
     let mut cursor = home
         .take_recipes_cursor()
         .expect("the recipes are to be written");
-    while cursor.next_chunk(&home).unwrap().is_some() {}
+    let mut recipes_bytes = 0;
+    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+        recipes_bytes += chunk.len();
+    }
+    file_bytes.push(recipes_bytes);
 
     // The settings (spec 026): the six keys at their longest, `settings.json` written, the sun
-    // computed, the backup asked (its document is built, then refused: over 16 KB).
+    // computed.
     let settings = json!({
         "home.name": "n".repeat(MAX_HOME_NAME_CHARS),
         "home.latitude": "-89.123456789012",
@@ -640,15 +657,18 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
         settings_json.push_str(&chunk);
     }
-    let backup_bytes = home.export_backup().unwrap().len();
-    let backup = handle(
-        &mut home,
-        &request("GET", "/api/v1/backup", b""),
-        T0,
-        &mut random,
+
+    // The worst case's files fit the full backup (spec 035, R9): each under `MAX_FILE_BYTES`,
+    // all with `settings.json` under `MAX_ARCHIVE_BYTES`.
+    file_bytes.push(settings_json.len());
+    assert!(
+        file_bytes.iter().all(|bytes| *bytes < MAX_FILE_BYTES),
+        "a file of the worst case does not fit a backup: {file_bytes:?}"
     );
-    assert_eq!(backup.status, 413, "{backup:?}");
-    assert!(backup.body.as_ref().unwrap().len() <= MAX_BODY_BYTES);
+    assert!(
+        file_bytes.iter().sum::<usize>() < MAX_ARCHIVE_BYTES,
+        "the worst case's files do not fit a backup: {file_bytes:?}"
+    );
 
     let measured = ALLOCATOR.peak_usage().saturating_sub(base);
     let peak = measured + RADIO_ESTIMATE_BYTES.saturating_sub(radio.len());
@@ -711,7 +731,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert_eq!(texts.len(), MAX_EVENTS);
     assert_eq!(extras.len(), MAX_EQUIPMENTS_API);
     println!(
-        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), of which the optional equipment fields {extras_json_bytes} bytes of JSON; {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); settings.json {} bytes; backup document {backup_bytes} bytes (refused over {MAX_BODY_BYTES}); ceiling {CEILING_BYTES}",
+        "memory worst case: measured peak {measured} bytes ({} KB), with the radio's estimate {peak} bytes ({} KB), with every log entry at 200 bytes {worst} bytes ({} KB), of which the optional equipment fields {extras_json_bytes} bytes of JSON; {MAX_CLIENTS} clients of {queued_events} events and {queued_bytes} bytes; logs {log_bytes} bytes; GET /equipments {} bytes, GET /devices {} bytes (streamed); settings.json {} bytes; ceiling {CEILING_BYTES}",
         measured / 1024,
         peak / 1024,
         worst / 1024,

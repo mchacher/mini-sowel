@@ -110,6 +110,8 @@ fn bench_on(ncp: Ncp, serving: bool) -> Bench {
     radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(),
             &mut |_| Ok(()),
         )

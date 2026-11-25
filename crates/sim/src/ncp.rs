@@ -1389,6 +1389,15 @@ impl Ncp {
                     self.st(SL_NOT_JOINED)
                 }
             }
+            // leaveNetwork: the radio forgets its network and says "network down".
+            0x20 => {
+                self.network = None;
+                self.network_state = 0;
+                self.dirty = true;
+                let down = self.stack_status(false);
+                reply.after.push(down);
+                ok
+            }
             0x68 => {
                 if args.len() == 43 {
                     let mut tc = [0u8; 16];

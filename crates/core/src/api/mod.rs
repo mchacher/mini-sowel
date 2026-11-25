@@ -1,10 +1,9 @@
 //! Sowel's routes for devices, zones, equipments, recipes and settings (`src/api/routes/{devices,
-//! zones,equipments,recipes,settings}.ts` of the Sowel repository), and Solite's backup, as a pure
+//! zones,equipments,recipes,settings}.ts` of the Sowel repository), and Solite's own routes, as a pure
 //! function: a request in, a status and a JSON body out. The host (or the box) only moves bytes.
 //! The time and the random bytes come from the caller.
 
 mod auth;
-mod backup;
 mod devices;
 mod equipments;
 pub(crate) mod input;
@@ -26,6 +25,7 @@ use std::sync::Mutex;
 
 use serde_json::{Map, Value};
 
+use crate::backup::BackupTicket;
 use crate::devices::{Random, lock, to_json};
 use crate::failure::Failure;
 use crate::home::Home;
@@ -76,8 +76,6 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("PUT", "/api/v1/settings"),
     ("GET", "/api/v1/settings/timezones"),
     ("GET", "/api/v1/system/timezone"),
-    ("GET", "/api/v1/backup"),
-    ("POST", "/api/v1/backup"),
     ("GET", "/api/v1/integrations/solite/permit-join"),
     ("POST", "/api/v1/integrations/solite/permit-join"),
     ("GET", "/api/v1/auth/status"),
@@ -88,6 +86,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/system/factory-reset"),
     ("GET", "/api/v1/system/version"),
     ("POST", "/api/v1/system/update"),
+    ("GET", "/api/v1/system/backup"),
+    ("POST", "/api/v1/system/backup"),
 ];
 
 /// Who can reach the server: it decides which `Host` headers are accepted (spec 022, D33).
@@ -140,6 +140,17 @@ pub enum Reply {
     /// signed update file, not read yet. The caller streams it into `Updates::install` (the host
     /// from its server's reader, the box from its socket), the home's lock being released.
     Update,
+    /// `GET /system/backup` with its gate passed (spec 035, R1): the caller reads the header
+    /// `X-Backup-Password` and calls `BackupTicket::export`, then streams the archive it returns,
+    /// the home's lock being released.
+    BackupExport(BackupTicket),
+    /// `POST /system/backup` with its gate, content type, presence and pairing checks passed: the
+    /// body is the archive, not read yet. The caller calls `BackupTicket::restore` with its
+    /// reader, the lock being released. `wifi`: `?wifi=true` was given.
+    BackupRestore {
+        ticket: BackupTicket,
+        wifi: bool,
+    },
 }
 
 /// The answer: a status, and a JSON body (`None` for 204). The content type is
@@ -267,6 +278,7 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
         Reply::StaticError(response) => response,
         // Not reachable: the plain handler refuses the route before the gate.
         Reply::Update => error(501, UPDATES_NEED_STREAMING),
+        Reply::BackupExport(_) | Reply::BackupRestore { .. } => error(501, BACKUPS_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
             loop {
@@ -342,7 +354,65 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
             Reply::Whole(error(415, "Unsupported Media Type"))
         };
     }
+    // The backup's routes: the gate has passed; the checks that need the home are made here, under
+    // the lock, before any body is read (spec 035, R1).
+    if is_backup_path(request.path) && matches!(request.method, "GET" | "POST") {
+        return backup_reply(&mut guard, request);
+    }
     dispatch(&mut guard, request, now, random, true)
+}
+
+/// True for `/api/v1/system/backup`, with or without a query.
+fn is_backup_path(path: &str) -> bool {
+    path.split(['?', '#']).next() == Some("/api/v1/system/backup")
+}
+
+/// True for the two requests the servers must not read the body of before `handle_guarded` has
+/// answered, because it is a file they stream: `POST /api/v1/system/update` (spec 032) and `POST
+/// /api/v1/system/backup` (spec 035).
+pub fn is_streamed_request(method: &str, path: &str) -> bool {
+    is_update_request(method, path) || (method == "POST" && is_backup_path(path))
+}
+
+/// The backup routes after the gate (R1), in order: a restore waiting for the restart 409, then
+/// for the restore the content type 415, the presence 403 and the pairing window 409, then
+/// another backup running 409. The lock is held by the caller and released with the reply.
+fn backup_reply(home: &mut Home, request: &Request) -> Reply {
+    let restore = request.method == "POST";
+    if home.backup_state().is_pending() {
+        return Reply::Whole(error(409, "A restore waits for the restart"));
+    }
+    if restore {
+        if !octet_stream_content_type(request.content_type) {
+            return Reply::Whole(error(415, "Unsupported Media Type"));
+        }
+        if !home.presence_confirmed() {
+            return Reply::Whole(auth::confirm_required(home.presence_hint()));
+        }
+        if home.pairing_in_progress() {
+            return Reply::Whole(error(409, "Pairing in progress"));
+        }
+    }
+    match home.backup_begin(restore) {
+        Err(e) => Reply::Whole(failure(&e)),
+        Ok(ticket) if restore => Reply::BackupRestore {
+            ticket,
+            wifi: wifi_asked(request.path),
+        },
+        Ok(ticket) => Reply::BackupExport(ticket),
+    }
+}
+
+/// True when the query has `wifi=true`.
+fn wifi_asked(path: &str) -> bool {
+    path.split_once('?').is_some_and(|(_, query)| {
+        query
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .split('&')
+            .any(|p| p == "wifi=true")
+    })
 }
 
 /// True for `POST /api/v1/system/update`: the one request whose body the caller must not read
@@ -365,6 +435,9 @@ pub fn static_reply(request: &Request) -> Option<Reply> {
 
 /// What the plain handlers answer to the update route: they cannot stream a body.
 const UPDATES_NEED_STREAMING: &str = "Updates need the streaming handler";
+
+/// What the plain handlers answer to the backup routes: they cannot stream.
+const BACKUPS_NEED_STREAMING: &str = "Backups need the streaming handler";
 
 /// True when the body is declared `application/octet-stream` (parameters allowed).
 fn octet_stream_content_type(value: Option<&str>) -> bool {
@@ -407,6 +480,9 @@ fn dispatch(
     // The update route is the streaming handler's: refused here, before the 16 KB and JSON checks.
     if is_update_request(request.method, request.path) {
         return Reply::Whole(error(501, UPDATES_NEED_STREAMING));
+    }
+    if is_backup_path(request.path) && matches!(request.method, "GET" | "POST") {
+        return Reply::Whole(error(501, BACKUPS_NEED_STREAMING));
     }
     if request.body.len() > MAX_BODY_BYTES {
         return Reply::Whole(error(413, "Body too large"));
@@ -472,7 +548,6 @@ fn dispatch(
             random,
         ),
         Some("system") => system::route(home, &segments, request, now),
-        Some("backup") => backup::route(home, &segments, request, now),
         _ => error(404, "Not found"),
     };
     if request.method != "GET" && response.status < 300 {

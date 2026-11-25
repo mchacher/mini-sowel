@@ -45,6 +45,8 @@ fn start(h: &mut Harness) -> Result<Network, RadioError> {
     h.radio.identify()?;
     h.radio.start_network(
         &NetworkSettings::default(),
+        None,
+        false,
         &mut scripted(draws()),
         &mut |_| Ok(()),
     )
@@ -233,6 +235,8 @@ fn a_random_pan_id_of_ffff_or_0000_is_drawn_again() {
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(values),
             &mut |_| Ok(()),
         )
@@ -251,6 +255,8 @@ fn an_extended_pan_id_of_all_zero_or_all_ff_is_drawn_again() {
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(values),
             &mut |_| Ok(()),
         )
@@ -266,6 +272,8 @@ fn a_random_source_that_fails_stops_the_start_before_the_network_is_formed() {
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(vec![]),
             &mut |_| Ok(()),
         )
@@ -353,6 +361,8 @@ fn a_start_without_identifying_the_radio_first_is_an_error() {
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(draws()),
             &mut |_| Ok(()),
         )
@@ -715,11 +725,20 @@ fn the_network_line_and_the_event_lines_are_those_of_the_spec() {
         extended_pan_id: [0xDD; 8],
         channel: 15,
         formed: true,
+        from_backup: false,
         keys: None,
     };
     assert_eq!(
         network_line(&network, false),
         "network: formed, channel 15, PAN 0x1A2B, extended PAN 0xDDDDDDDDDDDDDDDD"
+    );
+    let restored_network = Network {
+        from_backup: true,
+        ..network.clone()
+    };
+    assert!(
+        network_line(&restored_network, false)
+            .starts_with("network: formed (restored from the backup), channel 15")
     );
     let resumed = Network {
         formed: false,
@@ -762,6 +781,8 @@ fn on_formed_is_called_with_the_network_and_keys_right_after_the_form_before_lat
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(draws()),
             &mut |n| {
                 // At that moment the last command the radio got is formNetwork.
@@ -787,6 +808,8 @@ fn a_step_after_the_form_that_fails_still_leaves_the_keys_to_the_caller() {
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(draws()),
             &mut |n| {
                 keys = n.keys.clone();
@@ -812,6 +835,8 @@ fn an_on_formed_that_fails_ends_the_start_with_its_message_before_other_steps() 
         .radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(draws()),
             &mut |_| Err("cannot write /x".to_string()),
         )

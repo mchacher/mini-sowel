@@ -827,38 +827,6 @@ fn a_child_zone_moved_out_of_the_instance_zone_stops_counting_and_moved_back_cou
 }
 
 #[test]
-fn a_backup_import_that_moves_a_child_zone_out_settles_the_sources() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let shelf = rig.zone("Shelf");
-    let (status, body) = rig.put(
-        &format!("/api/v1/zones/{shelf}"),
-        json!({"parentId": g.zone}),
-    );
-    assert_eq!(status, 200, "{body}");
-    let second = rig.motion_sensor(0x62);
-    rig.equipment("Shelf motion", "sensor", &shelf, &[&second]);
-    let id = lit_garage(&mut rig, &g);
-    // The exported document with the shelf moved under the root, imported back.
-    let (status, mut document) = rig.get("/api/v1/backup");
-    assert_eq!(status, 200, "{document}");
-    for zone in document["zones"].as_array_mut().unwrap() {
-        if zone["id"] == json!(shelf) {
-            zone["parentId"] = json!(ROOT);
-        }
-    }
-    let (status, body) = rig.post("/api/v1/backup", document);
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["zonesUpdated"], 1, "{body}");
-    rig.advance(SECOND);
-    let before = failsafe(&mut rig, &id);
-    rig.advance(5 * SECOND);
-    rig.report(&motion(0x62, true));
-    assert_eq!(failsafe(&mut rig, &id), before, "moved out by the import");
-    assert_eq!(starts(&mut rig, &id), 1);
-}
-
-#[test]
 fn the_last_motion_sensor_of_the_zone_unbound_leaves_the_instance_running() {
     let mut rig = Rig::new();
     let g = rig.garage();

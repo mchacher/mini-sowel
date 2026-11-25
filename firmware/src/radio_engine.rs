@@ -30,6 +30,7 @@ use esp_idf_svc::sys::{
 };
 use solite_core::HeapStats;
 use solite_core::auth::BootPresence;
+use solite_core::backup::BackupFiles;
 use solite_core::devices::lock;
 use solite_core::engine::{
     self, Clocks, DEFINITION_DELAY_MS, RunError, SaveControl, Saver, Storage, load_home,
@@ -47,6 +48,7 @@ use solite_core::radio::{
 };
 use solite_core::radio::{identity_lines, network_line};
 
+use crate::backup_files::DataFiles;
 use crate::http_server;
 use crate::memory;
 use crate::ota::ENGINE_RUNNING;
@@ -270,20 +272,41 @@ fn boot_pairing() -> BootPairing {
 /// Starts the radio's network as `--pair` does on the Mac: resumed, or formed on channel 15 with
 /// the backup written the moment the radio accepts it.
 fn start_network(radio: &mut Wired) -> Result<(Network, bool), String> {
-    let network =
-        with_entropy(|| {
-            radio.start_network(&NetworkSettings::default(), &mut fill, &mut |network| {
-                match &network.keys {
-                    Some(keys) => write_backup(network, keys),
-                    None => Ok(()),
-                }
-            })
-        })
-        .map_err(|e| match e {
-            // The backup's own message, as it is.
-            RadioError::OnFormed(message) => message,
-            other => format!("radio: {other}"),
-        })?;
+    // The restored network (spec 035): the file's values when the radio has none, or, with the mark
+    // a restore left, the radio is moved onto it.
+    let mut files = DataFiles::new();
+    let restored = FatStorage::new()
+        .read(BACKUP_FILE)
+        .ok()
+        .flatten()
+        .and_then(|text| {
+            let parsed = backup::parse(&text);
+            if parsed.is_none() {
+                log::warn!("backup: {BACKUP_FILE} cannot be read, a network is formed as usual");
+            }
+            parsed
+        });
+    let replace = files.restore_mark()?;
+    let network = with_entropy(|| {
+        radio.start_network(
+            &NetworkSettings::default(),
+            restored.as_ref(),
+            replace,
+            &mut fill,
+            &mut |network| match &network.keys {
+                Some(keys) => write_backup(network, keys),
+                None => Ok(()),
+            },
+        )
+    })
+    .map_err(|e| match e {
+        // The backup's own message, as it is.
+        RadioError::OnFormed(message) => message,
+        other => format!("radio: {other}"),
+    })?;
+    if replace {
+        files.clear_restore_mark()?;
+    }
     let backed_up = FatStorage::new()
         .read(BACKUP_FILE)
         .ok()

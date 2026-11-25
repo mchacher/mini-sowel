@@ -3,6 +3,7 @@
 //! from JSON for the categories no catalog device gives, and measure events.
 #![allow(dead_code)]
 
+pub mod backup_fake;
 pub mod update_fake;
 
 use serde_json::{Value as Json, json};

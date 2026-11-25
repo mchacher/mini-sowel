@@ -29,12 +29,14 @@ use esp_idf_svc::sys::{
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
     MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
-    is_update_request, order_response, static_reply,
+    is_streamed_request, order_response, static_reply,
 };
+use solite_core::backup::{BackupTicket, CHUNK_BYTES};
 use solite_core::devices::lock;
 use solite_core::home::Home;
 use solite_core::update::MAX_UPLOAD_BYTES;
 
+use crate::backup_files::{BoxPacing, DataFiles};
 use crate::live_ws;
 use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
@@ -48,8 +50,8 @@ const BODY_BUFFER_BYTES: usize = MAX_BODY_BYTES + 1;
 const SERVER_STACK_BYTES: usize = 8 * 1024;
 /// At most this many connections; the least recently used one is closed beyond (R4.2).
 const MAX_OPEN_SOCKETS: usize = 12;
-/// The longest header value read (the request head is at most 1024 bytes, R4.2).
-const MAX_HEADER_BYTES: usize = 1024;
+/// The longest header value read (the request head is at most 4096 bytes, `sdkconfig.radio.defaults`).
+const MAX_HEADER_BYTES: usize = 4096;
 /// The content type of every JSON answer.
 const JSON: &str = "application/json; charset=utf-8";
 const BUSY: &str = r#"{"error":"Busy"}"#;
@@ -338,7 +340,14 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
         },
         Some(Reply::StaticError(response)) => raw.answer(&response, &STATIC_HEADERS),
         Some(Reply::Whole(response)) => raw.answer(&response, &[]),
-        Some(Reply::List(_) | Reply::Order(_) | Reply::Update) | None => {
+        Some(
+            Reply::List(_)
+            | Reply::Order(_)
+            | Reply::Update
+            | Reply::BackupExport(_)
+            | Reply::BackupRestore { .. },
+        )
+        | None => {
             raw.answer(&error_body(404, "Not found"), &STATIC_HEADERS);
         }
     }
@@ -436,12 +445,89 @@ fn answer_update(raw: &Raw, length: usize) -> bool {
     installed
 }
 
+/// `GET /api/v1/system/backup`, once the core has let it through: the archive streams out in chunks
+/// of 4 KB, from a buffer allocated for this request. The key derivation (5 to 10 s) runs inside
+/// `export`, before the status line, so that every refusal is a whole answer. A read error ends the
+/// answer without its end: the client holds a truncated file, which its MAC refuses.
+fn answer_export(raw: &Raw, ticket: BackupTicket, password: Option<&str>) {
+    let mut random = |bytes: &mut [u8]| fill(bytes);
+    let mut reader = match ticket.export(
+        password,
+        Box::new(DataFiles::new()),
+        Box::new(BoxPacing),
+        &mut random,
+    ) {
+        Ok(reader) => reader,
+        Err(response) => return raw.answer(&response, &[]),
+    };
+    let headers = [
+        (
+            "Content-Disposition",
+            "attachment; filename=\"solite-backup.slb\"",
+        ),
+        ("Cache-Control", "no-store"),
+    ];
+    let Ok(_kept) = raw.set_head(200, "application/octet-stream", &headers) else {
+        return;
+    };
+    let mut buffer = vec![0u8; CHUNK_BYTES];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => {
+                let _ = raw.send_chunk(&[]);
+                break;
+            }
+            Ok(count) => {
+                if !raw.send_chunk(&buffer[..count]) {
+                    break;
+                }
+            }
+            Err(_) => {
+                raw.close_after();
+                break;
+            }
+        }
+    }
+}
+
+/// `POST /api/v1/system/backup`, once the core has let it through: the body goes into
+/// `BackupTicket::restore`. Answers; true when the restore is staged and the ESP32 must restart
+/// (after `complete`, so the answer is out first). A refusal leaves body bytes unread: the
+/// connection closes.
+fn answer_restore(
+    raw: &Raw,
+    ticket: BackupTicket,
+    wifi: bool,
+    length: usize,
+    password: Option<&str>,
+) -> bool {
+    let mut source = BodyReader {
+        raw,
+        remaining: length,
+    };
+    let response = ticket.restore(
+        wifi,
+        Some(length as u64),
+        password,
+        &mut source,
+        &mut DataFiles::new(),
+        &mut BoxPacing,
+    );
+    raw.answer(&response, &[]);
+    if response.status == 200 {
+        return true;
+    }
+    raw.close_after();
+    false
+}
+
 /// A worker's answer to one request, as the host's `answer` (`crates/host/src/serve.rs`).
 fn answer(job: Job, buffer: &mut [u8], api: &Api) {
     let Job { raw, head, _slot } = job;
-    // The update's body is a file of megabytes: it is not read here (spec 032 R6), the core answers
-    // the gate first, and the body streams into the installation.
-    let streaming = is_update_request(head.method, &head.uri);
+    // The update's and the backup's bodies are files of megabytes: they are not read here (spec 032
+    // R6, spec 035), the core answers the gate first, and the body streams into the installation
+    // or the restore.
+    let streaming = is_streamed_request(head.method, &head.uri);
     if head.chunked {
         raw.answer(&error_body(411, "Length required"), &[]);
         raw.close_after();
@@ -495,9 +581,10 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
     };
     // The gate answered first; then a declared length above the maximum is refused (no body read).
     let too_large = matches!(reply, Reply::Update) && head.length as u64 > MAX_UPLOAD_BYTES;
-    // Every refusal of the update route leaves body bytes unread: the connection closes after the
-    // answer.
-    let close_after_answer = streaming && (too_large || !matches!(reply, Reply::Update));
+    // Every refusal of a streamed route leaves body bytes unread: the connection closes after the
+    // answer (a restore closes it itself, once the core has answered).
+    let close_after_answer =
+        streaming && (too_large || !matches!(reply, Reply::Update | Reply::BackupRestore { .. }));
     let mut restart = false;
     if too_large {
         raw.answer(&error_body(413, "Update too large"), &[]);
@@ -533,7 +620,16 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
                 }
             }
         }
-        Reply::Order(_) | Reply::Static(_) => raw.answer(&error_body(500, "Internal error"), &[]),
+        Reply::BackupExport(ticket) => {
+            answer_export(&raw, ticket, raw.header(c"X-Backup-Password").as_deref());
+        }
+        Reply::BackupRestore { ticket, wifi } => {
+            let password = raw.header(c"X-Backup-Password");
+            restart = answer_restore(&raw, ticket, wifi, head.length, password.as_deref());
+        }
+        Reply::Order(_) | Reply::Static(_) => {
+            raw.answer(&error_body(500, "Internal error"), &[]);
+        }
         Reply::Update => restart = answer_update(&raw, head.length),
     }
     if close_after_answer {

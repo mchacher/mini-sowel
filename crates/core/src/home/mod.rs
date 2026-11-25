@@ -14,14 +14,15 @@ mod settings_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
 pub use pairing::{CLOSE_GRACE_MS, PairingWindow, Phase};
-pub use settings_ops::ImportSummary;
 
 use std::cell::{Cell, RefCell};
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use serde::{Serialize, Serializer};
 
 use crate::auth::{Account, Attempts, Sessions};
+use crate::backup::BackupState;
 use crate::devices::{Device, Devices, Id, Random, format_iso};
 use crate::equipments::{Alias, Equipments, StatusTracker, StoredEquipment};
 use crate::failure::{Failure, Outcome};
@@ -140,6 +141,8 @@ pub struct Home {
     /// Who confirms that a person is at the box.
     presence: auth_ops::PresenceSlot,
     auth_changed: bool,
+    /// The backup in progress (spec 035): shared with its ticket and with the saver.
+    backup: Arc<BackupState>,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -242,6 +245,7 @@ impl Home {
             last_login: None,
             presence: auth_ops::PresenceSlot::default(),
             auth_changed: false,
+            backup: Arc::new(BackupState::default()),
         }
     }
 

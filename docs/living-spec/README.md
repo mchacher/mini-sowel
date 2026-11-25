@@ -161,9 +161,14 @@ storage error logs and stops the loop without resetting the radio.
   and saves it in its own flash; the host writes a backup of it (identifiers and keys) to
   `solite-data/network.json` (`solite-data/sim/network.json` under `--sim`; `--data
   <dir>` for another folder), readable by its owner only,
-  never printed;
+  never printed; when that file already holds a network (put there by a restored full backup,
+  see "Backs up and restores the whole box") and the radio has none, the radio forms **that**
+  network, with its keys, instead of a new one: `network: formed (restored from the backup), ...`;
+- a Mac host whose `network.json` parses and that is pointed at another, blank radio forms the old
+  network on it: two coordinators with the same PAN and keys if the first radio still runs;
 - after that, the radio **resumes** its network; a coordinator network another program made is
-  used as it is, never destroyed, and named so;
+  used as it is, never destroyed, and named so; the one exception is a restore (next
+  paragraph);
 - a device that joins is shown with its address, then with the manufacturer and model it sends
   (an original Sonoff SNZB-02 sends `eWeLink TH01`); `device: <address> unknown unknown` when it
   does not answer, `device: <address> not identified (radio busy)` when the radio stays busy;
@@ -186,6 +191,20 @@ storage error logs and stops the loop without resetting the radio.
   progress finish first, at most 70 s; a setup still running then shows `reporting: <address> cut
   short`), or on Ctrl-C (exit 130).
 
+**After a restore, a radio that runs another network leaves it.** A restore that brought a
+network file (see "Backs up and restores the whole box") leaves a one-shot mark, `zigbee.restore`
+(the same name on the Mac host), in the data folder. At the next network start, with the mark
+present, a radio that runs a network other than the restored one **leaves it** (the usual case: a
+box forms its own network at its first start, and a factory reset keeps it) and forms the
+restored one, with its PAN, channel and keys; a radio already on the restored network resumes it.
+The network it left keeps its keys in `zigbee-<PAN id>.json` (`network-<PAN id>.json` on the Mac
+host), set aside when the restore is applied, so no network's keys are lost. The mark is removed
+once the network is up; a start that fails keeps it for the next. It is the only case where Solite
+leaves a network: without the mark a radio on a network resumes it and never leaves it. It is a
+best effort: the radio's own address, its frame counter and its list of child devices are not
+carried over, so a device that remembers the old radio's higher counter may ignore its commands
+until it passes it, and an end device whose parent was the coordinator may need pairing again.
+
 With `--pair`, the identification's `network: <state>` line is replaced by the `network:` line
 below; `network: resumed (made by another program), ...` for a network the host has no backup
 of. When a network is formed, the backup is written as soon as the radio accepts it, before the
@@ -203,7 +222,8 @@ pairing: closed
 In the radio image of the firmware, the radio's network is started as `--pair` starts it (resumed,
 or formed on channel 15 with the ESP32's hardware random generator) and, when formed, the backup
 is written to `/data/zigbee.json` in the host's format before the next step; a `zigbee.json` of
-another network is kept, renamed `zigbee-<PAN id>.json`. The file holds the network and
+another network is kept, renamed `zigbee-<PAN id>.json`. A radio with no network forms the network
+of `/data/zigbee.json` when the file holds one (a restored backup). The file holds the network and
 trust-centre keys in plain text, on a flash that is not encrypted. A marker file, `/data/booting`,
 is written at each boot and removed after 10 minutes of running. Pairing opens for 180 seconds at
 boot only when the reset is a power-on (power, or the USB bridge's reset) and no marker was there:
@@ -311,14 +331,15 @@ from another site is also refused by a `Host` check, and by an `Origin` check on
 | `GET /api/v1/auth/status`, `POST /api/v1/auth/setup`, `/login`, `/refresh`, `/logout` | Sowel's authentication (see "Protects the home with a password") |
 | `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
 | `GET /api/v1/system/version`, `POST /api/v1/system/update` | the version; the signed update file as the body (see "Updates itself from a signed file") |
+| `GET /api/v1/system/backup`, `POST /api/v1/system/backup` | the full backup file, with the password in `X-Backup-Password`; its restore (see "Backs up and restores the whole box") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
-Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>` and 501 on the update route; 502 for an order no device took; 503 `Busy` beyond 4 requests at
+Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>` and 501 on the update route (501 on the backup routes too, through the plain handler); 502 for an order no device took; 503 `Busy` beyond 4 requests at
 once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
-`application/json`, so a web page cannot send one from the browser; the one exception is the update route, which takes
+`application/json`, so a web page cannot send one from the browser; the exceptions are the update route and the backup restore, which take
 `application/octet-stream` (a cross-origin form cannot send that type, and the token is required). The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
@@ -375,9 +396,9 @@ except:
   `http://127.0.0.1:5173`) are accepted as on the Mac. The subprotocol `bearer.none` is echoed; the token is read from the second subprotocol (or the `Authorization` header), so a client that offers only `bearer.<token>` gets no subprotocol echoed and its browser drops the socket.
   A dead client is found by TCP keep-alive (about 45 s) instead of 60 s of silence.
 - A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413 (except
-  the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file"); a body
-  that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 1024 bytes,
-  431. A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
+  the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file", and the backup restore's, streamed up to 2 MiB); a body
+  that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 4096 bytes,
+  431 (the backup's password header can need 1536 of them). A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -570,19 +591,88 @@ times computed from them, as Sowel's sunlight manager does.
   is not set (before 2020). Computed at most once a minute and at once after a setting changes;
   when they change, Sowel's `sunlight.changed` event, and the root zone's `zone.data.changed`; a
   change of day or night shows within about 2 minutes without any measure.
-- **Export** (`GET /api/v1/backup`): `{"version":1,"settings":{...},"zones":[...]}`, the settings
-  and every zone (Sowel's `Zone`); no secret in it (no radio key, no Wi-Fi password). Over 16384
-  bytes (32 rooms with long descriptions) it is refused, 413 `Backup too large: <n> bytes, 16384
-  at most (shorten the rooms' descriptions)`, so that every export can be imported back.
-- **Import** (`POST /api/v1/backup`, at most 16384 bytes): checked whole first, else 400
-  `Invalid backup: <reason>` and nothing changed (bad version, unknown field, a bad setting, a zone
-  id that is not a UUID or appears twice, a zone breaking the rules of the zone routes, a parent
-  found nowhere, a zone under itself, more than 32 zones in all). It replaces the settings whole
-  (a key absent from the document is unset); it creates the document's zones the home does not
-  have, with their ids, and updates those that differ; it deletes no zone and touches no
-  equipment, device or recipe. Answer `{"success":true,"settings":<n>,"zonesCreated":<n>,
-  "zonesUpdated":<n>,"zonesUnchanged":<n>}`, with the events of the settings and zones changed; an
-  import that changes nothing writes nothing.
+### Backs up and restores the whole box
+
+One file, the **backup** (`.slb`, "Solite backup"), holds everything needed to rebuild a box: the
+home (devices, rooms, equipments, recipe instances, settings), the Zigbee network (PAN, channel,
+keys) and the Wi-Fi settings. A box replaced or a lost `storage` partition no longer means pairing
+every device again and building the home again. Solite's own routes, at a path Sowel does not use
+(Sowel's `/api/v1/backup` is a ZIP of its database, not mirrored, decision D56; `/api/v1/backup`
+answers 404), behind the token:
+
+- **Export**: `GET /api/v1/system/backup` with the password in the header `X-Backup-Password`
+  (percent-encoded UTF-8, so any character fits; never in the address). 200
+  `application/octet-stream`, `Content-Disposition: attachment; filename="solite-backup.slb"`, sent
+  in chunks (the size is not known ahead). The password is 8 to 128 characters: missing, 400
+  `Backup password required`; too short or too long, 400 `Backup password must be 8 to 128
+  characters`. Another export or restore running: 409 `Backup already in progress`. These
+  refusals are whole JSON answers, before the file starts.
+- **Restore**: `POST /api/v1/system/backup` with the file as the body (`application/octet-stream`,
+  415 otherwise; on the box a missing `Content-Length` is 411) and the password in the same
+  header. `?wifi=true` also restores the Wi-Fi settings; without it, the box keeps its own.
+  Before the body is read, in this order: the token, the content type, the confirmation at the box
+  (as the factory reset: 403 `{"error": <hint>, "confirmRequired": true}`), then 409 `Pairing in
+  progress` when the pairing window is open and 409 `Backup already in progress`; then a declared
+  length over 2 MiB is 413 `Backup too large` and a missing password 400 `Backup password
+  required`. Another method: 405. While a restore waits for the restart (below) both routes answer
+  409 `A restore waits for the restart`.
+- **What it holds**: `devices.json`, `zones.json`, `equipments.json`, `recipes.json` and
+  `settings.json` (stored plain, the file's chunks authenticated), and the two secrets, the Zigbee
+  network file and `wifi.json` (the box only), **encrypted**. Never in it: the account
+  (`auth.json`: a restore keeps the box's own account, and its sessions end with the restart, so
+  the user logs in again) and the network setting (`auto`, `wifi`, `ethernet`: the box's hardware
+  link). A home file the box has never written is absent from the file.
+- **The format**: the magic `SOLITEBK`, the format number (1), the key derivation's iterations
+  (100,000 at export; a restore accepts 10,000 to 400,000), a random salt and nonce, a key check;
+  then each file as chunks of at most 4096 bytes; then a manifest (JSON: the version, Solite's
+  version, each file's name, size and SHA-256) and a 32-byte HMAC-SHA256 over every byte before
+  it. The key is PBKDF2-HMAC-SHA256 of the password (ten times the account's iterations, because
+  the file leaves the box and can be attacked offline: about 5 to 10 seconds on the box, once per
+  export or restore, a second on the Mac); the secrets are encrypted with ChaCha20 and the whole
+  file authenticated (decision D56). The password is used as the UTF-8 bytes received, with no
+  Unicode normalisation. A file made by a newer format is refused.
+- **Streamed, never held whole**: both ways use one 4 KB buffer on the Mac host; the box's export holds two (the archive reader's and the HTTP server's send buffer), so a 1 MB file peaks under 32 KB
+  of heap (measured by a test). An export is read from the files as last saved (at most 2 seconds
+  behind the home in memory) and makes the Saver write nothing while it runs; if the Saver is
+  writing a file when the export starts, it waits up to 5 seconds, else 503 `Busy saving, try
+  again`; an export ends after 120 seconds whatever the client. A failure mid-stream ends the
+  answer without its end: the client keeps a truncated file, which a restore refuses. During the
+  key derivation the box pauses 10 ms every 5,000 iterations, so its watchdog keeps being fed.
+- **A restore is checked whole before it changes anything**: the file is read once and written as
+  staged copies (`<name>.restore`, readable by their owner only) beside the live files, checking
+  as it goes. Refused, with nothing changed: a wrong password (400 `Wrong backup password`, before
+  any file is staged), a file that is not a backup (400 `Invalid backup: not a Solite backup`), a
+  newer format (400 `Backup made by a newer version of Solite`), a body that ends early (400
+  `Invalid backup: truncated`), a changed byte anywhere or bytes after the end (400 `Invalid
+  backup: <reason>`), an unknown or repeated file name, a secret stored plain, a file over 1 MiB,
+  more than 7 files, a chunk over 4096 bytes, iterations out of range, a body over 2 MiB (413
+  `Backup too large`). The staged copies are then removed. A refused file may have written up to
+  its size in staged copies to the flash before its check fails.
+- **Applied at the next start**: once everything holds, the staged copies are synced and a marker
+  file, `restore.pending`, names what to do for each file (`promote <name>` or `remove <name>`).
+  The answer is 200 `{"success":true,"message":"Backup restored: the box restarts, log in again
+  after it","files":<n>,"wifi":<bool>}`; the box restarts right after (the update's restart:
+  the Saver flushes, then a software reset). The Mac host answers `Backup restored: restart the
+  host to load it`, prints `backup: restored <n> files; restart the host to load them` and applies
+  the files at its next start. At every start, before anything reads the data folder
+  (`backup::apply_pending`), the staged copies are renamed over the live files, then the marker
+  is removed, logged `backup: <n> files restored` (`<n>`, like `files` in the answer, counts the
+  files restored, not the home files removed); a power cut at any point is finished at the
+  next start. A staged copy without a marker (a refused or interrupted restore) is removed; a
+  marker that does not parse or names a file outside the list is discarded whole, with a warning.
+  The home is the backup's, not a mix: a home file the backup does not hold is removed, with its
+  leftover temporary copies; an absent network or Wi-Fi file leaves the box's own. `?wifi=true` on
+  the Mac host (no Wi-Fi file there) is ignored: `"wifi": false`. Restoring the same file twice
+  gives the same result.
+- **The Zigbee network after a restore** (best effort, decision D57): the radio forms the
+  network of the backup, with its keys, and leaves the one it runs; see "Pairs a device". Before a
+  restored network file replaces one of another network, the live one is kept as
+  `zigbee-<PAN id>.json`, so no network's keys are lost. What the radio itself holds is not in
+  the file (its own address, its frame counter, its list of child devices): some devices may
+  need pairing again.
+- **Never restore a backup onto a second box while the first one still runs**: two coordinators
+  with the same PAN and keys would answer the same devices (the same warning as the Mac host and
+  the box sharing one radio network). Switch the first one off, or factory-reset it, first.
 
 ### Checks the Sowel contract
 
@@ -629,7 +719,7 @@ Sowel's 1.1.2), through Sowel's routes:
   read stops the host; an entry beyond 16, or with an id already seen, is dropped.
 - **When what it uses changes** (decisions D38 and D46; Sowel keeps the stale ids): right after an
   equipment is created, changed or deleted, a data binding added or removed, an order binding
-  removed, a device removed, or a zone updated (through its route or a backup import) or deleted, the instances settle. A deleted equipment leaves the settings of every instance that names it (its
+  removed, a device removed, or a zone updated through its route or deleted, the instances settle. A deleted equipment leaves the settings of every instance that names it (its
   id taken out of the lights, the buttons, or the legacy `light`, which becomes empty), with the
   warning `Equipment removed from settings: <name>` in its log, and the change is written. Every
   enabled instance is then checked as a creation is: one that no longer validates is stopped,
@@ -802,11 +892,16 @@ copy embedded in the radio image at build time.
   becomes `.`), sunrise and sunset offsets, and the time zone, picked in the list (`UTC` when
   unset); Save shows when something changed and sends the six keys; a refusal shows the host's
   text. Under it, **Today**: sunrise, sunset and "Day" or "Night", live from the root zone; "Set
-  the location to get the sun times" when unknown. The **Backup** card: "Export" downloads
-  `solite-backup-<date>.json`; "Import" takes a `.json` file of 16384 bytes at most ("File too
-  large (16 KB at most)" otherwise, nothing sent), asks to confirm what it replaces, then shows
-  "Imported: <n> settings, <c> rooms created, <u> rooms updated" or the host's refusal, and reads
-  the rooms and settings again. At the foot of the page, the **Factory reset** card: what is erased, a
+  the location to get the sun times" when unknown. The **Backup** card: under "Export", a password and its confirmation (8 to 128 characters, the two
+  equal; else the button stays disabled and the reason shows under it) and an "Export" button
+  ("Exporting..." while it runs, a few seconds on the box), which downloads
+  `solite-backup-<date>.slb` or shows the host's refusal; under "Restore", a file input (`.slb`),
+  the backup's password, a checkbox "Also restore the Wi-Fi settings" and a "Restore" button,
+  disabled until a file and a password are given, which opens a confirmation dialog (the devices,
+  rooms, equipments, recipes, settings and the Zigbee network are replaced, the account is kept,
+  the box restarts; one more line when the Wi-Fi box is ticked), then "Restoring..." during the
+  upload, and the answer's message or the host's refusal ("Wrong backup password", the
+  confirmation's hint). At the foot of the page, the **Factory reset** card: what is erased, a
   "Factory reset" button and a confirmation dialog (what is erased, "Erase everything"); success
   clears the tokens and shows the first-start screen, a refusal (the confirmation's text, "Pairing in
   progress") shows the host's text. Between the Backup and Factory reset cards, the **Firmware
@@ -954,7 +1049,7 @@ application image of the slot, as `espflash save-image` writes it). Integers are
   RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
   write the flash), receives them through a channel one request at a time, and ticks the probation
   every second; a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
-  final save runs) and the box restarts, logged `update: restarting`. Its start lines are the host's.
+  final save runs) and the box restarts, logged `restarting`. Its start lines are the host's.
 
 ### Signing a release
 
@@ -1040,7 +1135,9 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   `(use --keep-storage to keep them)`. With `--image box` or `sim` it is refused (`--keep-storage is
   for the radio image: the sim image seeds /data`, exit 2). The radio image's plan also prints
   `the box drives this radio's network itself: never start a Mac host with this network's backup on
-  another radio while the box runs`: one network, one coordinator at a time.
+  another radio while the box runs`: one network, one coordinator at a time. The same holds for a
+  full backup (see "Backs up and restores the whole box"): never restore one onto a second box
+  while the first one still runs.
 - `wifi [--forget]` asks on the terminal (`/dev/tty`, never standard input; no terminal: `box: no
   terminal to ask for the Wi-Fi settings, nothing done`, exit 1) for the network's name (shown as
   typed) and its password (echo off, restored on any exit, Ctrl-C included, nothing sent then). It
@@ -1127,7 +1224,8 @@ Without it nothing is flashed and nothing is written through the API: preflight,
   failed is `skipped (after <id> <outcome>)`.
 - **The checks**: authentication (status, setup or login, one login timed, at most 2 s, 401
   without a token, `/ws` closed 4001 without a token and live with it, the pairing route behind the
-  token, the 429 of the 11th attempt in a minute); home (the backup exported and imported back, the
+  token, the 429 of the 11th attempt in a minute); home (the full backup exported, and its restore with a wrong password refused (400, nothing
+  changed), the
   location and time zone set from `SOLITE_HOME_LATITUDE`, `SOLITE_HOME_LONGITUDE` and
   `SOLITE_HOME_TIMEZONE` and read back, the sun times after the clock is set, `GET
   /api/v1/system/timezone`, the devices' dates and status, and on the box the 5th request `Busy`
@@ -1208,7 +1306,7 @@ of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet 
 wiring and its risks.
 
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
-zones, equipments, recipe instances, the account and the network backup, serves Sowel's device, zone,
+zones, equipments, recipe instances, the account and the network backup, makes and restores the full backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
 measures; the firmware's radio image does the same over the serial link and serves the API, the
@@ -1249,3 +1347,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 029 | A password at commissioning, confirmed at the box: one account, Sowel's `/auth` routes and bearer token on every route and on `/ws`, the box's pairing route behind the token, a factory reset |
 | 031 | The colour cluster: a colour bulb's colour temperature and colour read, its colour orders sent, proposed as `light_color`; a simulated colour bulb |
 | 032 | Signed updates: a signed update file streamed into the inactive slot, a probation with automatic rollback, `--update-keygen` and `--update-sign`, a Firmware update card |
+| 035 | The full backup: one password-protected file with the home, the Zigbee network and the Wi-Fi settings, streamed both ways, checked whole before a restore replaces the home at the next start; the radio forms the restored network; a Backup card |

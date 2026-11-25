@@ -387,6 +387,8 @@ fn started(protocol: u8) -> Harness {
     h.radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut |buffer: &mut [u8]| -> Result<(), String> {
                 buffer.fill(0x11);
                 if buffer.len() == 2 {

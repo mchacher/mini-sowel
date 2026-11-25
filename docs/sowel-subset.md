@@ -132,8 +132,6 @@ interface's files).
 | `PUT /api/v1/settings` | Settings |
 | `GET /api/v1/settings/timezones` | The time zones the box knows (deviation, D41) |
 | `GET /api/v1/system/timezone` | The home's time zone |
-| `GET /api/v1/backup` | Export (Solite's document, D42) |
-| `POST /api/v1/backup` | Import (Solite's document, D42) |
 | `GET /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28; behind the token, D49) |
 | `POST /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28; behind the token, D49) |
 | `GET /api/v1/auth/status` | First start or login (Sowel's, D47) |
@@ -142,6 +140,8 @@ interface's files).
 | `POST /api/v1/auth/refresh` | New tokens (Sowel's, D47) |
 | `POST /api/v1/auth/logout` | Closes the session (Sowel's, D47) |
 | `POST /api/v1/system/factory-reset` | Erases the home and the account (deviation, D48) |
+| `GET /api/v1/system/backup` | The full backup archive (deviation, D56) |
+| `POST /api/v1/system/backup` | Restores the full backup archive (deviation, D56) |
 | `GET /api/v1/system/version` | The running version (Sowel's `VersionInfo`, a subset, D53) |
 | `POST /api/v1/system/update` | Installs the signed update file in its body (Sowel's route takes none, D53) |
 
@@ -165,7 +165,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53).
+D44, D47 to D49, D53, D56).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -173,6 +173,8 @@ D44, D47 to D49, D53).
 | route | `GET /api/v1/integrations/solite/permit-join` | D28 |
 | route | `POST /api/v1/integrations/solite/permit-join` | D28 |
 | route | `POST /api/v1/system/factory-reset` | D48 |
+| route | `GET /api/v1/system/backup` | D56 |
+| route | `POST /api/v1/system/backup` | D56 |
 
 Differences of value in the authentication (D47 to D49), none a new name: one account, always
 `admin` (no other user, no `/me`, no `/users`, no API token, no MFA: `trustedDeviceToken` is

@@ -2,30 +2,31 @@
 // UI 1.87.0), spec 026. Changes: the page holds the Home card, a Backup card and a factory reset card (spec 029); the time zone
 // is a select over `GET /api/v1/settings/timezones` (D41) in place of Sowel's read-only source line;
 // no restart toast (the box applies a new location at once); a "Today" line from the root zone's
-// aggregation; the backup is Solite's own (D42).
-import { useEffect, useRef, useState } from "react";
+// aggregation; the backup is Solite's own (D56): a password, an encrypted file, a restore at the box's restart.
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Loader2 } from "lucide-react";
 import {
   exportBackup,
   getSettings,
   getSystemVersion,
   getTimezones,
-  importBackup,
   installUpdate,
+  restoreBackup,
   updateSettings,
-  type ImportResult,
 } from "../../api";
 import { useAuth } from "../../store/useAuth";
 import { useZoneAggregation } from "../../store/useZoneAggregation";
-import { useZones } from "../../store/useZones";
+import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_LABEL, Modal } from "../ui/Modal";
 
 /** The root zone's id, the same in Sowel and in Solite. */
 const ROOT_ZONE_ID = "00000000-0000-0000-0000-000000000001";
-/** The API's body bound (`MAX_BODY_BYTES`): a larger file is refused before it is sent. */
-export const MAX_BACKUP_BYTES = 16384;
+/** The backup password's length, in characters, as the host checks it (spec 035, R1). */
+const BACKUP_PASSWORD_MIN = 8;
+const BACKUP_PASSWORD_MAX = 128;
 
 const INPUT =
   "w-full px-3 py-2 text-body bg-background border border-border rounded-sm text-text placeholder:text-text-tertiary focus:outline-none focus:border-primary";
@@ -57,6 +58,17 @@ function formOf(all: Record<string, string>): Form {
     sunsetOffset: all["home.sunsetOffset"] ?? "45",
     timezone: all["home.timezone"] ?? "UTC",
   };
+}
+
+/**
+ * The text a backup call shows (spec 035, R10): the server's own words, including for a 5xx
+ * (`Busy saving, try again`, `Restore failed: <reason>`), which the generic text would hide.
+ */
+function backupErrorText(err: unknown, t: TFunction): string {
+  if (err instanceof ApiError && err.fromServer && err.status >= 500 && err.message) {
+    return err.message;
+  }
+  return formErrorText(err, t);
 }
 
 export function SettingsPage() {
@@ -99,8 +111,6 @@ function HomeSettingsSection() {
 
   useEffect(() => {
     void load();
-    window.addEventListener("solite:settings-imported", load);
-    return () => window.removeEventListener("solite:settings-imported", load);
   }, []);
 
   const set = (key: keyof Form, value: string) => setForm((f) => ({ ...f, [key]: value }));
@@ -263,66 +273,68 @@ function today(): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
+/** Spec 035, R10: the full backup, exported with a password and restored with it. */
 function BackupSection() {
   const { t } = useTranslation();
-  const input = useRef<HTMLInputElement>(null);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [restorePassword, setRestorePassword] = useState("");
+  const [wifi, setWifi] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState<{ text: string; error: boolean } | null>(
+    null,
+  );
+
+  const length = [...password].length;
+  const reason =
+    length < BACKUP_PASSWORD_MIN
+      ? t("auth.passwordTooShort")
+      : length > BACKUP_PASSWORD_MAX
+        ? t("auth.passwordTooLong")
+        : password !== confirm
+          ? t("auth.passwordMismatch")
+          : null;
 
   const doExport = async () => {
-    setMessage(null);
+    setExporting(true);
+    setExportMessage(null);
     try {
-      const text = await exportBackup();
-      const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+      const blob = await exportBackup(password);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `solite-backup-${today()}.json`;
+      link.download = `solite-backup-${today()}.slb`;
       // In the page while clicked, and revoked later: Safari may abort a download otherwise.
       document.body.appendChild(link);
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setPassword("");
+      setConfirm("");
     } catch (err) {
-      setMessage({ text: formErrorText(err, t), error: true });
-    }
-  };
-
-  const pick = async (e: Event) => {
-    const field = e.currentTarget as HTMLInputElement;
-    const file = field.files?.[0];
-    field.value = "";
-    if (!file) return;
-    setMessage(null);
-    if (file.size > MAX_BACKUP_BYTES) {
-      setMessage({ text: t("settings.fileTooLarge"), error: true });
-      return;
-    }
-    setPending(await file.text());
-  };
-
-  const doImport = async () => {
-    const text = pending;
-    if (text === null) return;
-    setPending(null);
-    setBusy(true);
-    try {
-      const r: ImportResult = await importBackup(text);
-      setMessage({
-        text: t("settings.imported", {
-          settings: r.settings,
-          created: r.zonesCreated,
-          updated: r.zonesUpdated,
-        }),
-        error: false,
-      });
-      void useZones.getState().fetchZones();
-      window.dispatchEvent(new Event("solite:settings-imported"));
-      void useZoneAggregation.getState().fetchAggregation();
-    } catch (err) {
-      setMessage({ text: formErrorText(err, t), error: true });
+      setExportMessage(backupErrorText(err, t));
     } finally {
-      setBusy(false);
+      setExporting(false);
+    }
+  };
+
+  const doRestore = async () => {
+    if (!file) return;
+    setConfirming(false);
+    setRestoring(true);
+    setRestoreMessage(null);
+    try {
+      const r = await restoreBackup(file, restorePassword, wifi);
+      setRestoreMessage({ text: r.message, error: false });
+      setRestorePassword("");
+    } catch (err) {
+      setRestoreMessage({ text: backupErrorText(err, t), error: true });
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -330,43 +342,122 @@ function BackupSection() {
     <section className="card p-5">
       <h2 className="text-body font-semibold text-text mb-1">{t("settings.backup")}</h2>
       <p className="text-caption text-text-tertiary mb-4">{t("settings.backupDescription")}</p>
-      <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={doExport} className={BUTTON_SECONDARY}>
-          {t("settings.export")}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => input.current?.click()}
-          className={BUTTON_SECONDARY}
-        >
-          {t("settings.import")}
-        </button>
-        <input
-          ref={input}
-          type="file"
-          accept=".json,application/json"
-          aria-label={t("settings.import")}
-          className="hidden"
-          onChange={pick}
-        />
+
+      <h3 className="text-small font-semibold text-text mb-2">{t("settings.backupExport")}</h3>
+      <div className="grid gap-3 sm:grid-cols-2 mb-2">
+        <div>
+          <label htmlFor="backup-password" className={FIELD_LABEL}>
+            {t("settings.backupPassword")}
+          </label>
+          <input
+            id="backup-password"
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            disabled={exporting}
+            className={INPUT}
+            onInput={(e) => setPassword((e.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="backup-confirm" className={FIELD_LABEL}>
+            {t("settings.backupPasswordConfirm")}
+          </label>
+          <input
+            id="backup-confirm"
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            disabled={exporting}
+            className={INPUT}
+            onInput={(e) => setConfirm((e.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
       </div>
-      {message && (
-        <p className={`text-small mt-3 ${message.error ? "text-error" : "text-text-secondary"}`}>
-          {message.text}
+      <p className="text-caption text-text-tertiary mb-2">{t("settings.backupPasswordHint")}</p>
+      <button
+        type="button"
+        disabled={reason !== null || exporting}
+        onClick={doExport}
+        className={BUTTON_SECONDARY}
+      >
+        {exporting ? t("settings.backupExporting") : t("settings.export")}
+      </button>
+      {reason !== null && (password !== "" || confirm !== "") && (
+        <p className="text-small text-text-secondary mt-2">{reason}</p>
+      )}
+      {exportMessage && <p className="text-small text-error mt-2">{exportMessage}</p>}
+
+      <h3 className="text-small font-semibold text-text mt-6 mb-2">
+        {t("settings.backupRestore")}
+      </h3>
+      <div className="grid gap-3 sm:grid-cols-2 mb-3">
+        <div>
+          <label htmlFor="backup-file" className={FIELD_LABEL}>
+            {t("settings.backupFile")}
+          </label>
+          <input
+            id="backup-file"
+            type="file"
+            accept=".slb"
+            disabled={restoring}
+            className="text-small text-text-secondary"
+            onChange={(e) => setFile((e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+          />
+        </div>
+        <div>
+          <label htmlFor="backup-restore-password" className={FIELD_LABEL}>
+            {t("settings.backupRestorePassword")}
+          </label>
+          <input
+            id="backup-restore-password"
+            type="password"
+            autoComplete="off"
+            value={restorePassword}
+            disabled={restoring}
+            className={INPUT}
+            onInput={(e) => setRestorePassword((e.currentTarget as HTMLInputElement).value)}
+          />
+        </div>
+      </div>
+      <label className="flex items-center gap-2 text-small text-text mb-3">
+        <input
+          type="checkbox"
+          checked={wifi}
+          disabled={restoring}
+          onChange={(e) => setWifi((e.currentTarget as HTMLInputElement).checked)}
+        />
+        {t("settings.backupWifi")}
+      </label>
+      <button
+        type="button"
+        disabled={!file || restorePassword === "" || restoring}
+        onClick={() => setConfirming(true)}
+        className={BUTTON_SECONDARY}
+      >
+        {restoring ? t("settings.backupRestoring") : t("settings.backupRestoreAction")}
+      </button>
+      {restoreMessage && (
+        <p className={`text-small mt-3 ${restoreMessage.error ? "text-error" : "text-success"}`}>
+          {restoreMessage.text}
         </p>
       )}
-      {pending !== null && (
-        <Modal title={t("settings.importConfirmTitle")} onClose={() => setPending(null)}>
+      {confirming && (
+        <Modal title={t("settings.backupConfirmTitle")} onClose={() => setConfirming(false)}>
           <div className="px-6 py-4">
-            <p className="text-body text-text-secondary">{t("settings.importConfirm")}</p>
+            <p className="text-body text-text-secondary">{t("settings.backupConfirm")}</p>
+            {wifi && (
+              <p className="text-body text-text-secondary mt-2">
+                {t("settings.backupConfirmWifi")}
+              </p>
+            )}
           </div>
           <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-light">
-            <button type="button" onClick={() => setPending(null)} className={BUTTON_SECONDARY}>
+            <button type="button" onClick={() => setConfirming(false)} className={BUTTON_SECONDARY}>
               {t("common.cancel")}
             </button>
-            <button type="button" onClick={doImport} className={BUTTON_PRIMARY}>
-              {t("settings.import")}
+            <button type="button" onClick={doRestore} className={BUTTON_PRIMARY}>
+              {t("settings.backupRestoreAction")}
             </button>
           </div>
         </Modal>

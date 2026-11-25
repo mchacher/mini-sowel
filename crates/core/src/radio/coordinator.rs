@@ -7,6 +7,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 
+use super::backup::RestoredNetwork;
 use super::measures::{self, Measure};
 use super::{Radio, RadioError, RadioTransport};
 use super::{ezsp, zcl, zdo};
@@ -87,6 +88,9 @@ pub struct Network {
     pub channel: u8,
     /// True when this start formed the network, false when it resumed one the radio had.
     pub formed: bool,
+    /// True when the network this start formed took its identifiers and keys from a restored
+    /// backup (spec 035, R7) instead of drawing new ones.
+    pub from_backup: bool,
     /// The keys, only for a network just formed (a resumed one keeps its keys in the radio).
     pub keys: Option<NetworkKeys>,
 }
@@ -103,7 +107,9 @@ pub fn cut_short_line(eui64: &[u8; 8]) -> String {
 /// The `network:` line of the host. `foreign` is true for a resumed network the host has no
 /// backup of.
 pub fn network_line(network: &Network, foreign: bool) -> String {
-    let state = if network.formed {
+    let state = if network.formed && network.from_backup {
+        "formed (restored from the backup)"
+    } else if network.formed {
         "formed"
     } else if foreign {
         "resumed (made by another program)"
@@ -666,9 +672,18 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
     /// buffer with random bytes (the core has no source of its own). `on_formed` is called with
     /// the new network and its keys right after the radio accepted `formNetwork`, before any
     /// later step that can fail, so the caller can keep the keys; its error ends the start.
+    ///
+    /// `restored` (spec 035, R7) is the network of a restored backup: a radio with no network
+    /// forms it, with its identifiers and keys, instead of a random one. `replace` is the
+    /// one-shot mark a restore leaves: a radio that runs another network then leaves it (EZSP
+    /// `leaveNetwork`) and forms `restored`; a radio already on `restored` resumes it. `replace`
+    /// without `restored` (a file that did not parse) changes nothing. Without `replace`, a radio
+    /// that has a network resumes it and is never left.
     pub fn start_network(
         &mut self,
         settings: &NetworkSettings,
+        restored: Option<&RestoredNetwork>,
+        replace: bool,
         random: &mut dyn FnMut(&mut [u8]) -> Result<(), String>,
         on_formed: &mut dyn FnMut(&Network) -> Result<(), String>,
     ) -> Result<Network, RadioError> {
@@ -679,12 +694,26 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         self.configure(wide)?;
 
         let status = self.call_status(ezsp::ID_NETWORK_INIT, &ezsp::network_init(), wide)?;
+        let mut from_backup = false;
         let keys = match status {
             ezsp::STATUS_OK => {
                 self.wait_for_network_up()?;
-                None
+                match restored.filter(|_| replace) {
+                    Some(wanted) if !self.runs_network(wide, wanted)? => {
+                        log::warn!(
+                            "radio: leaving its network to form the one of the restored backup"
+                        );
+                        self.leave_network(wide)?;
+                        from_backup = true;
+                        Some(self.form(settings, Some(wanted), random, on_formed, wide)?)
+                    }
+                    _ => None,
+                }
             }
-            ezsp::STATUS_NOT_JOINED => Some(self.form(settings, random, on_formed, wide)?),
+            ezsp::STATUS_NOT_JOINED => {
+                from_backup = restored.is_some();
+                Some(self.form(settings, restored, random, on_formed, wide)?)
+            }
             status => {
                 return Err(RadioError::Refused {
                     command: "networkInit",
@@ -693,7 +722,28 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             }
         };
 
-        self.running_network(wide, keys)
+        let mut network = self.running_network(wide, keys)?;
+        network.from_backup = network.formed && from_backup;
+        Ok(network)
+    }
+
+    /// True when the radio's network has the PAN id and extended PAN id of `wanted`.
+    fn runs_network(&mut self, wide: bool, wanted: &RestoredNetwork) -> Result<bool, RadioError> {
+        let response = self.call(ezsp::ID_GET_NETWORK_PARAMETERS, &[])?;
+        let parameters = ezsp::parse_network_parameters(wide, &response)?;
+        let mut frame_order = wanted.extended_pan_id;
+        frame_order.reverse();
+        Ok(parameters.status == ezsp::STATUS_OK
+            && parameters.parameters.pan_id == wanted.pan_id
+            && parameters.parameters.extended_pan_id == frame_order)
+    }
+
+    /// Leaves the network the radio runs and waits for the stack's "network down" (R7). From
+    /// EZSP 14 the command takes an options byte (0: none).
+    fn leave_network(&mut self, wide: bool) -> Result<(), RadioError> {
+        let params: &[u8] = if wide { &[0] } else { &[] };
+        self.require_ok("leaveNetwork", ezsp::ID_LEAVE_NETWORK, params, wide)?;
+        self.wait_for_stack_status(false)
     }
 
     /// Resumes the network the radio has, without ever forming one, and returns it. A radio with
@@ -752,6 +802,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             extended_pan_id,
             channel: parameters.parameters.radio_channel,
             formed: keys.is_some(),
+            from_backup: false,
             keys,
         })
     }
@@ -794,36 +845,54 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         Ok(())
     }
 
-    /// Forms a new network with random keys and identifiers.
+    /// Forms a network: the one of a restored backup when `restored` is given, else a new one
+    /// with random keys and identifiers.
     fn form(
         &mut self,
         settings: &NetworkSettings,
+        restored: Option<&RestoredNetwork>,
         random: &mut dyn FnMut(&mut [u8]) -> Result<(), String>,
         on_formed: &mut dyn FnMut(&Network) -> Result<(), String>,
         wide: bool,
     ) -> Result<NetworkKeys, RadioError> {
         let mut fill = |buffer: &mut [u8]| random(buffer).map_err(RadioError::Random);
-        let mut keys = NetworkKeys {
-            network_key: [0; 16],
-            trust_center_key: [0; 16],
-        };
-        fill(&mut keys.network_key)?;
-        fill(&mut keys.trust_center_key)?;
-        // An extended PAN of all 0x00 or all 0xFF is not valid: drawn again.
-        let mut extended_pan_id = [0u8; 8];
-        loop {
-            fill(&mut extended_pan_id)?;
-            if extended_pan_id != [0x00; 8] && extended_pan_id != [0xFF; 8] {
-                break;
+        let (keys, extended_pan_id, pan_id, channel) = match restored {
+            Some(wanted) => {
+                // The file shows the extended PAN id in display order, the frame has it reversed.
+                let mut frame_order = wanted.extended_pan_id;
+                frame_order.reverse();
+                (
+                    wanted.keys.clone(),
+                    frame_order,
+                    wanted.pan_id,
+                    wanted.channel,
+                )
             }
-        }
-        // PAN 0x0000 and 0xFFFF are not valid either.
-        let mut pan = [0u8; 2];
-        let pan_id = loop {
-            fill(&mut pan)?;
-            let pan_id = u16::from_le_bytes(pan);
-            if pan_id != 0x0000 && pan_id != 0xFFFF {
-                break pan_id;
+            None => {
+                let mut keys = NetworkKeys {
+                    network_key: [0; 16],
+                    trust_center_key: [0; 16],
+                };
+                fill(&mut keys.network_key)?;
+                fill(&mut keys.trust_center_key)?;
+                // An extended PAN of all 0x00 or all 0xFF is not valid: drawn again.
+                let mut extended_pan_id = [0u8; 8];
+                loop {
+                    fill(&mut extended_pan_id)?;
+                    if extended_pan_id != [0x00; 8] && extended_pan_id != [0xFF; 8] {
+                        break;
+                    }
+                }
+                // PAN 0x0000 and 0xFFFF are not valid either.
+                let mut pan = [0u8; 2];
+                let pan_id = loop {
+                    fill(&mut pan)?;
+                    let pan_id = u16::from_le_bytes(pan);
+                    if pan_id != 0x0000 && pan_id != 0xFFFF {
+                        break pan_id;
+                    }
+                };
+                (keys, extended_pan_id, pan_id, settings.channel)
             }
         };
 
@@ -838,7 +907,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let bitmask = ezsp::set_value(0x0A, &0x0110u16.to_le_bytes());
         self.best_effort("setValue", ezsp::ID_SET_VALUE, &bitmask, wide)?;
         self.best_effort("clearKeyTable", ezsp::ID_CLEAR_KEY_TABLE, &[], wide)?;
-        let parameters = NetworkParameters::new(extended_pan_id, pan_id, settings.channel);
+        let parameters = NetworkParameters::new(extended_pan_id, pan_id, channel);
         self.require_ok(
             "formNetwork",
             ezsp::ID_FORM_NETWORK,
@@ -850,8 +919,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         on_formed(&Network {
             pan_id,
             extended_pan_id: shown_pan,
-            channel: settings.channel,
+            channel,
             formed: true,
+            from_backup: restored.is_some(),
             keys: Some(keys.clone()),
         })
         .map_err(RadioError::OnFormed)?;
@@ -864,22 +934,32 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
 
     /// Waits for the "network up" stack status, which may already be queued.
     fn wait_for_network_up(&mut self) -> Result<(), RadioError> {
+        self.wait_for_stack_status(true)
+    }
+
+    /// Waits for the "network up" (`up`) or "network down" stack status, which may already be
+    /// queued.
+    fn wait_for_stack_status(&mut self, up: bool) -> Result<(), RadioError> {
         let wide = self.wide()?;
+        let wanted = if up {
+            StackStatus::NetworkUp
+        } else {
+            StackStatus::NetworkDown
+        };
         let started = (self.now)();
         loop {
             self.drain_payloads();
-            let mut up = false;
+            let mut seen = false;
             self.callbacks.retain(|callback| {
                 if callback.id != ezsp::ID_STACK_STATUS_HANDLER {
                     return true;
                 }
-                if let Ok(StackStatus::NetworkUp) = ezsp::parse_stack_status(wide, &callback.params)
-                {
-                    up = true;
+                if ezsp::parse_stack_status(wide, &callback.params) == Ok(wanted) {
+                    seen = true;
                 }
                 false
             });
-            if up {
+            if seen {
                 return Ok(());
             }
             if (self.now)().saturating_sub(started) >= NETWORK_UP_TIMEOUT_MS {

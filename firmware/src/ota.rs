@@ -392,8 +392,8 @@ pub fn start() -> Result<(), String> {
     .map_err(|_| "update: already started".to_string())
 }
 
-/// After a successful installation, once its answer is out: asks the engine to stop (its files are
-/// saved), then restarts the ESP32 into the new image.
+/// After a successful installation or restore, once its answer is out: asks the engine to stop (its
+/// files are saved), then restarts the ESP32 (into the new image, or onto the restored files).
 #[allow(unsafe_code)]
 pub fn restart_after_update() -> ! {
     std::thread::sleep(ANSWER_FLUSH);
@@ -405,7 +405,7 @@ pub fn restart_after_update() -> ! {
     if !STOPPED.load(Ordering::SeqCst) {
         log::warn!("update: the engine did not stop within 10 s, restarting anyway");
     }
-    log::info!("update: restarting");
+    log::info!("restarting");
     // SAFETY: takes no argument, restarts the chip, never returns.
     unsafe { esp_restart() }
 }

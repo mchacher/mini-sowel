@@ -375,6 +375,8 @@ fn relay_announce_gives_capability_0x8c_and_a_mains_power_source() {
     h.radio
         .start_network(
             &solite_core::radio::NetworkSettings::default(),
+            None,
+            false,
             &mut |b: &mut [u8]| {
                 b.fill(7);
                 Ok(())
