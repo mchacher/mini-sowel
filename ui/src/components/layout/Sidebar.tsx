@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, LogOut, Menu, Shield, X } from "lucide-react";
+import { ChevronDown, ChevronRight, LogOut, Shield, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FlatZone } from "../../zones";
 import { ADMIN_NAV_ITEMS, type AdminPage } from "./admin-nav-items";
@@ -105,23 +105,6 @@ export function Sidebar({ zones, activeId, page }: Zones) {
       </div>
       <Nav zones={zones} activeId={activeId} page={page} />
     </aside>
-  );
-}
-
-/** The phone's top bar: the menu button and the name. */
-export function MobileTopBar({ onMenu }: { onMenu: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <header className="flex md:hidden items-center h-topbar px-3 border-b border-border-light bg-surface gap-2 shrink-0">
-      <button
-        onClick={onMenu}
-        aria-label={t("app.menu")}
-        className="w-10 h-10 -ml-2 flex items-center justify-center rounded-sm text-text-secondary hover:bg-border-light/60 transition-colors duration-150"
-      >
-        <Menu size={20} strokeWidth={1.7} />
-      </button>
-      <Brand />
-    </header>
   );
 }
 

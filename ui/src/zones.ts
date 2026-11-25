@@ -43,3 +43,6 @@ export function chooseZone(
   const withEquipments = flat.find((f) => equipments.some((e) => e.zoneId === f.zone.id));
   return (withEquipments ?? flat[0])?.zone ?? null;
 }
+
+/** The id of the root zone, the one that holds the home's sun times (Sowel's `ROOT_ZONE_ID`). */
+export const ROOT_ZONE_ID = "00000000-0000-0000-0000-000000000001";

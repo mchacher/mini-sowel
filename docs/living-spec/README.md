@@ -772,7 +772,7 @@ still answers, `/` answers 404 `Interface not built: run npm run build in ui/`, 
 prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm run dev` serves
 it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
 the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
-equipment", a device's "Create equipment"), sets the recipes (a room's Recipes panel) and the home's location and time zone (Settings), as well
+equipment"), sets the recipes (a room's Recipes panel) and the home's location and time zone (Settings), as well
 as showing them. It also shows an equipment's page (its values, devices and bindings, completed or
 changed one by one, enabled or disabled) and a device's page (its data and orders). The interface also opens at
 `http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
@@ -790,10 +790,19 @@ copy embedded in the radio image at build time.
   refresh refused clears the tokens and shows the login screen, a 403 `setupRequired` shows the
   first-start screen. `/ws` offers `bearer.none` and `bearer.<access>`; a close 4001 refreshes the
   token and reconnects.
-- **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
+- **Sidebar**: on a phone, behind the top bar's menu button, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
   Topology, Discovery, Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
-  (`#/zone/<id>`); at first the first room with equipments.
+  (`#/zone/<id>`); at first the first room with equipments. The Solite mark is in the sidebar and the drawer, not in the phone's top bar.
+- **Top bar**: on every page of the home, the home's name (the Settings' name, "Home" when none, a
+  grey placeholder while it loads) and where you are (the room's path, or the administration
+  page); on the right the home's time when the browser sits in another time zone, the sunrise and
+  sunset of the root zone with a sun by day and a moon by night ("Set the location", a link to
+  Settings, when no location is set; nothing while the box's clock is not set), and the link
+  indicator: nothing while connected and for 3 s after, then "Connecting..." or "Disconnected". On
+  a phone the bar holds the menu button, the home's name with the page under it, and the
+  indicators as icons. The name and the time zone are read again when the connection opens and
+  after Settings saves.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
   with its values, any other equipment with its name, icon and status badge; a disabled one
@@ -823,10 +832,9 @@ copy embedded in the radio image at build time.
   then once more after 1 s).
 - **Devices**: `#/devices`: every device by name, with its status, name (editable), manufacturer,
   model and Equipment column ("Room › Equipment" for each equipment that binds it, the room a link
-  to its page, the equipment's name a link to its own page; "—" when none); "Create equipment" on
-  a device with none; delete (confirmed; a refusal shows its text for 5 s); "Add devices" opens
-  Discovery. A click on a row opens the device's page, except on the name editor, "Create
-  equipment", delete and the links, which keep their action. A device has no room select.
+  to its page, the equipment's name a link to its own page; "—" when none); delete (confirmed; a refusal shows its text for 5 s); "Add devices" opens
+  Discovery. A click on a row opens the device's page, except on the name editor, delete and the
+  links, which keep their action. A device has no room select.
 - **Device page** (`#/devices/<id>`): a back link "Devices"; a radio icon, the name (editable, as
   on the list) and the status badge (online, offline, unknown), read like the list's, so a rename
   and a status change show at once. The information: manufacturer and model, the source device id,
@@ -857,9 +865,7 @@ copy embedded in the radio image at build time.
   uses still block "Create". Only what the type uses is bound, under Sowel's names
   (`state`, `brightness`, `position`, `battery`; `battery_2` for a second one), one request per
   binding after the equipment's; if one is refused the equipment is deleted again and the form
-  shows the text; edit the name and room; delete (confirmed). A device's "Create equipment" opens
-  the form with the device ticked, its type guessed (colour light, dimmable light, light,
-  shutter, thermostat, button, sensor) and its name; an equipment of a type the form does not
+  shows the text; edit the name and room; delete (confirmed). An equipment of a type the form does not
   offer (made through the API, `door`...) keeps its type when edited, shown as written; the room is chosen there. A refusal keeps the form open with its
   text. At most 64 devices chosen; a warning when they give more than
   16 values, of which only 16 are bound.
@@ -932,7 +938,8 @@ copy embedded in the radio image at build time.
   the page does not poll). The file goes as the body, `Content-Type: application/octet-stream`, with
   the bearer token. French and English labels.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
-  connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
+  connection is not open for 3 s (also at the first load) the top bar's link indicator says so:
+  "Connecting..." while it tries, "Disconnected" between tries; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
 - **A light's button** sends the order (`ON` or `OFF`); the button waits, and the light shows its
   new state when the device confirms it; a refusal shows its text for 5 s.

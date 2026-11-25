@@ -10,6 +10,8 @@ import { usePairing } from "./usePairing";
 import { useEquipments } from "./useEquipments";
 import { useZoneAggregation } from "./useZoneAggregation";
 import { useZones } from "./useZones";
+import { useHomeSettings } from "./useHomeSettings";
+import { useTimezone } from "./useTimezone";
 import { useRecipes } from "./useRecipes";
 import { coalesceCalls } from "../lib/coalesce-calls";
 import { getAccessToken } from "../api/client";
@@ -102,6 +104,8 @@ function refetchAll(): void {
   void useRecipes.getState().fetchRecipes();
   void useRecipes.getState().fetchInstances();
   void useDeviceDetail.getState().reload();
+  void useHomeSettings.getState().fetch();
+  void useTimezone.getState().fetch();
 }
 
 function apply(event: LiveEvent): void {
@@ -205,6 +209,8 @@ export function connect(): void {
   }
   const current = new WebSocket(socketUrl(), subprotocols());
   socket = current;
+  // Each attempt shows as "connecting" (the top bar's link indicator); a wait between two says "closed".
+  setStatus("connecting");
   current.onopen = () => {
     attempts = 0;
     refreshedOnClose = false;

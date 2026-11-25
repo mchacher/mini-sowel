@@ -8,16 +8,15 @@
 // and the devices read, and `NewEquipmentForm` sends the plan's requests; no device is required
 // (spec 030, decision D50, as Sowel's form: "Create" makes the equipment without bindings), but
 // devices ticked that give nothing the type uses block "Create" (the plan is empty); changing the type
-// keeps the devices ticked; the type, name and devices can be given (a device's "Create
-// equipment"); step 2 reads the devices again every 5 s while the plan is empty (also with no device
-// ticked); a type guessed without data is guessed again from each read.
+// keeps the devices ticked; step 2 reads the devices again every 5 s while the plan is
+// empty (also with no device ticked).
 import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { EquipmentType, ZoneWithChildren } from "../../types";
 import type { DeviceWithData } from "../../api";
 import { DeviceSelector, pickDevices } from "./DeviceSelector";
 import { computeBindingPlan } from "./bindingUtils";
-import { SOLITE_EQUIPMENT_TYPES, TYPE_LABELS, deduceType } from "./equipment-type-meta";
+import { SOLITE_EQUIPMENT_TYPES, TYPE_LABELS } from "./equipment-type-meta";
 import { flattenZonesWithPath } from "../../lib/zone-path";
 import { formErrorText } from "../../lib/form-error";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_INPUT, FIELD_LABEL, Modal } from "../ui/Modal";
@@ -32,12 +31,6 @@ interface EquipmentFormProps {
   };
   /** The zone chosen when the form opens (a room's page). */
   defaultZoneId?: string;
-  /** The type, name and devices the form opens with (a device's "Create equipment"). */
-  initialType?: EquipmentType;
-  /** `initialType` is the fallback, guessed without data: guess again from each read until the user picks a type. */
-  typeIsGuess?: boolean;
-  initialName?: string;
-  initialDeviceIds?: string[];
   zones: ZoneWithChildren[];
   onSubmit: (data: {
     name: string;
@@ -58,24 +51,18 @@ export function EquipmentForm({
   title,
   initial,
   defaultZoneId,
-  initialType,
-  typeIsGuess = false,
-  initialName,
-  initialDeviceIds,
   zones,
   onSubmit,
   onClose,
 }: EquipmentFormProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<"info" | "devices">("info");
-  const [name, setName] = useState(initial?.name ?? initialName ?? "");
-  const [type, setType] = useState<EquipmentType>(initial?.type ?? initialType ?? "light_onoff");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [type, setType] = useState<EquipmentType>(initial?.type ?? "light_onoff");
   const [zoneId, setZoneId] = useState(initial?.zoneId ?? defaultZoneId ?? "");
-  const [deviceIds, setDeviceIds] = useState<string[]>(initialDeviceIds ?? []);
+  const [deviceIds, setDeviceIds] = useState<string[]>([]);
   // `null` until the first read of the devices.
   const [devicesRead, setDevicesRead] = useState<DeviceWithData[] | null>(null);
-  // True while the type is the fallback guessed without data and the user has not chosen one.
-  const guessing = useRef(typeIsGuess);
   const [saving, setSaving] = useState(false);
   // A second click before the first one's render must not send a second request.
   const busy = useRef(false);
@@ -99,18 +86,6 @@ export function EquipmentForm({
   const planEmpty = useMemo(() => computeBindingPlan(ticked, type).length === 0, [ticked, type]);
   const noDevice = deviceIds.length === 0;
   const blocked = !initial && !noDevice && planEmpty;
-
-  const handleDevicesRead = (all: DeviceWithData[]) => {
-    setDevicesRead(all);
-    if (!guessing.current) return;
-    const guessed = pickDevices(all, deviceIds)
-      .map(deduceType)
-      .find((x) => x !== null);
-    if (guessed) {
-      setType(guessed);
-      guessing.current = false;
-    }
-  };
 
   const handleCreate = async () => {
     if (!name.trim() || !zoneId || busy.current || (step === "devices" && blocked)) return;
@@ -154,7 +129,6 @@ export function EquipmentForm({
                   id="equipment-type"
                   value={type}
                   onChange={(e) => {
-                    guessing.current = false;
                     setType((e.target as HTMLSelectElement).value as EquipmentType);
                   }}
                   className={SELECT}
@@ -217,7 +191,7 @@ export function EquipmentForm({
                 equipmentType={type}
                 selectedDeviceIds={deviceIds}
                 onSelectionChange={setDeviceIds}
-                onDevicesRead={handleDevicesRead}
+                onDevicesRead={setDevicesRead}
                 reread={planEmpty}
               />
               {noDevice && (

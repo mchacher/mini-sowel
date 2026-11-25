@@ -3,22 +3,18 @@
 // model, the Equipment column, the actions); no sort buttons, source, battery, LQI or last-seen
 // columns; the rows come in the order given. A click on a row opens the device's page
 // (`#/devices/<id>`, spec 030, R2), except on the name editor, the buttons and the links (the
-// equipment and room links of the Equipment column go to their own page). Added:
-// "Create equipment" on a row with no equipment, which reads the device and opens the equipment
-// form with it ticked; delete with confirmation (a refusal shows its text under the row for 5 s,
-// a 404 removes the row).
+// equipment and room links of the Equipment column go to their own page). Added: delete with
+// confirmation (a refusal shows its text under the row for 5 s, a 404 removes the row). No
+// equipment is made from a row (spec 037, R1; Sowel's `EquipmentCell` shows "—" and no action).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { getDevice, type DeviceWithData } from "../../api";
 import { apiErrorStatus, apiErrorText } from "../../lib/api-error";
 import { useDevices } from "../../store/useDevices";
 import { useEquipments } from "../../store/useEquipments";
 import { useZones } from "../../store/useZones";
 import type { Device } from "../../types";
 import { hashForDetail } from "../layout/admin-nav-items";
-import { NewEquipmentForm } from "../equipments/NewEquipmentForm";
-import { deduceType } from "../equipments/equipment-type-meta";
 import { DeviceNameEditor } from "./DeviceNameEditor";
 import { EquipmentCell } from "./EquipmentCell";
 import { deviceEquipmentMap, type DeviceEquipment } from "./deviceEquipments";
@@ -36,18 +32,14 @@ function Row({
   device,
   isNew,
   equipments,
-  onCreate,
 }: {
   device: Device;
   isNew: boolean;
   equipments: DeviceEquipment[] | undefined;
-  onCreate: (device: DeviceWithData) => void;
 }) {
   const { t } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // A second click before the read is answered must not send a second request.
-  const reading = useRef(false);
 
   useEffect(
     () => () => {
@@ -71,22 +63,6 @@ function Row({
       else fail(err);
     }
   };
-
-  const create = async () => {
-    if (reading.current) return;
-    reading.current = true;
-    try {
-      onCreate(await getDevice(device.id));
-    } catch (err) {
-      // Deleted meanwhile: the row goes; any other refusal shows its text.
-      if (apiErrorStatus(err) === 404) useDevices.getState().removeDevice(device.id);
-      fail(err);
-    } finally {
-      reading.current = false;
-    }
-  };
-
-  const none = !equipments || equipments.length === 0;
 
   return (
     <>
@@ -140,16 +116,6 @@ function Row({
         </td>
         <td className="py-2.5 px-3">
           <div className="flex items-center justify-end gap-1">
-            {none && (
-              <button
-                type="button"
-                onClick={() => void create()}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-sm text-caption font-medium text-primary hover:bg-primary-light"
-              >
-                <Plus size={14} strokeWidth={1.5} />
-                {t("devices.createEquipment")}
-              </button>
-            )}
             <button
               type="button"
               onClick={() => void remove()}
@@ -178,7 +144,6 @@ export function DeviceList({ devices, newIds = [] }: { devices: Device[]; newIds
   const { t } = useTranslation();
   const equipments = useEquipments((s) => s.equipments);
   const tree = useZones((s) => s.tree);
-  const [creating, setCreating] = useState<DeviceWithData | null>(null);
   // The column is live: it follows the equipments the interface already holds.
   const byDevice = useMemo(() => deviceEquipmentMap(equipments, tree), [equipments, tree]);
 
@@ -210,20 +175,10 @@ export function DeviceList({ devices, newIds = [] }: { devices: Device[]; newIds
               device={device}
               isNew={newIds.includes(device.id)}
               equipments={byDevice.get(device.id)}
-              onCreate={setCreating}
             />
           ))}
         </tbody>
       </table>
-      {creating && (
-        <NewEquipmentForm
-          initialType={deduceType(creating) ?? "light_onoff"}
-          typeIsGuess={deduceType(creating) === null}
-          initialName={creating.name}
-          initialDeviceIds={[creating.id]}
-          onClose={() => setCreating(null)}
-        />
-      )}
     </div>
   );
 }

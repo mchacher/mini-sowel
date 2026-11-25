@@ -162,7 +162,7 @@ describe("App", () => {
     expect(aside.className).toContain("md:flex");
     expect(screen.queryByRole("dialog")).toBeNull();
     const menu = screen.getByRole("button", { name: "Menu" });
-    expect(menu.closest("header")!.className).toContain("md:hidden");
+    expect(menu.className).toContain("md:hidden");
     fireEvent.click(menu);
     const drawer = screen.getByRole("dialog");
     expect(
@@ -174,15 +174,61 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("shows the mark and the wordmark in the sidebar, the top bar and the drawer", async () => {
+  it("shows the mark and the wordmark in the sidebar and the drawer, not in the top bar", async () => {
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     await screen.findByRole("heading", { level: 1, name: "House" });
     expect(within(nav().closest("aside")!).getByRole("img", { name: "Solite" })).toBeTruthy();
-    const bar = screen.getByRole("button", { name: "Menu" }).closest("header")!;
-    expect(within(bar).getByRole("img", { name: "Solite" })).toBeTruthy();
+    const bar = screen.getByTestId("topbar-frame");
+    expect(within(bar).queryByRole("img", { name: "Solite" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Menu" }));
     const drawer = screen.getByRole("dialog");
     expect(within(drawer).getByRole("img", { name: "Solite" })).toBeTruthy();
+  });
+
+  it("shows the top bar with the home's name and the room the page shows, and no connection strip", async () => {
+    await boot({
+      zones: tree(),
+      equipments: [light("l", "House light", "house", false)],
+      settings: { "home.name": "Annex" },
+    });
+    await screen.findByRole("heading", { level: 1, name: "House" });
+    const bar = screen.getByTestId("topbar-frame");
+    await waitFor(() => expect(bar.textContent).toContain("Annex"));
+    expect(bar.querySelector(".text-lead")!.textContent).toBe("Annex");
+    // No zone in the address: the room shown (the first with equipments), never the hash alone.
+    expect(bar.querySelector(".text-micro")!.textContent).toBe("House");
+    expect(screen.queryByText(/Connection lost/)).toBeNull();
+  });
+
+  it("reads the home's name when the home shows, even before the live connection opens", async () => {
+    mockApi(homeRoutes({ zones: tree(), equipments: [], settings: { "home.name": "Annex" } }));
+    storeSession();
+    render(<App />);
+    // The socket is never opened here.
+    await waitFor(() =>
+      expect(screen.getByTestId("topbar-frame").querySelector(".text-lead")!.textContent).toBe(
+        "Annex",
+      ),
+    );
+  });
+
+  it("says the room shown in the top bar for an unknown zone id too", async () => {
+    window.location.hash = "#/zone/nowhere";
+    await boot({ zones: tree(), equipments: [light("l", "Garage light", "garage", false)] });
+    await screen.findByRole("heading", { level: 1, name: "Garage" });
+    expect(screen.getByTestId("topbar-frame").querySelector(".text-micro")!.textContent).toBe(
+      "Garage",
+    );
+  });
+
+  it("says the administration page in the top bar", async () => {
+    window.location.hash = "#/devices";
+    await boot({ zones: tree() });
+    await waitFor(() =>
+      expect(screen.getByTestId("topbar-frame").querySelector(".text-micro")!.textContent).toBe(
+        "Devices",
+      ),
+    );
   });
 
   it("closes the drawer when a zone is picked in it", async () => {

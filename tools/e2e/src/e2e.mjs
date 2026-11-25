@@ -146,61 +146,64 @@ try {
       await row(model).getByText("New", { exact: true }).waitFor();
     }
     check((await page.locator("tbody tr").count()) === 3, "Discovery does not list 3 devices");
+    check(
+      (await page.locator("tbody tr").getByRole("button", { name: "Create equipment" }).count()) ===
+        0,
+      "a Discovery row has a Create equipment button",
+    );
   });
 
-  await step("create-light", async () => {
-    // The form guesses the type from the device's data: wait until they are set up.
-    await deviceWithData("ZBMINIR2", "state");
-    await row("ZBMINIR2").getByRole("button", { name: "Create equipment" }).click();
+  // No equipment is made from a device (spec 037, R1): the type is picked, the devices are ticked.
+  const addEquipment = async (name, type) => {
+    await page.goto(`${base}/#/equipments`);
+    await page.getByRole("button", { name: "Add equipment" }).first().click();
     await page.locator("#equipment-name").waitFor();
-    check(
-      (await page.locator("#equipment-type").inputValue()) === "light_onoff",
-      "the type is not guessed as light on/off",
-    );
-    await page.locator("#equipment-name").fill("Lumière garage");
+    await page.locator("#equipment-type").selectOption(type);
+    await page.locator("#equipment-name").fill(name);
     await page.locator("#equipment-zone").selectOption({ label: "Garage" });
     await page.getByRole("button", { name: "Next: Select devices" }).click();
-    const create = page.getByRole("button", { name: "Create", exact: true });
-    await page.waitForFunction(() =>
+  };
+  const tick = async (model) => {
+    const box = page.getByRole("checkbox", { name: new RegExp(model) });
+    await box.waitFor();
+    if (!(await box.isChecked())) await box.check();
+  };
+  const createEnabled = () =>
+    page.waitForFunction(() =>
       [...document.querySelectorAll("button")].some(
         (b) => b.textContent === "Create" && !b.disabled,
       ),
     );
-    await create.click();
-    await row("ZBMINIR2").getByText("Lumière garage").waitFor();
+
+  await step("create-light", async () => {
+    // "Create" waits for the data of the device: wait until they are set up.
+    await deviceWithData("ZBMINIR2", "state");
+    await addEquipment("Lumière garage", "light_onoff");
+    await tick("ZBMINIR2");
+    await createEnabled();
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.getByText("Lumière garage").first().waitFor();
   });
 
   await step("create-sensor", async () => {
-    // The MS01 is the one to tick in step 2: its data must be there when the form stops reading.
     await deviceWithData("MS01", "occupancy");
-    // Pressed as soon as the row is there, possibly before the TH01's data exist: the form
-    // guesses its type again from its own re-reads, and "Create" waits for them.
-    await row("TH01").getByRole("button", { name: "Create equipment" }).click();
-    await page.locator("#equipment-name").waitFor();
-    await page.locator("#equipment-name").fill("Capteurs garage");
-    await page.locator("#equipment-zone").selectOption({ label: "Garage" });
-    await page.getByRole("button", { name: "Next: Select devices" }).click();
-    const ms01 = page.getByRole("checkbox", { name: /MS01/ });
-    await ms01.waitFor();
-    if (!(await ms01.isChecked())) await ms01.check();
-    await page.waitForFunction(() =>
-      [...document.querySelectorAll("button")].some(
-        (b) => b.textContent === "Create" && !b.disabled,
-      ),
-    );
-    await page.getByRole("button", { name: "Back" }).click();
-    check(
-      (await page.locator("#equipment-type").inputValue()) === "sensor",
-      "the type is not guessed as sensor",
-    );
-    await page.getByRole("button", { name: "Next: Select devices" }).click();
+    await deviceWithData("TH01", "temperature");
+    await addEquipment("Capteurs garage", "sensor");
+    await tick("TH01");
+    await tick("MS01");
+    await createEnabled();
     await page.getByRole("button", { name: "Create", exact: true }).click();
-    await row("TH01").getByText("Capteurs garage").waitFor();
-    await row("MS01").getByText("Capteurs garage").waitFor();
+    await page.getByText("Capteurs garage").first().waitFor();
   });
 
   await step("devices-page", async () => {
     await page.goto(`${base}/#/devices`);
+    await row("ZBMINIR2").waitFor();
+    check(
+      (await page.locator("tbody tr").getByRole("button", { name: "Create equipment" }).count()) ===
+        0,
+      "a Devices row has a Create equipment button",
+    );
     for (const [model, name] of [
       ["ZBMINIR2", "Lumière garage"],
       ["TH01", "Capteurs garage"],

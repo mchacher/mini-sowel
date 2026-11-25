@@ -20,7 +20,7 @@ The Sowel repository (`github.com/mchacher/sowel`, usually cloned as `../sowel`)
 | `ui/public/favicon.svg` (commit `5da84dc1`) | `ui/src/assets/favicon.svg` | derived: the small weight with the antenna; Vite publishes it as `/assets/favicon-<hash>.svg`, which the host and the box's radio image both serve; `logo-sync.test.ts` checks it against `logo.ts` |
 
 The Solite mark (Sowel's smiling house with an antenna and a radio wave on each side of the roof)
-is the one the sidebar, the mobile top bar, the drawer and the browser tab show. The house is the
+is the one the sidebar, the drawer and the browser tab show. The house is the
 ink (`--color-primary`), the face, the ball and the waves the mid-blue (`--color-primary-mid`);
 the favicon, an image, holds the same two values as hex. The wordmark is a path, not text: no web
 font is loaded.
@@ -51,7 +51,8 @@ naming its Sowel source and commit:
 | `pages/ZonesPage.tsx`, `components/zones/{ZoneTree,ZoneForm}.tsx` | `components/zones/{ZonesPage,ZoneTree,ZoneForm}.tsx` | ported (spec 018): no auth, reorder or expand/collapse; names at most 64; no "None" parent; edit and delete in the rows; the modal is `components/ui/Modal.tsx` (Escape and click outside close it) |
 | `pages/EquipmentsPage.tsx`, `components/equipments/{EquipmentForm,DeviceSelector,equipment-type-meta}.tsx` | `components/equipments/{EquipmentsPage,EquipmentForm,DeviceSelector,equipment-type-meta}.tsx` | ported (spec 018): the eight types with rules (`light_color` since spec 027), a type outside them kept and shown as written; Sowel's candidates for lights, switches and shutters and the thermostat contract; no search; a row instead of `EquipmentCard`; the plan and one request per binding, no device required (spec 030: an equipment can be created alone and completed on its page); check boxes, 64 devices at most, a warning past 16 values |
 | `components/layout/{admin-nav-items,SidebarItem}.tsx`, the Administration block of `Sidebar.tsx` | `components/layout/{admin-nav-items,SidebarItem,Sidebar}.tsx` | ported (spec 019): Devices, Equipments, Topology, Discovery in the place of Integrations, and Settings (spec 026, Solite's own page); hash links instead of `NavLink`; no collapsed mode, roles or badges; a Log out button under Administration (spec 029, Solite's own) |
-| `pages/DevicesPage.tsx`, `components/devices/DeviceList.tsx` | `components/devices/{DevicesPage,DeviceList,EquipmentCell}.tsx` | ported, cut (spec 019): the table with the Equipment column, "Create equipment" and delete; no search, sort, source, battery, LQI or last-seen columns; a row opens the device page (spec 030); `TabButton` in `components/ui/` |
+| `components/layout/{TopBarFrame,SunTimes,HomeTimeNote,ConnectionStatus}.tsx` and their tests, `hooks/useTopBarState.ts`, `store/useTimezone.ts`, the header of `AppLayout.tsx` (`TopbarBreadcrumb`, `MobileTopbarTitle`, `HomeNameSkeleton`) | `components/layout/{TopBarFrame,SunTimes,HomeTimeNote,ConnectionStatus,TopBar}.tsx`, `hooks/useTopBarState.ts`, `store/useTimezone.ts` | ported at Sowel commit `2d360726` (spec 037, D62): `md` in the place of `lg`; no shadow mode or takeover banner, no alarms, updates or restart pills, no user block, no `hit-group`; the link indicator reads `useLive` (`open` is `connected`, `closed` `disconnected`); no router, so `TopBar` takes the page and the zone shown as props, the parts of the context are made by `top-bar-context.ts` (Solite's own); the home's name and whether a location is set come from `store/useHomeSettings.ts` (Solite's own); `SunLocationHint`, a "Set the location" link to Settings where Sowel shows nothing, is Solite's own; `SunTimes`, `HomeTimeNote`, `useTimezone` unchanged |
+| `pages/DevicesPage.tsx`, `components/devices/DeviceList.tsx` | `components/devices/{DevicesPage,DeviceList,EquipmentCell}.tsx` | ported, cut (spec 019): the table with the Equipment column and delete; no search, sort, source, battery, LQI or last-seen columns; a row opens the device page (spec 030); `TabButton` in `components/ui/` |
 | `pages/EquipmentDetailPage.tsx` (with `DevicesSection`, `ChangeDeviceModal`), `components/equipments/{AddBindingModal,MissingBindingsModal,ConfigRow}.tsx` | `components/equipments/{EquipmentDetailPage,AddBindingModal,MissingBindingsModal,ConfigRow}.tsx` | ported (spec 030): no history section, no panels of the other types, no type change on edit, no router (the page reads the equipment from the store); dialogs on `Modal`, a refusal stops the writing and shows the host's text; `ConfigRow` unchanged; `EnabledRow` is Solite's own (Sowel has no control for `enabled`) |
 | `pages/DeviceDetailPage.tsx`, `components/devices/DeviceDataTable.tsx`, `components/RelativeTime.tsx` | `components/devices/{DeviceDetailPage,DeviceDataTable}.tsx`, `components/RelativeTime.tsx` | ported (spec 030): no raw expose section, source badge or admin test; the data come from `store/useDeviceDetail.ts` (Solite's own, followed by `device.data.updated`); `DeviceDataTable` and `RelativeTime` unchanged |
 | `src/shared/binding-candidates.ts`, `thermostat-contract.ts` | `lib/binding-candidates.ts` | ported (spec 019): the candidates of the lights (`light_color` since spec 027), switches and shutters (category fallback for shutters) and `isThermostatDevice` |
@@ -111,8 +112,12 @@ Everything else (colours, roles, scales, radii, shadows, motion, components) is 
 Sowel's application layout: a sidebar on the left (260 px, `bg-surface`, right border), the mark
 and the wordmark in a 49 px header, the rooms' tree below, the Administration section at its foot; the room on the right on the
 `bg-background` tint: its name as the title, Sowel's lights line and pills beneath it, then its
-equipments by family. Below `md` the sidebar gives way to a top bar with a menu button that
-opens it as a drawer (Sowel's pattern; Sowel switches at `lg`). Code: `ui/src/components/layout/{Sidebar,ZoneTree,Banner}.tsx`,
+equipments by family. Above the room, a top bar on every page of the home (spec 037): the home's
+name and where you are on the left, the home's time, the sun times and the link indicator on the
+right; 56 px (`h-topbar`) below `md`, where it is fixed at the top over a safe-area band and holds
+a menu button that opens the sidebar as a drawer (Sowel's pattern; Sowel switches at `lg`), and
+49 px from `md` up, level with the sidebar's header. Code:
+`ui/src/components/layout/{Sidebar,ZoneTree,TopBar,TopBarFrame,top-bar-context}.tsx`,
 `ui/src/components/home/{ZonePage,EquipmentRow}.tsx`, `ui/src/App.tsx`.
 
 ## Rules
@@ -132,4 +137,4 @@ opens it as a drawer (Sowel's pattern; Sowel switches at `lg`). Code: `ui/src/co
   buttons, `strokeWidth={1.5}` as in Sowel; ported files keep Sowel's sizes.
 - **Updating from Sowel**: copy the files of the two tables under Source again from a newer Sowel
   commit, compare each with the commit in its header, apply the cuts listed again, update the
-  commits and dates, and check the budget (first load 72.7 KB gzip after spec 030).
+  commits and dates, and check the budget (first load 75.4 KB gzip after spec 037).
