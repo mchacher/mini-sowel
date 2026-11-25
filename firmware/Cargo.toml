@@ -23,7 +23,7 @@ opt-level = "z"
 # The image QEMU runs: the engine with the simulated radio and the realistic home of
 # `fixtures/` (spec 016, decision D26). Without it (and without `radio`), the image is the box's:
 # it starts no radio.
-sim = ["dep:solite-sim"]
+sim = ["dep:solite-sim", "dep:ed25519-dalek"]
 # The measuring image for the box (spec 020): `sim`, but every save goes to the flash, timed, and
 # the run logs the `saves:` line. QEMU's flash takes a quarter of an hour for those saves, so only
 # the box runs it.
@@ -37,6 +37,8 @@ solite-core = { path = "../crates/core" }
 solite-sim = { path = "../crates/sim", optional = true }
 esp-idf-svc = "0.53"
 log = "0.4"
+# Signs the throwaway update files of the QEMU image's stack check (`update_check.rs`, D60).
+ed25519-dalek = { version = "3.0", default-features = false, optional = true }
 
 [build-dependencies]
 embuild = "0.33"

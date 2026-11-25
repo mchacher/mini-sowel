@@ -11,6 +11,8 @@ mod backup_files;
 mod console;
 #[cfg(feature = "radio")]
 mod http_server;
+#[cfg(any(feature = "radio", feature = "sim"))]
+mod job_thread;
 #[cfg(feature = "radio")]
 mod live_ws;
 #[cfg(feature = "sim")]
@@ -27,6 +29,8 @@ mod simulated;
 mod storage;
 #[cfg(feature = "radio")]
 mod supervisor;
+#[cfg(feature = "sim")]
+mod update_check;
 #[cfg(feature = "radio")]
 mod wifi;
 
@@ -87,6 +91,7 @@ fn log_network() {
 
 #[cfg(feature = "sim")]
 fn run_engine() {
+    update_check::run();
     if let Err(e) = simulated::seed() {
         log::error!("{e}");
         return;

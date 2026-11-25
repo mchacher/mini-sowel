@@ -88,7 +88,12 @@ Each of the three programs starts and says which tool it is, with its version:
   their minimum), and fails, with the last lines of the log, when the heap peak is above 350 KB, when a device of the home got no measure into the engine
   (`50 devices (50 reported)`), when the radio dropped a callback while the scenario played,
   when the internal RAM minimum free is below 64 KB, when the firmware panics or reboots, or when
-  the `engine:` line does not show within 240 seconds. `sh scripts/validate.sh` runs it. The image
+  the `engine:` line does not show within 240 seconds. Before the engine, the image installs three
+  update files of a 64 KB image, signed with a key pair made at boot, on the `update` thread of the
+  radio image (16 KB of stack, the slot a counter in memory), and logs `update check: valid 200,
+  image changed 400, signature changed 400` and the thread's `update: thread stack <n> of 16384
+  bytes never used`; the run fails when a status differs or fewer than 2048 bytes stay unused.
+  The measuring image (`flash-saves`) runs the same check at its boot. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
   application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
   application in the first slot, at the offset the built table gives. Allocations above 4 KB go
@@ -1063,7 +1068,14 @@ application image of the slot, as `espflash save-image` writes it). Integers are
 - **The box** (radio image) serves the same route. One OTA thread, with a 6 KB stack in internal
   RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
   touch the flash, a read neither), receives them through a channel one request at a time, and ticks the probation
-  every second (and runs the supervisor's tick); a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
+  every second (and runs the supervisor's tick); a chunk crosses in one 4096-byte buffer in PSRAM.
+  The installation itself (the body read, the header's signature check, the image's hash, the
+  answer) runs on an `update` thread started for the request, its 16 KB stack in internal RAM,
+  while the API worker that took the request waits: the signature check alone needs about 9 KB of
+  stack, more than a worker's 10 KB holds with the request's own frames. When the thread cannot
+  start, the answer is 503 `Busy, try again` and the connection closes. The thread logs `update:
+  thread stack <n> of 16384 bytes never used` at the end of every attempt, accepted or refused
+  (D60). After a success the answer is sent, then the engine stops (its
   final save runs) and the box restarts, logged `restarting`. Its start lines are the host's. A restart the supervisor makes before the confirmation
   (a panic, a watchdog, the last rung of the ladder) rolls the image back like any other restart,
   and an image that boots into the safe mode is not healthy (its engine's loop does not run): it

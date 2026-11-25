@@ -1,7 +1,9 @@
 //! The radio image's updates (spec 032 R8): `UpdateAdapter` on ESP-IDF's OTA, and the probation
 //! tick. Every call that touches the flash runs on ONE thread, `ota`, whose 6 KB stack is in
-//! internal RAM: the API workers' stacks are in PSRAM and must never touch the flash. A worker
-//! sends each call through a channel of one request at a time and waits for the answer; the same
+//! internal RAM: the API workers' stacks are in PSRAM and must never touch the flash. The
+//! installation runs on an `update` thread started for the request (`job_thread.rs`, D60: the
+//! signature check needs more stack than a worker has), which sends each call through a channel of
+//! one request at a time and waits for the answer; the same
 //! thread ticks `Updates::watch` every second (health: the engine's loop is running and the API
 //! server is listening). A chunk crosses in one 4096-byte buffer in PSRAM, allocated once by that
 //! thread. The logic (header, signature, digest, probation) is the core's, tested on the Mac.
@@ -52,12 +54,12 @@ pub fn updates() -> Option<&'static Updates> {
     UPDATES.get()
 }
 
-/// An adapter for a worker: every call goes to the OTA thread. `None` when it did not start.
+/// An adapter for the `update` thread: every call goes to the OTA thread. `None` when it did not start.
 pub fn adapter() -> Option<RemoteAdapter> {
     LINK.get().map(|_| RemoteAdapter)
 }
 
-/// What a worker asks of the OTA thread.
+/// What the `update` thread asks of the OTA thread.
 enum Call {
     Capacity,
     Begin(u32),
@@ -73,13 +75,13 @@ enum Call {
 /// The answer: a number (capacity, a flag as 0 or 1) or a message.
 type Answer = Result<u64, String>;
 
-/// The worker's side: the requests (one at a time, under the mutex) and the shared buffer.
+/// The `update` thread's side: the requests (one at a time, under the mutex) and the shared buffer.
 struct Link {
     calls: Mutex<(SyncSender<Call>, Receiver<Answer>)>,
     chunk: &'static Mutex<&'static mut [u8]>,
 }
 
-/// The adapter a worker uses: it holds nothing, the OTA thread does.
+/// The adapter the `update` thread uses: it holds nothing, the OTA thread does.
 pub struct RemoteAdapter;
 
 fn gone() -> String {
@@ -240,7 +242,7 @@ impl Flash {
             Call::Begin(length) => self.begin(length).map(|()| 0),
             Call::Write(count) => {
                 let chunk = lock(chunk);
-                // The worker never asks for more than the buffer holds.
+                // The `update` thread never asks for more than the buffer holds.
                 let bytes = chunk.get(..count).ok_or("chunk too long")?;
                 self.write(bytes).map(|()| 0)
             }

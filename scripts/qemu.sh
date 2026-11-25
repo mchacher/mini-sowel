@@ -14,6 +14,8 @@
 # (`N devices (N reported)`), and the radio dropped no callback once the scenario started (`scenario:
 # started`, logged when its clock starts after the first loop turn); exit 1 and the last 40 lines of the serial output when
 # a limit is crossed, the firmware panics, reboots, or a line is missing within the time allowed.
+# The sim image also runs an update's whole installation on the thread the radio image runs it on
+# (D60): its three statuses must be right and at least 2 KB of that thread's stack stay unused.
 # QEMU is always stopped, also on Ctrl-C.
 # Installs QEMU into firmware/.embuild/ at the first run (a download, like ESP-IDF's).
 set -e
@@ -146,6 +148,9 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     fi
     echo "$(grep -a 'engine: ' "$LOG" | tail -n 1)"
     REASON=$(fw_check_engine "$LOG") || show_failure "$REASON"
+    grep -a 'update check: ' "$LOG" | tail -n 1
+    grep -a 'update: thread stack ' "$LOG" | tail -n 1
+    REASON=$(fw_check_update_stack "$LOG") || show_failure "$REASON"
     exit 0
   fi
   sleep 1
