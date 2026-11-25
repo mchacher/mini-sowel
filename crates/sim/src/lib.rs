@@ -7,7 +7,8 @@
 pub mod clock;
 pub mod devices;
 pub mod harness;
-mod memory;
+#[doc(hidden)] // public for the allocation test of the memory file only
+pub mod memory;
 pub mod ncp;
 pub mod scenario;
 pub mod transport;

@@ -178,7 +178,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
-| 2026-11-21 | Stream the loading of the home (its files are read whole and parsed: the largest transient of the engine's peak, 312 KB in QEMU); measure the peak again on the box | Spec 016 |
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
 | 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
@@ -220,7 +219,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | ESP32 Secure Boot V2 and flash encryption (eFuses, irreversible, D52): signed bootloader and application checked by the ROM; `box.sh identify` stops on a box that has them | Spec 032, D52 |
 | 2026-11-25 | Publishing a release: where the signed `.sup` is hosted, a manifest (version, size, digest), the `/solite-release` skill | Spec 032 |
 | 2026-11-25 | Key rotation: several public keys per build, a revocation list, what a box does when its key is lost (a USB flash today) | Spec 032 |
-| 2026-11-25 | The engine's heap peak in QEMU is 363 KB, above D27's 350 KB: `validate.sh`'s QEMU step fails on `main` at 98d38da already (reproduced from a clean `git archive`; the pull requests' CI skips QEMU, D34). Find which spec raised it from 312 KB (025 to 031) and bring it back under, or replace D27 with a measured ceiling | Spec 032 (found by its validate run) |
+| 2026-11-25 | Decide what the QEMU ceiling measures: the engine without the simulator (the box's image has none) or the bench with it; if without, take the simulator's allocations out of the phase figures (`firmware/src/simulated.rs:228-259`, `measure.rs:73-86`) and set a new ceiling from the measured figure | Fix of the 363 KB peak |
+| 2026-11-25 | Stream the home's loading for real: `Storage` returns a reader and `devices.json` and `equipments.json` are parsed with `from_reader` (the texts of 94 KB and 71 KB are read whole today, `engine/storage.rs:145-195`) | Fix of the 363 KB peak |
+| 2026-11-25 | Intern the texts of `DeviceData` and `DeviceOrder` (`key`, `category`, `unit`) so about a thousand small blocks leave the internal RAM (`devices/model.rs:313-347`) | Fix of the 363 KB peak |
+| 2026-11-25 | An internal-RAM threshold measured on the box with Wi-Fi up: the periodic `heap:` line also prints the largest free block (`core/src/memory.rs:117`), a floor written in `docs/memory-budget.md` | Fix of the 363 KB peak |
 
 ## Sowel issues to open
 
@@ -399,3 +401,4 @@ Every change to this roadmap: date, what changed, why.
   a Firmware update card (D52 to D54). J5's rollback note is met. Added: the box check in the tests
   to run (one USB flash, one OTA install, one image that panics), and the inbox lines for a release
   feed, Sowel's `system.update.*` events, Secure Boot V2, publishing a release, key rotation.
+- 2026-11-25: the QEMU peak of 363 KB (D27's ceiling 350 KB) came from the simulator's memory file, written whole by `to_string_pretty` (its text passed 32 KB with spec 031, the buffer doubled to 64 KB). Written in a stream now: 327 KB in QEMU, ceiling and D27 unchanged. Inbox: the QEMU ceiling's scope, the home's loading in a stream, interned device texts, an internal-RAM threshold on the box.
