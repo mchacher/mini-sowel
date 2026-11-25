@@ -536,6 +536,7 @@ name = "solite-sim"
 version = "0.1.0"
 dependencies = [
  "log",
+ "peak_alloc",
  "serde",
  "serde_json",
  "solite-core",

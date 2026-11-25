@@ -19,7 +19,7 @@ Wi-Fi or Ethernet driver loaded, so its internal RAM is an upper estimate too.
 | Home lock held per batch of measures, realistic home, one live client listening to everything (`measures`, `recompute`, `tick`, `run_recipes`: one turn of the engine's loop) | temperature report: 70 µs on average, 142 µs at most; motion report driving motion-light: 56 µs, 98 µs (spec 027, release build); on the box roughly 20 to 50 times longer, **E**, not measured | M, Mac: `cargo test --release -p solite-core --test lock_time -- --ignored --nocapture` |
 | Share of small allocations in the worst case at its peak | 673 KB in allocations of 4 KB or less, 267 KB above, 940 KB in all: the live bytes of the whole test process at the moment of its peak, which was the 925 KB measured then (spec 025) plus the 14 KB the process holds before the test starts | M, Mac, a counting allocator split by size at the peak, run once and not kept |
 | Free memory at boot, in QEMU | `memory: internal 359 KB free (largest block 160 KB), psram 2045 KB free of 2048 KB` | M, `sh scripts/qemu.sh` |
-| Engine, realistic home, on the 32-bit target (QEMU, with the simulator inside) | `engine: 50 devices (50 reported), 10 zones, 50 equipments, 3 recipes; heap 170 KB (peak 312 KB); internal 221 KB free (min 107 KB); psram 1985 KB free (min 1916 KB)`: 312 KB at the highest, 170 KB held at the end, the internal RAM never below 107 KB free | M, `sh scripts/qemu.sh` (spec 016, decision D26) |
+| Engine, realistic home, on the 32-bit target (QEMU, with the simulator inside) | `engine: 50 devices (50 reported), 10 zones, 50 equipments, 3 recipes; heap 176 KB (peak 327 KB); internal 221 KB free (min 95 KB); psram 1980 KB free (min 1916 KB)`: 327 KB at the highest, 176 KB held at the end, the internal RAM never below 95 KB free | M, `sh scripts/qemu.sh` (spec 016, decision D26) |
 
 The worst case counts, in its peak, the HTTP bodies (4 workers of the host, 16 KB each,
 `api::MAX_BODY_BYTES`), the live clients' queues (`live::MAX_CLIENTS` of 4, `MAX_QUEUED_BYTES`
@@ -102,19 +102,19 @@ none is counted.
 The firmware runs the engine on the simulated radio with the realistic home of D20 and prints
 the `engine:` line above. Reading it:
 
-- **Peak 312 KB** against the 350 KB ceiling of D27 (D20's 300 KB, above which the first run
-  went), 170 KB held when the scenario ends. The largest phase is the second (the recipes'
-  start and the simulator's build, 312 KB), then the load of the home (258 KB), the run itself
-  (197 KB) and the radio's identification (186 KB). The peak is an **upper bound** of the engine's: it counts the engine thread's 32 KB stack, the
+- **Peak 327 KB** (2026-11-25, after the simulator's memory file is written in a stream; 312 KB at spec 016, 363 KB while the file was built whole in a text of over 32 KB) against the 350 KB ceiling of D27 (D20's 300 KB, above which the first run
+  went), 176 KB held when the scenario ends. The largest phase is the second (the recipes'
+  start and the simulator's build, 327 KB), then the load of the home (258 KB), the run itself
+  (203 KB) and the radio's identification (192 KB). The peak is an **upper bound** of the engine's: it counts the engine thread's 32 KB stack, the
   simulator and its memory file, the load of the home from its files (the text of
   `devices.json`, 94 KB, and of `equipments.json`, 71 KB, are read whole and parsed: the largest
   transient, about 260 KB with the home), and the memory is read as the sum of the low
   watermarks of the internal RAM and the PSRAM, phase by phase (see D26). Both readings, the
-  whole run's (329 KB at the first run) and the per-phase one (312 KB), are upper bounds of the
+  whole run's (329 KB at the first run) and the per-phase one (327 KB), are upper bounds of the
   true peak; the per-phase one is the tighter and never below the true peak. The bound holds for
   what the run exercised: the realistic home, the scenario of `firmware/fixtures/`, no network. It is labelled "QEMU,
   with simulator" and measured on the box with the measuring image ("On the box", below).
-- **Internal RAM: 107 KB free at the lowest**, against the 64 KB floor of `scripts/qemu.sh`. This
+- **Internal RAM: 95 KB free at the lowest (107 KB at spec 016)**, against the 64 KB floor of `scripts/qemu.sh`. This
   run starts no network: the 70 KB the budget sets for Wi-Fi are not in the figure, and the
   margin that decides is the box's, with the network up ("On the box", below).
 - **`SPIRAM_MALLOC_ALWAYSINTERNAL`**: kept at 4096. At 512 the same run read a peak of 359 KB (sum
@@ -155,7 +155,7 @@ and becomes a line of the roadmap's inbox (or a decision for the ceiling): the l
 | Figure | Value | Where it comes from |
 | ------ | ----- | ------------------- |
 | Free memory at boot, box image | 359 KB internal RAM free (largest block 160 KB), 2045 KB of 2048 KB PSRAM free (2026-11-22) | `sh scripts/box.sh log --image box` (the `memory:` line) |
-| Engine, realistic home: heap peak, internal RAM minimum, PSRAM minimum | Heap peak 312 KB (QEMU: 312 KB), internal RAM minimum 107 KB free, PSRAM minimum 1916 KB free; 50 devices, 10 zones, 50 equipments, 3 recipes (2026-11-22) | `sh scripts/box.sh log --image sim` (the `engine:` line) |
+| Engine, realistic home: heap peak, internal RAM minimum, PSRAM minimum | Heap peak 312 KB (QEMU: 312 KB then, 327 KB on 2026-11-25), internal RAM minimum 107 KB free, PSRAM minimum 1916 KB free; 50 devices, 10 zones, 50 equipments, 3 recipes (2026-11-22) | `sh scripts/box.sh log --image sim` (the `engine:` line) |
 | FAT partition: size, use after the realistic home | 7964 KB; 208 KB used after the realistic home, kept at the next boot (2026-11-22) | `sh scripts/box.sh log --image sim` (the `storage-after:` line, logged after the last save; `storage:` is the boot value) |
 | Save stall: the longest save (file, KB) and the total | Longest save 3770 ms (`devices.json`, 98 KB); 51 saves in 172 s in all; 3945 ms for the one save of a second boot (2026-11-22). Above the 1 s limit: a line of the roadmap inbox | `sh scripts/box.sh log --image sim` (the `saves:` line) |
 | Internal RAM with Wi-Fi up | Measured on 2026-11-22, one device known, 10 s after `serving:`: `memory-network: internal 171 KB free (largest block 62 KB), psram 1904 KB free of 2048 KB`. The boot's `memory:` line showed 289 KB internal free, so Wi-Fi, the server and the engine's start took about 118 KB of internal RAM together (a difference of two snapshots, M). Not computed: the network's cost as a difference of two `heap:` minima (234 KB without Wi-Fi, minus a run's first `heap:` internal minimum) and the projection for the realistic home (107 KB minus that cost); until then, the network's cost is the estimate of the table above (70 KB, E) | `sh scripts/box.sh log --image radio` (the `heap:` and `memory-network:` lines) |

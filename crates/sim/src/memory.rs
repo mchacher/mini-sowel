@@ -278,7 +278,6 @@ pub fn save(file: &Path, memory: &Memory) -> Result<(), String> {
     {
         fs::create_dir_all(dir).map_err(|e| cannot(&e))?;
     }
-    let text = serde_json::to_string_pretty(memory).map_err(|e| cannot(&e))?;
     let temporary = temporary_path(file);
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -287,7 +286,12 @@ pub fn save(file: &Path, memory: &Memory) -> Result<(), String> {
     #[cfg(unix)]
     options.mode(0o600);
     let mut out = options.open(&temporary).map_err(|e| cannot(&e))?;
-    out.write_all(text.as_bytes()).map_err(|e| cannot(&e))?;
+    // Written in a stream through a small buffer: `to_string_pretty` doubles its text as it grows,
+    // and over 32 KB it held 32 + 64 KB at once, which broke the firmware run's memory ceiling.
+    let mut buffered = std::io::BufWriter::with_capacity(4096, &mut out);
+    serde_json::to_writer_pretty(&mut buffered, memory).map_err(|e| cannot(&e))?;
+    buffered.flush().map_err(|e| cannot(&e))?;
+    drop(buffered);
     out.sync_all().map_err(|e| cannot(&e))?;
     drop(out);
     // The content is complete: it takes the name `.new`. A rename onto an existing file is
