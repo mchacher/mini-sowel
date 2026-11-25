@@ -274,3 +274,121 @@ fn the_update_tools_refuse_to_be_mixed_with_the_radio_options_or_to_be_incomplet
     }
     assert!(!out.exists());
 }
+
+fn verify(file: &Path, public: &str) -> Output {
+    host(&[
+        "--update-verify".as_ref(),
+        file.as_os_str(),
+        "--public-key".as_ref(),
+        public.as_ref(),
+    ])
+}
+
+/// A file signed as 0.2.0 by a fresh key: the file, its public key, the image it holds.
+fn signed_file(dir: &Path) -> (PathBuf, String, Vec<u8>) {
+    let (key_file, public) = key(dir);
+    let image: Vec<u8> = (0..20_000u32)
+        .map(|i| u8::try_from(i % 251).unwrap())
+        .collect();
+    let out = dir.join("image.sup");
+    let output = sign(&image_file(dir, &image), "0.2.0", &key_file, &out);
+    assert!(output.status.success(), "{output:?}");
+    (out, public, image)
+}
+
+fn assert_refused(output: &Output, reason: &str) {
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    let text = stderr(output);
+    assert!(text.contains("update-verify:"), "{text}");
+    assert!(text.contains(reason), "{text}");
+    assert!(!stdout(output).contains("verified:"));
+}
+
+#[test]
+fn verify_accepts_a_file_signed_by_the_matching_key() {
+    let dir = temp();
+    let (file, public, image) = signed_file(&dir);
+    let output = verify(&file, &public);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        stdout(&output).contains(&format!(
+            "verified: {}, version 0.2.0, {} bytes, key {}",
+            file.display(),
+            image.len(),
+            &public[..8]
+        )),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn verify_refuses_another_keys_public_key() {
+    let dir = temp();
+    let (file, _, _) = signed_file(&dir);
+    let other = temp();
+    let (_, other_public) = key(&other);
+    assert_refused(&verify(&file, &other_public), "Invalid signature");
+}
+
+#[test]
+fn verify_refuses_a_changed_byte_of_the_image() {
+    let dir = temp();
+    let (file, public, _) = signed_file(&dir);
+    let mut bytes = std::fs::read(&file).unwrap();
+    bytes[500] ^= 1;
+    std::fs::write(&file, bytes).unwrap();
+    assert_refused(&verify(&file, &public), "SHA-256 differs");
+}
+
+#[test]
+fn verify_refuses_a_truncated_image_and_an_appended_byte() {
+    let dir = temp();
+    let (file, public, _) = signed_file(&dir);
+    let bytes = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &bytes[..bytes.len() - 1]).unwrap();
+    assert_refused(&verify(&file, &public), "shorter than the header says");
+    let mut longer = bytes.clone();
+    longer.push(0);
+    std::fs::write(&file, longer).unwrap();
+    assert_refused(&verify(&file, &public), "longer than the header says");
+}
+
+#[test]
+fn verify_refuses_a_file_shorter_than_the_header() {
+    let dir = temp();
+    let (file, public, _) = signed_file(&dir);
+    let bytes = std::fs::read(&file).unwrap();
+    std::fs::write(&file, &bytes[..127]).unwrap();
+    assert_refused(&verify(&file, &public), "shorter than the 128-byte header");
+}
+
+#[test]
+fn verify_refuses_a_bad_public_key_and_a_missing_file() {
+    let dir = temp();
+    let (file, public, _) = signed_file(&dir);
+    assert_refused(&verify(&file, &public[..63]), "not 64 hexadecimal");
+    assert_refused(&verify(&file, &"zz".repeat(32)), "not 64 hexadecimal");
+    assert_refused(&verify(&dir.join("missing.sup"), &public), "cannot read");
+}
+
+#[test]
+fn verify_needs_its_file_and_its_public_key_together() {
+    let dir = temp();
+    let (file, public, _) = signed_file(&dir);
+    for args in [
+        vec!["--update-verify".as_ref(), file.as_os_str()],
+        vec!["--public-key".as_ref(), public.as_ref()],
+        vec![
+            "--update-verify".as_ref(),
+            file.as_os_str(),
+            "--public-key".as_ref(),
+            public.as_ref(),
+            "--listen".as_ref(),
+        ],
+    ] {
+        let output = host(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+        assert!(stderr(&output).starts_with("usage:"));
+    }
+}

@@ -34,7 +34,8 @@ const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
 --sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
 [--data <dir>] | \
 --update-keygen <file> | \
---update-sign <image> --version <x.y.z> --key <file> --out <file>";
+--update-sign <image> --version <x.y.z> --key <file> --out <file> | \
+--update-verify <file> --public-key <64 hex>";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
 /// Port of `--serve` when it has no number.
@@ -78,7 +79,7 @@ struct Args {
     /// The folder of the interface's files (`--serve` only).
     ui: Option<PathBuf>,
     data: PathBuf,
-    /// `--update-keygen` or `--update-sign`: a task of its own, without a radio.
+    /// `--update-keygen`, `--update-sign` or `--update-verify`: a task of its own, without a radio.
     update: Option<update_cli::Command>,
 }
 
@@ -99,6 +100,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let mut data = None;
     // `--update-sign` and its three values.
     let (mut sign_image, mut sign_version, mut sign_key, mut sign_out) = (None, None, None, None);
+    // `--update-verify` and its public key.
+    let (mut verify_file, mut verify_key) = (None, None);
     let mut speed_given = false;
     let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
@@ -168,6 +171,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
                 }
             }
             "--update-sign" => sign_image = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--update-verify" => verify_file = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--public-key" => verify_key = Some(rest.next().ok_or_else(usage)?.clone()),
             "--version" => sign_version = Some(rest.next().ok_or_else(usage)?.clone()),
             "--key" => sign_key = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--out" => sign_out = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
@@ -195,6 +200,17 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     } else if sign_given.iter().any(|given| *given) {
         // One of `--update-sign`, `--version`, `--key`, `--out` without the others.
         return Err(usage());
+    }
+    match (verify_file, verify_key) {
+        (Some(file), Some(public_key)) => {
+            let command = update_cli::Command::Verify { file, public_key };
+            if parsed.update.replace(command).is_some() {
+                return Err(usage());
+            }
+        }
+        (None, None) => {}
+        // One of `--update-verify`, `--public-key` without the other.
+        _ => return Err(usage()),
     }
     // The update tools are a task of their own: no radio, no other mode.
     if parsed.update.is_some()

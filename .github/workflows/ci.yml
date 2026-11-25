@@ -34,10 +34,12 @@ jobs:
       - name: Rust, at the version pinned in rust-toolchain.toml
         run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      # Pinned like the composite action of release.yml: the keys are computed by the same version.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             . -> target
+          shared-key: rust
 
       - name: Validate
         run: sh scripts/validate.sh --only rust $SKIP_SLOW
@@ -98,10 +100,11 @@ jobs:
         working-directory: ui
         run: npm ci
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             firmware -> target
+          shared-key: firmware
 
       # The Xtensa toolchain espup installs (about 1.4 GB, a minute to download and unpack) and its
       # export file: restored from the cache when espup's version and the firmware's toolchain
