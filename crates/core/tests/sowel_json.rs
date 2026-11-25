@@ -505,3 +505,64 @@ fn the_root_zone_carries_the_sun_data_of_sowels_zone_aggregated_data() {
         "{text}"
     );
 }
+
+// ---- Spec 029: `User` and `AuthTokens` ----
+
+/// Sowel's `User` (`src/shared/types.ts`: id, username, displayName, role, preferences, enabled,
+/// `lastLoginAt`, `createdAt`) and `AuthTokens` (`src/auth/auth-service.ts`: accessToken,
+/// refreshToken, expiresIn, user), written by hand.
+#[test]
+fn an_account_serialises_as_sowels_user_and_auth_tokens() {
+    use solite_core::auth::{Account, AuthTokens, Language, PasswordHash};
+    use solite_core::devices::Id;
+
+    let account = Account {
+        id: Id::parse("01010101-0101-4101-8101-010101010101").unwrap(),
+        username: "admin".into(),
+        display_name: "Owner".into(),
+        language: Language::Fr,
+        created_at: T0,
+        password: PasswordHash::new("a password", [1; 16]),
+    };
+    let user = json!({
+        "id": "01010101-0101-4101-8101-010101010101",
+        "username": "admin",
+        "displayName": "Owner",
+        "role": "admin",
+        "preferences": {"language": "fr"},
+        "enabled": true,
+        "lastLoginAt": null,
+        "createdAt": "2026-11-21T09:12:03.120Z"
+    });
+    assert_eq!(serde_json::to_value(account.user(None)).unwrap(), user);
+    let mut logged = user.clone();
+    logged["lastLoginAt"] = json!("2026-11-21T09:12:04.120Z");
+    assert_eq!(
+        serde_json::to_value(account.user(Some(T0 + 1000))).unwrap(),
+        logged
+    );
+    let tokens = AuthTokens {
+        access_token: "a".repeat(32),
+        refresh_token: "b".repeat(32),
+        expires_in: 900,
+        user: account.user(None),
+    };
+    assert_eq!(
+        serde_json::to_value(&tokens).unwrap(),
+        json!({
+            "accessToken": "a".repeat(32),
+            "refreshToken": "b".repeat(32),
+            "expiresIn": 900,
+            "user": user
+        })
+    );
+    // English, as `UserPreferences.language` says.
+    let english = Account {
+        language: Language::En,
+        ..account
+    };
+    assert_eq!(
+        serde_json::to_value(english.user(None)).unwrap()["preferences"],
+        json!({"language": "en"})
+    );
+}

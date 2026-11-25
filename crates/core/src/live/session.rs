@@ -41,8 +41,8 @@ pub fn origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
 }
 
 /// The subprotocol to echo, from the values of the `Sec-WebSocket-Protocol` headers: the first
-/// offered that starts with `bearer.` (the browser drops the socket if it is not echoed; the
-/// token itself is not checked, decision D13).
+/// offered that starts with `bearer.` (the browser drops the socket if it is not echoed). The
+/// token is read by `bearer_token`.
 pub fn pick_subprotocol<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<String> {
     lines
         .into_iter()
@@ -51,6 +51,36 @@ pub fn pick_subprotocol<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<
         .find(|p| p.starts_with("bearer."))
         .map(str::to_string)
 }
+
+/// The token of a `/ws` upgrade (spec 029, R5.1, D49): the `Authorization: Bearer <token>` header
+/// if there is one, else the first offered subprotocol `bearer.<token>` other than `bearer.none`
+/// (the interface offers `bearer.none` first, for the box's server, which echoes a fixed
+/// subprotocol). `None` when there is none: the socket is closed 4001.
+pub fn bearer_token<'a>(
+    lines: impl IntoIterator<Item = &'a str>,
+    authorization: Option<&str>,
+) -> Option<String> {
+    if let Some(token) = authorization
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+    {
+        return Some(token.to_string());
+    }
+    lines
+        .into_iter()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter_map(|p| p.strip_prefix("bearer."))
+        .find(|token| !token.is_empty() && *token != "none")
+        .map(str::to_string)
+}
+
+/// The close code and reason of a socket that came without a token (R5.3).
+pub const CLOSE_UNAUTHENTICATED: u16 = 4001;
+/// The reason when no token was offered.
+pub const REASON_AUTHENTICATION_REQUIRED: &str = "Authentication required";
+/// The reason when the token is not a live access token.
+pub const REASON_INVALID_TOKEN: &str = "Invalid token";
 
 /// The reason text of a close frame.
 pub fn close_reason(code: u16) -> &'static str {

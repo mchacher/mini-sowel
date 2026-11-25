@@ -23,6 +23,7 @@ fn route(method: &str, path: &str, host: Option<&str>) -> Reply {
             port: PORT,
             reach: Reach::Loopback,
             content_type: None,
+            authorization: None,
             body: b"",
         },
         1_795_252_323_120,
@@ -139,6 +140,7 @@ fn box_reply(method: &str, path: &str, host: &str) -> Option<Reply> {
         port: 80,
         reach: Reach::Lan { name: BOX_NAME },
         content_type: None,
+        authorization: None,
         body: b"",
     })
 }

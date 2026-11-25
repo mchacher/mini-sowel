@@ -53,9 +53,10 @@ sh scripts/quiet.sh cargo build -p solite-host || exit 1
 ./target/debug/solite-host --sim scenarios/garage.json --serve "$port" --speed 10 --data "$data" >"$log" 2>&1 &
 host_pid=$!
 
-# Wait until it answers (at most 60 s).
+# Wait until it answers (at most 60 s): the status of the account needs no token (spec 029); the
+# browser test goes through the first-start screen itself.
 tries=0
-until curl -sf "http://127.0.0.1:$port/api/v1/zones" >/dev/null 2>&1; do
+until curl -sf "http://127.0.0.1:$port/api/v1/auth/status" >/dev/null 2>&1; do
   kill -0 "$host_pid" 2>/dev/null || { cat "$log" | tail -n 15; fail "the host stopped at start"; }
   tries=$((tries + 1))
   [ "$tries" -le 600 ] || fail "the host does not answer on port $port"

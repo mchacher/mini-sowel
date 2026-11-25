@@ -1188,6 +1188,7 @@ fn an_api_request_after_the_clock_set_moves_the_dates_before_the_statuses() {
             port: 8080,
             reach: Reach::Loopback,
             content_type: None,
+            authorization: None,
             body: b"",
         },
         T0,

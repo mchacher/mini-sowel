@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Menu, Shield, X } from "lucide-react";
+import { ChevronDown, ChevronRight, LogOut, Menu, Shield, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { FlatZone } from "../../zones";
 import { ADMIN_NAV_ITEMS, type AdminPage } from "./admin-nav-items";
 import { SidebarItem } from "./SidebarItem";
 import { SoliteLogo } from "./SoliteLogo";
 import { ZoneTree } from "./ZoneTree";
+import { useAuth } from "../../store/useAuth";
 
 /** The page shown: an administration page, or `null` for a room's page. */
 export type Page = AdminPage;
@@ -65,12 +66,28 @@ function AdminSection({ page, onPick }: { page: Page | null; onPick?: () => void
   );
 }
 
+/** Ends the session: the host forgets it, the tokens are cleared, the login screen shows. */
+function LogoutButton() {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={() => void useAuth.getState().logout()}
+      className="flex items-center gap-3 w-full px-3 py-1.5 mt-1 rounded-sm text-left text-text-secondary hover:bg-background hover:text-text transition-colors duration-150 ease-out"
+    >
+      <LogOut size={16} strokeWidth={1.5} className="flex-shrink-0" />
+      <span className="text-small font-medium truncate">{t("auth.logout")}</span>
+    </button>
+  );
+}
+
 function Nav({ zones, activeId, page, onPick }: Zones & { onPick?: () => void }) {
   const { t } = useTranslation();
   return (
     <nav aria-label={t("app.mainNav")} className="flex-1 overflow-y-auto py-3 px-2">
       <ZoneTree zones={zones} activeId={page ? null : activeId} onPick={onPick} />
       <AdminSection page={page ?? null} onPick={onPick} />
+      <LogoutButton />
     </nav>
   );
 }

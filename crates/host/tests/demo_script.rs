@@ -12,6 +12,8 @@ use std::time::Duration;
 
 const GARAGE: &str = "../../scenarios/garage.json";
 const SCRIPT: &str = "../../scripts/demo-garage.sh";
+/// The synthetic password of the tests' account.
+const PASSWORD: &str = "test-password-1234";
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// A host program that is killed and reaped when the test ends, however it ends.
@@ -101,15 +103,47 @@ fn run_script(port: u16) -> (bool, String, String) {
 
 /// The script with this argument (a port, or an address with an optional port).
 fn run_script_with(argument: &str) -> (bool, String, String) {
-    let output = Command::new("sh")
+    run_script_env(argument, Some(PASSWORD))
+}
+
+/// The script with the password in `SOLITE_PASSWORD` (or without it).
+fn run_script_env(argument: &str, password: Option<&str>) -> (bool, String, String) {
+    let mut command = Command::new("sh");
+    command
         .args([SCRIPT, argument])
-        .output()
-        .expect("sh runs the script");
+        .env_remove("SOLITE_PASSWORD");
+    if let Some(password) = password {
+        command.env("SOLITE_PASSWORD", password);
+    }
+    let output = command.output().expect("sh runs the script");
     (
         output.status.success(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
+}
+
+/// `curl` on the host, with this access token.
+fn get_with(port: u16, token: &str, path: &str) -> String {
+    let output = Command::new("curl")
+        .args(["-s", "-H", &format!("Authorization: Bearer {token}")])
+        .arg(format!("http://127.0.0.1:{port}/api/v1/{path}"))
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The access token of the account the script set up.
+fn login(port: u16) -> String {
+    let output = Command::new("curl")
+        .args(["-s", "-H", "Content-Type: application/json", "-d"])
+        .arg(format!(r#"{{"username":"admin","password":"{PASSWORD}"}}"#))
+        .arg(format!("http://127.0.0.1:{port}/api/v1/auth/login"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let tokens: serde_json::Value = serde_json::from_str(&text).expect(&text);
+    tokens["accessToken"].as_str().expect(&text).to_string()
 }
 
 #[test]
@@ -128,13 +162,8 @@ fn the_script_sets_the_garage_up_prints_the_ids_and_refuses_a_second_run() {
         assert!(out.contains(expected), "{expected:?} missing from:\n{out}");
     }
     // The zone, its three equipments and the recipe's instance exist.
-    let get = |path: &str| {
-        let output = Command::new("curl")
-            .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/{path}")])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout).into_owned()
-    };
+    let token = login(port);
+    let get = |path: &str| get_with(port, &token, path);
     assert!(get("zones").contains("\"Garage\""));
     assert!(get("equipments").matches("\"Garage ").count() >= 3);
     assert!(get("recipe-instances").contains("motion-light"));
@@ -154,11 +183,8 @@ fn an_address_with_a_port_sets_the_garage_up_as_a_port_alone_does() {
         out.contains("Garage light") && out.contains("instance  "),
         "{out}"
     );
-    let zones = Command::new("curl")
-        .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/zones")])
-        .output()
-        .unwrap();
-    assert!(String::from_utf8_lossy(&zones.stdout).contains("\"Garage\""));
+    let zones = get_with(port, &login(port), "zones");
+    assert!(zones.contains("\"Garage\""));
 }
 
 #[test]
@@ -194,7 +220,11 @@ fn host_refusing_equipments() -> u16 {
             let n = stream.read(&mut buffer).unwrap_or(0);
             let head = String::from_utf8_lossy(&buffer[..n]).into_owned();
             let line = head.lines().next().unwrap_or("").to_string();
-            let (status, body) = if line.starts_with("GET /api/v1/zones") {
+            let (status, body) = if line.starts_with("GET /api/v1/auth/status") {
+                ("200 OK", r#"{"setupRequired":false}"#.to_string())
+            } else if line.starts_with("POST /api/v1/auth/login") {
+                ("200 OK", r#"{"accessToken":"stub-token"}"#.to_string())
+            } else if line.starts_with("GET /api/v1/zones") {
                 ("200 OK", "[]".to_string())
             } else if line.starts_with("GET /api/v1/devices") {
                 let devices: Vec<String> = ["TH01", "MS01", "ZBMINIR2"]
@@ -275,7 +305,11 @@ fn host_with_real_devices() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>
             }
             let head = String::from_utf8_lossy(&raw).into_owned();
             let line = head.lines().next().unwrap_or("").to_string();
-            let body = if line.starts_with("GET /api/v1/zones") {
+            let body = if line.starts_with("GET /api/v1/auth/status") {
+                r#"{"setupRequired":false}"#.to_string()
+            } else if line.starts_with("POST /api/v1/auth/login") {
+                r#"{"accessToken":"stub-token"}"#.to_string()
+            } else if line.starts_with("GET /api/v1/zones") {
                 "[]".to_string()
             } else if line.starts_with("GET /api/v1/devices") {
                 let devices: Vec<String> = ["SNZB-03PR2", "ZBMINIR2"]
@@ -313,4 +347,55 @@ fn the_script_sets_the_garage_up_with_the_real_devices() {
     assert!(posts.contains("Garage light"), "{posts}");
     assert!(!posts.contains("Garage climate"), "{posts}");
     assert!(posts.contains("recipe-instances"), "{posts}");
+}
+
+#[test]
+fn without_the_password_the_script_says_so_and_exits_2_before_any_request() {
+    let (_host, port, _data) = serving();
+    let output = Command::new("sh")
+        .args([SCRIPT, &port.to_string()])
+        .env_remove("SOLITE_PASSWORD")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        err.contains("demo-garage: set SOLITE_PASSWORD (the password of the box)"),
+        "{err}"
+    );
+    // Nothing was done: the host is still fresh.
+    let status = Command::new("curl")
+        .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/auth/status")])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&status.stdout),
+        r#"{"setupRequired":true}"#
+    );
+}
+
+#[test]
+fn on_a_set_up_host_the_script_logs_in_and_a_wrong_password_is_refused_with_exit_1() {
+    let (_host, port, _data) = serving();
+    // The first run sets the account up; the second logs in (and finds the garage).
+    let (ok, out, err) = run_script(port);
+    assert!(ok, "{out}\n{err}");
+    let (ok, _, err) = run_script(port);
+    assert!(!ok);
+    assert!(err.contains("a zone named Garage exists already"), "{err}");
+    // A wrong password: the host's text, exit 1, the password nowhere in the output.
+    let wrong = "wrong-password-9876";
+    let output = Command::new("sh")
+        .args([SCRIPT, &port.to_string()])
+        .env("SOLITE_PASSWORD", wrong)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&output.stderr);
+    let out = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        err.contains("login refused (401): Invalid credentials"),
+        "{err}"
+    );
+    assert!(!err.contains(wrong) && !out.contains(wrong), "{err}{out}");
 }

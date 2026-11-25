@@ -25,7 +25,7 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 | E3a | The box's first flash (spec 020): `scripts/box.sh` identifies the Dongle Max, saves its original firmware, restores it once, flashes the box's image and a measuring image (the realistic home, saves written to the flash and timed), checks their boot log; the free memory at boot, the engine's peak, the FAT partition and the save stall measured on the box | The backup restored and the radio seen again over TCP; both images boot; the figures are in `docs/memory-budget.md` | script and tests built (spec 020); the run on the box needs the user's yes for each write |
 | E3b | The radio over the serial link (UART): the engine on the real radio in the box; the serial link's buffers measured | A motion sensor paired and its measures seen, the radio driven by the box | done on the box 2026-11-22 (spec 021): radio at 115200 baud, network resumed, SNZB-03PR2 paired and its measures read. Not run: the 10-minute capture (4 minutes), a second boot, the booting-marker and power-cut cases, the restart ladder, a forming of a network, the ZBMINIR2 |
 | E3c | The network (Wi-Fi; Ethernet is E3e), the HTTP and WebSocket API, the interface served by the box (precompressed), configured by `scripts/demo-garage.sh`; the internal RAM with Wi-Fi up and the 33 requests of an equipment with 16 + 16 bindings measured | The interface of the box opened from the Mac, the garage set up through the API | done 2026-11-22: garage set up through the API, motion switched the ZBMINIR2, `/ws` live in a browser, pairing by `box.sh pair`; the 33 requests never `Busy` but over 10 s in seven runs of eight, one request lost in two (inbox); lost link, clock line and error cases not run (see spec 023) |
-| E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings also written through the serial console, `box.sh wifi`, specs 022 and 023); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) stays disabled in the box (404) until J4's password exists | The garage runs in the box for a day, Mac off | |
+| E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings also written through the serial console, `box.sh wifi`, specs 022 and 023); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) answers on the box behind the token (spec 029, D49) | The garage runs in the box for a day, Mac off | |
 | E3e | Ethernet (the IP101, RMII, pins of `docs/hardware.md`): a cable at boot under `auto` means Ethernet, the same server; the Ethernet memory figure measured | The box's interface opened over a cable, Wi-Fi settings absent | |
 
 ### Order of work while the box is away (from 2026-11-25)
@@ -34,8 +34,7 @@ E3d and E3e need the box, so the work goes on in the core and the interface, tes
 this order (each through `/solite-feature` or `/solite-fix`):
 
 1. A batch of core fixes: done (spec 028).
-2. J4: the password at commissioning, mirroring Sowel's authentication (the button's confirmation
-   is written in the core and checked later on the box).
+2. J4: the password at commissioning: built (spec 029); its box checks are in the list below.
 3. J2: equipments from the interface (detail page, bindings one by one, enable and disable).
 4. The colour cluster `0x0300` with a simulated bulb, then J5 (signed updates, the core part).
 
@@ -44,7 +43,7 @@ this order (each through `/solite-feature` or `/solite-fix`):
 One session, the user present, after their yes to flash (D6), saves held and flushed once (D39:
 no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a row above.
 
-- Spec 025: flash the radio image; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'`
+- Spec 025: flash the radio image; `SOLITE_PASSWORD=<password> box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'`
   (33 requests, one flush); `box.sh log --image radio --seconds 60 --budget 1`.
 - Spec 026: inside `box.sh saves --budget 2`, `PUT /api/v1/settings` (location, time zone) and
   `POST /api/v1/backup`; local sun times in `GET /api/v1/zones/aggregation`; by day, motion does
@@ -59,8 +58,14 @@ no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a 
   for it).
 - Spec 028: a device heard before the clock is set (a boot with the ZBMINIR2 powered) shows a
   real `lastSeen` in `GET /api/v1/devices` after the clock, and stays `online`.
-- Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and, once J4 is built, the
-  button's confirmation.
+- Spec 029 (J4): within 10 minutes of a power-on, the interface asks for the password; the setup
+  inside `box.sh saves --budget 1` (one write of `auth.json`); one login timed (PBKDF2 at 10 000
+  iterations, expected 0.5 to 1 s); `/ws` live in the browser with the token (4001 without it, no
+  token in the serial log); Discovery's "Add a device" opens pairing from the interface; the 11th
+  login in a minute answers 429; a software restart asks to log in again and keeps the account.
+- Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
+  (its pin; a short press confirms through `ButtonPresence`, a long press calls
+  `Home::factory_reset`; spec 029, D48).
 
 ## Next milestone
 
@@ -75,7 +80,7 @@ in a real annex without intervention (the true north's test).
 | J1 | Add a device from the interface: pairing while serving, per integration (Administration › Discovery), the device appears live and named; it has no room of its own (the room is its equipment's, J2) | The ZBMINIR2 is added without a terminal | |
 | J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | |
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
-| J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | |
+| J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | built 2026-11-25 (spec 029): Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, factory reset, first-start and login screens; the confirmation is the 10 minutes after a power-on until the button is wired; box check pending |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
 | J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | built 2026-11-24 (spec 026): settings, sun times on the root zone, Settings page, export and import of the settings and zones; the box run is pending (inbox) |
 
@@ -165,14 +170,13 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | An equipment enabled or disabled from the interface (`PUT {"enabled"}` exists) | Spec 018 |
 | 2026-11-22 | mDNS on the box (`solite-xxxxxx.local` without the router's help) | Spec 023 |
 | 2026-11-22 | The server in QEMU through `open_eth`, so the serving path is tested without the box | Spec 023 |
-| 2026-11-22 | Sowel's bearer token on the box's `/ws` (only `bearer.none` is echoed until J4) | Spec 023 |
 | 2026-11-22 | The realistic home measured on the radio image with Wi-Fi and the server up (the radio image seeded from `firmware/fixtures/`), so the "Internal RAM with Wi-Fi up" row stops being a subtraction for it | Spec 023 |
 | 2026-11-22 | The 33 requests of `measure-api.sh` on the box: eight runs, no `Busy`, totals 9.0 to 22.3 s against 10 s (rising over the runs), each creation 0.15 to 0.65 s (GETs about 0.05 s), likely the save to flash at every write; in two runs one request got no answer at all (curl status 000; 60 zone creations and deletions in a row lost none). Find where the time goes and why a connection is lost, before E3d's day-long run | Spec 023 run |
 | 2026-11-22 | Investigate on the box the `devices.json` save (98 KB): it blocks the radio loop 3.8 s, 51 saves in 172 s in the realistic home. Accepted: a message may be lost while a save runs; what counts is the performance in normal running. Leads: one file per device, the radio on its own core, apart from the engine and the writer (a flash write stalls both cores for tens of ms, and the serial chip holds 128 bytes: about 11 ms at 115200 baud, so a large buffer is needed), where the time goes (erase, write, rename); UART interrupt in internal RAM (E3b) | Spec 020 |
 | 2026-11-22 | `box.sh backup` prints `tr: stdout: Broken pipe` after a valid backup (cosmetic); the radio and the Wi-Fi of E3 settle the original firmware version, unread in E3a | Spec 020 |
 | 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
-| 2026-11-22 | Replace the pairing windows of the box (180 s at a power-on boot, and the serial console's `pair` over the cable, D36) by the button or the authenticated route (J4) | Spec 021, D36 |
+| 2026-11-22 | Remove the box's pairing windows at a power-on boot and from the serial console's `pair` (D32, D36) once the button is wired: the authenticated route exists (spec 029, D49) | Spec 021, D36, spec 029 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
 | 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
 | 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
@@ -180,7 +184,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | Run the pending box checks of spec 023: the lost link (access point off), no 1970 date on the flash after a boot with the access point off, a wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered relay, the console's long and unknown lines, a client that stops reading, the power-on cases with the access point or its Internet off | Spec 023 |
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); looked at again in J6 (spec 026): kept, and the aggregation, GET included, also emits `sunlight.changed` when the sun data changed | Architecture review 2026-11-22 |
-| 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
+| 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `SOLITE_PASSWORD=<password> box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
 | 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 2`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
 | 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
 | 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
@@ -191,6 +195,10 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-24 | Behaviour for more of Sowel's types (door, gate, awning, water valve, heater, meters): their binding rules, Sowel's zone counts (`doorsTotal`, `waterValvesTotal`...), and the rules of the seven equipment fields refused on `PUT` (D43) | Spec 027 |
 | 2026-11-24 | Proposals exposed when milestone C starts (pair a sensor, pick the room): `equipments::propose` is internal until then, Sowel has no route for it | Spec 027 |
 | 2026-11-22 | Two-core rule, kept as is (engine, radio, UART interrupt and saver on core 1; Wi-Fi, lwIP, HTTP server and workers, live thread and console on core 0): a future history or MQTT thread goes on core 0 at priority 5 at most; the engine never goes to core 0 (Wi-Fi 23, lwIP 18) and gets no higher priority without a blocking read (idle-task watchdog on core 1) | Architecture review 2026-11-22 |
+| 2026-11-25 | Password change (Sowel's `PUT /api/v1/me/password`) from the interface | Spec 029 |
+| 2026-11-25 | A factory reset that also erases the Wi-Fi settings (`wifi.json`) and leaves the Zigbee network (forgets `zigbee.json`'s keys), so EN 18031-2's deletion is whole | Spec 029, D48 |
+| 2026-11-25 | The ESP32's SHA accelerator for the password hash, through an adapter, to raise PBKDF2's iterations | Spec 029, D47 |
+| 2026-11-25 | A rate limit per client address on the box (one counter today: a device of the home network can keep the owner from logging in while it tries) | Spec 029, D47 |
 
 ## Sowel issues to open
 
@@ -345,3 +353,8 @@ Every change to this roadmap: date, what changed, why.
   device's zone change (no event, as Sowel) closed. Lines removed: the clock wait's `lastSeen`,
   the device removal, `set_device_zone`, the deleted motion sensor, the button's device. New line:
   the other dates of the clock wait.
+- 2026-11-25: spec 029 (J4) built on the Mac (the user away): one account set at first start,
+  Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, sessions in
+  RAM, factory reset, first-start and login screens (D47 to D49). Lines removed: the bearer on
+  `/ws`; rewritten: the box's pairing windows. New lines: password change, a whole factory reset,
+  the SHA accelerator, a rate limit per address; J4's box checks added to the list.

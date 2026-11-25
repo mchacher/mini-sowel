@@ -28,6 +28,7 @@ use esp_idf_svc::sys::{
     heap_caps_get_minimum_free_size, uxTaskGetStackHighWaterMark2,
 };
 use solite_core::HeapStats;
+use solite_core::auth::BootPresence;
 use solite_core::devices::lock;
 use solite_core::engine::{
     self, Clocks, DEFINITION_DELAY_MS, RunError, SaveControl, Saver, Storage, load_home,
@@ -301,6 +302,12 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
         // first moment, API calls included (as `crates/host/src/serve.rs` does).
         let mut guard = lock(&home);
         guard.orders().set_clock(Arc::new(mono));
+        // The box asks for a first password only within ten minutes of a power-on (spec 029 R6):
+        // a software restart or a crash never opens the setup to the home's network.
+        guard.set_presence(BootPresence::new(
+            reset_reason() == ResetReason::PowerOn,
+            Arc::new(mono),
+        ));
         guard.start_recipes(mono(), wall_ms());
     }
     if let Some(events) = events {

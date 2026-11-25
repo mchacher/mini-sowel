@@ -10,8 +10,8 @@
 //!
 //! Locks, in the order they may be taken: the home, then the orders' queue, then the live hub
 //! (the home emits events while it is held). The random source comes after the home. A
-//! WebSocket client's thread takes the hub only, never the home, so no client can hold up the
-//! radio loop or the API.
+//! WebSocket client's thread takes the home once, to check its token, then the hub only, so no
+//! client can hold up the radio loop or the API.
 
 use std::io::{self, Read};
 use std::net::TcpListener;
@@ -22,9 +22,10 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use solite_core::api::{
-    ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_stream,
+    ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_guarded,
     order_response,
 };
+use solite_core::auth::AlwaysConfirmed;
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
@@ -151,17 +152,22 @@ fn answer(
         .iter()
         .find(|h| h.field.equiv("Content-Type"))
         .map(|h| h.value.to_string());
+    let authorization = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Authorization"))
+        .map(|h| h.value.to_string());
     // One byte more than allowed is enough to see that the body is too long.
     let mut body = Vec::new();
     let _ = request
         .as_reader()
         .take(MAX_BODY_BYTES as u64 + 1)
         .read_to_end(&mut body);
+    // The core takes and lets go of the home itself (a password hash runs without it).
     let reply = {
-        let mut guard = lock(home);
         let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
-        handle_stream(
-            &mut guard,
+        handle_guarded(
+            home,
             &Request {
                 method: &method,
                 path: &path,
@@ -169,6 +175,7 @@ fn answer(
                 port,
                 reach: Reach::Loopback,
                 content_type: request_type.as_deref(),
+                authorization: authorization.as_deref(),
                 body: &body,
             },
             now_ms(),
@@ -268,6 +275,8 @@ pub fn serve<T: RadioTransport>(
         // first moment, API calls included.
         let mut guard = lock(&home);
         guard.orders().set_clock(Arc::new(monotonic_ms));
+        // At the host the person is at the keyboard: no button to press (spec 029 R6).
+        guard.set_presence(AlwaysConfirmed);
         guard
             .pairing_mut()
             .set_grace_ms(u64::try_from(crate::close_grace().as_millis()).unwrap_or(u64::MAX));
@@ -287,6 +296,7 @@ pub fn serve<T: RadioTransport>(
         backend,
         ws: Context {
             hub: lock(&home).live(),
+            home: Arc::clone(&home),
             port,
             stop: Arc::clone(&clients_stop),
             active: Arc::clone(&clients),

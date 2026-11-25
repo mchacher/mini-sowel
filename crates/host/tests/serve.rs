@@ -87,7 +87,13 @@ struct Serving {
     port: u16,
     lines: Receiver<String>,
     shown: Vec<String>,
+    /// The access token of the account the helper set up or logged in (empty when bare).
+    token: String,
 }
+
+/// The synthetic password of the tests' account.
+const USERNAME: &str = "admin";
+const PASSWORD: &str = "test-password-1234";
 
 fn serve(dir: &Path, speed: &str, extra: &[&str]) -> Serving {
     serve_scenario(dir, GARAGE, speed, extra)
@@ -106,6 +112,22 @@ fn serve_scenario(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Se
 }
 
 fn try_serve(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Option<Serving> {
+    let mut serving = try_serve_bare(dir, scenario, speed, extra)?;
+    serving.sign_in();
+    Some(serving)
+}
+
+/// Starts the host without setting an account up or logging in (the auth tests).
+fn serve_bare(dir: &Path, speed: &str, extra: &[&str]) -> Serving {
+    for _ in 0..5 {
+        if let Some(serving) = try_serve_bare(dir, GARAGE, speed, extra) {
+            return serving;
+        }
+    }
+    panic!("the host could not listen on a free port in five tries");
+}
+
+fn try_serve_bare(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Option<Serving> {
     let port = free_port();
     let mut child = host()
         .args([
@@ -137,6 +159,7 @@ fn try_serve(dir: &Path, scenario: &str, speed: &str, extra: &[&str]) -> Option<
         port,
         lines,
         shown: Vec::new(),
+        token: String::new(),
     };
     loop {
         match serving.lines.recv_timeout(Duration::from_secs(20)) {
@@ -176,6 +199,31 @@ impl Drop for Serving {
 }
 
 impl Serving {
+    /// Sets the account up on a fresh host, or logs in to the one the data folder holds; keeps
+    /// the access token, which every later request carries.
+    fn sign_in(&mut self) {
+        let (status, body) = self.get("/api/v1/auth/status");
+        assert_eq!(status, 200, "{body}");
+        let fresh = serde_json::from_str::<Value>(&body).unwrap()["setupRequired"] == true;
+        let (route, payload) = if fresh {
+            (
+                "setup",
+                serde_json::json!({"username": USERNAME, "password": PASSWORD, "displayName": "Admin"}),
+            )
+        } else {
+            (
+                "login",
+                serde_json::json!({"username": USERNAME, "password": PASSWORD}),
+            )
+        };
+        let (status, text) = self.post(&format!("/api/v1/auth/{route}"), &payload.to_string());
+        assert!(status == 200 || status == 201, "{route}: {status} {text}");
+        self.token = serde_json::from_str::<Value>(&text).unwrap()["accessToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    }
+
     /// Sends a request and returns (status, body); a chunked body is decoded.
     fn request(&self, method: &str, path: &str, host: &str, body: &str) -> (u16, String) {
         let (status, _, body) = self.request_full(method, path, host, body);
@@ -206,9 +254,10 @@ impl Serving {
         stream
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
+        let auth = self.authorization();
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: {content_type}\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
         .unwrap();
@@ -225,6 +274,15 @@ impl Serving {
             body.to_string()
         };
         (status, head.to_string(), body)
+    }
+
+    /// The `Authorization` line of a request (nothing when there is no token).
+    fn authorization(&self) -> String {
+        if self.token.is_empty() {
+            String::new()
+        } else {
+            format!("Authorization: Bearer {}\r\n", self.token)
+        }
     }
 
     fn get(&self, path: &str) -> (u16, String) {
@@ -860,12 +918,13 @@ fn the_new_routes_refuse_a_foreign_host_and_answer_json_errors_over_http() {
     let handles: Vec<_> = (0..6)
         .map(|i| {
             let port = serving.port;
+            let auth = serving.authorization();
             thread::spawn(move || {
                 let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
                 let body = format!(r#"{{"name":"Zone {i}"}}"#);
                 write!(
                     stream,
-                    "POST /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "POST /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 )
                 .unwrap();
@@ -1008,18 +1067,24 @@ fn light_on(serving: &Serving, model: &str, kind: &str) -> String {
 }
 
 fn order(serving: &Serving, equipment: &str, alias: &str, body: &str) -> (u16, Value) {
-    post_order(serving.port, equipment, alias, body)
+    post_order(
+        serving.port,
+        &serving.authorization(),
+        equipment,
+        alias,
+        body,
+    )
 }
 
 /// `POST .../orders/<alias>` on a port (a thread has no `Serving`).
-fn post_order(port: u16, equipment: &str, alias: &str, body: &str) -> (u16, Value) {
+fn post_order(port: u16, auth: &str, equipment: &str, alias: &str, body: &str) -> (u16, Value) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
         .unwrap();
     write!(
         stream,
-        "POST /api/v1/equipments/{equipment}/orders/{alias} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST /api/v1/equipments/{equipment}/orders/{alias} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     )
     .unwrap();
@@ -1237,9 +1302,9 @@ fn a_third_order_is_busy_and_reads_are_still_served_while_two_wait_on_a_silenced
     let light = light_on(&serving, "ZBMINIR2", "light_onoff");
     let mut waiting = Vec::new();
     for _ in 0..2 {
-        let (port, light) = (serving.port, light.clone());
+        let (port, light, auth) = (serving.port, light.clone(), serving.authorization());
         waiting.push(thread::spawn(move || {
-            post_order(port, &light, "state", r#"{"value":true}"#)
+            post_order(port, &auth, &light, "state", r#"{"value":true}"#)
         }));
         thread::sleep(Duration::from_millis(200));
     }
@@ -1362,8 +1427,9 @@ fn an_order_is_answered_while_slow_clients_hold_the_long_lists_open() {
         let mut stream = TcpStream::connect(("127.0.0.1", serving.port)).unwrap();
         write!(
             stream,
-            "GET /api/v1/equipments HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-            serving.port
+            "GET /api/v1/equipments HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{}Connection: close\r\n\r\n",
+            serving.port,
+            serving.authorization()
         )
         .unwrap();
         slow.push(stream);
@@ -1673,4 +1739,57 @@ fn a_device_being_paired_cannot_be_deleted_and_a_finished_one_can() {
     }
     assert_eq!(status, 204);
     assert_eq!(serving.interrupt(), Some(130));
+}
+
+// ---- Spec 029: the password at commissioning ----
+
+#[test]
+fn a_fresh_host_is_403_setup_then_401_without_a_token_and_200_with_one() {
+    let dir = data_dir();
+    let mut serving = serve_bare(&dir, "100", &[]);
+    let (status, body) = serving.get("/api/v1/devices");
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&body).unwrap(),
+        serde_json::json!({"error": "Setup required", "setupRequired": true})
+    );
+    let (status, body) = serving.get("/api/v1/auth/status");
+    assert_eq!((status, body.as_str()), (200, r#"{"setupRequired":true}"#));
+    // The interface's files and the status need no token.
+    serving.sign_in();
+    let token = serving.token.clone();
+    assert_eq!(serving.get("/api/v1/devices").0, 200);
+    serving.token = String::new();
+    let (status, body) = serving.get("/api/v1/devices");
+    assert_eq!(status, 401, "{body}");
+    assert!(body.contains("Authentication required"), "{body}");
+    serving.token = token;
+    assert_eq!(serving.get("/api/v1/devices").0, 200);
+    let (status, body) = serving.get("/api/v1/auth/status");
+    assert_eq!((status, body.as_str()), (200, r#"{"setupRequired":false}"#));
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn restarting_keeps_the_account_the_old_token_is_401_and_a_login_is_200() {
+    let dir = data_dir();
+    let mut first = serve_bare(&dir, "100", &[]);
+    first.sign_in();
+    let old = first.token.clone();
+    assert_eq!(first.interrupt(), Some(130));
+    assert!(dir.join("auth.json").exists(), "the account was written");
+    let text = std::fs::read_to_string(dir.join("auth.json")).unwrap();
+    assert!(!text.contains(PASSWORD), "the password is not in the file");
+    let mut second = serve_bare(&dir, "100", &[]);
+    let (status, body) = second.get("/api/v1/auth/status");
+    assert_eq!((status, body.as_str()), (200, r#"{"setupRequired":false}"#));
+    second.token = old;
+    assert_eq!(
+        second.get("/api/v1/devices").0,
+        401,
+        "sessions are not kept"
+    );
+    second.sign_in();
+    assert_eq!(second.get("/api/v1/devices").0, 200);
+    assert_eq!(second.interrupt(), Some(130));
 }

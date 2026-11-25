@@ -27,6 +27,13 @@ of 8 KB each, one batch in flight each), the orders queues, and the radio's queu
 (48 KB, **E**: the radio is not driven by that test). The test's header lists every `pub const
 MAX_*` of the core and how it is reached; a test fails when one is missing.
 
+The account (spec 029) is small and not driven by the worst case: at most 8 sessions of 72 bytes
+(`auth::MAX_SESSIONS`) and 10 attempt times of 8 bytes (`auth::MAX_ATTEMPTS`), in RAM only, about
+700 bytes beside the home, and one account of about 250 bytes. The password hash keeps under 1 KB
+on the stack of the HTTP worker that runs it (inside its 10 KB), nothing on the heap that grows; it
+takes about 0.5 to 1 s on the box (**E**, from software SHA-256 at 240 MHz, D47: one login timed on
+the box is a pending check).
+
 ## PSRAM, 2048 KB
 
 | Item | Bound | Worst case | Where | M / E |

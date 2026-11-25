@@ -276,7 +276,9 @@ fn without_a_built_interface_the_api_still_serves_and_the_root_says_to_build() {
         answer.text(),
         r#"{"error":"Interface not built: run npm run build in ui/"}"#
     );
-    assert_eq!(serving.get("/api/v1/devices").status, 200);
+    // The status of the account needs no token (the devices do: spec 029).
+    assert_eq!(serving.get("/api/v1/auth/status").status, 200);
+    assert_eq!(serving.get("/api/v1/devices").status, 403);
 }
 
 #[test]

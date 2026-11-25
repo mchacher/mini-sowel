@@ -4,6 +4,8 @@ import { App } from "./App";
 import { setLanguage } from "./i18n";
 import {
   FakeWebSocket,
+  openSocket,
+  storeSession,
   aggregate,
   homeRoutes,
   installFakeWebSocket,
@@ -37,8 +39,9 @@ const nav = () => screen.getByRole("navigation");
 
 async function boot(home: Parameters<typeof homeRoutes>[0]) {
   const api = mockApi(homeRoutes(home));
+  storeSession();
   render(<App />);
-  act(() => FakeWebSocket.last.open());
+  await openSocket();
   await waitFor(() => expect(api.count("GET /api/v1/zones")).toBe(1));
   return api;
 }
@@ -128,8 +131,9 @@ describe("App", () => {
     let zones = tree();
     routes["GET /api/v1/zones"] = () => ({ body: zones });
     mockApi(routes);
+    storeSession();
     render(<App />);
-    act(() => FakeWebSocket.last.open());
+    await openSocket();
     expect(await screen.findByRole("heading", { level: 1, name: "House" })).toBeTruthy();
     zones = [zone("root", "Home", [zone("garage", "Garage", [], "root")])];
     act(() =>
@@ -196,9 +200,14 @@ describe("App", () => {
   });
 
   it("shows the text of a store whose fetch failed", async () => {
-    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
+    const routes = homeRoutes({ zones: tree() });
+    routes["GET /api/v1/zones"] = () => {
+      throw new TypeError("Failed to fetch");
+    };
+    mockApi(routes);
+    storeSession();
     render(<App />);
-    act(() => FakeWebSocket.last.open());
+    await openSocket();
     expect(await screen.findByText("Cannot reach Solite")).toBeTruthy();
   });
 
@@ -300,5 +309,70 @@ describe("App", () => {
     for (const name of ["Devices", "Equipments", "Topology", "Discovery", "Settings"]) {
       expect(within(nav()).queryByRole("link", { name })).toBeNull();
     }
+  });
+});
+
+describe("App, the gate (spec 029)", () => {
+  it("setupRequired: the first-start screen, no home", async () => {
+    mockApi({ "GET /api/v1/auth/status": { body: { setupRequired: true } } });
+    render(<App />);
+    expect(await screen.findByText("Set up your Solite")).toBeTruthy();
+    expect(FakeWebSocket.instances).toEqual([]);
+  });
+
+  it("no stored token: the login screen, no socket", async () => {
+    mockApi(homeRoutes({ zones: tree() }));
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeTruthy();
+    expect(FakeWebSocket.instances).toEqual([]);
+  });
+
+  it("a stored token: the home, the socket offers the new token", async () => {
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    expect(await screen.findByRole("navigation")).toBeTruthy();
+    expect(FakeWebSocket.last.protocol).toEqual(["bearer.none", "bearer.access-1"]);
+  });
+
+  it("a stored token the host refuses: the login screen", async () => {
+    storeSession();
+    mockApi({
+      ...homeRoutes({ zones: tree() }),
+      "POST /api/v1/auth/refresh": {
+        status: 401,
+        body: { error: "Invalid or expired refresh token" },
+      },
+    });
+    render(<App />);
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeTruthy();
+  });
+
+  it("a 403 setupRequired from a route shows the first-start screen", async () => {
+    const routes = homeRoutes({ zones: tree() });
+    routes["GET /api/v1/zones"] = {
+      status: 403,
+      body: { error: "Setup required", setupRequired: true },
+    };
+    mockApi(routes);
+    storeSession();
+    render(<App />);
+    await openSocket();
+    expect(await screen.findByText("Set up your Solite")).toBeTruthy();
+    expect(localStorage.getItem("sowel_refresh_token")).toBeNull();
+  });
+
+  it("Log out leads to the login screen and closes the socket", async () => {
+    const api = await boot({ zones: tree() });
+    api.calls.length = 0;
+    const socket = FakeWebSocket.last;
+    fireEvent.click(within(nav()).getByRole("button", { name: "Log out" }));
+    expect(await screen.findByRole("button", { name: "Log in" })).toBeTruthy();
+    await waitFor(() => expect(socket.readyState).toBe(3));
+  });
+
+  it("an unreachable host: a message and a retry", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
+    render(<App />);
+    expect(await screen.findByText("Cannot reach Solite")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 });

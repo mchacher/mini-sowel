@@ -1,5 +1,5 @@
 // Ported from Sowel ui/src/pages/SettingsPage.tsx, `HomeSettingsSection` (Sowel commit 5da84dc1,
-// UI 1.87.0), spec 026. Changes: the page holds the Home card and a Backup card only; the time zone
+// UI 1.87.0), spec 026. Changes: the page holds the Home card, a Backup card and a factory reset card (spec 029); the time zone
 // is a select over `GET /api/v1/settings/timezones` (D41) in place of Sowel's read-only source line;
 // no restart toast (the box applies a new location at once); a "Today" line from the root zone's
 // aggregation; the backup is Solite's own (D42).
@@ -14,6 +14,7 @@ import {
   updateSettings,
   type ImportResult,
 } from "../../api";
+import { useAuth } from "../../store/useAuth";
 import { useZoneAggregation } from "../../store/useZoneAggregation";
 import { useZones } from "../../store/useZones";
 import { formErrorText } from "../../lib/form-error";
@@ -64,6 +65,7 @@ export function SettingsPage() {
       <div className="space-y-6 max-w-[640px]">
         <HomeSettingsSection />
         <BackupSection />
+        <FactoryResetSection />
       </div>
     </div>
   );
@@ -362,6 +364,60 @@ function BackupSection() {
             </button>
             <button type="button" onClick={doImport} className={BUTTON_PRIMARY}>
               {t("settings.import")}
+            </button>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+/** Solite's own (spec 029, R9.7): erases the home and the password; the host may ask for the box's button. */
+function FactoryResetSection() {
+  const { t } = useTranslation();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reset = async () => {
+    setConfirming(false);
+    setBusy(true);
+    setError(null);
+    try {
+      // Success: the store clears the tokens and the App shows the first-start screen.
+      await useAuth.getState().factoryReset();
+    } catch (err) {
+      setError(formErrorText(err, t));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card p-5">
+      <h2 className="text-body font-semibold text-text mb-1">{t("settings.factoryReset")}</h2>
+      <p className="text-caption text-text-tertiary mb-4">
+        {t("settings.factoryResetDescription")}
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => setConfirming(true)}
+        className={BUTTON_SECONDARY}
+      >
+        {t("settings.factoryReset")}
+      </button>
+      {error && <p className="text-small text-error mt-3">{error}</p>}
+      {confirming && (
+        <Modal title={t("settings.factoryResetConfirmTitle")} onClose={() => setConfirming(false)}>
+          <div className="px-6 py-4">
+            <p className="text-body text-text-secondary">{t("settings.factoryResetConfirm")}</p>
+          </div>
+          <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-light">
+            <button type="button" onClick={() => setConfirming(false)} className={BUTTON_SECONDARY}>
+              {t("common.cancel")}
+            </button>
+            <button type="button" onClick={reset} className={BUTTON_PRIMARY}>
+              {t("settings.factoryResetAction")}
             </button>
           </div>
         </Modal>

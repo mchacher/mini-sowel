@@ -9,7 +9,10 @@
 # Passes (exit 0) when the 33 answered 201, none was 503 `Busy`, and the total is at most 10 s.
 # Otherwise exit 1, with the first answer that was not 201.
 #
-# usage: sh scripts/measure-api.sh <address>[:<port>] [--keep]
+# The box asks for its password (spec 029): SOLITE_PASSWORD (and SOLITE_USER, `admin` when unset);
+# a box without an account is set up with it, else the script logs in (the login is not timed).
+# Never an argument.
+# usage: SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:<port>] [--keep]
 #   port 80 by default; a number alone is a port on 127.0.0.1.
 #
 # Run it on the Mac against the simulator (`cargo run -p solite-host -- --sim scenarios/garage.json
@@ -29,7 +32,7 @@ for arg in "$@"; do
   esac
 done
 if [ -z "$TARGET" ]; then
-  echo "usage: sh scripts/measure-api.sh <address>[:<port>] [--keep]" >&2
+  echo "usage: SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:<port>] [--keep]" >&2
   echo "  on the Mac: sh scripts/measure-api.sh 8080 (host --sim --serve); on the box: once per milestone, inside sh scripts/box.sh saves (D39)" >&2
   exit 2
 fi
@@ -48,15 +51,62 @@ NAME="Measure 33"
 LIMIT_SECONDS=10
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/solite-measure.XXXXXX")
+AUTH_DIR=$WORK
+AUTH_FILE="$WORK/auth"
+: >"$AUTH_FILE"
+
+# The account (spec 029): the password comes from SOLITE_PASSWORD, never from an argument, and is
+# never printed; the user name from SOLITE_USER (admin when unset). The box is asked whether it
+# needs an account: set it up when it does, else log in. The token goes to curl in a header file.
+SOLITE_USER=${SOLITE_USER:-admin}
+export SOLITE_USER
+if [ -z "${SOLITE_PASSWORD:-}" ]; then
+  echo "measure-api: set SOLITE_PASSWORD (the password of the box)" >&2
+  exit 2
+fi
+export SOLITE_PASSWORD
+# Prints the host's `error` text of an answer file, else the status.
+refusal() {
+  python3 -c '
+import sys, json
+try:
+    print(json.load(open(sys.argv[1])).get("error", "refused"))
+except (ValueError, OSError, AttributeError):
+    print("refused")' "$1"
+}
+# Sets the account up (when the host asks for one) or logs in; writes the token header file.
+sign_in() {
+  if ! STATUS=$(curl -sS -f --max-time 10 "$API/auth/status" 2>/dev/null); then
+    return 1
+  fi
+  case "$STATUS" in *'"setupRequired":true'*) ROUTE=setup ;; *) ROUTE=login ;; esac
+  export ROUTE
+  python3 -c '
+import os, json
+body = {"username": os.environ["SOLITE_USER"], "password": os.environ["SOLITE_PASSWORD"]}
+if os.environ["ROUTE"] == "setup":
+    body["displayName"] = os.environ["SOLITE_USER"]
+print(json.dumps(body))' | curl -sS -o "$AUTH_DIR/answer" -w '%{http_code}' --max-time 30 \
+    -X POST "$API/auth/$ROUTE" -H "$JSON" -d @- >"$AUTH_DIR/code" 2>/dev/null || echo 000 >"$AUTH_DIR/code"
+  CODE=$(cat "$AUTH_DIR/code")
+  if [ "$CODE" != 200 ] && [ "$CODE" != 201 ]; then
+    echo "measure-api: $ROUTE refused ($CODE): $(refusal "$AUTH_DIR/answer")" >&2
+    exit 1
+  fi
+  python3 -c '
+import sys, json
+print("Authorization: Bearer " + json.load(open(sys.argv[1]))["accessToken"])' "$AUTH_DIR/answer" >"$AUTH_FILE"
+  rm -f "$AUTH_DIR/answer" "$AUTH_DIR/code"
+}
 ZONE=
 EQUIPMENT=
 cleanup() {
   status=$?
   if [ -n "$EQUIPMENT" ] && ! $KEEP; then
-    curl -sS -f -X DELETE "$API/equipments/$EQUIPMENT" >/dev/null 2>&1 || echo "measure-api: could not delete the equipment $EQUIPMENT" >&2
+    curl -sS -f -H "@$AUTH_FILE" -X DELETE "$API/equipments/$EQUIPMENT" >/dev/null 2>&1 || echo "measure-api: could not delete the equipment $EQUIPMENT" >&2
   fi
   if [ -n "$ZONE" ] && ! $KEEP; then
-    curl -sS -f -X DELETE "$API/zones/$ZONE" >/dev/null 2>&1 || echo "measure-api: could not delete the zone $ZONE" >&2
+    curl -sS -f -H "@$AUTH_FILE" -X DELETE "$API/zones/$ZONE" >/dev/null 2>&1 || echo "measure-api: could not delete the zone $ZONE" >&2
   fi
   rm -rf "$WORK"
   exit "$status"
@@ -64,7 +114,11 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-if ! ZONES=$(curl -sS -f --max-time 10 "$API/zones" 2>/dev/null); then
+if ! sign_in; then
+  echo "measure-api: no API answers at $ADDRESS" >&2
+  exit 1
+fi
+if ! ZONES=$(curl -sS -f --max-time 10 -H "@$AUTH_FILE" "$API/zones" 2>/dev/null); then
   echo "measure-api: no API answers at $ADDRESS" >&2
   exit 1
 fi
@@ -79,7 +133,7 @@ sys.exit(0 if sys.argv[1] in names(json.load(sys.stdin)) else 1)' "$NAME"; then
   exit 1
 fi
 
-DEVICES=$(curl -sS -f --max-time 10 "$API/devices")
+DEVICES=$(curl -sS -f --max-time 10 -H "@$AUTH_FILE" "$API/devices")
 # The id of the first data (or order) of the first device that has one; empty when none.
 first_id() {
   echo "$DEVICES" | python3 -c '
@@ -110,7 +164,7 @@ except (ValueError, KeyError, TypeError):
     pass'
 }
 
-ZONE=$(curl -sS -f --max-time 10 -X POST "$API/zones" -H "$JSON" -d "{\"name\":\"$NAME\"}" | id_of)
+ZONE=$(curl -sS -f --max-time 10 -H "@$AUTH_FILE" -X POST "$API/zones" -H "$JSON" -d "{\"name\":\"$NAME\"}" | id_of)
 if [ -z "$ZONE" ]; then
   echo "measure-api: could not create the zone $NAME" >&2
   exit 1
@@ -119,7 +173,7 @@ fi
 # One request of the 33: $1 its number, $2 the method, $3 the path, $4 the body. Writes the answer
 # to $WORK/body, and `<status> <seconds>` to $WORK/times at the end of the file.
 send() {
-  result=$(curl -sS -o "$WORK/body" --max-time 30 -w '%{http_code} %{time_total}' -X "$2" "$API$3" -H "$JSON" -d "$4" 2>/dev/null) || result="000 0"
+  result=$(curl -sS -o "$WORK/body" --max-time 30 -H "@$AUTH_FILE" -w '%{http_code} %{time_total}' -X "$2" "$API$3" -H "$JSON" -d "$4" 2>/dev/null) || result="000 0"
   echo "$1 $result" >>"$WORK/times"
   status=${result%% *}
   if [ "$status" != 201 ] && [ ! -s "$WORK/first-bad" ]; then

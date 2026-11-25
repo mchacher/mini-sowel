@@ -2,7 +2,7 @@
 //! core 0. `/ws` is `live_ws.rs`'s; `/` and `/assets/*` are answered on the server's task from the
 //! interface embedded in the flash, as the core's `static_reply` decides; every other request is
 //! handed, as an ESP-IDF asynchronous request, to one of 4 worker threads (stacks and body buffers
-//! in PSRAM), which asks the core's `handle_stream` exactly as the Mac host does
+//! in PSRAM), which asks the core's `handle_guarded` exactly as the Mac host does
 //! (`crates/host/src/serve.rs`), so an order waiting for the radio never holds the server's task.
 //! The core decides every answer; this file moves the bytes.
 
@@ -27,7 +27,7 @@ use esp_idf_svc::sys::{
 };
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
-    MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_stream,
+    MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
     order_response, static_reply,
 };
 use solite_core::devices::lock;
@@ -97,6 +97,8 @@ struct Head {
     uri: String,
     host: Option<String>,
     content_type: Option<String>,
+    /// The `Authorization` header, whole (the token goes in it, spec 029).
+    authorization: Option<String>,
     chunked: bool,
     length: usize,
 }
@@ -313,6 +315,7 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
         port: api.port,
         reach: Reach::Lan { name: api.name },
         content_type: None,
+        authorization: None,
         body: b"",
     });
     match reply {
@@ -360,6 +363,7 @@ extern "C" fn api_entry(request: *mut httpd_req_t) -> esp_err_t {
         uri: raw.uri(),
         host: raw.header(c"Host"),
         content_type: raw.header(c"Content-Type"),
+        authorization: raw.header(c"Authorization"),
         chunked: raw.header(c"Transfer-Encoding").is_some(),
         length: raw.content_length(),
     };
@@ -408,11 +412,11 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         }
         received += count as usize;
     }
+    // The core takes and lets go of the home itself: a password hash runs without it.
     let reply = {
-        let mut home = lock(&api.home);
         let mut random = |bytes: &mut [u8]| fill(bytes);
-        handle_stream(
-            &mut home,
+        handle_guarded(
+            &api.home,
             &Request {
                 method: head.method,
                 path: &head.uri,
@@ -420,6 +424,7 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
                 port: api.port,
                 reach: Reach::Lan { name: api.name },
                 content_type: head.content_type.as_deref(),
+                authorization: head.authorization.as_deref(),
                 body: &buffer[..received],
             },
             wall_ms(),
@@ -593,7 +598,7 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
     };
     let server = EspHttpServer::new(&configuration).map_err(|e| e.to_string())?;
     let handle = server.handle();
-    live_ws::register(handle, shared.hub, name, port)?;
+    live_ws::register(handle, shared.hub, Arc::clone(&shared.home), name, port)?;
     for method in [
         http_method_HTTP_GET,
         http_method_HTTP_POST,

@@ -9,13 +9,16 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use solite_core::api::{Reach, host_allowed};
+use solite_core::devices::lock;
+use solite_core::home::Home;
 use solite_core::live::session::{
-    MAX_INCOMING_BYTES, PING_SECONDS, SILENCE_SECONDS, TICK_MS, WRITE_TIMEOUT_SECONDS,
+    CLOSE_UNAUTHENTICATED, MAX_INCOMING_BYTES, PING_SECONDS, REASON_AUTHENTICATION_REQUIRED,
+    REASON_INVALID_TOKEN, SILENCE_SECONDS, TICK_MS, WRITE_TIMEOUT_SECONDS, bearer_token,
     close_reason, origin_allowed, pick_subprotocol,
 };
 use solite_core::live::{ClientId, LiveHandle};
@@ -70,6 +73,8 @@ impl Timing {
 #[derive(Clone)]
 pub struct Context {
     pub hub: LiveHandle,
+    /// The home, taken once for each new client to check its token (spec 029 R5).
+    pub home: Arc<Mutex<Home>>,
     /// The port the API listens on (the `Host` check).
     pub port: u16,
     /// Set when the host stops: each client is sent close 1001.
@@ -225,7 +230,12 @@ pub fn serve_request(mut stream: TcpStream, head: &Head, rest: Vec<u8>, ctx: &Co
         WebSocket::from_partially_read(stream, rest, Role::Server, Some(config))
     };
     let allowed = origin_allowed(head.header("Origin"), head.header("Host"));
-    session(socket, &guard, allowed);
+    // The token, from the `Authorization` header or the subprotocols (the core's rule).
+    let token = bearer_token(
+        head.all("Sec-WebSocket-Protocol"),
+        head.header("Authorization"),
+    );
+    session(socket, &guard, allowed, token);
 }
 
 /// The timeouts and buffers of a client's socket.
@@ -269,10 +279,24 @@ enum End {
 }
 
 /// The client's life: the welcome, then each tick the frames it sent and the events waiting.
-fn session(mut socket: WebSocket<TcpStream>, guard: &Session<'_>, origin_ok: bool) {
+fn session(
+    mut socket: WebSocket<TcpStream>,
+    guard: &Session<'_>,
+    origin_ok: bool,
+    token: Option<String>,
+) {
     let (ctx, client) = (guard.ctx, guard.client);
     if !origin_ok {
         return finish(&mut socket, 4003, "Origin not allowed");
+    }
+    // Checked once, here: a session that ends later does not close the socket (Sowel's rule).
+    let reason = match token {
+        None => Some(REASON_AUTHENTICATION_REQUIRED),
+        Some(token) if !token_valid(&ctx.home, &token) => Some(REASON_INVALID_TOKEN),
+        Some(_) => None,
+    };
+    if let Some(reason) = reason {
+        return finish(&mut socket, CLOSE_UNAUTHENTICATED, reason);
     }
     if socket.send(Message::Text(WELCOME.into())).is_err() {
         return;
@@ -283,6 +307,15 @@ fn session(mut socket: WebSocket<TcpStream>, guard: &Session<'_>, origin_ok: boo
         End::Drop => {}
     }
     let _ = socket.get_ref().shutdown(Shutdown::Both);
+}
+
+/// True when the token is a live access token. The wall clock is observed first, as every
+/// request does, so that a clock set since the last request moved the sessions.
+fn token_valid(home: &Mutex<Home>, token: &str) -> bool {
+    let now = crate::serve::now_ms();
+    let mut home = lock(home);
+    home.observe_wall(now);
+    home.access_valid(token, now)
 }
 
 /// The loop; returns when the client must be closed or dropped.

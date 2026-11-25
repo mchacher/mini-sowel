@@ -11,11 +11,21 @@ import { useZoneAggregation } from "./useZoneAggregation";
 import { useZones } from "./useZones";
 import { useRecipes } from "./useRecipes";
 import { coalesceCalls } from "../lib/coalesce-calls";
+import { getAccessToken } from "../api/client";
+import { useAuth } from "./useAuth";
 
 /** What the screen is subscribed to. */
 const TOPICS = ["zones", "equipments", "devices", "recipes"];
-/** The host takes no token (decision D13); the subprotocol is still sent, as Sowel's client does. */
-const SUBPROTOCOL = "bearer.none";
+/**
+ * The subprotocols offered (spec 029, R5): `bearer.none`, the one the box echoes, then
+ * `bearer.<access token>`, which the host reads for the token.
+ */
+function subprotocols(): string[] {
+  const token = getAccessToken();
+  return token ? ["bearer.none", `bearer.${token}`] : ["bearer.none"];
+}
+/** The close code of a missing or refused token (Sowel's). */
+const CLOSE_UNAUTHORIZED = 4001;
 const MAX_RECONNECT_DELAY = 30_000;
 
 export type LiveStatus = "connecting" | "open" | "closed";
@@ -51,6 +61,8 @@ let socket: WebSocket | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let attempts = 0;
 let hooksInstalled = false;
+/** A 4001 was answered by a refresh and no socket has opened since: the next one backs off. */
+let refreshedOnClose = false;
 
 function setStatus(status: LiveStatus): void {
   useLive.setState({ status });
@@ -177,18 +189,31 @@ export function connect(): void {
     clearTimeout(timer);
     timer = null;
   }
-  const current = new WebSocket(socketUrl(), SUBPROTOCOL);
+  const current = new WebSocket(socketUrl(), subprotocols());
   socket = current;
   current.onopen = () => {
     attempts = 0;
+    refreshedOnClose = false;
     setStatus("open");
     current.send(JSON.stringify({ type: "subscribe", topics: TOPICS }));
     refetchAll();
   };
   current.onmessage = (message) => onMessage(message.data);
-  current.onclose = () => {
+  current.onclose = (event) => {
     if (socket === current) socket = null;
     setStatus("closed");
+    if (event?.code === CLOSE_UNAUTHORIZED && !refreshedOnClose) {
+      // The token is expired or refused: a new one, then the socket again. A refused refresh
+      // shows the login screen (the auth store), and the home closes this connection.
+      refreshedOnClose = true;
+      void useAuth
+        .getState()
+        .refreshSession()
+        .then((ok) => {
+          if (ok && !socket && !timer) connect();
+        });
+      return;
+    }
     timer = setTimeout(() => {
       timer = null;
       attempts++;
@@ -209,6 +234,7 @@ export function disconnect(): void {
   const current = socket;
   socket = null;
   attempts = 0;
+  refreshedOnClose = false;
   if (current) {
     current.onclose = null;
     current.close();

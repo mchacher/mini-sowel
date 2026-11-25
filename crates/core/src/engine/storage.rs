@@ -4,6 +4,7 @@
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use crate::auth::Account;
 use crate::devices::{Devices, parse_list};
 use crate::equipments::{self, StoredEquipment};
 use crate::home::Home;
@@ -21,6 +22,8 @@ pub const EQUIPMENTS_FILE: &str = "equipments.json";
 pub const RECIPES_FILE: &str = "recipes.json";
 /// The home's settings (spec 026), a JSON object of at most six strings.
 pub const SETTINGS_FILE: &str = "settings.json";
+/// The home's account and its password hash (spec 029), or `{"version":1}` for none.
+pub const AUTH_FILE: &str = "auth.json";
 
 /// The writes of a storage to its medium since boot (spec 025 R2): a 32-bit count that stops at
 /// its maximum instead of wrapping, so nothing grows with the writes. The firmware keeps one in a
@@ -182,6 +185,15 @@ pub fn load_settings(storage: &dyn Storage) -> Result<(Settings, bool), String> 
     Settings::parse_file(&text).map_err(|e| cannot_read(storage, "settings", SETTINGS_FILE, e))
 }
 
+/// The account; none when there is no file or the file says none (`{"version":1}`). A file that
+/// cannot be read or parsed is an error, never "no account": that would open the setup to anyone.
+pub fn load_auth(storage: &dyn Storage) -> Result<Option<Account>, String> {
+    let Some(text) = storage.read(AUTH_FILE)? else {
+        return Ok(None);
+    };
+    crate::auth::parse_file(&text).map_err(|e| cannot_read(storage, "auth", AUTH_FILE, e))
+}
+
 /// The whole home, made consistent; a file that cannot be read stops everything. The recipe
 /// instances are loaded, not started: the caller starts them (`Home::start_recipes`).
 pub fn load_home(storage: &dyn Storage, now: u64) -> Result<Home, String> {
@@ -195,5 +207,6 @@ pub fn load_home(storage: &dyn Storage, now: u64) -> Result<Home, String> {
     home.load_recipes(load_recipes(storage)?);
     let (settings, repaired) = load_settings(storage)?;
     home.load_settings(settings, repaired);
+    home.load_auth(load_auth(storage)?);
     Ok(home)
 }

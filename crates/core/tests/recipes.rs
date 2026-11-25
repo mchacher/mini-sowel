@@ -618,6 +618,7 @@ fn a_recipe_switching_three_lights_never_makes_the_api_answer_busy() {
                 port: PORT,
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
+                authorization: None,
                 body: br#"{"value":true}"#,
             },
             rig.now,

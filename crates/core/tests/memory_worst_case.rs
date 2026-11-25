@@ -66,6 +66,15 @@
 //! - `settings/mod.rs::MAX_HOME_NAME_CHARS`: the six settings at their longest (a name of 64
 //!   characters, numbers at the length of their pattern), `settings.json` written and the backup
 //!   document built (it is refused, over `api/mod.rs::MAX_BODY_BYTES`).
+//! - `auth/mod.rs::MAX_SESSIONS`, `auth/mod.rs::MAX_ATTEMPTS`: 8 sessions of 72 bytes and 10
+//!   attempt times of 8 bytes, in RAM only (spec 029); about 700 bytes in all, far below the
+//!   rest, so the worst case does not drive them (`tests/auth.rs` tests each bound).
+//! - `auth/mod.rs::MAX_PASSWORD_CHARS`, `auth/mod.rs::MAX_PASSWORD_BYTES`,
+//!   `auth/mod.rs::MAX_USERNAME_CHARS`, `auth/mod.rs::MAX_DISPLAY_NAME_CHARS`: the account's
+//!   fields, inside a request body (`api/mod.rs::MAX_BODY_BYTES`, counted above); the hash itself
+//!   keeps under 1 KB of stack and nothing on the heap that grows.
+//! - `auth/mod.rs::MAX_ITERATIONS`: the most iterations a stored hash may declare, a count of
+//!   rounds, no memory.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
@@ -122,6 +131,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
         port: 8080,
         reach: Reach::Loopback,
         content_type: Some("application/json"),
+        authorization: None,
         body,
     }
 }

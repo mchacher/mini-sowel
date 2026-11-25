@@ -393,6 +393,7 @@ fn a_light_is_made_by_the_forms_sequence_and_switches_the_relay() {
             port: PORT,
             reach: Reach::Loopback,
             content_type: Some("application/json"),
+            authorization: None,
             body: br#"{"value":true}"#,
         },
         rig.now,

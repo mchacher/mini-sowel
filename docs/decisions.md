@@ -795,3 +795,79 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   device was removed, nor switch a lit garage off (a restart's start sync) for it; and a motion
   sensor replaced, unbound or moved must count, or stop counting, for the safety auto-off without
   anyone restarting the recipe. Creation and the form still refuse a button without `action`.
+
+## D47: One account, opaque tokens in RAM, PBKDF2-HMAC-SHA256 (narrows D13 and D33)
+
+- **Date**: 2026-11-25 (spec 029, decided in an autonomous run, for the user's review)
+- **Choice**: the home has one account, Sowel's admin, set up at first start (no default
+  password, EN 18031-1). The password is hashed with PBKDF2-HMAC-SHA256 (RFC 8018), a 16-byte salt
+  from the caller's random source, 10 000 iterations (stored with the hash, so a later change still
+  checks the old ones), a 32-byte result, compared in constant time; 8 to 128 characters and at
+  most 512 bytes (Sowel asks 6: 8 is NIST SP 800-63B's floor). The hash and the user are in
+  `auth.json`, written by the saver like `settings.json` (one write per setup or reset, none per
+  login); a file that cannot be read stops the start, it is never read as "no account", which would
+  open the setup to anyone. A login or a setup opens a session: an access token (900 s) and a
+  refresh token (30 days), each 16 random bytes as 32 hex characters, opaque (not a JWT), kept in
+  RAM only, at most 8 (a 9th drops the first), lost at a restart. Sowel's five `/auth` routes and
+  its gate's three errors are mirrored; setup and login together are limited to 10 attempts per
+  minute for the whole box (the core does not see addresses), a 429 beyond, without hashing. Three
+  RustCrypto crates enter the core (`sha2`, `hmac`, `pbkdf2`, no default features): std has no hash
+  (D12), and a hash written by hand is worse than three audited crates.
+- **Why**: a box on the home's network (D33) with no authentication is not acceptable for a product
+  (EN 18031-1: no common default password, protection against brute force). The cost is reasoned
+  for the ESP32: one iteration is two SHA-256 compressions of about 25 to 50 µs in software at 240
+  MHz, so a hash takes 0.5 to 1 s on the HTTP worker that asked, never under the home's lock; the
+  ESP32's SHA accelerator (more iterations) is an adapter for later. Tokens in RAM cost no flash
+  write and a restart only asks the owner to log in again; opaque tokens need no JWT library, no
+  clock agreement with a client and can be closed at logout (stricter than Sowel's JWT). One rate
+  limit for the box accepts that a device of the home network can keep the owner from logging in
+  while it tries, open sessions and their refresh working: accepted for a home network. Sowel's
+  users, roles, API tokens, MFA and password change stay out (password change: roadmap inbox).
+
+## D48: The confirmation at the box is an adapter, and the factory reset is Solite's route
+
+- **Date**: 2026-11-25 (spec 029, decided in an autonomous run, for the user's review)
+- **Choice**: the setup and the factory reset need a person at the box. The core defines the
+  adapter `Presence` (`confirmed()`, `hint()`), held by the home (`Home::set_presence`), counting
+  time on a monotonic uptime clock given to it, never the wall clock, which jumps when it is set;
+  the default never confirms. The Mac host confirms always (`AlwaysConfirmed`: it serves on
+  loopback, the person at the Mac is at the host). Until the box's button is wired, the box
+  confirms during the 10 minutes after a power-on boot (`BootPresence`, the reset reasons of D32's
+  pairing window, never after a software restart or a crash). `ButtonPresence` (press, confirmed
+  for 120 s) is in the core for the firmware's button later. A refusal is 403
+  `{"error": <hint>, "confirmRequired": true}`. `POST /api/v1/system/factory-reset` (Solite's, no
+  Sowel counterpart) erases the recipe instances, equipments, devices, zones but the root (its name
+  and description back to a first start's), the settings, the account and the sessions, as the
+  API's deletions do (with their live events), and answers 409 while a pairing window is open. It
+  keeps the Zigbee network and its keys (`zigbee.json`), the Wi-Fi settings and the network
+  setting. `Home::factory_reset` is what the button's long press will call.
+- **Why**: EN 18031-2 asks that the user can delete their data, and the first person on the home's
+  network must not be able to take a box that was not set up. Confirmation by a physical action
+  at the box is the answer; the real button (pin, short and long press) needs the box in hand, so
+  the core takes the decision behind an adapter, tested here, and the box's 10 minutes after a
+  power-on stand in for it. The factory reset leaves the radio network: forgetting its keys would
+  make every paired device unreachable, and the forgotten devices come back when they announce
+  themselves during a pairing window, so the deletion is partial (an inbox line).
+
+## D49: The box's pairing route behind the token, and `/ws`'s token in the second subprotocol (replaces D28's constraint and D36's "never from the network", narrows D13 and D33)
+
+- **Date**: 2026-11-25 (spec 029, decided in an autonomous run, for the user's review)
+- **Choice**: every route of the API and `/ws` need Sowel's bearer token on the Mac host and on
+  the box alike; the interface's files stay public. The box's pairing route
+  (`/api/v1/integrations/solite/permit-join`) answers as on the Mac, behind the token: D28's
+  "stays disabled (404) until J4's password exists" and D36's "never from the network" are
+  replaced. The power-on window (D32) and the console's `pair` (D36) stay until the button is
+  wired. On `/ws` the token is read from the `Authorization` header or from the first offered
+  subprotocol `bearer.<token>` other than `bearer.none`; the interface offers `bearer.none` then
+  `bearer.<access token>`, because ESP-IDF echoes only a fixed subprotocol and reads at most 49
+  characters of the header: the box echoes `bearer.none` and reads the whole header itself. After
+  the upgrade, no token closes 4001 `Authentication required`, a token that is not a live access
+  token closes 4001 `Invalid token`; a session that ends later does not close an open socket (as
+  Sowel, which checks the token at the handshake). A client that offers only `bearer.<token>`, as
+  Sowel's own interface does, gets no subprotocol echoed on the box and its browser drops the
+  socket (a deviation, `docs/sowel-subset.md`). The firmware sets ESP-IDF's `httpd_ws` log to
+  errors only, so the offered subprotocols (the token) are never written to the serial log.
+- **Why**: with a password and a token the reason for D28's and D36's rule (an API open to the
+  home network) is gone, and the interface can open pairing from "Add a device" on the box as on
+  the Mac. The token goes where a browser can put it (the subprotocol: a browser cannot set
+  headers on a WebSocket), and the fixed echo is the one thing the box's server allows.

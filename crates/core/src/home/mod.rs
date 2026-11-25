@@ -4,6 +4,7 @@
 //! radio loop, the only writer, knows what to write. No I/O, no clock and no random source of its
 //! own: the caller gives them.
 
+mod auth_ops;
 mod cursor;
 mod equipment_ops;
 pub mod events;
@@ -20,6 +21,7 @@ use std::io::{self, Write};
 
 use serde::{Serialize, Serializer};
 
+use crate::auth::{Account, Attempts, Sessions};
 use crate::devices::{Device, Devices, Id, Random, format_iso};
 use crate::equipments::{Alias, Equipments, StatusTracker, StoredEquipment};
 use crate::failure::{Failure, Outcome};
@@ -127,6 +129,17 @@ pub struct Home {
     /// The last wall time the home was given (`observe_wall`), kept here so that it survives the
     /// radio restarts that call `engine::run` again.
     last_wall: Option<u64>,
+    /// The home's one account (spec 029), `None` until the setup.
+    account: Option<Account>,
+    /// The open sessions, in RAM only: at most `MAX_SESSIONS`.
+    sessions: Sessions,
+    /// The last setup and login attempts, at most `MAX_ATTEMPTS`.
+    attempts: Attempts,
+    /// The last login since the start (Sowel's `lastLoginAt`): one value.
+    last_login: Option<u64>,
+    /// Who confirms that a person is at the box.
+    presence: auth_ops::PresenceSlot,
+    auth_changed: bool,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -223,6 +236,12 @@ impl Home {
             sun_computations: Cell::new(0),
             sun_seen: Sunlight::default(),
             last_wall: None,
+            account: None,
+            sessions: Sessions::new(),
+            attempts: Attempts::new(),
+            last_login: None,
+            presence: auth_ops::PresenceSlot::default(),
+            auth_changed: false,
         }
     }
 
@@ -238,7 +257,10 @@ impl Home {
             // The statuses of this turn are computed after, with the shifted `lastSeen`: a device
             // heard during the wait stays online.
             self.devices.shift_before_clock(now - last);
+            self.shift_auth_before_clock(now - last);
         }
+        self.sessions.drop_after(now);
+        self.attempts.drop_after(now);
     }
 
     /// The pairing window.

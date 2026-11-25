@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
 import {
   FakeWebSocket,
+  openSocket,
+  storeSession,
   homeRoutes,
   installFakeWebSocket,
   light,
@@ -41,12 +43,15 @@ describe("light control (Sowel's LightControl, compact)", () => {
         return { status: 204 };
       },
     });
+    storeSession();
     render(<App />);
-    act(() => FakeWebSocket.last.open());
+    await openSocket();
     const button = await screen.findByTitle("Turn on");
     fireEvent.click(button);
     await vi.waitFor(() => expect(api.count("POST /api/v1/equipments/l/orders/state")).toBe(1));
-    expect(api.calls.find((c) => c.key.startsWith("POST"))!.body).toEqual({ value: "ON" });
+    expect(api.calls.find((c) => c.key === "POST /api/v1/equipments/l/orders/state")!.body).toEqual(
+      { value: "ON" },
+    );
     expect((screen.getByTitle("Turn on") as HTMLButtonElement).disabled).toBe(true);
     // The answer is in, the state is not: no optimistic value.
     await act(async () => answer());

@@ -1,19 +1,37 @@
 //! `/system/timezone` (Sowel's `src/api/routes/system.ts`): the home's time zone as
 //! `{tz, source, offsetHours}`. Sowel's other `/system` routes (version, update, mode...) are
-//! not Solite's.
+//! not Solite's. `POST /system/factory-reset` is Solite's (spec 029, D48).
 
 use serde::Serialize;
 use serde_json::{Number, Value};
 
-use super::{Request, Response, error, json, method_not_allowed};
+use super::auth::{confirm_required, empty_body};
+use super::{Request, Response, error, failure, json, method_not_allowed, no_content};
 use crate::home::Home;
 use crate::settings;
 
-pub fn route(home: &Home, segments: &[&str], request: &Request, now: u64) -> Response {
+pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) -> Response {
     match (segments, request.method) {
         (["system", "timezone"], "GET") => timezone(home, now),
         (["system", "timezone"], _) => method_not_allowed(),
+        (["system", "factory-reset"], "POST") => factory_reset(home, request.body, now),
+        (["system", "factory-reset"], _) => method_not_allowed(),
         _ => error(404, "Not found"),
+    }
+}
+
+/// `POST /system/factory-reset` (R7): an empty body or `{}`, then the presence (403 with its
+/// hint), then the reset (409 while pairing runs), then 204.
+fn factory_reset(home: &mut Home, body: &[u8], now: u64) -> Response {
+    if let Err(e) = empty_body(body) {
+        return failure(&e);
+    }
+    if !home.presence_confirmed() {
+        return confirm_required(home.presence_hint());
+    }
+    match home.factory_reset(now) {
+        Ok(()) => no_content(),
+        Err(e) => failure(&e),
     }
 }
 

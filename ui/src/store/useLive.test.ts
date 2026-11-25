@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeWebSocket,
+  authTokens,
+  storeSession,
   aggregate,
   homeRoutes,
   installFakeWebSocket,
@@ -10,6 +12,7 @@ import {
   zone,
 } from "../test-utils";
 import { connect, reconnectDelay, useLive } from "./useLive";
+import { useAuth } from "./useAuth";
 import { useZoneAggregation } from "./useZoneAggregation";
 import { useDevices } from "./useDevices";
 import { usePairing } from "./usePairing";
@@ -39,7 +42,7 @@ describe("live store", () => {
   it("connects to /ws with the subprotocol bearer.none", () => {
     connect();
     expect(FakeWebSocket.last.url).toBe(`ws://${window.location.host}/ws`);
-    expect(FakeWebSocket.last.protocol).toBe("bearer.none");
+    expect(FakeWebSocket.last.protocol).toEqual(["bearer.none"]);
     expect(useLive.getState().status).toBe("connecting");
   });
 
@@ -217,5 +220,55 @@ describe("live store", () => {
     FakeWebSocket.last.open();
     expect(api.count("GET /api/v1/devices")).toBe(2);
     expect(api.count("GET /api/v1/integrations/solite/permit-join")).toBe(2);
+  });
+});
+
+describe("live store, token (spec 029)", () => {
+  it("offers bearer.none then bearer.<access token>", () => {
+    storeSession("access-0", "refresh-0");
+    connect();
+    expect(FakeWebSocket.last.protocol).toEqual(["bearer.none", "bearer.access-0"]);
+  });
+
+  it("a close 4001 asks for a refresh, then reconnects with the new token", async () => {
+    storeSession("access-0", "refresh-0");
+    api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "POST /api/v1/auth/refresh": { body: authTokens("access-1", "refresh-1") },
+    });
+    connect();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.drop(4001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.count("POST /api/v1/auth/refresh")).toBe(1);
+    expect(FakeWebSocket.instances.length).toBe(2); // at once, not after the backoff
+    expect(FakeWebSocket.last.protocol).toEqual(["bearer.none", "bearer.access-1"]);
+  });
+
+  it("a close 4001 with a refused refresh ends the session and does not reconnect", async () => {
+    storeSession("access-0", "refresh-0");
+    useAuth.setState({ isAuthenticated: true, loading: false, setupRequired: false });
+    api = mockApi({ "POST /api/v1/auth/refresh": { status: 401 } });
+    connect();
+    FakeWebSocket.last.open();
+    FakeWebSocket.last.drop(4001);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(useAuth.getState().isAuthenticated).toBe(false);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+
+  it("a second 4001 before any open backs off instead of looping", async () => {
+    storeSession("access-0", "refresh-0");
+    api = mockApi({ "POST /api/v1/auth/refresh": { body: authTokens("access-1", "refresh-1") } });
+    connect();
+    FakeWebSocket.last.drop(4001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    FakeWebSocket.last.drop(4001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.count("POST /api/v1/auth/refresh")).toBe(1);
+    expect(FakeWebSocket.instances.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeWebSocket.instances.length).toBe(3);
   });
 });
