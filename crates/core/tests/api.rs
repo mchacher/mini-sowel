@@ -354,3 +354,51 @@ fn the_routes_of_the_table_are_written_with_the_prefix_and_colon_parameters() {
     seen.dedup();
     assert_eq!(seen.len(), ROUTES.len(), "no route twice");
 }
+
+// ---- Spec 028, R4: a removed device stays removed until it joins again ----
+
+fn list_len(home: &mut Home) -> usize {
+    json(&local(home, "GET", "/api/v1/devices", ""))
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[test]
+fn a_removed_device_that_sends_a_measure_is_not_added_back() {
+    use solite_core::radio::measures::{Measure, Value};
+    use solite_core::radio::{MeasureEvent, Sender};
+    let (mut home, th, _) = two_devices();
+    let response = local(&mut home, "DELETE", &format!("/api/v1/devices/{th}"), "");
+    assert_eq!(response.status, 204);
+    assert_eq!(list_len(&mut home), 1);
+    let event = MeasureEvent {
+        sender: Sender::Eui64([0, 0x12, 0x4B, 0, 0x12, 0x34, 0x56, 0x78]),
+        endpoint: 1,
+        measures: vec![Measure {
+            kind: "temperature",
+            value: Value::Number(20.0),
+            unit: "°C",
+            device_value: None,
+        }],
+    };
+    home.measures(&event, T0 + 5000, &mut counter()).unwrap();
+    assert_eq!(list_len(&mut home), 1, "the measure adds nothing");
+    let gone = local(&mut home, "GET", &format!("/api/v1/devices/{th}"), "");
+    assert_eq!(error(&gone), (404, "Device not found".to_string()));
+}
+
+#[test]
+fn a_removed_device_that_announces_itself_outside_a_pairing_window_is_not_added_back() {
+    use solite_core::radio::Activity;
+    let (mut home, th, _) = two_devices();
+    local(&mut home, "DELETE", &format!("/api/v1/devices/{th}"), "");
+    let announce = Activity::Announced {
+        eui64: [0, 0x12, 0x4B, 0, 0x12, 0x34, 0x56, 0x78],
+        capability: 0x80,
+    };
+    home.devices.apply_activity(&announce, T0 + 5000);
+    assert_eq!(list_len(&mut home), 1);
+    let gone = local(&mut home, "GET", &format!("/api/v1/devices/{th}"), "");
+    assert_eq!(gone.status, 404);
+}

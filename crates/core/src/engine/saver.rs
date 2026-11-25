@@ -160,6 +160,8 @@ impl<S: Storage> Saver<S> {
     /// chunk by chunk from a cursor: the home is taken for one chunk, then let go, then the chunk
     /// is written (memory ceiling, spec 010 R7.15).
     pub fn tick(&mut self, home: &Mutex<Home>, now: u64, stopping: bool) -> Result<(), String> {
+        // Before anything is written: a date taken before the clock was set is moved first.
+        lock(home).observe_wall(now);
         if !stopping && self.gate.as_ref().is_some_and(|open| !open()) {
             self.gate_was_closed = true;
             return Ok(());

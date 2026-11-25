@@ -41,7 +41,7 @@ struct OffTimer {
 #[derive(Debug)]
 pub struct MotionLight {
     p: Params,
-    /// Resolved once, when the instance starts.
+    /// Resolved when the instance starts, and again at each settle (`refresh`).
     sources: Vec<MotionSource>,
     off: Option<OffTimer>,
     /// The failsafe's deadline.
@@ -623,6 +623,21 @@ impl Runner for MotionLight {
             override_mode: self.override_mode.then_some(true),
             timer_expires_at: self.timer_expires_at,
             failsafe_expires_at: self.failsafe_expires_at,
+        }
+    }
+
+    fn refresh(&mut self, home: &Home, params: &serde_json::Value) {
+        self.sources = resolve_motion_sources(home, &self.p.zone);
+        if let Some(serde_json::Value::Array(list)) = params.get("buttons") {
+            // Bounded as at validation: at most `MAX_BUTTONS`.
+            self.p.buttons = list
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter_map(Id::parse)
+                .take(super::params::MAX_BUTTONS)
+                .collect();
+        } else {
+            self.p.buttons.clear();
         }
     }
 

@@ -416,3 +416,489 @@ fn a_light_named_by_sixteen_instances_of_sixteen_lights_is_pruned_from_all_in_on
         assert_eq!(instance["enabled"], true);
     }
 }
+
+// ---- Spec 028: buttons pruned, sources followed ----
+
+const SECOND: u64 = 1000;
+
+/// A `button` equipment of the zone with an `action` binding on the first data of a new SNZB-02
+/// (EUI ending `last`); (equipment id, device id, binding id).
+fn action_button(rig: &mut Rig, zone: &str, name: &str, last: u8) -> (String, String, String) {
+    let sensor = rig.sensor(last);
+    let data = rig.home.devices.get(&sensor).unwrap().data[0]
+        .id
+        .to_string();
+    let button = rig.equipment(name, "button", zone, &[]);
+    let (status, body) = rig.post(
+        &format!("/api/v1/equipments/{button}/data-bindings"),
+        json!({"deviceDataId": data, "alias": "action"}),
+    );
+    assert_eq!(status, 201, "{body}");
+    let (_, details) = rig.get(&format!("/api/v1/equipments/{button}"));
+    let binding = details["dataBindings"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (button, sensor, binding)
+}
+
+fn unbind(rig: &mut Rig, equipment: &str, binding: &str) {
+    let (status, _) = rig.delete(&format!(
+        "/api/v1/equipments/{equipment}/data-bindings/{binding}"
+    ));
+    assert_eq!(status, 204);
+}
+
+fn starts(rig: &mut Rig, id: &str) -> usize {
+    rig.messages(id)
+        .iter()
+        .filter(|m| m.starts_with("Recipe activated"))
+        .count()
+}
+
+fn count(messages: &[String], text: &str) -> usize {
+    messages.iter().filter(|m| *m == text).count()
+}
+
+#[test]
+fn a_button_whose_device_is_removed_leaves_the_settings_and_the_instance_keeps_running() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, sensor, _) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.sent();
+    saved(&mut rig.home);
+    let (hub, c) = listening(&rig);
+    let (status, _) = rig.delete(&format!("/api/v1/devices/{sensor}"));
+    assert_eq!(status, 204);
+    let instance = listed(&mut rig, &id);
+    assert_eq!(instance["enabled"], true);
+    assert_eq!(instance["params"]["buttons"], json!([]));
+    assert!(!not_running(&mut rig, &id));
+    assert_eq!(starts(&mut rig, &id), 1, "not restarted");
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Button removed from settings: Wall button"
+    );
+    assert!(!types(&hub, c).contains(&"recipe.instance.error".to_string()));
+    let written = saved(&mut rig.home).expect("recipes.json is written");
+    assert_eq!(written[0]["params"]["buttons"], json!([]));
+    assert_eq!(written[0]["enabled"], true);
+}
+
+#[test]
+fn a_button_whose_action_binding_is_removed_leaves_the_settings_and_the_instance_keeps_running() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.sent();
+    saved(&mut rig.home);
+    unbind(&mut rig, &button, &binding);
+    let instance = listed(&mut rig, &id);
+    assert_eq!(instance["enabled"], true);
+    assert_eq!(instance["params"]["buttons"], json!([]));
+    assert!(!not_running(&mut rig, &id));
+    assert_eq!(starts(&mut rig, &id), 1);
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Button removed from settings: Wall button"
+    );
+    let written = saved(&mut rig.home).expect("recipes.json is written");
+    assert_eq!(written[0]["params"]["buttons"], json!([]));
+    // The light still follows motion.
+    rig.report(&motion(PIR, true));
+    assert_eq!(rig.sent(), [Command::On]);
+}
+
+#[test]
+fn a_button_pruned_while_the_light_is_on_keeps_its_timer_and_sends_nothing() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    rig.report(&state(RELAY, true));
+    rig.report(&motion(PIR, false));
+    rig.sent();
+    let before = rig.state(&id);
+    assert!(before["timerExpiresAt"].is_string());
+    unbind(&mut rig, &button, &binding);
+    assert_eq!(rig.state(&id), before);
+    assert!(rig.sent().is_empty());
+    assert_eq!(starts(&mut rig, &id), 1);
+    // The timer still fires.
+    rig.advance(20 * SECOND);
+    assert_eq!(rig.sent(), [Command::Off]);
+}
+
+#[test]
+fn a_disabled_instance_has_its_stale_button_pruned_logged_and_written_and_stays_disabled() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.post(&format!("{BASE}/{id}/disable"), json!({}));
+    saved(&mut rig.home);
+    unbind(&mut rig, &button, &binding);
+    let instance = listed(&mut rig, &id);
+    assert_eq!(instance["enabled"], false);
+    assert_eq!(instance["params"]["buttons"], json!([]));
+    assert_eq!(
+        rig.messages(&id).last().unwrap(),
+        "Button removed from settings: Wall button"
+    );
+    assert!(saved(&mut rig.home).is_some());
+}
+
+#[test]
+fn a_deleted_button_equipment_is_logged_once_by_the_deletion_and_does_not_restart() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, _) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.delete(&format!("/api/v1/equipments/{button}"));
+    let messages = rig.messages(&id);
+    assert_eq!(
+        count(&messages, "Equipment removed from settings: Wall button"),
+        1
+    );
+    assert!(!messages.iter().any(|m| m.starts_with("Button removed")));
+    assert_eq!(starts(&mut rig, &id), 1, "not restarted");
+    assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
+    assert!(!not_running(&mut rig, &id));
+}
+
+#[test]
+fn a_button_in_two_instances_is_pruned_from_both_with_one_line_each() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let first = rig.garage_instance(&g, json!({"buttons": [button]}));
+    let second = rig.garage_instance(&g, json!({"buttons": [button]}));
+    unbind(&mut rig, &button, &binding);
+    for id in [&first, &second] {
+        assert_eq!(listed(&mut rig, id)["params"]["buttons"], json!([]));
+        let messages = rig.messages(id);
+        assert_eq!(
+            count(&messages, "Button removed from settings: Wall button"),
+            1
+        );
+        assert!(!not_running(&mut rig, id));
+    }
+}
+
+#[test]
+fn the_same_button_twice_in_the_stored_buttons_is_taken_out_with_one_line() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let params = json!({"zone": g.zone, "lights": [g.light], "timeout": "20s",
+        "buttons": [button, button]});
+    let stored = RecipeInstance {
+        id: Id::from_random([9; 16]),
+        recipe_id: "motion-light".into(),
+        params: params.to_string().into(),
+        enabled: true,
+        created_at: rig.now,
+    };
+    rig.home.load_recipes(vec![stored]);
+    rig.home.start_recipes(rig.now, rig.now);
+    let id = Id::from_random([9; 16]).to_string();
+    assert!(!not_running(&mut rig, &id));
+    unbind(&mut rig, &button, &binding);
+    assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
+    let messages = rig.messages(&id);
+    assert_eq!(
+        count(&messages, "Button removed from settings: Wall button"),
+        1
+    );
+}
+
+#[test]
+fn creating_or_changing_an_instance_with_a_button_without_action_is_still_refused() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    unbind(&mut rig, &button, &binding);
+    let params = json!({"zone": g.zone, "lights": [g.light], "buttons": [button]});
+    let body = json!({"recipeId": "motion-light", "params": params}).to_string();
+    assert_eq!(
+        rig.refused("POST", BASE, &body),
+        (
+            400,
+            "Invalid params: Button \"Wall button\" has no \"action\" data binding".to_string()
+        )
+    );
+    let body = json!({"params": params}).to_string();
+    assert_eq!(rig.refused("PUT", &format!("{BASE}/{id}"), &body).0, 400);
+}
+
+#[test]
+fn a_press_on_a_pruned_button_does_nothing_even_when_its_binding_comes_back() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let (button, sensor, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
+    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
+    rig.sent();
+    unbind(&mut rig, &button, &binding);
+    let data = rig.home.devices.get(&sensor).unwrap().data[0]
+        .id
+        .to_string();
+    let (status, _) = rig.post(
+        &format!("/api/v1/equipments/{button}/data-bindings"),
+        json!({"deviceDataId": data, "alias": "action"}),
+    );
+    assert_eq!(status, 201);
+    let before = rig.messages(&id);
+    rig.report(&temperature(0x60, 20.0));
+    assert!(rig.sent().is_empty());
+    assert_eq!(rig.messages(&id), before);
+    assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
+}
+
+/// An instance of the garage with a safety auto-off, its light on and its zone's motion on;
+/// the sensor's raw reports are impulses that reset the auto-off. Returns the instance's id.
+fn lit_garage(rig: &mut Rig, g: &Garage) -> String {
+    let id = rig.garage_instance(g, json!({"maxOnDuration": "5m"}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    rig.report(&state(RELAY, true));
+    rig.sent();
+    assert!(rig.state(&id)["failsafeExpiresAt"].is_string());
+    id
+}
+
+fn failsafe(rig: &mut Rig, id: &str) -> Value {
+    rig.state(id)["failsafeExpiresAt"].clone()
+}
+
+#[test]
+fn a_motion_sensor_unbound_under_a_running_instance_no_longer_resets_the_safety_auto_off() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = lit_garage(&mut rig, &g);
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{}", g.motion_equipment));
+    let bindings = equipment["dataBindings"].as_array().unwrap().clone();
+    for binding in &bindings {
+        unbind(
+            &mut rig,
+            &g.motion_equipment,
+            binding["id"].as_str().unwrap(),
+        );
+    }
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    // A raw impulse of the sensor, no longer a source of the zone.
+    rig.report(&motion(PIR, true));
+    assert_eq!(failsafe(&mut rig, &id), before);
+    assert_eq!(starts(&mut rig, &id), 1, "not restarted");
+}
+
+#[test]
+fn a_motion_sensor_added_to_the_zone_resets_the_safety_auto_off_without_a_restart() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = lit_garage(&mut rig, &g);
+    let second = rig.motion_sensor(0x62);
+    rig.equipment("Second motion", "sensor", &g.zone, &[&second]);
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    let after = failsafe(&mut rig, &id);
+    assert_ne!(after, before, "the new source resets the auto-off");
+    assert_eq!(starts(&mut rig, &id), 1, "not restarted");
+}
+
+#[test]
+fn a_motion_data_binding_added_to_an_equipment_of_the_zone_makes_it_a_source_without_a_restart() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = lit_garage(&mut rig, &g);
+    let second = rig.motion_sensor(0x62);
+    let empty = rig.equipment("Second motion", "sensor", &g.zone, &[]);
+    let data = rig
+        .home
+        .devices
+        .get(&second)
+        .unwrap()
+        .data
+        .iter()
+        .find(|d| &*d.category == "motion")
+        .unwrap()
+        .id
+        .to_string();
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    assert_eq!(failsafe(&mut rig, &id), before, "not bound yet");
+    let (status, body) = rig.post(
+        &format!("/api/v1/equipments/{empty}/data-bindings"),
+        json!({"deviceDataId": data, "alias": "occupancy"}),
+    );
+    assert_eq!(status, 201, "{body}");
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    assert_ne!(failsafe(&mut rig, &id), before, "bound: it counts");
+    assert_eq!(starts(&mut rig, &id), 1);
+}
+
+#[test]
+fn a_sensor_equipment_moved_out_of_the_zone_or_disabled_stops_counting() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = lit_garage(&mut rig, &g);
+    let other = rig.zone("Cellar");
+    // Moved out.
+    let (status, _) = rig.put(
+        &format!("/api/v1/equipments/{}", g.motion_equipment),
+        json!({"zoneId": other}),
+    );
+    assert_eq!(status, 200);
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(PIR, true));
+    assert_eq!(failsafe(&mut rig, &id), before, "moved out");
+    // Moved back in: it counts again.
+    rig.put(
+        &format!("/api/v1/equipments/{}", g.motion_equipment),
+        json!({"zoneId": g.zone}),
+    );
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(PIR, true));
+    let back = failsafe(&mut rig, &id);
+    assert_ne!(back, before, "moved back");
+    // Disabled.
+    rig.put(
+        &format!("/api/v1/equipments/{}", g.motion_equipment),
+        json!({"enabled": false}),
+    );
+    rig.advance(SECOND);
+    let back = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(PIR, true));
+    assert_eq!(failsafe(&mut rig, &id), back, "disabled");
+    assert_eq!(starts(&mut rig, &id), 1);
+}
+
+#[test]
+fn a_child_zone_moved_out_of_the_instance_zone_stops_counting_and_moved_back_counts_again() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let shelf = rig.zone("Shelf");
+    let (status, body) = rig.put(
+        &format!("/api/v1/zones/{shelf}"),
+        json!({"parentId": g.zone}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let second = rig.motion_sensor(0x62);
+    rig.equipment("Shelf motion", "sensor", &shelf, &[&second]);
+    let id = lit_garage(&mut rig, &g);
+    // Moved out of the garage (under the root).
+    let (status, body) = rig.put(&format!("/api/v1/zones/{shelf}"), json!({"parentId": ROOT}));
+    assert_eq!(status, 200, "{body}");
+    // The zone's own aggregate may change with the move (the recipe's own rule); read after it.
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    assert_eq!(failsafe(&mut rig, &id), before, "moved out");
+    // Moved back in.
+    rig.put(
+        &format!("/api/v1/zones/{shelf}"),
+        json!({"parentId": g.zone}),
+    );
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    assert_ne!(failsafe(&mut rig, &id), before, "moved back in");
+    assert_eq!(starts(&mut rig, &id), 1);
+}
+
+#[test]
+fn a_backup_import_that_moves_a_child_zone_out_settles_the_sources() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let shelf = rig.zone("Shelf");
+    let (status, body) = rig.put(
+        &format!("/api/v1/zones/{shelf}"),
+        json!({"parentId": g.zone}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let second = rig.motion_sensor(0x62);
+    rig.equipment("Shelf motion", "sensor", &shelf, &[&second]);
+    let id = lit_garage(&mut rig, &g);
+    // The exported document with the shelf moved under the root, imported back.
+    let (status, mut document) = rig.get("/api/v1/backup");
+    assert_eq!(status, 200, "{document}");
+    for zone in document["zones"].as_array_mut().unwrap() {
+        if zone["id"] == json!(shelf) {
+            zone["parentId"] = json!(ROOT);
+        }
+    }
+    let (status, body) = rig.post("/api/v1/backup", document);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["zonesUpdated"], 1, "{body}");
+    rig.advance(SECOND);
+    let before = failsafe(&mut rig, &id);
+    rig.advance(5 * SECOND);
+    rig.report(&motion(0x62, true));
+    assert_eq!(failsafe(&mut rig, &id), before, "moved out by the import");
+    assert_eq!(starts(&mut rig, &id), 1);
+}
+
+#[test]
+fn the_last_motion_sensor_of_the_zone_unbound_leaves_the_instance_running() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = rig.garage_instance(&g, json!({"maxOnDuration": "5m"}));
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{}", g.motion_equipment));
+    for binding in equipment["dataBindings"].as_array().unwrap().clone() {
+        unbind(
+            &mut rig,
+            &g.motion_equipment,
+            binding["id"].as_str().unwrap(),
+        );
+    }
+    assert_eq!(listed(&mut rig, &id)["enabled"], true);
+    assert!(!not_running(&mut rig, &id));
+    rig.advance(30 * SECOND);
+    assert_eq!(starts(&mut rig, &id), 1);
+}
+
+#[test]
+fn a_sensor_unbound_keeps_the_state_and_the_timers_and_sends_nothing() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let id = rig.garage_instance(&g, json!({}));
+    rig.sent();
+    rig.report(&motion(PIR, true));
+    rig.report(&state(RELAY, true));
+    rig.report(&motion(PIR, false));
+    rig.sent();
+    let before = rig.state(&id);
+    assert!(before["timerExpiresAt"].is_string());
+    let (_, equipment) = rig.get(&format!("/api/v1/equipments/{}", g.motion_equipment));
+    // Only the luminosity or the occupancy binding changes the sources; remove them all.
+    for binding in equipment["dataBindings"].as_array().unwrap().clone() {
+        unbind(
+            &mut rig,
+            &g.motion_equipment,
+            binding["id"].as_str().unwrap(),
+        );
+    }
+    assert_eq!(rig.state(&id)["timerExpiresAt"], before["timerExpiresAt"]);
+    assert!(rig.sent().is_empty());
+    assert_eq!(starts(&mut rig, &id), 1);
+}

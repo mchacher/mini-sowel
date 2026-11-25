@@ -263,6 +263,8 @@ impl Home {
             .emit(Topic::Equipments, || EngineEvent::EquipmentCreated {
                 equipment: item.equipment.clone(),
             });
+        // A new equipment can hold motion sensors a running instance follows.
+        self.settle_recipes(Settle::default(), now);
         Ok(item)
     }
 
@@ -381,6 +383,7 @@ impl Home {
         equipment: &str,
         data: &str,
         alias: &str,
+        now: u64,
         random: Random,
     ) -> Outcome<DataBinding> {
         let Some(item) = self.equipments.get(equipment) else {
@@ -412,6 +415,8 @@ impl Home {
         }
         self.equipments_changed = true;
         self.announce_equipment_updated(equipment);
+        // The binding can add a motion sensor to a zone, or give a button its `action`.
+        self.settle_recipes(Settle::default(), now);
         Ok(binding)
     }
 

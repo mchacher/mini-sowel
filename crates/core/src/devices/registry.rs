@@ -11,6 +11,7 @@ use super::model::{
     Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Id, PowerSource, Route,
     ValueType,
 };
+use crate::home::CLOCK_SET_AFTER_MS;
 use crate::live::{EngineEvent, LiveHandle, Topic};
 use crate::radio::measures::Value as MeasureValue;
 use crate::radio::{
@@ -109,10 +110,57 @@ impl Devices {
             item.orders.shrink_to_fit();
         }
         list.shrink_to_fit();
+        // A date read in 1970 (a former boot, before its clock was set) is unknown: its boot is
+        // gone, so it cannot be shifted.
+        let mut forgot = false;
+        for item in &mut list {
+            let unset = |date: &mut Option<u64>| {
+                if date.is_some_and(|d| d < CLOCK_SET_AFTER_MS) {
+                    *date = None;
+                    true
+                } else {
+                    false
+                }
+            };
+            forgot |= unset(&mut item.device.last_seen);
+            for data in &mut item.data {
+                forgot |= unset(&mut data.last_updated);
+                forgot |= unset(&mut data.last_changed);
+            }
+        }
         Devices {
             items: list,
+            values: forgot,
             ..Devices::default()
         }
+    }
+
+    /// The box's clock was just set: moves every date taken before it (still in 1970) forward by
+    /// the jump. Marks the values as changed, never the definitions. True when a date moved.
+    pub fn shift_before_clock(&mut self, jump: u64) -> bool {
+        let mut moved = false;
+        let shift = |date: &mut u64| {
+            if *date < CLOCK_SET_AFTER_MS {
+                *date = date.saturating_add(jump);
+                true
+            } else {
+                false
+            }
+        };
+        let shift_opt = |date: &mut Option<u64>| date.as_mut().is_some_and(shift);
+        for item in &mut self.items {
+            moved |= shift_opt(&mut item.device.last_seen);
+            moved |= shift(&mut item.device.created_at);
+            moved |= shift(&mut item.device.updated_at);
+            for data in &mut item.data {
+                moved |= shift_opt(&mut data.last_updated);
+                moved |= shift_opt(&mut data.last_changed);
+            }
+        }
+        if moved {
+            self.values = true;
+        }
+        moved
     }
 
     pub fn list(&self) -> &[DeviceWithDetails] {

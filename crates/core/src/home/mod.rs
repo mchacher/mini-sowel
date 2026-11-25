@@ -124,6 +124,9 @@ pub struct Home {
     sun_computations: Cell<u32>,
     /// The last sun data the aggregation saw, for `sunlight.changed`: one value.
     sun_seen: Sunlight,
+    /// The last wall time the home was given (`observe_wall`), kept here so that it survives the
+    /// radio restarts that call `engine::run` again.
+    last_wall: Option<u64>,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -219,6 +222,22 @@ impl Home {
             sun_cache: RefCell::new(None),
             sun_computations: Cell::new(0),
             sun_seen: Sunlight::default(),
+            last_wall: None,
+        }
+    }
+
+    /// Records the wall time of this turn. When the clock was never set at the last call (before
+    /// `CLOCK_SET_AFTER_MS`) and is now, every date of the devices taken meanwhile (still in 1970)
+    /// moves forward by the jump (see `Devices::shift_before_clock`). The first call only records. Call it first in each turn, before anything reads or writes a date.
+    pub fn observe_wall(&mut self, now: u64) {
+        let last = self.last_wall.replace(now);
+        if let Some(last) = last
+            && last < CLOCK_SET_AFTER_MS
+            && now >= CLOCK_SET_AFTER_MS
+        {
+            // The statuses of this turn are computed after, with the shifted `lastSeen`: a device
+            // heard during the wait stays online.
+            self.devices.shift_before_clock(now - last);
         }
     }
 
@@ -500,6 +519,8 @@ impl Home {
         self.live.emit(Topic::Zones, || EngineEvent::ZoneUpdated {
             zone: zone.clone(),
         });
+        // A zone moved under or out of an instance's zone changes its motion sources.
+        self.settle_recipes(Settle::default(), now);
         Ok(zone)
     }
 

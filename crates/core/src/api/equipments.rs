@@ -37,7 +37,9 @@ pub fn route(
             Err(e) => failure(&e),
         },
         (["equipments", _], _) => method_not_allowed(),
-        (["equipments", id, "data-bindings"], "POST") => add_data(home, id, request.body, random),
+        (["equipments", id, "data-bindings"], "POST") => {
+            add_data(home, id, request.body, now, random)
+        }
         (["equipments", id, "order-bindings"], "POST") => add_order(home, id, request.body, random),
         (["equipments", _, "data-bindings" | "order-bindings"], _) => method_not_allowed(),
         (["equipments", id, "data-bindings", binding], "DELETE") => {
@@ -185,9 +187,9 @@ fn binding_fields(body: &[u8], id_field: &str) -> Outcome<(String, String)> {
     Ok((target, input::alias(&alias)?))
 }
 
-fn add_data(home: &mut Home, id: &str, body: &[u8], random: Random) -> Response {
+fn add_data(home: &mut Home, id: &str, body: &[u8], now: u64, random: Random) -> Response {
     match binding_fields(body, "deviceDataId")
-        .and_then(|(data, alias)| home.add_data_binding(id, &data, &alias, random))
+        .and_then(|(data, alias)| home.add_data_binding(id, &data, &alias, now, random))
     {
         Ok(binding) => match Id::parse(id) {
             Some(equipment_id) => json(
