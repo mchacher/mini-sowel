@@ -3,9 +3,11 @@
 //! `lastSeen` every 10 minutes when they changed, and on stop or a flush. The storage is an
 //! adapter; only one thread (the radio loop) writes.
 
+use std::fmt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use serde::{Deserialize, Serialize, Serializer};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::model::{
     Device, DeviceData, DeviceOrder, DeviceWithDetails, Id, OrderList, Route, iso_option,
@@ -195,7 +197,7 @@ struct StoredDataOut<'a> {
 struct StoredIn {
     #[serde(flatten)]
     device: Device,
-    data: Vec<StoredDataIn>,
+    data: Vec<DeviceData>,
     orders: Vec<DeviceOrder>,
     /// Missing in a file written before spec 011.
     #[serde(default)]
@@ -204,36 +206,44 @@ struct StoredIn {
     endpoint: Option<u8>,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredDataIn {
-    #[serde(flatten)]
-    data: DeviceData,
-    /// Missing in a file written before spec 010: `null`.
-    #[serde(default, with = "iso_option")]
-    last_changed: Option<u64>,
-}
-
-/// The devices read back from the JSON `Devices::to_json` wrote.
-pub fn parse_list(json: &str) -> Result<Vec<DeviceWithDetails>, String> {
-    let list: Vec<StoredIn> = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    Ok(list
-        .into_iter()
-        .map(|item| DeviceWithDetails {
+impl From<StoredIn> for DeviceWithDetails {
+    fn from(item: StoredIn) -> Self {
+        DeviceWithDetails {
             device: item.device,
-            data: item
-                .data
-                .into_iter()
-                .map(|d| DeviceData {
-                    last_changed: d.last_changed,
-                    ..d.data
-                })
-                .collect(),
+            data: item.data,
             orders: item.orders,
             route: Route {
                 nwk: item.nwk,
                 endpoint: item.endpoint,
             },
-        })
-        .collect())
+        }
+    }
+}
+
+/// Reads the array one device at a time, into the final list (no list of read structures).
+struct ListVisitor;
+
+impl<'de> Visitor<'de> for ListVisitor {
+    type Value = Vec<DeviceWithDetails>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a list of devices")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        // Bounded by the file read; `Devices::from_list` cuts it to `MAX_DEVICES`.
+        let mut list = Vec::new();
+        while let Some(item) = seq.next_element::<StoredIn>()? {
+            list.push(DeviceWithDetails::from(item));
+        }
+        Ok(list)
+    }
+}
+
+/// The devices read back from the JSON `Devices::to_json` wrote.
+pub fn parse_list(json: &str) -> Result<Vec<DeviceWithDetails>, String> {
+    let mut de = serde_json::Deserializer::from_str(json);
+    let list = de.deserialize_seq(ListVisitor).map_err(|e| e.to_string())?;
+    de.end().map_err(|e| e.to_string())?;
+    Ok(list)
 }

@@ -3,6 +3,7 @@
 
 mod support;
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -1480,4 +1481,125 @@ fn a_colour_measure_from_a_device_without_colour_data_is_ignored() {
     let updates = colour_frame(&mut devices, &[("color_x", 0.2)], T0 + 1000);
     assert!(updates.is_empty());
     assert!(!keys(&devices.list()[0]).contains(&"color"));
+}
+
+// Spec 034: the texts of a device read back are the catalog's constants, and the read is one pass.
+
+/// One device with the given data and orders, in the JSON `devices.json` holds.
+fn stored_device(data: &str, orders: &str) -> String {
+    format!(
+        r#"[{{"id":"00000001-5a5a-4a5a-9a5a-5a5a5a5a5a5a","integrationId":"solite","sourceDeviceId":"0x00124b0012345600","name":"N","manufacturer":null,"model":null,"ieeeAddress":"0x00124b0012345600","zoneId":null,"source":"solite","status":"online","powerSource":"unknown","lastSeen":null,"createdAt":"2026-11-21T09:12:03.120Z","updatedAt":"2026-11-21T09:12:03.120Z","data":[{data}],"orders":[{orders}]}}]"#
+    )
+}
+
+fn one_data(key: &str, category: &str, unit: &str) -> String {
+    format!(
+        r#"{{"id":"00000002-5a5a-4a5a-9a5a-5a5a5a5a5a5a","key":"{key}","type":"number","category":"{category}","value":null,{unit}"lastUpdated":null,"lastChanged":null}}"#
+    )
+}
+
+#[test]
+fn a_data_read_back_borrows_its_known_key_category_and_unit() {
+    let json = stored_device(
+        &one_data("temperature", "temperature", r#""unit":"°C","#),
+        "",
+    );
+    let list = parse_list(&json).unwrap();
+    let data = &list[0].data[0];
+    assert!(matches!(data.key, Cow::Borrowed("temperature")));
+    assert!(matches!(data.category, Cow::Borrowed("temperature")));
+    assert!(matches!(data.unit, Some(Cow::Borrowed("°C"))));
+}
+
+#[test]
+fn an_escaped_unit_is_read_and_borrowed() {
+    let json = stored_device(
+        &one_data("temperature", "temperature", r#""unit":"\u00b0C","#),
+        "",
+    );
+    let list = parse_list(&json).unwrap();
+    assert!(matches!(list[0].data[0].unit, Some(Cow::Borrowed("°C"))));
+}
+
+#[test]
+fn an_unknown_category_and_unit_are_kept_owned_and_written_back() {
+    let json = stored_device(&one_data("co2", "air_quality", r#""unit":"ppm","#), "");
+    let devices = Devices::from_list(parse_list(&json).unwrap());
+    let data = &devices.list()[0].data[0];
+    assert!(matches!(&data.key, Cow::Owned(k) if k == "co2"));
+    assert!(matches!(&data.category, Cow::Owned(c) if c == "air_quality"));
+    assert!(matches!(&data.unit, Some(Cow::Owned(u)) if u == "ppm"));
+    let written = devices.to_json().unwrap();
+    assert!(written.contains(r#""key":"co2""#) && written.contains(r#""unit":"ppm""#));
+    assert!(written.contains(r#""category":"air_quality""#));
+}
+
+#[test]
+fn an_absent_or_null_optional_text_reads_none() {
+    let absent = stored_device(&one_data("battery", "battery", ""), "");
+    assert_eq!(parse_list(&absent).unwrap()[0].data[0].unit, None);
+    let null = stored_device(&one_data("battery", "battery", r#""unit":null,"#), "");
+    assert_eq!(parse_list(&null).unwrap()[0].data[0].unit, None);
+    let order = r#"{"id":"00000003-5a5a-4a5a-9a5a-5a5a5a5a5a5a","key":"brightness","type":"number","category":null,"valueOn":null}"#;
+    let list = parse_list(&stored_device("", order)).unwrap();
+    let order = &list[0].orders[0];
+    assert!(order.category.is_none() && order.value_on.is_none() && order.value_off.is_none());
+}
+
+#[test]
+fn an_order_read_back_borrows_its_texts() {
+    let order = r#"{"id":"00000003-5a5a-4a5a-9a5a-5a5a5a5a5a5a","key":"state","type":"boolean","category":"light_toggle","valueOn":"ON","valueOff":"OFF"}"#;
+    let list = parse_list(&stored_device("", order)).unwrap();
+    let order = &list[0].orders[0];
+    assert!(matches!(order.key, Cow::Borrowed("state")));
+    assert!(matches!(
+        order.category,
+        Some(Cow::Borrowed("light_toggle"))
+    ));
+    assert!(matches!(order.value_on, Some(Cow::Borrowed("ON"))));
+    assert!(matches!(order.value_off, Some(Cow::Borrowed("OFF"))));
+}
+
+#[test]
+fn the_realistic_devices_file_read_then_written_is_the_same_file() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../firmware/fixtures/devices.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let devices = Devices::from_list(parse_list(&text).unwrap());
+    assert_eq!(devices.to_json().unwrap(), text.trim_end());
+}
+
+#[test]
+fn a_file_from_before_specs_010_and_011_reads_no_last_changed_and_no_route() {
+    let data = r#"{"id":"00000002-5a5a-4a5a-9a5a-5a5a5a5a5a5a","key":"temperature","type":"number","category":"temperature","value":null,"unit":"°C","lastUpdated":null}"#;
+    let list = parse_list(&stored_device(data, "")).unwrap();
+    assert_eq!(list[0].data[0].last_changed, None);
+    assert_eq!(list[0].route, solite_core::devices::Route::default());
+}
+
+#[test]
+fn a_last_changed_in_the_file_is_read_into_the_data() {
+    let data = r#"{"id":"00000002-5a5a-4a5a-9a5a-5a5a5a5a5a5a","key":"temperature","type":"number","category":"temperature","value":null,"lastUpdated":null,"lastChanged":"2026-11-21T09:12:03.120Z"}"#;
+    let list = parse_list(&stored_device(data, "")).unwrap();
+    assert_eq!(list[0].data[0].last_changed, Some(T0));
+}
+
+#[test]
+fn an_empty_file_list_is_an_empty_list_and_a_truncated_one_is_an_error() {
+    assert!(parse_list("[]").unwrap().is_empty());
+    let json = stored_device(&one_data("battery", "battery", ""), "");
+    assert!(parse_list(&json[..json.len() - 5]).is_err());
+    assert!(parse_list(&format!("{json} x")).is_err());
+}
+
+#[test]
+fn seventy_devices_in_the_file_are_cut_to_64_by_from_list() {
+    let one = stored_device("", "");
+    let item = &one[1..one.len() - 1];
+    let json = format!("[{}]", vec![item; 70].join(","));
+    let list = parse_list(&json).unwrap();
+    assert_eq!(list.len(), 70);
+    assert_eq!(Devices::from_list(list).list().len(), MAX_DEVICES);
 }

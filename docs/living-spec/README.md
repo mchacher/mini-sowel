@@ -60,7 +60,7 @@ Each of the three programs starts and says which tool it is, with its version:
   with a power-on reset opens pairing for 180 seconds, and so does the serial console's `pair` line
   at any time (see "Pairs a device"). Every 240 seconds it
   logs `serial: <baud> baud, rx buffer 4096 B, highest <n> B, full <k> times` and `heap: internal
-  <n> KB free (min <m> KB), psram <p> KB free (min <q> KB), engine stack <s> KB unused of 32 KB, http stack <s> KB unused of <t> KB`.
+  <n> KB free (min <m> KB), largest block <l> KB, psram <p> KB free (min <q> KB), largest block <r> KB, engine stack <s> KB unused of 32 KB, http stack <s> KB unused of <t> KB`.
   The radio image is a development image: its API is open on the local network (decision D33).
   It writes a change of definitions (a device, a zone, an equipment, a binding, a recipe instance)
   2 seconds after it first sees it unsaved, so a burst of changes gives one write per file; a stop
@@ -1195,8 +1195,8 @@ full queues, the orders queues full). Both are checked by tests on the Mac, whos
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
 measuring image; they are written in `docs/memory-budget.md`, "On the box". The radio image logs
-its own `heap:` line (the minimums since boot, the engine stack's and the workers' stack's
-high-water marks) and, once, `memory-network:` (a snapshot with the server idle, for information),
+its own `heap:` line (the minimums since boot, the largest free block of each memory, the
+fragmentation's indicator, the engine stack's and the workers' stack's high-water marks) and, once, `memory-network:` (a snapshot with the server idle, for information),
 and `box.sh
 log --image radio` fails when its internal RAM minimum is below the 64 KB reserve.
 `docs/memory-budget.md` has a row for the internal RAM with Wi-Fi up (the `memory-network:`

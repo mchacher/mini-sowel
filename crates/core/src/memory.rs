@@ -88,9 +88,13 @@ pub struct HeapStats {
     pub internal_free: usize,
     /// The lowest internal RAM free since boot.
     pub internal_min: usize,
+    /// The largest free block of internal RAM (fragmentation indicator).
+    pub internal_largest: usize,
     pub psram_free: usize,
     /// The lowest PSRAM free since boot.
     pub psram_min: usize,
+    /// The largest free block of PSRAM; 0 when there is none.
+    pub psram_largest: usize,
     /// Stack bytes never used by the engine thread (its high-water mark).
     pub stack_unused: usize,
     /// The engine thread's whole stack.
@@ -100,9 +104,9 @@ pub struct HeapStats {
     pub http_stack: Option<(usize, usize)>,
 }
 
-/// The line the radio image logs every few minutes: `heap: internal 120 KB free (min 90 KB), psram
-/// 1700 KB free (min 1650 KB), engine stack 20 KB unused of 32 KB`, followed by `, http stack 6 KB
-/// unused of 10 KB` when the image serves HTTP. Sizes in KiB, rounded down.
+/// The line the radio image logs every few minutes: `heap: internal 120 KB free (min 90 KB),
+/// largest block 60 KB, psram 1700 KB free (min 1650 KB), largest block 1500 KB, engine stack 20 KB
+/// unused of 32 KB`, followed by `, http stack 6 KB unused of 10 KB` when the image serves HTTP. Sizes in KiB, rounded down.
 pub fn heap_line(stats: &HeapStats) -> String {
     let http = stats
         .http_stack
@@ -114,11 +118,13 @@ pub fn heap_line(stats: &HeapStats) -> String {
             )
         });
     format!(
-        "heap: internal {} KB free (min {} KB), psram {} KB free (min {} KB), engine stack {} KB unused of {} KB{http}",
+        "heap: internal {} KB free (min {} KB), largest block {} KB, psram {} KB free (min {} KB), largest block {} KB, engine stack {} KB unused of {} KB{http}",
         kib(stats.internal_free),
         kib(stats.internal_min),
+        kib(stats.internal_largest),
         kib(stats.psram_free),
         kib(stats.psram_min),
+        kib(stats.psram_largest),
         kib(stats.stack_unused),
         kib(stats.stack_total),
     )

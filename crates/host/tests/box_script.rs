@@ -1398,7 +1398,7 @@ fn radio_log() -> String {
          I (3900) solite: clock: synced, 2026-11-22T10:00:00.000Z\n\
          I (13300) solite: memory-network: internal 150 KB free (largest block 80 KB), psram 1800 KB free of 2048 KB\n\
          I (240500) solite: serial: 115200 baud, rx buffer 4096 B, highest 212 B, full 0 times\n\
-         I (240501) solite: heap: internal 120 KB free (min 95 KB), psram 1900 KB free (min 1850 KB), engine stack 20 KB unused of 32 KB\n",
+         I (240501) solite: heap: internal 120 KB free (min 95 KB), largest block 60 KB, psram 1900 KB free (min 1850 KB), largest block 1800 KB, engine stack 20 KB unused of 32 KB\n",
     )
 }
 
@@ -1414,7 +1414,7 @@ fn log_checks_a_good_radio_log_and_prints_its_radio_lines() {
         "network: resumed",
         "pairing: open for 180 s",
         "serial: 115200 baud, rx buffer 4096 B",
-        "heap: internal 120 KB free (min 95 KB)",
+        "heap: internal 120 KB free (min 95 KB), largest block 60 KB, psram 1900 KB free (min 1850 KB), largest block 1800 KB",
     ] {
         assert!(out.text.contains(line), "{line} missing in {}", out.text);
     }
