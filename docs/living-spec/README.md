@@ -1099,6 +1099,68 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   lines, both strapping pins of the ESP32), GPIO13 and GPIO17 (the UART): a test checks it. The box
   and measuring images leave the radio untouched.
 
+#### Runs a box session in one command
+
+`sh scripts/box-session.sh [--yes-flash --backup <file>] [--factory-reset] [--with-gestures]
+[--port <device>] [--address <address>[:<port>]]` runs, in one pass and with no prompt between the
+steps, every check of the roadmap's "Tests to run with the box in hand" that needs no hand gesture,
+through `box.sh` (decision D55). `--yes-flash` is the user's yes of decision D6 for that run: typed
+by the user in their terminal (refused when `/dev/tty` cannot be opened: `box-session: --yes-flash
+is typed by the user in a terminal`, exit 2), never added by an agent; it needs `--backup <file>`
+(or `SOLITE_BOX_BACKUP`), passed to `box.sh flash`, which checks it (missing: exit 2, nothing run).
+Without it nothing is flashed and nothing is written through the API: preflight, the image size,
+`identify` and the boot log only, every other step `skipped (needs --yes-flash)`.
+
+- **Steps** <!-- check-docs: allow -->, in a fixed order: P1 preflight (it warns when the working tree has changes under
+  `crates/` or `firmware/`); P2 an update key made with `--update-keygen` in the run folder; P3 the
+  radio image built with that key; P4 a next version (patch + 1) and a rollback image (patch + 2,
+  panics at start) built in a copy of `HEAD` outside the repository, signed, and a copy with one
+  signature byte flipped; P5 the radio image's size against the `ota_0` slot; B1 `identify`; B2
+  `box.sh flash --image radio --keep-storage --backup <file>` (`storage` is never erased); B3
+  `box.sh log --image radio --budget 1` with the internal RAM free and largest block, the PSRAM
+  free, the internal minimum and the storage used, read from the serial log; B4 the
+  authentication checks inside `box.sh saves --budget 3`; B5 the second boot (`network: resumed`,
+  one banner, no token in the serial log); B6 `measure-api.sh` inside `saves --budget 5`; B7 the
+  home checks inside `saves --budget 4`; B8 the update checks, outside `saves` (the box restarts);
+  B9 `box.sh log --raw --seconds 300 --budget 1` and its `heap:` line; B10 the factory reset inside
+  `saves --budget 7`, only with `--factory-reset` (it erases the home). A step whose dependency
+  failed is `skipped (after <id> <outcome>)`.
+- **The checks**: authentication (status, setup or login, one login timed, at most 2 s, 401
+  without a token, `/ws` closed 4001 without a token and live with it, the pairing route behind the
+  token, the 429 of the 11th attempt in a minute); home (the backup exported and imported back, the
+  location and time zone set from `SOLITE_HOME_LATITUDE`, `SOLITE_HOME_LONGITUDE` and
+  `SOLITE_HOME_TIMEZONE` and read back, the sun times after the clock is set, `GET
+  /api/v1/system/timezone`, the devices' dates and status, and on the box the 5th request `Busy`
+  and a client that stops reading); update (401 without a token, a flipped signature refused, the
+  next version installed and running within 180 s with the settings kept, confirmed after 75 s, the
+  rollback image installed and rolled back after a restart is proven); reset (204, setup required,
+  setup again). Every group closes, as soon as it holds a token, the pairing window that each power-on boot
+  opens, so no device joins during a counted step.
+- **Stops**: `identify` refusing the box, a failed flash, a failed boot after it, a failed rollback
+  (the report names the way back, a USB flash) or a `saves` over its budget stop the box steps:
+  the later ones are `skipped (stopped after <id>)`. No step is repeated.
+- **Secrets**: the password is `SOLITE_PASSWORD`, else the password file (`$SOLITE_PASSWORD_FILE`,
+  by default `$HOME/.config/solite/box-password`, `<run folder>/password` with `--api-only`); a box with no account is set up with a password
+  generated into that file (0600, never overwritten), named on the verdict line, never printed. The
+  key is removed when the run ends, however it ends.
+- **Output**: one line per step, `box-session: <id> <name>: OK|KO|skipped (<reason>)`, a group's
+  checks on lines of their own, then `box-session: <k> OK, <m> KO, <s> skipped; log: <path>`;
+  every command's output is in `session.log` of the run folder (`$TMPDIR/solite-box-session/<date>`,
+  0700, refused inside the repository). Exit 0 with no KO, 1 with one, 2 for a usage error.
+- **Gestures**: eleven checks that need a person (a power cut, a hand in front of the sensor, the
+  access point off, the relay unplugged, the browser, an unplug during an update, a colour bulb)
+  are `skipped (needs a person: <what>)`, or, with `--with-gestures`, asked one by one on the
+  terminal after the automatic steps (`y` OK, `n` KO, `s` skipped).
+- `--api-only <address>[:<port>]` runs the same groups and `measure-api.sh` against the Mac host's
+  `--serve`, with no box and no firmware build (the host program makes the key and signs 16 bytes
+  for the refused signature); the box-only checks are `skipped (box only)`. Only `127.0.0.1`,
+  `localhost` and `::1` are accepted (`box-session: --api-only is for the Mac host (127.0.0.1,
+  localhost, ::1): <address> refused`, exit 2).
+
+`sh scripts/validate.sh` prints, after the firmware builds, each image's size and its share of the
+4 MB `ota_0` slot (`<image>: <n> KB, <p> % of the 4096 KB ota_0 slot`), with `WARNING: above 75 %
+of the slot` past three quarters.
+
 ### Measures the coverage of Zigbee2MQTT's definitions
 
 A tool on the Mac, `tools/z2m-coverage` (`npm run report` in its folder), loads the pinned version

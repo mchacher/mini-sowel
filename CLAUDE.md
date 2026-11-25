@@ -67,6 +67,7 @@ sh scripts/qemu.sh                               # the engine run in the firmwar
 sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them)
 sh scripts/box.sh saves --budget <n> -- <command>  # one test on the box, saves held then flushed once (D39: no loop on the box)
 sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
+sh scripts/box-session.sh --yes-flash --backup <file> | --api-only <port>  # the box session in one pass (the user types it, D55) | its API checks on the Mac
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
@@ -76,7 +77,8 @@ sh scripts/validate.sh [--skip-slow] --only rust|ui|firmware|e2e  # a third (CI 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, the Sowel contract, tests, UI size budget, the four
 ESP32 firmware images and the engine's run in QEMU. It must be green before any commit. After a
 fresh clone: `git config core.hooksPath .githooks` (Claude's commit hook also sets it). **Never
-flash the Dongle Max** without the user's explicit yes: its original firmware exposes the radio
+flash the Dongle Max** without the user's explicit yes (their own `--yes-flash` on `box-session.sh`, typed
+by them, is one, for that run; never add the flag yourself): its original firmware exposes the radio
 over TCP for development (decision D6).
 
 ## How we work

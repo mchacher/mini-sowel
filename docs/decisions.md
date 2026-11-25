@@ -977,3 +977,26 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   the Wi-Fi link would roll back a good update when the router is off. A minute catches an image
   that crashes or stalls at start; five minutes leave room for a slow radio start. Without a USB
   flash first, a box keeps working and accepts updates but cannot roll back: said in the box run.
+
+## D55: The box session's `--yes-flash` is the user's yes, given once on the command line, for that run (refines D6 and D39)
+
+- **Date**: 2026-11-25 (spec 033, decided in an autonomous run, for the user's review)
+- **Choice**: `scripts/box-session.sh` runs the roadmap's box checks in one pass. The user typing
+  `--yes-flash` in their own terminal is their D6 yes for that run only: one USB flash of the radio
+  image with `--keep-storage`, the API writes of the checks inside `box.sh saves` with D39's
+  budgets, two signed updates and the rollback they cause. Claude never adds the flag to a command
+  it runs, no agent message is the yes, and the script refuses the flag when `/dev/tty` cannot be
+  opened. Without it, the script flashes nothing and writes nothing through the API (the read-only
+  steps only). With it, the original firmware's backup is required (`--backup`, checked by
+  `box.sh flash`), although `box.sh flash` alone keeps it optional (D35): an unattended run flashes
+  only a box whose way back is proven. `storage` is never erased; no step is repeated or looped;
+  a `saves` over its budget stops the run. The factory reset, which erases the user's home, needs
+  its own flag, `--factory-reset`. The update key is made at run time and removed when the run
+  ends; a password the run creates is kept in `$HOME/.config/solite/box-password` (0600), outside
+  the repository, and `SOLITE_PASSWORD` overrides it. The home check sets the user's real location
+  and time zone from `SOLITE_HOME_LATITUDE`, `SOLITE_HOME_LONGITUDE` and `SOLITE_HOME_TIMEZONE`
+  (environment only, never in the repository), so specs 026 and 027 are checked end to end.
+- **Why**: the checks of a session were run one command at a time from a conversation, each with
+  its own yes; one yes for one pass keeps D6's intent (nothing is flashed without the user's
+  decision) and D39's (one pass, counted writes) while the session costs one command and one
+  report.

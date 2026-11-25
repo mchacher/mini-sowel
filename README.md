@@ -60,6 +60,7 @@ cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconf
 sh scripts/e2e-sim.sh                             # the simulated path driven in headless Chromium (cd tools/e2e && npm ci first)
 sh scripts/qemu.sh                                # the engine run in an emulated ESP32: its `engine:` line
 sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log [--budget], wifi, pair, saves; --image box|sim|radio)
+sh scripts/box-session.sh --yes-flash --backup <file>   # the whole box session in one pass (typed by the user: it flashes, D55); --api-only <port> on the Mac
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
 sh scripts/validate.sh                            # every check, the slow tests and QEMU included: must be green before a commit
 ```
