@@ -81,6 +81,16 @@ fw_elf2image() {
   [ "$APP_SIZE" -le "$SLOT_BYTES" ] || fw_fail "app.bin ($APP_SIZE bytes) is larger than the ota_0 slot ($SLOT_BYTES bytes)."
 }
 
+# One line of the image sizes (spec 033 R7): $1 the image's name, $2 its application image; needs
+# SLOT_BYTES (fw_build_table). `<name>: <n> KB, <p> % of the <s> KB ota_0 slot`, with a warning
+# above 75 % of the slot.
+fw_size_line() {
+  size=$(wc -c < "$2" | tr -d ' ')
+  line="$1: $((size / 1024)) KB, $((size * 100 / SLOT_BYTES)) % of the $((SLOT_BYTES / 1024)) KB ota_0 slot"
+  [ $((size * 100)) -gt $((SLOT_BYTES * 75)) ] && line="$line WARNING: above 75 % of the slot"
+  echo "$line"
+}
+
 # A broken boot. $1 the log, $2 the way to count resets: `qemu` (the ROM's reset line, "rst:", seen
 # a second time) or `box` (one after the first banner `solite <version>`: the resets before it,
 # from the port opening or the script's own reset, are not counted).

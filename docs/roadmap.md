@@ -40,46 +40,48 @@ this order (each through `/solite-feature` or `/solite-fix`):
 
 ### Tests to run with the box in hand
 
-One session, the user present, after their yes to flash (D6), saves held and flushed once (D39:
-no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a row above.
+One session, the user present: `sh scripts/quiet.sh --tail 60 sh scripts/box-session.sh
+--yes-flash --backup <the backup>` (spec 033), typed by the user (their D6 yes, D55), with
+`SOLITE_HOME_LATITUDE`, `SOLITE_HOME_LONGITUDE` and `SOLITE_HOME_TIMEZONE` set; add
+`--with-gestures` for the person's checks, `--factory-reset` for J4's reset. One pass, saves held
+and flushed once per step (D39), `--keep-storage`. Each item says the step that runs it, or that it
+stays a person's. The first run is expected to show route or timing mismatches (`/solite-fix`).
 
-- Spec 025: flash the radio image; `SOLITE_PASSWORD=<password> box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'`
-  (33 requests, one flush); `box.sh log --image radio --seconds 60 --budget 1`.
-- Spec 026: inside `box.sh saves --budget 2`, `PUT /api/v1/settings` (location, time zone) and
-  `POST /api/v1/backup`; local sun times in `GET /api/v1/zones/aggregation`; by day, motion does
-  not switch the ZBMINIR2 on with "Inactive during day".
-- Spec 027: inside `box.sh saves --budget 1`, `PUT` of the time zone then
-  `GET /api/v1/system/timezone`; the home lock per batch of measures timed (a log line to add).
-- Spec 023, not run yet: the lost link, a 1970 date after a boot with the access point off, a
-  wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered
-  relay, the console's long and unknown lines, a client that stops reading.
-- Spec 021, not run yet: a second boot, the power-cut case, a forming of the network, the ZBMINIR2.
-- The 33 requests over 10 s and the lost request: where the time goes (E3d's day-long run waits
-  for it).
-- Spec 028: a device heard before the clock is set (a boot with the ZBMINIR2 powered) shows a
-  real `lastSeen` in `GET /api/v1/devices` after the clock, and stays `online`.
-- Spec 029 (J4): within 10 minutes of a power-on, the interface asks for the password; the setup
-  inside `box.sh saves --budget 1` (one write of `auth.json`); one login timed (PBKDF2 at 10 000
-  iterations, expected 0.5 to 1 s); `/ws` live in the browser with the token (4001 without it, no
-  token in the serial log); Discovery's "Add a device" opens pairing from the interface; the 11th
-  login in a minute answers 429; a software restart asks to log in again and keeps the account.
+- Spec 025: the flash (B2), `measure-api.sh` inside `saves --budget 5` (B6), the boot log with
+  its budget (B3). Run by the script.
+- Spec 026: the backup exported and imported back, the location and time zone set, the sun times
+  (B7), kept after a restart (B8). Run by the script. By day, motion does not switch the ZBMINIR2
+  on with "Inactive during day": a person's (H3).
+- Spec 027: the time zone then `GET /api/v1/system/timezone` (B7). Run by the script. The home
+  lock per batch of measures timed: not run (the log line does not exist).
+- Spec 023: the 4 requests in progress and the 5th `Busy`, a client that stops reading (B7): run
+  by the script. The lost link (H4), a 1970 date after a boot with the access point off (H5), the
+  unpowered relay (H6): a person's. A wrong password and `wifi --forget`: a person's, outside the
+  script (they cut the box off the network). The console's long and unknown lines: not run
+  (`box.sh` sends no raw line; inbox).
+- Spec 021: a second boot (B5) run by the script; the power cut (H1), the ZBMINIR2 (H2): a
+  person's; a forming of the network: not run (it needs `storage` erased).
+- The 33 requests over 10 s and the lost request: B6 prints the total and the slowest; where the
+  time goes stays to read in the serial log (E3d's day-long run waits for it).
+- Spec 028: devices' dates and status after the clock (B7). Run by the script (the ZBMINIR2
+  powered at boot).
+- Spec 029 (J4): the setup within 10 minutes of a power-on inside `saves --budget 3`, one login
+  timed, 401 without a token, `/ws` 4001 without the token and live with it, the pairing route
+  behind the token, the 429 (B4); no token in the serial log (B5); the factory reset with
+  `--factory-reset` (B10). Run by the script. The browser's login, live page and Discovery's "Add a
+  device" (H7), a software restart asks to log in again (H8): a person's.
 - Spec 031 (needs a real Zigbee 3.0 colour bulb, which the user may not have; from the Mac over
   the Dongle Max's radio, nothing flashed): pair it; `reporting: ... light_color`; `color_temp`
   and `color` shown; `POST .../orders/color_temp {"value":250}` and
   `.../orders/color {"value":{"x":0.2,"y":0.6}}` change the bulb and are read back; a hue and
   saturation order; an order while the bulb is off (does it apply?); the proposal `light_color`.
-  Note the bulb's model and what was seen in spec 031.
-- Spec 032 (J5; the first part writes the flash: one pass, no loop, D39): after the user's yes,
-  one USB flash of the radio image with `--keep-storage` (it brings the bootloader with
-  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, which an update over the air never replaces); then one
-  OTA install of a higher signed version from the interface's Firmware update card, the restart,
-  `update: running image confirmed` a minute later, the internal RAM free read in the `heap:` line
-  (the OTA thread's 6 KB stack); then one image that panics at start (a local throwaway change,
-  not committed) installed: the box comes back to the previous image. The log is read with
-  `box.sh log --raw` (the checked mode fails on the second banner a restart prints). Also an
-  unplug during the minute after an update; the stack high-water marks of an API worker (10 KB,
-  the signature check) and of the OTA thread (6 KB) after one install; whether the browser shows
-  the error when the box refuses an upload before reading it.
+  Note the bulb's model and what was seen in spec 031. A person's (H11).
+- Spec 032 (J5): the USB flash with the key (B2, it brings the rollback bootloader), a flipped
+  signature refused, the next version installed from a signed file, running and confirmed, a
+  panicking image installed and rolled back (B8), the `heap:` line of the updated image (B9). Run
+  by the script. An unplug during the minute after an update (H9) and the Firmware update card's
+  error (H10): a person's. The stack high-water marks of an API worker and of the OTA thread just
+  after an install: not run (B9 reads a fresh boot).
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -178,6 +180,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-25 | `box.sh` sends one raw line to the radio image's console, so the session checks spec 023's long and unknown console lines | spec 033 |
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
 | 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
@@ -198,7 +201,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); looked at again in J6 (spec 026): kept, and the aggregation, GET included, also emits `sunlight.changed` when the sun data changed | Architecture review 2026-11-22 |
 | 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `SOLITE_PASSWORD=<password> box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
-| 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 2`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
+| 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 3`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
 | 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
 | 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
 | 2026-11-24 | Sowel alignment, what is left of D41 (D44): `GET /api/v1/settings/timezones` has no Sowel counterpart; `GET /api/v1/system/timezone` answers `source: "env"` for the setting, `fallback` with a location, and the offset now | Spec 026, spec 027 |
@@ -402,3 +405,7 @@ Every change to this roadmap: date, what changed, why.
   to run (one USB flash, one OTA install, one image that panics), and the inbox lines for a release
   feed, Sowel's `system.update.*` events, Secure Boot V2, publishing a release, key rotation.
 - 2026-11-25: the QEMU peak of 363 KB (D27's ceiling 350 KB) came from the simulator's memory file, written whole by `to_string_pretty` (its text passed 32 KB with spec 031, the buffer doubled to 64 KB). Written in a stream now: 327 KB in QEMU, ceiling and D27 unchanged. Inbox: the QEMU ceiling's scope, the home's loading in a stream, interned device texts, an internal-RAM threshold on the box.
+- 2026-11-25: spec 033 built on the Mac (the user away, the box not run): `scripts/box-session.sh`
+  runs the tests with the box in hand in one command, on the user's `--yes-flash` (D55); the list
+  above says, item by item, the step that runs it or that it stays a person's; `validate.sh`
+  prints the firmware images' share of the slot. New inbox line: a raw console line in `box.sh`.

@@ -120,15 +120,36 @@ if want firmware; then
     echo "validate: the ESP32 toolchain is not set up (espup install, see README.md)." >&2
     exit 1
   fi
+  # The size of each image (spec 033 R7): its application image is made right after its build (the
+  # three images that are not the radio's share one ELF path), into a temporary folder.
+  ROOT=$(pwd -P)
+  fw_fail() { echo "validate: $1" >&2; exit 1; }
+  . scripts/lib/firmware.sh
+  sizes_dir=$(mktemp -d "${TMPDIR:-/tmp}/solite-sizes.XXXXXX")
+  trap 'rm -rf "$sizes_dir"' EXIT
+  : >"$sizes_dir/lines"
+  # $1 the image's name, $2 its ELF. The tools exist once the first build has downloaded ESP-IDF.
+  measure_image() {
+    if [ ! -f "$sizes_dir/table.bin" ]; then
+      fw_find_tools
+      fw_build_table partitions.csv "$sizes_dir/table.bin"
+    fi
+    fw_elf2image "$2" "$sizes_dir/app.bin"
+    fw_size_line "$1" "$sizes_dir/app.bin" >>"$sizes_dir/lines"
+  }
   (
     cd firmware
     cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings
+    measure_image box target/xtensa-esp32-espidf/release/solite-firmware
     cargo build --release --features sim --quiet && cargo clippy --release --features sim --quiet -- -D warnings
+    measure_image sim target/xtensa-esp32-espidf/release/solite-firmware
     cargo build --release --features flash-saves --quiet && cargo clippy --release --features flash-saves --quiet -- -D warnings
+    measure_image flash-saves target/xtensa-esp32-espidf/release/solite-firmware
     # The radio image has its own target folder and its own ESP-IDF settings (spec 021 R1.1): the
     # other images keep theirs.
     export CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults"
     cargo build --release --features radio --quiet && cargo clippy --release --features radio --quiet -- -D warnings
+    measure_image radio target/radio/xtensa-esp32-espidf/release/solite-firmware
     # The settings file was read: the UART interrupt is in internal RAM in the radio build, and
     # in none of the others.
     grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
@@ -149,6 +170,11 @@ if want firmware; then
     grep -aqF 'solite-ui ' "$elf" || { echo "validate: the radio image holds no embedded interface (no solite-ui marker)" >&2; exit 1; }
     grep -aqF "$script" "$elf" || { echo "validate: the radio image does not embed the current ui/dist ($script missing): rebuild it" >&2; exit 1; }
   )
+
+  step "Firmware: image sizes"
+  cat "$sizes_dir/lines"
+  rm -rf "$sizes_dir"
+  trap - EXIT
 
   if $slow; then
     step "Firmware: the engine runs in QEMU (heap peak and internal RAM checked)"
