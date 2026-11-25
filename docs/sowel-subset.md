@@ -142,6 +142,8 @@ interface's files).
 | `POST /api/v1/auth/refresh` | New tokens (Sowel's, D47) |
 | `POST /api/v1/auth/logout` | Closes the session (Sowel's, D47) |
 | `POST /api/v1/system/factory-reset` | Erases the home and the account (deviation, D48) |
+| `GET /api/v1/system/version` | The running version (Sowel's `VersionInfo`, a subset, D53) |
+| `POST /api/v1/system/update` | Installs the signed update file in its body (Sowel's route takes none, D53) |
 
 ## Equipment types with behaviour
 
@@ -163,7 +165,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49).
+D44, D47 to D49, D53).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -180,3 +182,10 @@ answers 403 `{"error", "confirmRequired": true}` until a person at the box confi
 rate limit for the box (10 attempts per minute on setup and login together); `/ws` reads the token
 from the first `bearer.` subprotocol other than `bearer.none`, and the box echoes `bearer.none`
 only, so a client that offers `bearer.<token>` alone gets no subprotocol echoed there (D49).
+
+Differences of value in the updates (D53), none a new name: `POST /api/v1/system/update` takes the
+signed update file as its body (`application/octet-stream`; Sowel's route takes none and pulls
+the release itself) and answers Sowel's `{success, message}`, its `{error}` shape and its 409
+`Update already in progress`; `GET /api/v1/system/version` answers `current`, `latest` (always
+`null`), `updateAvailable` (always `false`) and `releaseUrl` (`null`), without Sowel's two Docker
+fields (`dockerAvailable`, `composeManaged`).

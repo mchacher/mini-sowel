@@ -31,3 +31,10 @@ CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 # than 8.3 (`devices.json`), so long file names are on, their buffer taken from the heap.
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=64
+
+# App rollback (spec 032, decision D54): an image booted after an update stays on probation until the
+# program confirms it, and the bootloader returns to the previous image after a reset before that.
+# It is a BOOTLOADER setting: an update over the air replaces the application, never the
+# bootloader, so it reaches the box only through the bootloader that `scripts/box.sh flash` writes.
+# Until the box has been flashed once over USB, no image is put on probation and nothing rolls back.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

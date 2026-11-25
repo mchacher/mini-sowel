@@ -3,6 +3,8 @@
 //! from JSON for the categories no catalog device gives, and measure events.
 #![allow(dead_code)]
 
+pub mod update_fake;
+
 use serde_json::{Value as Json, json};
 use solite_core::api::{Reach, Request, Response, handle};
 use solite_core::devices::{Devices, parse_list};

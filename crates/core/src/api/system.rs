@@ -1,6 +1,9 @@
 //! `/system/timezone` (Sowel's `src/api/routes/system.ts`): the home's time zone as
-//! `{tz, source, offsetHours}`. Sowel's other `/system` routes (version, update, mode...) are
-//! not Solite's. `POST /system/factory-reset` is Solite's (spec 029, D48).
+//! `{tz, source, offsetHours}`; `GET /system/version`: Sowel's `VersionInfo` (spec 032, a subset:
+//! no Docker fields, `latest` always null). `POST /system/update` is the streaming handler's
+//! (`Reply::Update`, spec 032, D53): only its other methods are answered here. Sowel's other
+//! `/system` routes (mode...) are not Solite's. `POST /system/factory-reset` is Solite's (spec 029,
+//! D48).
 
 use serde::Serialize;
 use serde_json::{Number, Value};
@@ -16,6 +19,8 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["system", "timezone"], _) => method_not_allowed(),
         (["system", "factory-reset"], "POST") => factory_reset(home, request.body, now),
         (["system", "factory-reset"], _) => method_not_allowed(),
+        (["system", "version"], "GET") => version(),
+        (["system", "version"] | ["system", "update"], _) => method_not_allowed(),
         _ => error(404, "Not found"),
     }
 }
@@ -33,6 +38,29 @@ fn factory_reset(home: &mut Home, body: &[u8], now: u64) -> Response {
         Ok(()) => no_content(),
         Err(e) => failure(&e),
     }
+}
+
+/// Sowel's `VersionInfo` without its Docker fields, its keys in Sowel's order.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VersionInfo {
+    current: &'static str,
+    latest: Option<&'static str>,
+    update_available: bool,
+    release_url: Option<&'static str>,
+}
+
+/// The running version, no release known.
+fn version() -> Response {
+    json(
+        200,
+        &VersionInfo {
+            current: crate::VERSION,
+            latest: None,
+            update_available: false,
+            release_url: None,
+        },
+    )
 }
 
 /// Sowel's `{tz, source, offsetHours}`, its keys in Sowel's order.

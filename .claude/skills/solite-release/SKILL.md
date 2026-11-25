@@ -41,9 +41,11 @@ Present the version and the notes.
 
 1. Commit (`chore(release): vX.Y.Z`, no AI attribution line) and tag `vX.Y.Z`.
 2. With a remote: push `main` and the tag.
-3. The tag is the release while the firmware is not distributed. Once the firmware is published
-   for Sowel users (signed binary, OTA manifest: see the roadmap), follow the steps written in
-   `docs/living-spec/` for publishing a firmware, and never publish one that is not signed.
+3. The tag is the release while the firmware is not distributed. To make the signed update file
+   of a firmware, follow "Signing a release" in `docs/living-spec/README.md` (key outside the
+   repository, build with `SOLITE_UPDATE_PUBLIC_KEY`, `espflash save-image`, `--update-sign`);
+   where the signed file is hosted and its manifest are not written yet (see the roadmap's inbox),
+   and never publish a firmware that is not signed.
    Never flash the user's box as part of a release without their explicit yes.
 4. Tell the user where the version is, and how users get it.
 

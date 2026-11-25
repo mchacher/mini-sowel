@@ -97,11 +97,18 @@ export type Route =
 /** A `fetch` that answers from a table keyed by `"GET /api/v1/zones"`; every call is recorded. */
 export function mockApi(routes: Record<string, Route | Route[]>) {
   const calls: { key: string; body: unknown }[] = [];
+  const headersOf: Record<string, string>[] = []; // parallel to `calls`
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const key = `${method} ${url}`;
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    // A string is JSON; an upload (a File) is recorded as it is.
+    const body = !init?.body
+      ? undefined
+      : typeof init.body === "string"
+        ? JSON.parse(init.body)
+        : init.body;
     calls.push({ key, body });
+    headersOf.push((init?.headers ?? {}) as Record<string, string>);
     const entry = routes[key];
     // A list answers its first item once, then the next, the last one for good.
     const route: Route = Array.isArray(entry)
@@ -115,7 +122,12 @@ export function mockApi(routes: Record<string, Route | Route[]>) {
     });
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, calls, count: (key: string) => calls.filter((c) => c.key === key).length };
+  return {
+    fetchMock,
+    calls,
+    headersOf,
+    count: (key: string) => calls.filter((c) => c.key === key).length,
+  };
 }
 
 export function zone(

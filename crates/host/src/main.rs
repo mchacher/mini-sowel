@@ -8,6 +8,8 @@ mod random;
 mod serve;
 mod static_files;
 mod store;
+mod update_cli;
+mod update_files;
 mod ws;
 
 use std::path::{Path, PathBuf};
@@ -29,7 +31,9 @@ use store::{FileStore, show_on_stderr};
 
 const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
 --sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
-[--data <dir>]";
+[--data <dir>] | \
+--update-keygen <file> | \
+--update-sign <image> --version <x.y.z> --key <file> --out <file>";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
 /// Port of `--serve` when it has no number.
@@ -73,6 +77,8 @@ struct Args {
     /// The folder of the interface's files (`--serve` only).
     ui: Option<PathBuf>,
     data: PathBuf,
+    /// `--update-keygen` or `--update-sign`: a task of its own, without a radio.
+    update: Option<update_cli::Command>,
 }
 
 /// Reads the command line.
@@ -87,8 +93,11 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         verbose: false,
         ui: None,
         data: PathBuf::new(),
+        update: None,
     };
     let mut data = None;
+    // `--update-sign` and its three values.
+    let (mut sign_image, mut sign_version, mut sign_key, mut sign_out) = (None, None, None, None);
     let mut speed_given = false;
     let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
@@ -147,8 +156,57 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             "--verbose" => parsed.verbose = true,
             "--ui" => parsed.ui = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--data" => data = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--update-keygen" => {
+                let file = PathBuf::from(rest.next().ok_or_else(usage)?);
+                if parsed
+                    .update
+                    .replace(update_cli::Command::Keygen(file))
+                    .is_some()
+                {
+                    return Err(usage());
+                }
+            }
+            "--update-sign" => sign_image = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--version" => sign_version = Some(rest.next().ok_or_else(usage)?.clone()),
+            "--key" => sign_key = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--out" => sign_out = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             _ => return Err(usage()),
         }
+    }
+    let sign_given = [
+        sign_image.is_some(),
+        sign_version.is_some(),
+        sign_key.is_some(),
+        sign_out.is_some(),
+    ];
+    if let (Some(image), Some(version), Some(key), Some(out)) =
+        (sign_image, sign_version, sign_key, sign_out)
+    {
+        let command = update_cli::Command::Sign {
+            image,
+            version,
+            key,
+            out,
+        };
+        if parsed.update.replace(command).is_some() {
+            return Err(usage());
+        }
+    } else if sign_given.iter().any(|given| *given) {
+        // One of `--update-sign`, `--version`, `--key`, `--out` without the others.
+        return Err(usage());
+    }
+    // The update tools are a task of their own: no radio, no other mode.
+    if parsed.update.is_some()
+        && (parsed.source.is_some()
+            || parsed.pair.is_some()
+            || parsed.listen
+            || parsed.serve.is_some()
+            || parsed.verbose
+            || parsed.ui.is_some()
+            || speed_given
+            || data.is_some())
+    {
+        return Err(usage());
     }
     if (parsed.pair.is_some() || parsed.listen || parsed.serve.is_some()) && parsed.source.is_none()
     {
@@ -368,6 +426,15 @@ fn main() -> ExitCode {
     };
     logger::install();
     println!("{}", solite_core::banner());
+    if let Some(command) = &args.update {
+        return match update_cli::run(command) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("{message}");
+                ExitCode::from(2)
+            }
+        };
+    }
     let Some(source) = args.source else {
         return ExitCode::SUCCESS;
     };

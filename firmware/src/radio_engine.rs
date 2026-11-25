@@ -48,6 +48,7 @@ use solite_core::radio::{identity_lines, network_line};
 
 use crate::http_server;
 use crate::memory;
+use crate::ota::ENGINE_RUNNING;
 use crate::radio_uart::{UartTransport, reset_radio};
 use crate::storage::{self, BASE, FatStorage};
 use crate::wifi::{CLOCK_SET, Event, WIFI_STARTED};
@@ -361,7 +362,9 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
         let Some(radio) = slot.as_mut() else {
             return Ok(());
         };
-        let error = match engine::run(
+        // The update's probation counts the engine's loop as healthy while it runs (spec 032 R5).
+        ENGINE_RUNNING.store(true, Ordering::SeqCst);
+        let ran = engine::run(
             radio,
             &home,
             &mut saver,
@@ -370,7 +373,9 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
             &mut fill,
             true,
             &mut |line| show(line),
-        ) {
+        );
+        ENGINE_RUNNING.store(false, Ordering::SeqCst);
+        let error = match ran {
             // Stopped (the console's restart): the files due are saved first.
             Ok(_) => return saver.tick(&home, wall_ms(), true),
             // A storage error, or a failed measure: logged by the caller, the loop stops and the

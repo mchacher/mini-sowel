@@ -36,7 +36,7 @@ this order (each through `/solite-feature` or `/solite-fix`):
 1. A batch of core fixes: done (spec 028).
 2. J4: the password at commissioning: built (spec 029); its box checks are in the list below.
 3. J2: equipments from the interface (detail page, bindings one by one, enable and disable): built (spec 030).
-4. The colour cluster `0x0300` with a simulated bulb: built (spec 031); then J5 (signed updates, the core part).
+4. The colour cluster `0x0300` with a simulated bulb: built (spec 031); then J5 (signed updates, the core part): built (spec 032), its box check is in the list below.
 
 ### Tests to run with the box in hand
 
@@ -69,6 +69,17 @@ no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a 
   `.../orders/color {"value":{"x":0.2,"y":0.6}}` change the bulb and are read back; a hue and
   saturation order; an order while the bulb is off (does it apply?); the proposal `light_color`.
   Note the bulb's model and what was seen in spec 031.
+- Spec 032 (J5; the first part writes the flash: one pass, no loop, D39): after the user's yes,
+  one USB flash of the radio image with `--keep-storage` (it brings the bootloader with
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, which an update over the air never replaces); then one
+  OTA install of a higher signed version from the interface's Firmware update card, the restart,
+  `update: running image confirmed` a minute later, the internal RAM free read in the `heap:` line
+  (the OTA thread's 6 KB stack); then one image that panics at start (a local throwaway change,
+  not committed) installed: the box comes back to the previous image. The log is read with
+  `box.sh log --raw` (the checked mode fails on the second banner a restart prints). Also an
+  unplug during the minute after an update; the stack high-water marks of an API worker (10 KB,
+  the signature check) and of the OTA thread (6 KB) after one install; whether the browser shows
+  the error when the box refuses an upload before reading it.
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -87,7 +98,7 @@ in a real annex without intervention (the true north's test).
 | J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | built 2026-11-25 (spec 030): an equipment's page (its bindings added and removed one by one, the missing ones offered, its devices changed, enabled or disabled, deleted) and a device's page; an equipment can be created with no device; box check not needed (interface only) |
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | built 2026-11-25 (spec 029): Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, factory reset, first-start and login screens; the confirmation is the 10 minutes after a power-on until the button is wired; box check pending |
-| J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back; a rollback to a release older than spec 031 cannot read a `devices.json` holding a `json` data (D51): the rollback handles it | |
+| J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back; a rollback to a release older than spec 031 cannot read a `devices.json` holding a `json` data (D51): the rollback handles it | built 2026-11-25 (spec 032): a signed update file (Ed25519 over a 128-byte header carrying the image's SHA-256, key given at build time, D52) streamed into the inactive slot through `POST /api/v1/system/update`, a probation (confirmed after 1 minute healthy, rolled back after 5, D54), `--update-keygen` and `--update-sign`, a Firmware update card; box check pending |
 | J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | built 2026-11-24 (spec 026): settings, sun times on the root zone, Settings page, export and import of the settings and zones; the box run is pending (inbox) |
 
 ## Built, waiting for the real hardware
@@ -204,6 +215,12 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | Read `ColorCapabilities` (`0x400A`) at the pairing setup, so a tunable white bulb gets `color_temp` and no `color` data or order (today every `0x0300` device gets both, D51) | Spec 031 |
 | 2026-11-25 | Zigbee2MQTT's other forms of a `color` order: `{"hex": "#RRGGBB"}` and `{"r","g","b"}` (converted to XY), the form a colour picker gives | Spec 031 |
 | 2026-11-25 | A colour and colour-temperature control on the equipment page, once Sowel's `LightControl` has one to port (Sowel issue below) | Spec 031 |
+| 2026-11-25 | Fetch updates from a release feed (Sowel's version check: `POST /api/v1/system/version/check`, `latest`, `updateAvailable` and `releaseUrl` filled from GitHub releases) instead of uploading the file from the browser | Spec 032 |
+| 2026-11-25 | Sowel's `system.update.available`, `system.update.progress` and `system.update.error` events on `/ws` (the upload's answer carries the outcome today) | Spec 032 |
+| 2026-11-25 | ESP32 Secure Boot V2 and flash encryption (eFuses, irreversible, D52): signed bootloader and application checked by the ROM; `box.sh identify` stops on a box that has them | Spec 032, D52 |
+| 2026-11-25 | Publishing a release: where the signed `.sup` is hosted, a manifest (version, size, digest), the `/solite-release` skill | Spec 032 |
+| 2026-11-25 | Key rotation: several public keys per build, a revocation list, what a box does when its key is lost (a USB flash today) | Spec 032 |
+| 2026-11-25 | The engine's heap peak in QEMU is 363 KB, above D27's 350 KB: `validate.sh`'s QEMU step fails on `main` at 98d38da already (reproduced from a clean `git archive`; the pull requests' CI skips QEMU, D34). Find which spec raised it from 312 KB (025 to 031) and bring it back under, or replace D27 with a measured ceiling | Spec 032 (found by its validate run) |
 
 ## Sowel issues to open
 
@@ -376,3 +393,9 @@ Every change to this roadmap: date, what changed, why.
   `scenarios/color-light.json` (D51). Line removed: read the colour cluster. Added: the
   capabilities, `hex` orders, a colour control (and its Sowel issue), the Zigbee2MQTT plugin's
   colour (Sowel issue), the real-bulb check in the tests to run, J5's rollback note.
+- 2026-11-25: spec 032 (J5) built on the Mac (the user away; the firmware and interface parts
+  built, the box not run): a signed update file (Ed25519, 128-byte header, key at build time)
+  streamed into the inactive slot, a probation with rollback, `--update-keygen` and `--update-sign`,
+  a Firmware update card (D52 to D54). J5's rollback note is met. Added: the box check in the tests
+  to run (one USB flash, one OTA install, one image that panics), and the inbox lines for a release
+  feed, Sowel's `system.update.*` events, Secure Boot V2, publishing a release, key rotation.

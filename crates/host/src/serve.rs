@@ -23,21 +23,48 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use solite_core::api::{
     ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_guarded,
-    order_response,
+    is_update_request, order_response,
 };
 use solite_core::auth::AlwaysConfirmed;
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
+use solite_core::update::{MAX_UPLOAD_BYTES, Updates};
 use tiny_http::{Header, Response, Server};
 
 use crate::front::{self, Door};
 use crate::random::SystemRandom;
 use crate::static_files;
 use crate::store::{FileStore, show_on_stderr};
+use crate::update_files::{FileAdapter, start_updates};
 use crate::ws::{Context, Timing};
 use crate::{backup, clock};
+
+/// The update key of this build (spec 032, R2): 64 hexadecimal characters, or absent.
+const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_UPDATE_PUBLIC_KEY");
+
+/// What the API's workers need to install an update: the core's state and the files.
+struct UpdateParts {
+    updates: Updates,
+    adapter: FileAdapter,
+}
+
+/// What the probation reads (R5): the engine's loop is running, the API server is listening.
+#[derive(Default)]
+struct Health {
+    engine: AtomicBool,
+    listening: AtomicBool,
+}
+
+impl Health {
+    fn healthy(&self) -> bool {
+        self.engine.load(Ordering::SeqCst) && self.listening.load(Ordering::SeqCst)
+    }
+}
+
+/// How often the probation is ticked.
+const WATCH_TICK: Duration = Duration::from_secs(1);
 
 /// The server, so that Ctrl-C can unblock the HTTP thread.
 static SERVER: OnceLock<Arc<Server>> = OnceLock::new();
@@ -139,6 +166,7 @@ fn answer(
     port: u16,
     content_type: &Header,
     ui: &Path,
+    update: &UpdateParts,
 ) {
     let method = request.method().to_string();
     let path = request.url().to_string();
@@ -157,12 +185,17 @@ fn answer(
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.to_string());
+    // The update's body is a file of megabytes: it is not read here, the core answers the gate
+    // first and the file is then streamed into the installation (spec 032, R6).
+    let streaming = is_update_request(&method, &path);
     // One byte more than allowed is enough to see that the body is too long.
     let mut body = Vec::new();
-    let _ = request
-        .as_reader()
-        .take(MAX_BODY_BYTES as u64 + 1)
-        .read_to_end(&mut body);
+    if !streaming {
+        let _ = request
+            .as_reader()
+            .take(MAX_BODY_BYTES as u64 + 1)
+            .read_to_end(&mut body);
+    }
     // The core takes and lets go of the home itself (a password hash runs without it).
     let reply = {
         let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
@@ -182,6 +215,9 @@ fn answer(
             &mut fill,
         )
     };
+    if streaming {
+        return answer_update(request, reply, update, content_type);
+    }
     // The interface's files do not need the home: its lock is already let go.
     if let Reply::Static(file) = &reply {
         return static_files::send(request, ui, file);
@@ -209,7 +245,7 @@ fn answer(
             None,
             None,
         )),
-        Reply::Order(_) | Reply::Static(_) | Reply::StaticError(_) => {
+        Reply::Order(_) | Reply::Static(_) | Reply::StaticError(_) | Reply::Update => {
             request.respond(Response::empty(500))
         }
         Reply::Whole(response) => match response.body {
@@ -223,6 +259,70 @@ fn answer(
     };
 }
 
+/// `POST /system/update`, once the core has answered: a refusal of the gate or of the content
+/// type, or the order to stream. The body is streamed from the server's reader, bounded to the
+/// declared length, into `Updates::install`. Every refusal leaves body bytes unread, so the
+/// connection is closed after it: the image's bytes are never read as a next request.
+fn answer_update(
+    mut request: tiny_http::Request,
+    reply: Reply,
+    update: &UpdateParts,
+    content_type: &Header,
+) {
+    let response = match reply {
+        Reply::Update => {
+            let declared = request.body_length().map(|n| n as u64);
+            if declared.is_some_and(|n| n > MAX_UPLOAD_BYTES) {
+                solite_core::api::Response {
+                    status: 413,
+                    body: Some(r#"{"error":"Update too large"}"#.to_string()),
+                }
+            } else {
+                // Without a length (chunked), the stream is bounded all the same.
+                let limit = declared.unwrap_or(MAX_UPLOAD_BYTES);
+                let mut source = request.as_reader().take(limit);
+                let mut adapter = update.adapter.clone();
+                let response = update.updates.install(&mut source, &mut adapter);
+                if response.status == 200 {
+                    println!(
+                        "update: {} written to slot {}; restart the host to put it on probation",
+                        installed_version(response.body.as_deref()),
+                        adapter.boot_slot(),
+                    );
+                }
+                response
+            }
+        }
+        Reply::Whole(response) | Reply::StaticError(response) => response,
+        Reply::List(_) | Reply::Order(_) | Reply::Static(_) => solite_core::api::Response {
+            status: 500,
+            body: Some(r#"{"error":"Internal error"}"#.to_string()),
+        },
+    };
+    let answer = match response.body {
+        Some(text) => Response::from_string(text)
+            .with_status_code(response.status)
+            .with_header(content_type.clone()),
+        None => Response::from_string("")
+            .with_status_code(response.status)
+            .with_header(content_type.clone()),
+    };
+    // The client may have gone: nothing to do about it.
+    let _ = request.respond(answer);
+}
+
+/// `x.y.z` of the answer's `Installed x.y.z, restarting`.
+fn installed_version(body: Option<&str>) -> String {
+    body.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value["message"].as_str().map(str::to_string))
+        .and_then(|message| {
+            message
+                .strip_prefix("Installed ")
+                .and_then(|rest| rest.split(',').next().map(str::to_string))
+        })
+        .unwrap_or_default()
+}
+
 /// Accepts requests and hands each to a worker thread (at most `MAX_WORKERS` at once), so that
 /// a stalled client never blocks the others or the exit.
 fn http_loop(
@@ -232,6 +332,7 @@ fn http_loop(
     port: u16,
     content_type: &Header,
     ui: &Arc<PathBuf>,
+    update: &Arc<UpdateParts>,
 ) {
     let slots = Slots::new(MAX_WORKERS);
     for request in server.incoming_requests() {
@@ -243,16 +344,17 @@ fn http_loop(
             );
             continue;
         };
-        let (home, random, content_type, ui) = (
+        let (home, random, content_type, ui, update) = (
             Arc::clone(home),
             Arc::clone(random),
             content_type.clone(),
             Arc::clone(ui),
+            Arc::clone(update),
         );
         // The slot is released when the worker ends, or at once when the thread cannot start
         // (the closure, and the guard with it, is dropped).
         let _ = thread::Builder::new().spawn(move || {
-            answer(request, &home, &random, port, &content_type, &ui);
+            answer(request, &home, &random, port, &content_type, &ui, &update);
             drop(guard);
         });
     }
@@ -307,11 +409,46 @@ pub fn serve<T: RadioTransport>(
     thread::spawn(move || front::run(&door));
     let content_type = Header::from_bytes("Content-Type", "application/json; charset=utf-8")
         .map_err(|()| "serve: cannot build the Content-Type header".to_string())?;
-    {
-        let (server, home, random) = (Arc::clone(&server), Arc::clone(&home), Arc::clone(&random));
-        let ui = Arc::new(ui.to_path_buf());
-        thread::spawn(move || http_loop(&server, &home, &random, port, &content_type, &ui));
+    // The updates of this build and the files of the slots; the start lines, then the probation
+    // ticks about once a second (R5), on a thread of its own that ends with the serve.
+    let adapter = FileAdapter::new(data);
+    let (updates, start_lines) = start_updates(UPDATE_PUBLIC_KEY, &adapter);
+    for line in &start_lines {
+        println!("{line}");
     }
+    let update = Arc::new(UpdateParts { updates, adapter });
+    let health = Arc::new(Health::default());
+    let watch_stop = Arc::new(AtomicBool::new(false));
+    {
+        let (update, health, watch_stop) = (
+            Arc::clone(&update),
+            Arc::clone(&health),
+            Arc::clone(&watch_stop),
+        );
+        thread::spawn(move || {
+            let mut adapter = update.adapter.clone();
+            while !watch_stop.load(Ordering::SeqCst) {
+                update
+                    .updates
+                    .watch(&mut adapter, monotonic_ms(), health.healthy());
+                thread::sleep(WATCH_TICK);
+            }
+        });
+    }
+    {
+        let (server, home, random, update) = (
+            Arc::clone(&server),
+            Arc::clone(&home),
+            Arc::clone(&random),
+            Arc::clone(&update),
+        );
+        let ui = Arc::new(ui.to_path_buf());
+        thread::spawn(move || {
+            http_loop(&server, &home, &random, port, &content_type, &ui, &update)
+        });
+    }
+    // The server accepts connections from here on.
+    health.listening.store(true, Ordering::SeqCst);
     // Ctrl-C before the server existed: nobody unblocked it.
     if stop.load(Ordering::SeqCst) {
         unblock();
@@ -324,8 +461,9 @@ pub fn serve<T: RadioTransport>(
         .with_sink(show_on_stderr)
         .with_definition_delay(DEFINITION_DELAY_MS);
     let result = radio_loop(
-        transport, label, port, verbose, data, stop, &home, &random, &mut saver,
+        transport, label, port, verbose, data, stop, &home, &random, &mut saver, &health,
     );
+    watch_stop.store(true, Ordering::SeqCst);
     // The WebSocket clients are told (close 1001) as the host stops. The store is written
     // first, and the HTTP threads are never waited for: a client that stalls cannot keep the
     // host from saving and exiting; the WebSocket clients are given a moment to answer.
@@ -350,6 +488,7 @@ fn radio_loop<T: RadioTransport>(
     home: &Mutex<Home>,
     random: &Mutex<SystemRandom>,
     saver: &mut Saver<FileStore>,
+    health: &Health,
 ) -> Result<bool, String> {
     let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
     let mut radio = Radio::new(transport, clock());
@@ -369,7 +508,8 @@ fn radio_loop<T: RadioTransport>(
         now: Arc::new(now_ms),
         monotonic: Arc::new(monotonic_ms),
     };
-    engine::run(
+    health.engine.store(true, Ordering::SeqCst);
+    let result = engine::run(
         &mut radio,
         home,
         saver,
@@ -379,5 +519,7 @@ fn radio_loop<T: RadioTransport>(
         verbose,
         &mut |line| println!("{line}"),
     )
-    .map_err(String::from)
+    .map_err(String::from);
+    health.engine.store(false, Ordering::SeqCst);
+    result
 }

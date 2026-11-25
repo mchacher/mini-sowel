@@ -9,8 +9,10 @@ import { Loader2 } from "lucide-react";
 import {
   exportBackup,
   getSettings,
+  getSystemVersion,
   getTimezones,
   importBackup,
+  installUpdate,
   updateSettings,
   type ImportResult,
 } from "../../api";
@@ -65,6 +67,7 @@ export function SettingsPage() {
       <div className="space-y-6 max-w-[640px]">
         <HomeSettingsSection />
         <BackupSection />
+        <UpdateSection />
         <FactoryResetSection />
       </div>
     </div>
@@ -367,6 +370,75 @@ function BackupSection() {
             </button>
           </div>
         </Modal>
+      )}
+    </section>
+  );
+}
+
+/** Spec 032, R9: the running version and the install of a signed `.sup` file. */
+function UpdateSection() {
+  const { t } = useTranslation();
+  const [version, setVersion] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [installed, setInstalled] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    getSystemVersion()
+      .then((v) => live && setVersion(v.current))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const install = async () => {
+    if (!file) return;
+    setBusy(true);
+    setMessage(null);
+    setInstalled(false);
+    try {
+      const r = await installUpdate(file);
+      setMessage({ text: r.message, error: false });
+      setInstalled(true);
+    } catch (err) {
+      setMessage({ text: formErrorText(err, t), error: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card p-5">
+      <h2 className="text-body font-semibold text-text mb-1">{t("settings.update")}</h2>
+      <p className="text-caption text-text-tertiary mb-4">{t("settings.updateDescription")}</p>
+      {version && (
+        <p className="text-small text-text mb-3">
+          {t("settings.updateVersion")} {version}
+        </p>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="file"
+          accept=".sup"
+          aria-label={t("settings.updateFile")}
+          disabled={busy}
+          className="text-small text-text-secondary"
+          onChange={(e) => setFile((e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+        />
+        <button type="button" disabled={!file || busy} onClick={install} className={BUTTON_PRIMARY}>
+          {busy ? t("settings.updateInstalling") : t("settings.updateInstall")}
+        </button>
+      </div>
+      {message && (
+        <p className={`text-small mt-3 ${message.error ? "text-error" : "text-success"}`}>
+          {message.text}
+        </p>
+      )}
+      {installed && (
+        <p className="text-small text-text-secondary mt-1">{t("settings.updateRestart")}</p>
       )}
     </section>
   );

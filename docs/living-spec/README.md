@@ -310,14 +310,16 @@ from another site is also refused by a `Host` check, and by an `Origin` check on
 | `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
 | `GET /api/v1/auth/status`, `POST /api/v1/auth/setup`, `/login`, `/refresh`, `/logout` | Sowel's authentication (see "Protects the home with a password") |
 | `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
+| `GET /api/v1/system/version`, `POST /api/v1/system/update` | the version; the signed update file as the body (see "Updates itself from a signed file") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
-Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 413, 415, 426, 429; 502 for an order no device took; 503 `Busy` beyond 4 requests at
+Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>` and 501 on the update route; 502 for an order no device took; 503 `Busy` beyond 4 requests at
 once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
-`application/json`, so a web page cannot send one from the browser. The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
+`application/json`, so a web page cannot send one from the browser; the one exception is the update route, which takes
+`application/octet-stream` (a cross-origin form cannot send that type, and the token is required). The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
 http://127.0.0.1:<port>`; `--verbose` also prints the measure lines. `--pair` adds the devices to
 the same file. Ctrl-C writes the store and exits 130.
@@ -372,7 +374,8 @@ except:
   origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
   `http://127.0.0.1:5173`) are accepted as on the Mac. The subprotocol `bearer.none` is echoed; the token is read from the second subprotocol (or the `Authorization` header), so a client that offers only `bearer.<token>` gets no subprotocol echoed and its browser drops the socket.
   A dead client is found by TCP keep-alive (about 45 s) instead of 60 s of silence.
-- A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413; a body
+- A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413 (except
+  the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file"); a body
   that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 1024 bytes,
   431. A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
@@ -806,7 +809,13 @@ copy embedded in the radio image at build time.
   the rooms and settings again. At the foot of the page, the **Factory reset** card: what is erased, a
   "Factory reset" button and a confirmation dialog (what is erased, "Erase everything"); success
   clears the tokens and shows the first-start screen, a refusal (the confirmation's text, "Pairing in
-  progress") shows the host's text.
+  progress") shows the host's text. Between the Backup and Factory reset cards, the **Firmware
+  update** card: the running version (`GET /api/v1/system/version`), a file input (`.sup`), an
+  "Install" button, disabled until a file is chosen and during the upload ("Installing..."), then
+  the answer's `message` (success token) or `error` (danger token) on a line under it; after a
+  success, "The box restarts; reload the page in a minute." (the connection drops with the restart;
+  the page does not poll). The file goes as the body, `Content-Type: application/octet-stream`, with
+  the bearer token. French and English labels.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
@@ -853,6 +862,127 @@ deletes its zone and equipment afterwards (kept with `--keep`). It is run on the
 simulator (`--sim scenarios/garage.json --serve`, then `SOLITE_PASSWORD=<password> sh scripts/measure-api.sh 8080`); against
 the box at most once per milestone, inside `box.sh saves` (decision D39), and no script loops it.
 
+### Updates itself from a signed file
+
+A box is updated from a **signed update file** (`.sup`, "Solite update package") sent to Sowel's
+`POST /api/v1/system/update`. The file is a header of exactly 128 bytes, then the image (the ESP32
+application image of the slot, as `espflash save-image` writes it). Integers are little-endian.
+
+| Offset | Bytes | Field |
+| ------ | ----- | ----- |
+| 0 | 8 | magic, ASCII `SOLITEUP` |
+| 8 | 4 | format, `1` |
+| 12, 14, 16 | 2 each | version: major, minor, patch |
+| 18 | 2 | reserved, 0 |
+| 20 | 4 | image length in bytes, at least 1 |
+| 24 | 32 | SHA-256 of the image |
+| 56 | 8 | reserved, 0 |
+| 64 | 64 | Ed25519 signature (RFC 8032) over bytes 0 to 63 |
+
+- **The key.** The signature is checked against a public key given at build time, in the
+  environment variable `SOLITE_UPDATE_PUBLIC_KEY` (64 hexadecimal characters, either case), read by
+  the host and the firmware; the core takes it as a value. No private key, seed or test key is in
+  the repository. A build without the variable has no update key: the route answers 503 `Updates are
+  not configured: this build has no update key` and the start logs `update: no key, updates
+  refused`. A value that is not 64 hex characters, not an Ed25519 point or a weak key is the same
+  case, logged `update: invalid key, updates refused`. With a key, the start logs `update: key
+  <first 8 hex characters>`.
+- **The checks, before anything is written**, in this order: magic (400 `Not a Solite update`),
+  format (400 `Unsupported update format <n>`), reserved bytes zero and length at least 1 (400
+  `Malformed update header`), signature (400 `Invalid signature`; a non-canonical signature is
+  refused), version strictly newer than the running one, compared as (major, minor, patch) (400
+  `Version <x.y.z> is not newer than <running>`), image length within the slot (413 `Image too
+  large for the update slot`; the slot holds 4 MB). A file shorter than 128 bytes is 400
+  `Truncated update`. No downgrade goes through the API: an equal or older version is refused, a
+  downgrade is a flash.
+- **Streaming.** The image is never held whole. It is read at most 4096 bytes at a time into one
+  buffer, hashed and written to the inactive slot, so the memory of an installation is the header,
+  that buffer and the hash state, whatever the image's size (1 MB peaks under 32 KB of heap in the
+  tests). A source that ends early or fails: 400 `Truncated update`; one more byte than declared:
+  400 `Update longer than declared`; a SHA-256 that differs from the header's: 400 `Image does not
+  match its signature`; a write or finish that fails (the platform finds the image invalid, for
+  instance): 500 `Update failed: <message>`, logged `update: failed: <message>`. Each of these
+  drops what was written: the slot is not bootable and the boot record is unchanged, so a power
+  cut at any point before the end leaves the running image as the one that boots. Only when the
+  whole image matches does the slot become the next boot, on probation; the answer is 200
+  `{"success": true, "message": "Installed <x.y.z>, restarting"}`, logged `update: <x.y.z>
+  installed, <KB> KB`.
+- **One at a time.** An installation in progress: 409 `Update already in progress`; an update
+  installed and waiting for the restart: 409 `An update is installed and waits for the restart`;
+  the running image still on probation: 409 `The running image is not confirmed yet` (the inactive
+  slot holds the image to fall back to). No key: 503.
+- **Probation.** A newly booted image is on probation. It is confirmed (the running image is kept
+  from then on, logged `update: running image confirmed`) once it has run healthy for 60 s without
+  a break; a break restarts the minute. Healthy means the engine's loop is running and the API
+  server is listening; the Wi-Fi link is not required, so a router that is off does not roll back a
+  good update (decision D54). An image not confirmed 300 s after its start is rolled back (logged
+  `update: not confirmed in time, rolling back`): the previous image becomes the next boot, and the
+  box restarts into it. A confirmation or a rollback that fails is logged (`update: confirm
+  failed: ...`, `update: roll back failed: ...`) and tried again at the next tick, about one
+  second later. The time is the monotonic clock, so a jump of the wall clock changes nothing.
+  Installations are refused while on probation (above) and accepted once confirmed.
+- **A crash, a restart or a power cut before the confirmation** is rolled back by the bootloader
+  at the next boot (ESP-IDF's app rollback, `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`). Unplugging
+  the box during the minute after an update brings the old image back; the update is then simply
+  installed again. The setting belongs to the **bootloader**, which an update over the air never
+  replaces: it reaches the box only through `scripts/box.sh flash`. Until the box has been
+  flashed once over USB with an image that carries it, a new image is never put on probation
+  (its state stays new, nothing is pending) and nothing rolls back. The sim and QEMU images get
+  the setting too; with `otadata` erased they boot `ota_0` as before.
+- **The routes**, behind the token (401 and 403 as every route, before any body byte is read):
+  `GET /api/v1/system/version` answers 200 `{"current": "<version>", "latest": null,
+  "updateAvailable": false, "releaseUrl": null}` (Sowel's `VersionInfo` without its two Docker
+  fields); `POST /api/v1/system/update` takes the signed file as its body, sent as
+  `application/octet-stream` (415 `Unsupported Media Type` otherwise; a deviation from Sowel's
+  route, which takes no body and pulls a release itself, decision D53). Another method on either:
+  405. The 16 KB body limit does not apply to this route; a declared `Content-Length` over 128
+  bytes + 4 MB + 1 is 413 before any read, and on the box a missing one is 411 (a chunked upload
+  too). The body ends at `Content-Length` bytes, so the check for a longer file never waits on the
+  socket. Every refusal of this route that leaves body bytes unread (401, 403, 405, 409, 411, 413,
+  415, 503, a header refused, an error mid-image) closes the connection after its answer, so the
+  image's bytes are never read as a next request. Through the core's plain request handler (tests
+  and tools, which cannot stream) the route answers 501 `Updates need the streaming handler`.
+- **The host** keeps its slots as files in `<data>/update/`: `slot-0.bin`, `slot-1.bin` and
+  `boot.json` (`{"boot": 0|1, "pending": <bool>}`, absent meaning slot 0, not pending), each
+  written through a temporary file and a rename. It does not run the image it stores nor restart:
+  after an installation it prints `update: <x.y.z> written to slot <n>; restart the host to put it
+  on probation`. At start, a `boot.json` with `pending: true` puts the host on probation, logged
+  `update: slot <n> on probation`, and `update: running image confirmed` follows a minute later. The
+  `update:` lines are printed without `--verbose`. A stalled upload ends within 30 s (the door's
+  idle read timeout), the installation counts as truncated and the next upload is accepted.
+- **The box** (radio image) serves the same route. One OTA thread, with a 6 KB stack in internal
+  RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
+  write the flash), receives them through a channel one request at a time, and ticks the probation
+  every second; a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
+  final save runs) and the box restarts, logged `update: restarting`. Its start lines are the host's.
+
+### Signing a release
+
+The steps a maintainer follows (the `/solite-release` skill points here). Publishing the signed file
+(where it is hosted, a manifest) is not covered.
+
+1. **Key, once.** `cargo run -p solite-host -- --update-keygen <file>` writes a new signing key
+   (32 random bytes, as 64 hex characters and a newline) to `<file>`, created new with mode `0600`,
+   and prints `public key: <64 hex>`. It refuses an existing file and a path inside a git working
+   tree (a `.git` in the file's folder or above), exit 2 with the reason. Keep the file outside the
+   repository, offline (an encrypted volume or a password manager), and back it up: a lost key
+   means a box can only be updated by a USB flash. `*.update-key` and `*.sup` are ignored by git.
+2. **Build** the firmware with `SOLITE_UPDATE_PUBLIC_KEY=<the printed hex>` (the radio image, see
+   the firmware's README). The version of the image is the workspace's `version`; `firmware/Cargo.toml`
+   carries the same one, and `scripts/validate.sh` fails naming both when they differ.
+3. **Image.** `espflash save-image --chip esp32` of the radio image makes the application image.
+4. **Sign.** `cargo run -p solite-host -- --update-sign <image> --version <x.y.z> --key <file>
+   --out <file>.sup` writes the file above and prints `signed: <out>, version <x.y.z>, <bytes>
+   bytes, key <first 8 hex>` (the bytes are the image's). It refuses (exit 2, nothing written) an
+   empty image or one over 4 MB, a version that is not `x.y.z` of numbers up to 65535, a key file
+   that is not 64 hex characters, and an existing `<out>`. When the image is an ESP32 application
+   image (first byte `0xE9`, magic `0xABCD5432` at offset 32), the version of its application
+   descriptor (offset 48, 32 bytes) must equal `--version` (else exit 2); an image without a
+   descriptor (the Mac demo's bytes) is signed with the line `signed: no application descriptor,
+   version not checked`. The core only verifies; the signing is in the host.
+5. **Install** from the Settings page's Firmware update card (see "Shows the home in the browser"),
+   or `POST` the file to `/api/v1/system/update` with the token.
+
 ### Flashes the box and brings it back
 
 `sh scripts/box.sh <command> [--port <device>] [--baud <rate>]` works on the Dongle Max over USB,
@@ -877,7 +1007,10 @@ Python environment in `firmware/.embuild/`. The port is `--port`, or the only US
   image is the one asked for
   and fits the `ota_0` slot, erases `nvs`, `otadata` and `storage` (unless `--keep-storage`, radio
   image only), writes the bootloader, the table
-  of `firmware/partitions.csv` and the application, and resets the box. The radio image is read
+  of `firmware/partitions.csv` and the application, and resets the box. The bootloader it writes
+  carries the app rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, see "Updates itself from a
+  signed file"): a box that has never been flashed with it never puts an update on probation, and an
+  update over the air cannot bring it. The radio image is read
   from `firmware/target/radio`, a build without the marker `radio: uart ` is refused with the
   build command, a radio build without the embedded interface (its ELF lacks the marker
   `solite-ui `) is refused with the build command, and the box and sim images refuse a radio build; the box is not reset at the end
@@ -1053,3 +1186,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 028 | Core fixes: the dates of a device taken before the clock is set move by its jump; a motion-light button without an `action` binding leaves the settings instead of disabling the recipe; a running motion-light follows its zone's motion sensors as they change |
 | 029 | A password at commissioning, confirmed at the box: one account, Sowel's `/auth` routes and bearer token on every route and on `/ws`, the box's pairing route behind the token, a factory reset |
 | 031 | The colour cluster: a colour bulb's colour temperature and colour read, its colour orders sent, proposed as `light_color`; a simulated colour bulb |
+| 032 | Signed updates: a signed update file streamed into the inactive slot, a probation with automatic rollback, `--update-keygen` and `--update-sign`, a Firmware update card |

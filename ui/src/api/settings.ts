@@ -36,3 +36,26 @@ export async function exportBackup(): Promise<string> {
 export async function importBackup(text: string): Promise<ImportResult> {
   return fetchJSON<ImportResult>(`${API_BASE}/backup`, { method: "POST", body: text });
 }
+
+/** Sowel's `VersionInfo` as Solite answers it: only the running version. */
+export interface VersionInfo {
+  current: string;
+}
+
+export async function getSystemVersion(): Promise<VersionInfo> {
+  return fetchJSON<VersionInfo>(`${API_BASE}/system/version`);
+}
+
+/** The answer of `POST /api/v1/system/update`. */
+export interface UpdateResult {
+  message: string;
+}
+
+/** The signed file (`.sup`) as the body, streamed by the browser; the box restarts after a 200. */
+export async function installUpdate(file: File): Promise<UpdateResult> {
+  return fetchJSON<UpdateResult>(`${API_BASE}/system/update`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file,
+  });
+}

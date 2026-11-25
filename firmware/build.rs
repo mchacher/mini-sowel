@@ -25,6 +25,8 @@ fn embed_interface() -> Result<(), String> {
 
 fn main() {
     embuild::espidf::sysenv::output();
+    // The update's public key is read with `option_env!` (spec 032 R2).
+    println!("cargo:rerun-if-env-changed=SOLITE_UPDATE_PUBLIC_KEY");
     if std::env::var_os("CARGO_FEATURE_RADIO").is_some()
         && let Err(message) = embed_interface()
     {
