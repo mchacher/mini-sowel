@@ -62,6 +62,7 @@ sh scripts/qemu.sh                                # the engine run in an emulate
 sh scripts/box.sh identify                        # the Dongle Max over USB (also: backup, restore, flash [--keep-storage], log [--budget], wifi, pair, saves; --image box|sim|radio)
 sh scripts/box-session.sh --yes-flash --backup <file>   # the whole box session in one pass (typed by the user: it flashes, D55); --api-only <port> on the Mac
 cd tools/z2m-coverage && npm run report           # the Zigbee2MQTT coverage report
+sh scripts/release.sh <x.y.z> --key-file <file>   # a signed release, locally (the CI's release.yml does it on a tag; docs/release.md)
 sh scripts/validate.sh                            # every check, the slow tests and QEMU included: must be green before a commit
 ```
 
@@ -69,6 +70,22 @@ The firmware is flashed only through `sh scripts/box.sh flash`, run by the user.
 firmware is optional (`--backup <file>`, checked when given): the way back is Sonoff's own reflash (see
 [docs/decisions.md](docs/decisions.md), D6, D31 and D35, and [docs/hardware.md](docs/hardware.md)).
 Without a flash, the Dongle Max keeps its original firmware.
+
+## Install from a release
+
+A release (the GitHub Releases page) holds `solite-<version>-flash.bin` (the whole image),
+`solite-<version>.sup` (the signed update file), `SHA256SUMS` and `manifest.json`.
+
+- **A Dongle Max never flashed with Solite**: download `solite-<version>-flash.bin` and `SHA256SUMS`
+  into one folder and check the image (`shasum -a 256 -c --ignore-missing SHA256SUMS`, on Linux
+  `sha256sum -c --ignore-missing SHA256SUMS`: the line of the file you did not download is
+  skipped), then
+  `sh scripts/box.sh identify`, `esptool.py --chip esp32 erase_flash` and
+  `esptool.py --chip esp32 write_flash 0x0 solite-<version>-flash.bin`. This replaces the box's
+  original firmware: optionally back it up first (`sh scripts/box.sh backup --out <folder>`).
+  Details: [docs/release.md](docs/release.md).
+- **A box already running Solite**: never flashed this way (it would lose its home); upload the
+  `.sup` in Settings, the Firmware update card. The box checks its signature.
 
 ## How the project is worked on
 

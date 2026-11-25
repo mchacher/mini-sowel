@@ -1,5 +1,6 @@
 //! `--update-keygen` and `--update-sign` (spec 032, R7): the signing side of the update file, in
 //! the host only (the core verifies). A refusal is a message and exit 2, with nothing written.
+//! `--update-verify` (spec 038, R4) checks a signed file as the box does, installing nothing.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -7,7 +8,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::{Signer, SigningKey};
-use solite_core::update::{HEADER_BYTES, SLOT_BYTES, Version, image_digest, signed_bytes};
+use solite_core::update::{
+    HEADER_BYTES, SLOT_BYTES, Version, check_header, image_digest, parse_public_key, signed_bytes,
+};
 
 use crate::random::SystemRandom;
 
@@ -23,6 +26,8 @@ pub enum Command {
         key: PathBuf,
         out: PathBuf,
     },
+    /// `--update-verify <file> --public-key <64 hex>`.
+    Verify { file: PathBuf, public_key: String },
 }
 
 /// Runs a command, printing its result lines; the error is the line to print before exit 2.
@@ -35,6 +40,7 @@ pub fn run(command: &Command) -> Result<(), String> {
             key,
             out,
         } => sign(image, version, key, out),
+        Command::Verify { file, public_key } => verify(file, public_key),
     }
 }
 
@@ -175,6 +181,56 @@ fn sign(image_path: &Path, version: &str, key_path: &Path, out_path: &Path) -> R
         out_path.display(),
         image.len(),
         &hex(&signing.verifying_key().to_bytes())[..8]
+    );
+    Ok(())
+}
+
+/// Checks a signed file as the box does (the header with a running version of 0.0.0 and the
+/// slot's capacity, then the image's length and digest against the header), installing nothing.
+fn verify(file: &Path, public_key: &str) -> Result<(), String> {
+    let refuse = |reason: String| format!("update-verify: {reason}");
+    let key = parse_public_key(public_key).ok_or_else(|| {
+        refuse("the public key is not 64 hexadecimal characters of an Ed25519 public key".into())
+    })?;
+    let bytes =
+        fs::read(file).map_err(|e| refuse(format!("cannot read {}: {e}", file.display())))?;
+    let header: &[u8; HEADER_BYTES] = bytes
+        .get(..HEADER_BYTES)
+        .and_then(|head| head.try_into().ok())
+        .ok_or_else(|| {
+            refuse(format!(
+                "{} is {} bytes, shorter than the {HEADER_BYTES}-byte header",
+                file.display(),
+                bytes.len()
+            ))
+        })?;
+    let checked = check_header(header, &key, Version::new(0, 0, 0), SLOT_BYTES)
+        .map_err(|refusal| refuse(refusal.message))?;
+    let image = &bytes[HEADER_BYTES..];
+    let length = checked.length as usize;
+    if image.len() < length {
+        return Err(refuse(format!(
+            "the image is {} bytes, shorter than the header says ({length})",
+            image.len()
+        )));
+    }
+    if image.len() > length {
+        return Err(refuse(format!(
+            "the image is {} bytes, longer than the header says ({length})",
+            image.len()
+        )));
+    }
+    if image_digest(image) != checked.digest {
+        return Err(refuse(
+            "the image's SHA-256 differs from the header's".into(),
+        ));
+    }
+    println!(
+        "verified: {}, version {}, {} bytes, key {}",
+        file.display(),
+        checked.version,
+        image.len(),
+        &hex(&key.to_bytes())[..8]
     );
     Ok(())
 }

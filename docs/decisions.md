@@ -1213,3 +1213,57 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: an always-shown clock (Sowel's older `CurrentTimePill`, which Sowel replaced);
   keeping the Banner beside the indicator (two signals for one fact); Sowel's `lg` switch point
   (would change Solite's sidebar too).
+## D63: A release is made by one script and published by a tag-triggered workflow (spec 038)
+
+- **Date**: 2026-11-25 (decided in an autonomous run, for the user's review)
+- **Choice**: `scripts/release.sh` turns a version, a signing key and the public key into the files
+  of a release (the signed `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`), refusing a
+  release that is not signed, not signed by the key matching the public key, or whose version is
+  not the tree's (the three version files). `.github/workflows/release.yml` runs it on a pushed tag
+  `vX.Y.Z` and publishes the GitHub release; run by hand it is a dry run with a throwaway key that
+  publishes nothing. Details:
+  - the public key is a committed file, `release/update-key.pub` (not a repository variable);
+  - the notes are the section of `docs/release-notes.md` for the version (also the annotated tag's
+    message), not read from the tag;
+  - one full-flash image (`esptool merge_bin`, written at `0x0`) rather than three files with
+    offsets;
+  - the release is built in `firmware/target/release-radio`, so its key never lands in
+    `target/radio`, which `box.sh flash` takes;
+  - the private key is an environment secret (`release`, deployment rule: tags `v*`), read by the
+    `sign` job only; that job builds only the host program, whose Rust dependencies' `build.rs`
+    are far fewer than the radio image's npm, ESP-IDF, cmake and pip, and they run in an earlier
+    step than the one that holds the secret (on Linux a build tool of the same user could read a
+    running step's environment); the radio image is built by the `firmware` job, which has no secret, and handed
+    over as an artifact that `sign` accepts only if it carries the committed public key; the job
+    that writes the release has no secret and the only `contents: write`; the caches are restored,
+    never saved, by a release run (no `setup-node` `cache: npm`, which saves on a miss, and no npm
+    cache at all);
+    one concurrency group per kind of run (tag, manual), so a dry run never cancels a tag run;
+  - the tag must be on `main` (checked by the `firmware` job before its build, and again by `sign`), put on the merge commit of the release's
+    pull request;
+  - `SHA256SUMS` is not signed (the `.sup` is, and the box checks it); signing it is in the inbox;
+  - `solite-host --update-verify` proves the script's output with the box's own checks.
+- **Why**: a release that exists, is signed and is reproducible from a tag is what the true north
+  asks ("signed binaries", users flashing from a public release). Each rule closes a way to publish
+  a wrong or unsigned file: a key that does not match the image's public key would give a release no
+  box accepts.
+- **Alternatives**: the public key as a repository variable (not reproducible from the tag, not
+  nameable in the docs); the notes from the tag message (not reviewed in the release commit); three
+  files with offsets (mistypeable); a repository secret instead of an environment secret (a branch's
+  workflow could read it).
+
+## D64: Key custody, and what a rotation means (spec 038)
+
+- **Date**: 2026-11-25 (decided in an autonomous run, for the user's review)
+- **Choice**: the key is made outside the repository (`--update-keygen`), its public half committed,
+  its private half kept in a password manager and an offline copy and given to the CI as the
+  environment secret (`docs/release.md`). The update file's format 1 has one key per build and no
+  field for a next key: its reserved bytes (18-19 and 56-63) are checked to be zero. A rotation is
+  therefore a **bridging release** signed with the old key and carrying the new public key; from it
+  on, releases are signed with the new key. A leaked key means a new key and the same bridge, or a
+  USB flash. The format and the order of the bridge are designed in step 3 of the roadmap's J5b.
+- **Why**: the public key is compiled into the image (D52), so only a release signed by the old key
+  can bring the new one to a running box; writing that now would fix a format nothing reads yet.
+- **Alternatives**: several public keys per build and a revocation list (a larger image and a
+  format change, for a need not yet met); a rotation field in format 1 (the reserved bytes are
+  refused today, so a box that has not the new reader would reject the file).
