@@ -889,11 +889,9 @@ cmd_wifi() {
     case "$(cd "$(dirname "$FROM_FILE")" && pwd -P)/" in
       "$ROOT"/*) echo "box: the Wi-Fi settings file is inside the repository, nothing done" >&2; exit 1 ;;
     esac
-    mode=$(stat -f '%Lp' "$FROM_FILE" 2>/dev/null || stat -c '%a' "$FROM_FILE" 2>/dev/null)
-    case "$mode" in
-      600 | 400) ;;
-      *) echo "box: the Wi-Fi settings file must be readable by its owner only (chmod 600), nothing done" >&2; exit 1 ;;
-    esac
+    # Group and other permission bits of `ls -ld` (`-rw-------`: characters 5 to 10), portable.
+    others=$(ls -ld "$FROM_FILE" | cut -c5-10)
+    [ "$others" = "------" ] || { echo "box: the Wi-Fi settings file must be readable by its owner only (chmod 600), nothing done" >&2; exit 1; }
     resolve_port
     name=$(sed -n 's/^SOLITE_WIFI_SSID=//p' "$FROM_FILE" | head -n 1 | tr -d '\r')
     pass=$(sed -n 's/^SOLITE_WIFI_PASSWORD=//p' "$FROM_FILE" | head -n 1 | tr -d '\r')
