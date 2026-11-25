@@ -76,6 +76,7 @@ impl Rig {
                 port: PORT,
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
+                authorization: None,
                 body: body.as_bytes(),
             },
             self.now,

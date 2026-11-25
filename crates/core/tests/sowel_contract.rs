@@ -553,6 +553,7 @@ fn call(home: &mut Home, method: &str, path: &str, body: &str) -> Response {
             port: 8080,
             reach: Reach::Loopback,
             content_type: Some("application/json"),
+            authorization: None,
             body: body.as_bytes(),
         },
         T0 + 2000,

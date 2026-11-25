@@ -7,12 +7,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::storage::{
-    DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, ZONES_FILE,
+    AUTH_FILE, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, ZONES_FILE,
 };
 use crate::devices::{WritePolicy, lock};
 use crate::home::{Home, ListCursor};
 
-/// A zones, equipments, recipes or settings file that could not be written is tried again after this, in
+/// A zones, equipments, recipes, settings or auth file that could not be written is tried again after this, in
 /// milliseconds (never in a tight loop).
 pub const RETRY_MS: u64 = 60 * 1000;
 
@@ -197,7 +197,11 @@ impl<S: Storage> Saver<S> {
         let (zones, equipments) = home.changes();
         home.devices.changes().0
             || (!self.devices_only
-                && (zones || equipments || home.recipes_changed() || home.settings_changed()))
+                && (zones
+                    || equipments
+                    || home.recipes_changed()
+                    || home.settings_changed()
+                    || home.auth_changed()))
     }
 
     /// False while unsaved definitions wait for the delay; true when they may be written (or there
@@ -243,7 +247,7 @@ impl<S: Storage> Saver<S> {
         }
         type Take = fn(&mut Home) -> Option<ListCursor>;
         type Mark = fn(&mut Home);
-        let files: [(&str, Take, Mark); 4] = [
+        let files: [(&str, Take, Mark); 5] = [
             (
                 ZONES_FILE,
                 Home::take_zones_cursor,
@@ -264,6 +268,7 @@ impl<S: Storage> Saver<S> {
                 Home::take_settings_cursor,
                 Home::mark_settings_changed,
             ),
+            (AUTH_FILE, Home::take_auth_cursor, Home::mark_auth_changed),
         ];
         for (name, take, mark) in files {
             let cursor = take(&mut lock(home));

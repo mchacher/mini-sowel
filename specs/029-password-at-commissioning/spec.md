@@ -140,8 +140,8 @@ setup, login and refresh need no token (Sowel's `PUBLIC_ROUTES`); logout goes th
 ### R4: the token on every other route
 
 1. Every other `/api/v1/...` route (existing and unknown paths) goes through Sowel's gate, before
-   its body is read and before the 413 and 415 checks (an unauthenticated POST gets 401), in
-   Sowel's order: no account → 403 `{"error":"Setup required","setupRequired":true}`; no
+   the 413 and 415 checks (an unauthenticated POST gets 401; the box's own 411, 413 and 408, decided
+   from the request's head while it reads the body, come before it), in Sowel's order: no account → 403 `{"error":"Setup required","setupRequired":true}`; no
    `Authorization: Bearer <token>` header → 401 `{"error":"Authentication required"}`; a token
    that is not a live access token → 401 `{"error":"Invalid or expired token"}`. Then the route
    answers as today.

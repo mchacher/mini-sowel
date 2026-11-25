@@ -14,9 +14,9 @@ pub use saver::{
     DEFINITION_DELAY_MS, FLUSH_ASKED_LINE, HOLD_LINE, RETRY_MS, SaveControl, Saver, flushed_line,
 };
 pub use storage::{
-    DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, WriteCounter, ZONES_FILE,
-    complete_name, flash_line, load_devices, load_equipments, load_home, load_recipes,
-    load_settings, load_zones, recover_interrupted_save, temporary_name,
+    AUTH_FILE, DEVICES_FILE, EQUIPMENTS_FILE, RECIPES_FILE, SETTINGS_FILE, Storage, WriteCounter,
+    ZONES_FILE, complete_name, flash_line, load_auth, load_devices, load_equipments, load_home,
+    load_recipes, load_settings, load_zones, recover_interrupted_save, temporary_name,
 };
 
 use crate::devices::lock;

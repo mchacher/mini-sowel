@@ -20,6 +20,7 @@ pub use memory::{
 pub mod radio;
 
 pub mod api;
+pub mod auth;
 pub mod devices;
 pub mod engine;
 pub mod equipments;

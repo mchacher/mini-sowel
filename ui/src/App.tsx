@@ -9,7 +9,12 @@ import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { ZonesPage } from "./components/zones/ZonesPage";
 import { useTranslation } from "react-i18next";
-import { connect, useLive } from "./store/useLive";
+import { LoginPage } from "./components/auth/LoginPage";
+import { SetupPage } from "./components/auth/SetupPage";
+import { AuthScreen } from "./components/auth/AuthScreen";
+import { BUTTON_SECONDARY } from "./components/ui/Modal";
+import { useAuth } from "./store/useAuth";
+import { connect, disconnect, useLive } from "./store/useLive";
 import { useEquipments } from "./store/useEquipments";
 import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
@@ -26,8 +31,45 @@ function useHash(): string {
   return hash;
 }
 
-/** The home screen: the sidebar of rooms and devices, and the page of the selected one. */
+/**
+ * What the page shows, from `GET /auth/status` and the session (spec 029, R9.1): the first-start
+ * screen when the host has no account, the login screen without a session, else the home.
+ */
 export function App() {
+  const { t } = useTranslation();
+  const loading = useAuth((s) => s.loading);
+  const setupRequired = useAuth((s) => s.setupRequired);
+  const isAuthenticated = useAuth((s) => s.isAuthenticated);
+  const unreachable = useAuth((s) => s.unreachable);
+
+  useEffect(() => {
+    void useAuth.getState().checkStatus();
+  }, []);
+
+  if (unreachable) {
+    return (
+      <AuthScreen>
+        <div className="card p-6 text-center">
+          <p className="text-body text-error mb-4">{t("auth.unreachable")}</p>
+          <button
+            type="button"
+            onClick={() => void useAuth.getState().checkStatus()}
+            className={BUTTON_SECONDARY}
+          >
+            {t("auth.retry")}
+          </button>
+        </div>
+      </AuthScreen>
+    );
+  }
+  if (setupRequired) return <SetupPage />;
+  if (loading || setupRequired === null) return null;
+  if (!isAuthenticated) return <LoginPage />;
+  return <Home />;
+}
+
+/** The home screen: the sidebar of rooms and devices, and the page of the selected one. */
+function Home() {
   const { t } = useTranslation();
   const tree = useZones((s) => s.tree);
   const zonesLoading = useZones((s) => s.loading);
@@ -42,8 +84,12 @@ export function App() {
   const page = adminPageFromHash(hash);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // The stores fetch when the socket opens, the first time and after each reconnection.
-  useEffect(connect, []);
+  // The stores fetch when the socket opens, the first time and after each reconnection. The
+  // socket closes with the home: a session that ended must not keep it.
+  useEffect(() => {
+    connect();
+    return disconnect;
+  }, []);
 
   const flat = flattenZones(tree);
   const zone = chooseZone(flat, equipments, hashId);

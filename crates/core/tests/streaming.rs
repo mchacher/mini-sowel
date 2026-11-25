@@ -19,6 +19,7 @@ fn stream(rig: &mut Rig, path: &str) -> ListCursor {
             port: PORT,
             reach: Reach::Loopback,
             content_type: Some("application/json"),
+            authorization: None,
             body: b"",
         },
         rig.now,

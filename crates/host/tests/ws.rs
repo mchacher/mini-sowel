@@ -3,13 +3,14 @@
 //! Ctrl-C, and the acceptance demo (the garage and its motion-light, seen from a WebSocket).
 //! The client is the `tungstenite` crate's, over a socket that is set up by hand.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,15 @@ const WELCOME: &str =
 const KEY: &str = "dGhlIHNhbXBsZSBub25jZQ==";
 const ACCEPT: &str = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
+/// The synthetic account of the tests (spec 029).
+const USERNAME: &str = "admin";
+const PASSWORD: &str = "test-password-1234";
+/// The access token of each host started here, by port: `connect_with` and `http` send it.
+static TOKENS: Mutex<Option<HashMap<u16, String>>> = Mutex::new(None);
+
+fn token_of(port: u16) -> Option<String> {
+    TOKENS.lock().unwrap().as_ref()?.get(&port).cloned()
+}
 
 /// A data folder that is removed when the test ends.
 struct TempDir(PathBuf);
@@ -119,6 +129,13 @@ struct Serving {
 /// Starts `--serve` on a free port. The port is chosen before the host binds it, so another
 /// process can take it in between: a host that exits before it serves is started again.
 fn serve(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Serving {
+    let serving = serve_bare(dir, speed, env);
+    serving.sign_in();
+    serving
+}
+
+/// Starts `--serve` without an account (the auth tests).
+fn serve_bare(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Serving {
     for _ in 0..5 {
         if let Some(serving) = try_serve(dir, speed, env) {
             return serving;
@@ -192,8 +209,33 @@ fn try_serve(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Option<Serving> {
 }
 
 impl Serving {
-    /// Sends a request; (status, head, body).
+    /// Sets the account up (a fresh folder) or logs in, and keeps the access token for this port.
+    fn sign_in(&self) -> String {
+        let (_, status) = self.send("GET", "/api/v1/auth/status", &Value::Null);
+        let (route, body) = if status["setupRequired"] == true {
+            (
+                "setup",
+                json!({"username": USERNAME, "password": PASSWORD, "displayName": "Admin"}),
+            )
+        } else {
+            ("login", json!({"username": USERNAME, "password": PASSWORD}))
+        };
+        let (code, tokens) = self.send("POST", &format!("/api/v1/auth/{route}"), &body);
+        assert!(code == 200 || code == 201, "{route}: {code} {tokens}");
+        let token = tokens["accessToken"].as_str().unwrap().to_string();
+        TOKENS
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(self.port, token.clone());
+        token
+    }
+
+    /// Sends a request; (status, head, body). Carries the token once `sign_in` has run.
     fn http(&self, method: &str, path: &str, body: &Value) -> (u16, String, String) {
+        let auth = token_of(self.port)
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
         let text = if body.is_null() {
             String::new()
         } else {
@@ -205,7 +247,7 @@ impl Serving {
             .unwrap();
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
             self.port,
             text.len()
         )
@@ -323,6 +365,14 @@ fn upgrade_request(port: u16, path: &str, method: &str, extra: &[(&str, &str)]) 
         ("Sec-WebSocket-Key".into(), KEY.into()),
         ("Sec-WebSocket-Version".into(), "13".into()),
     ];
+    // The token goes in the `Authorization` header unless the test sets its own.
+    if let Some(token) = token_of(port)
+        && !extra
+            .iter()
+            .any(|(n, _)| n.eq_ignore_ascii_case("Authorization"))
+    {
+        headers.push(("Authorization".into(), format!("Bearer {token}")));
+    }
     for (name, value) in extra {
         headers.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
         headers.push(((*name).into(), (*value).into()));
@@ -498,6 +548,15 @@ fn started() -> Serving {
     let dir = data_dir();
     pair(&dir);
     let mut serving = serve(&dir, "100", &[]);
+    serving.dir = Some(dir);
+    serving
+}
+
+/// A host with no account yet: its sockets carry no token until a test signs in.
+fn started_bare() -> Serving {
+    let dir = data_dir();
+    pair(&dir);
+    let mut serving = serve_bare(&dir, "100", &[]);
     serving.dir = Some(dir);
     serving
 }
@@ -1146,7 +1205,8 @@ fn an_upgrade_anywhere_but_on_ws_is_a_400_and_never_pins_an_api_worker() {
     }
     // A second request on a kept-alive connection: the connection ends after the first answer.
     let kept = format!(
-        "GET /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: keep-alive\r\n\r\n{}",
+        "GET /api/v1/zones HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {}\r\nConnection: keep-alive\r\n\r\n{}",
+        token_of(port).unwrap(),
         upgrade_on("/api/v1/zones")
     );
     let answer = raw_exchange(port, &kept);
@@ -1203,4 +1263,115 @@ fn a_client_on_devices_gets_one_device_discovered_per_new_device_when_pairing_op
         assert!(event["device"].get("data").is_none());
         assert_eq!(event["device"]["integrationId"], "solite");
     }
+}
+
+// ---- Spec 029: the token on /ws ----
+
+#[test]
+fn no_token_is_closed_4001_authentication_required_and_a_wrong_one_4001_invalid_token() {
+    let serving = started_bare();
+    // Not even an account yet: a token is still required.
+    let (answer, mut client) = connect_with(serving.port, &[]);
+    assert_eq!(answer.status, 101);
+    assert_eq!(
+        client.closed_with(Duration::from_secs(5)),
+        Some((4001, "Authentication required".to_string()))
+    );
+    serving.sign_in();
+    // Wrong, by subprotocol and by header; the right one is still welcome.
+    for extra in [
+        [
+            ("Sec-WebSocket-Protocol", "bearer.none, bearer.not-a-token"),
+            ("Authorization", ""),
+        ],
+        [("Authorization", "Bearer not-a-token"), ("Origin", "")],
+    ] {
+        let (_, mut client) = connect_with(serving.port, &extra);
+        assert_eq!(
+            client.closed_with(Duration::from_secs(5)),
+            Some((4001, "Invalid token".to_string())),
+            "{extra:?}"
+        );
+    }
+    // Only `bearer.none`: no token.
+    let (_, mut client) = connect_with(
+        serving.port,
+        &[
+            ("Sec-WebSocket-Protocol", "bearer.none"),
+            ("Authorization", ""),
+        ],
+    );
+    assert_eq!(
+        client.closed_with(Duration::from_secs(5)),
+        Some((4001, "Authentication required".to_string()))
+    );
+}
+
+#[test]
+fn the_origin_is_checked_before_the_token_and_the_slot_comes_back() {
+    let serving = started_bare();
+    let (_, mut client) = connect_with(serving.port, &[("Origin", "http://evil.example")]);
+    assert_eq!(
+        client.closed_with(Duration::from_secs(5)),
+        Some((4003, "Origin not allowed".to_string()))
+    );
+}
+
+#[test]
+fn two_subprotocols_get_the_welcome_and_bearer_none_is_echoed() {
+    let serving = started_bare();
+    let token = serving.sign_in();
+    let protocols = format!("bearer.none, bearer.{token}");
+    let (answer, mut client) = connect_with(
+        serving.port,
+        &[
+            ("Sec-WebSocket-Protocol", protocols.as_str()),
+            ("Authorization", ""),
+        ],
+    );
+    assert_eq!(
+        answer.header("Sec-WebSocket-Protocol").as_deref(),
+        Some("bearer.none")
+    );
+    client.welcome();
+    // The token alone, as Sowel's interface sends it, is accepted too (the box echoes none).
+    let alone = format!("bearer.{token}");
+    let (_, mut client) = connect_with(
+        serving.port,
+        &[
+            ("Sec-WebSocket-Protocol", alone.as_str()),
+            ("Authorization", ""),
+        ],
+    );
+    client.welcome();
+}
+
+#[test]
+fn a_logout_leaves_an_open_socket_open_and_the_next_one_is_refused() {
+    let serving = started_bare();
+    serving.sign_in();
+    let (status, tokens) = serving.send(
+        "POST",
+        "/api/v1/auth/login",
+        &json!({"username": USERNAME, "password": PASSWORD}),
+    );
+    assert_eq!(status, 200, "{tokens}");
+    let access = tokens["accessToken"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {access}");
+    let (_, mut client) = connect_with(serving.port, &[("Authorization", bearer.as_str())]);
+    client.welcome();
+    let (status, _) = serving.send(
+        "POST",
+        "/api/v1/auth/logout",
+        &json!({"refreshToken": tokens["refreshToken"]}),
+    );
+    assert_eq!(status, 204);
+    // The session is over, the socket is not: a ping is still answered, nothing closes it.
+    assert_eq!(client.closed_with(Duration::from_millis(1500)), None);
+    client.subscribe(&["devices"]);
+    let (_, mut next) = connect_with(serving.port, &[("Authorization", bearer.as_str())]);
+    assert_eq!(
+        next.closed_with(Duration::from_secs(5)),
+        Some((4001, "Invalid token".to_string()))
+    );
 }

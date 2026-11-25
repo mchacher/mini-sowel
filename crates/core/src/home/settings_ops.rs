@@ -95,7 +95,7 @@ impl Home {
 
     // ---- The sun ----
 
-    fn forget_sunlight(&mut self) {
+    pub(super) fn forget_sunlight(&mut self) {
         *self.sun_cache.get_mut() = None;
     }
 

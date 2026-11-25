@@ -237,6 +237,30 @@ export const en: Messages = {
     "The settings are replaced as a whole. The rooms of the file are created, or updated when they differ. The other rooms, the equipments and the recipes are kept.",
   "settings.imported":
     "Imported: {{settings}} settings, {{created}} rooms created, {{updated}} rooms updated",
+  "auth.login": "Log in",
+  "auth.logout": "Log out",
+  "auth.username": "Username",
+  "auth.password": "Password",
+  "auth.confirmPassword": "Confirm password",
+  "auth.displayName": "Display name",
+  "auth.loginFailed": "Login failed",
+  "auth.setupTitle": "Set up your Solite",
+  "auth.setupHint":
+    "Choose the user name and the password of this box. There is no default password.",
+  "auth.setupFailed": "Setup failed",
+  "auth.createAccount": "Create account",
+  "auth.passwordMismatch": "Passwords do not match",
+  "auth.passwordTooShort": "Password must be at least 8 characters",
+  "auth.passwordTooLong": "Password must be at most 128 characters",
+  "auth.unreachable": "Cannot reach Solite",
+  "auth.retry": "Try again",
+  "settings.factoryReset": "Factory reset",
+  "settings.factoryResetDescription":
+    "Erases the rooms, the devices, the equipments, the recipes, the settings and the password. The box shows its first-start screen again. The Zigbee network, the Wi-Fi settings and the devices' pairing in the network are kept: each device is paired again when it announces itself.",
+  "settings.factoryResetConfirmTitle": "Erase everything?",
+  "settings.factoryResetConfirm":
+    "The home and the password are erased for good. You will have to set the box up again.",
+  "settings.factoryResetAction": "Erase everything",
 };
 
 export const fr: Messages = {
@@ -473,4 +497,28 @@ export const fr: Messages = {
     "Les réglages sont remplacés en entier. Les pièces du fichier sont créées, ou modifiées si elles diffèrent. Les autres pièces, les équipements et les recettes sont conservés.",
   "settings.imported":
     "Importé : {{settings}} réglages, {{created}} pièces créées, {{updated}} pièces modifiées",
+  "auth.login": "Se connecter",
+  "auth.logout": "Se déconnecter",
+  "auth.username": "Identifiant",
+  "auth.password": "Mot de passe",
+  "auth.confirmPassword": "Confirmer le mot de passe",
+  "auth.displayName": "Nom affiché",
+  "auth.loginFailed": "Échec de connexion",
+  "auth.setupTitle": "Configurez votre Solite",
+  "auth.setupHint":
+    "Choisissez l'identifiant et le mot de passe de ce boîtier. Il n'y a pas de mot de passe par défaut.",
+  "auth.setupFailed": "Échec de la configuration",
+  "auth.createAccount": "Créer le compte",
+  "auth.passwordMismatch": "Les mots de passe ne correspondent pas",
+  "auth.passwordTooShort": "Le mot de passe doit faire au moins 8 caractères",
+  "auth.passwordTooLong": "Le mot de passe doit faire au plus 128 caractères",
+  "auth.unreachable": "Solite est injoignable",
+  "auth.retry": "Réessayer",
+  "settings.factoryReset": "Réinitialisation d'usine",
+  "settings.factoryResetDescription":
+    "Efface les pièces, les appareils, les équipements, les recettes, les réglages et le mot de passe. Le boîtier affiche de nouveau son écran de premier démarrage. Le réseau Zigbee, les réglages Wi-Fi et l'appairage des appareils dans le réseau sont conservés : chaque appareil est apparié de nouveau quand il s'annonce.",
+  "settings.factoryResetConfirmTitle": "Tout effacer ?",
+  "settings.factoryResetConfirm":
+    "La maison et le mot de passe sont effacés définitivement. Il faudra configurer de nouveau le boîtier.",
+  "settings.factoryResetAction": "Tout effacer",
 };

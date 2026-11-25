@@ -604,3 +604,33 @@ export interface RecipeLogEntry {
   message: string;
   level: "info" | "warn" | "error";
 }
+
+// ============================================================
+// Users and tokens (mirrors src/shared/types.ts, spec 029)
+// ============================================================
+
+export type UserRole = "admin" | "standard";
+
+export interface UserPreferences {
+  language: "fr" | "en";
+  theme?: "light" | "dark" | "system";
+  defaultZoneId?: string;
+}
+
+export interface User {
+  id: string;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  preferences: UserPreferences;
+  enabled: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export interface AuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  user: User;
+}

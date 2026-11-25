@@ -6,3 +6,4 @@ export * from "./devices";
 export * from "./pairing";
 export * from "./recipes";
 export * from "./settings";
+export * from "./auth";

@@ -52,8 +52,8 @@ cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the ne
 cargo run -p solite-host -- --radio tcp://<address>:6638 --listen # show the measures
 cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
 cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API and interface on :8080
-sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
-sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings (Mac sim; box: once per milestone)
+SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
+SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)
 cd firmware && cargo build --release              # the ESP32 firmware (box image; --features sim: the QEMU image)
 cd firmware && CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio   # the radio image (build the interface first: cd ui && npm run build)

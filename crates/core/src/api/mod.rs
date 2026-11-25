@@ -3,6 +3,7 @@
 //! function: a request in, a status and a JSON body out. The host (or the box) only moves bytes.
 //! The time and the random bytes come from the caller.
 
+mod auth;
 mod backup;
 mod devices;
 mod equipments;
@@ -21,9 +22,11 @@ pub use orders::order_response;
 pub use slots::{MAX_WORKERS, SlotGuard, Slots};
 pub use static_files::{StaticFile, content_type};
 
+use std::sync::Mutex;
+
 use serde_json::{Map, Value};
 
-use crate::devices::{Random, to_json};
+use crate::devices::{Random, lock, to_json};
 use crate::failure::Failure;
 use crate::home::Home;
 use crate::orders::OrderWait;
@@ -77,16 +80,21 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/backup"),
     ("GET", "/api/v1/integrations/solite/permit-join"),
     ("POST", "/api/v1/integrations/solite/permit-join"),
+    ("GET", "/api/v1/auth/status"),
+    ("POST", "/api/v1/auth/setup"),
+    ("POST", "/api/v1/auth/login"),
+    ("POST", "/api/v1/auth/refresh"),
+    ("POST", "/api/v1/auth/logout"),
+    ("POST", "/api/v1/system/factory-reset"),
 ];
 
-/// Who can reach the server: it decides which `Host` headers are accepted and whether the
-/// pairing route is open (spec 022, D33).
+/// Who can reach the server: it decides which `Host` headers are accepted (spec 022, D33).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reach<'a> {
     /// The Mac host: `Host` is `127.0.0.1:<port>` or `localhost:<port>`.
     Loopback,
     /// The box, on the home's network: private addresses and the box's own name (`solite-<6
-    /// hex>`) are accepted, and the pairing route is off.
+    /// hex>`) are accepted.
     Lan { name: &'a str },
 }
 
@@ -104,6 +112,8 @@ pub struct Request<'a> {
     pub reach: Reach<'a>,
     /// The `Content-Type` header, if any.
     pub content_type: Option<&'a str>,
+    /// The `Authorization` header, if any (`Bearer <access token>`), read by `handle_guarded`.
+    pub authorization: Option<&'a str>,
     /// At most `MAX_BODY_BYTES + 1` bytes are needed to see that it is too long.
     pub body: &'a [u8],
 }
@@ -274,6 +284,50 @@ pub fn handle_stream(home: &mut Home, request: &Request, now: u64, random: Rando
     dispatch(home, request, now, random, true)
 }
 
+/// Answers a request behind Sowel's gate (spec 029, R4), taking the home's lock itself, phase by
+/// phase: the `Host` check, the interface's files (public), then `/auth/status`, `/setup`, `/login`
+/// and `/refresh` (public: the two that hash a password do it with the lock released), and every
+/// other path of `/api/v1` after the gate (403 `Setup required`, 401 `Authentication required`,
+/// 401 `Invalid or expired token`), before its body is read. A path outside `/api/v1` is 404. The
+/// reply is returned with the lock released: serve a list's chunks and wait for an order as with
+/// `handle_stream`.
+pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: Random) -> Reply {
+    if !host_allowed(request.host, request.port, request.reach) {
+        return Reply::Whole(error(403, "Forbidden host"));
+    }
+    if let Some(reply) = static_files::route(request) {
+        return reply;
+    }
+    let path = request.path.split(['?', '#']).next().unwrap_or("");
+    let Some(rest) = path
+        .strip_prefix(PREFIX)
+        .and_then(|rest| rest.strip_prefix('/'))
+    else {
+        return Reply::Whole(error(404, "Not found"));
+    };
+    let segments: Vec<&str> = rest.split('/').collect();
+    if auth::is_public(&segments) {
+        if request.body.len() > MAX_BODY_BYTES {
+            return Reply::Whole(error(413, "Body too large"));
+        }
+        if request.method == "POST" && !json_content_type(request.content_type) {
+            return Reply::Whole(error(415, "Unsupported Media Type"));
+        }
+        return Reply::Whole(auth::route(
+            &mut auth::Access::Shared(home),
+            &segments,
+            request,
+            now,
+            random,
+        ));
+    }
+    let mut guard = lock(home);
+    if let Some(refusal) = auth::gate(&mut guard, request, now) {
+        return Reply::Whole(refusal);
+    }
+    dispatch(&mut guard, request, now, random, true)
+}
+
 /// The interface's answer for the box's server (spec 023 R4.6): `None` when the path is not the
 /// interface's (`/`, `/assets/<name>`), left to `handle_stream`; else, in the order of
 /// `handle_stream`, 403 for a `Host` the reach refuses, then 405, 404 or the file to send. The
@@ -366,15 +420,18 @@ fn dispatch(
         Some("devices") => devices::route(home, &segments, request, now),
         Some("zones") => zones::route(home, &segments, request, now, random),
         Some("equipments") => equipments::route(home, &segments, request, now, random),
-        // The box does not open pairing from the API (D28).
-        Some("integrations") if matches!(request.reach, Reach::Lan { .. }) => {
-            error(404, "Pairing from the API is off on the box")
-        }
         Some("integrations") => pairing::route(home, &segments, request),
         Some("recipes" | "recipe-instances") => {
             recipes::route(home, &segments, request, now, random)
         }
         Some("settings") => settings::route(home, &segments, request),
+        Some("auth") => auth::route(
+            &mut auth::Access::Direct(home),
+            &segments,
+            request,
+            now,
+            random,
+        ),
         Some("system") => system::route(home, &segments, request, now),
         Some("backup") => backup::route(home, &segments, request, now),
         _ => error(404, "Not found"),

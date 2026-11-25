@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../App";
 import {
   FakeWebSocket,
+  openSocket,
+  storeSession,
   advance,
   device,
   homeRoutes,
@@ -36,8 +38,9 @@ afterEach(async () => {
 
 async function boot(devices: Device[] = [], extra: Record<string, Route | Route[]> = {}) {
   const api = mockApi({ ...homeRoutes({ zones: tree(), devices }), ...extra });
+  storeSession();
   render(<App />);
-  act(() => FakeWebSocket.last.open());
+  await openSocket();
   await screen.findByRole("heading", { level: 1, name: "Discovery" });
   await waitFor(() => expect(api.count("GET /api/v1/devices")).toBe(1));
   return api;

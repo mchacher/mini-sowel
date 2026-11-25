@@ -13,6 +13,8 @@ use std::time::Duration;
 const GARAGE: &str = "../../scenarios/garage.json";
 const ONE_SENSOR: &str = "../../scenarios/snzb02.json";
 const SCRIPT: &str = "../../scripts/measure-api.sh";
+/// The synthetic password of the tests' account.
+const PASSWORD: &str = "test-password-1234";
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 struct Reaped(Child);
@@ -97,21 +99,49 @@ fn serving(scenario: &str) -> (Reaped, u16, TempDir) {
 
 /// (success, standard output, standard error).
 fn run(args: &[&str]) -> (bool, String, String) {
-    let output = Command::new("sh")
-        .arg(SCRIPT)
-        .args(args)
-        .output()
-        .expect("sh runs the script");
+    run_with(args, Some(PASSWORD))
+}
+
+/// The same with `SOLITE_PASSWORD` set to this, or unset.
+fn run_with(args: &[&str], password: Option<&str>) -> (bool, String, String) {
+    let (status, out, err) = run_status(args, password);
+    (status == Some(0), out, err)
+}
+
+fn run_status(args: &[&str], password: Option<&str>) -> (Option<i32>, String, String) {
+    let mut command = Command::new("sh");
+    command.arg(SCRIPT).args(args).env_remove("SOLITE_PASSWORD");
+    if let Some(password) = password {
+        command.env("SOLITE_PASSWORD", password);
+    }
+    let output = command.output().expect("sh runs the script");
     (
-        output.status.success(),
+        output.status.code(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
 }
 
+/// A GET with the access token of the account the script set up (a login of the test's own).
 fn get(port: u16, path: &str) -> String {
+    let login = Command::new("curl")
+        .args(["-s", "-H", "Content-Type: application/json", "-d"])
+        .arg(format!(r#"{{"username":"admin","password":"{PASSWORD}"}}"#))
+        .arg(format!("http://127.0.0.1:{port}/api/v1/auth/login"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&login.stdout).into_owned();
+    let tokens: serde_json::Value = serde_json::from_str(&text).expect(&text);
     let output = Command::new("curl")
-        .args(["-s", &format!("http://127.0.0.1:{port}/api/v1/{path}")])
+        .args([
+            "-s",
+            "-H",
+            &format!(
+                "Authorization: Bearer {}",
+                tokens["accessToken"].as_str().unwrap()
+            ),
+        ])
+        .arg(format!("http://127.0.0.1:{port}/api/v1/{path}"))
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -200,7 +230,10 @@ fn with_no_device_with_an_order_it_refuses_before_creating_anything() {
 fn without_an_address_the_usage_names_the_mac_and_the_box_rule() {
     let (ok, _, err) = run(&[]);
     assert!(!ok);
-    assert!(err.contains("usage: sh scripts/measure-api.sh"), "{err}");
+    assert!(
+        err.contains("usage: SOLITE_PASSWORD=<password> sh scripts/measure-api.sh"),
+        "{err}"
+    );
     assert!(
         err.contains("on the Mac: sh scripts/measure-api.sh 8080"),
         "{err}"
@@ -283,6 +316,11 @@ fn answer(mut stream: TcpStream, fake: &Fake) {
     }
     thread::sleep(fake.delay);
     let (status, body) = match (method, path) {
+        ("GET", "/api/v1/auth/status") => ("200 OK", r#"{"setupRequired":false}"#.to_string()),
+        ("POST", "/api/v1/auth/login") => (
+            "200 OK",
+            r#"{"accessToken":"stub-token","refreshToken":"stub-refresh"}"#.to_string(),
+        ),
         ("GET", "/api/v1/zones") => ("200 OK", "[]".to_string()),
         ("GET", "/api/v1/devices") => (
             "200 OK",
@@ -349,4 +387,29 @@ fn a_total_over_10_seconds_fails_and_prints_the_time() {
         seen.contains(&"DELETE /api/v1/zones/zone-1".to_string()),
         "{seen:?}"
     );
+}
+
+#[test]
+fn without_the_password_it_says_so_and_exits_2_and_a_refused_login_is_exit_1() {
+    let (_host, port, _data) = serving(GARAGE);
+    let (status, _, err) = run_status(&[&port.to_string()], None);
+    assert_eq!(status, Some(2));
+    assert!(
+        err.contains("measure-api: set SOLITE_PASSWORD (the password of the box)"),
+        "{err}"
+    );
+    // A fresh host is set up by the first run, and the same password logs in the second.
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(ok, "{out}\n{err}");
+    let (ok, out, err) = run(&[&port.to_string()]);
+    assert!(ok, "{out}\n{err}");
+    // A wrong password: the host's text, exit 1, the password never printed.
+    let wrong = "wrong-password-9876";
+    let (status, out, err) = run_status(&[&port.to_string()], Some(wrong));
+    assert_eq!(status, Some(1));
+    assert!(
+        err.contains("login refused (401): Invalid credentials"),
+        "{err}"
+    );
+    assert!(!err.contains(wrong) && !out.contains(wrong), "{err}{out}");
 }

@@ -285,8 +285,8 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, starts the network as `--pair`
 does (it forms one, with its backup, on a radio that has none; the errors and the `network:` line
-are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the box serves in its own section below; the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), without authentication (a browser page
-from another site is refused by a `Host` check, and by an `Origin` check on `/ws`):
+are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the box serves in its own section below; the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), with Sowel's bearer token (see "Protects the home with a password"; a browser page
+from another site is also refused by a `Host` check, and by an `Origin` check on `/ws`):
 
 | Route | Answer |
 | ----- | ------ |
@@ -296,12 +296,14 @@ from another site is refused by a `Host` check, and by an `Origin` check on `/ws
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `GET /api/v1/integrations/solite/permit-join` | 200 `{"permitJoin": <bool>, "remaining": <seconds>}`, plus `"error"` when the radio refused the last opening |
 | `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
+| `GET /api/v1/auth/status`, `POST /api/v1/auth/setup`, `/login`, `/refresh`, `/logout` | Sowel's authentication (see "Protects the home with a password") |
+| `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
-Errors are `{"error": "<message>"}` (400, 403, 404, 405, 413, 415, 426; 502 for an order no device took; 503 `Busy` beyond 4 requests at
+Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 413, 415, 426, 429; 502 for an order no device took; 503 `Busy` beyond 4 requests at
 once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
 `application/json`, so a web page cannot send one from the browser. The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
 their size never weighs on memory; the files are written the same way. It prints `serving:
@@ -321,12 +323,11 @@ closed`, `pairing: device store full (64), <address> ignored`, and `pairing: fai
 when the radio refuses the opening (kept in `error` until the next `POST`; the window stays
 closed and the engine goes on). A device deleted from the home that announces itself during a
 window comes back as a new device; a setup still running at its deletion does not bring it back,
-and a setup cut short at the cap is abandoned. The route has no authentication (decision D28).
+and a setup cut short at the cap is abandoned. The route needs the token (decision D49).
 
 #### Live events
 
-`GET /ws` is Sowel's WebSocket: a `bearer.` subprotocol is echoed back (its token is not
-checked); the first message is `{"type":"connected","message":"Connected to Sowel engine",
+`GET /ws` is Sowel's WebSocket: the token comes in the `Authorization` header or in a `bearer.<token>` subprotocol (the first offered other than `bearer.none`); the first offered `bearer.` subprotocol is echoed back; after the upgrade, no token closes the socket with 4001 `Authentication required`, a token that is not a live access token with 4001 `Invalid token` (the `Host` and `Origin` checks, 4003, come first, the 5th client's 1013 after); a session that ends later does not close an open socket. The first message is `{"type":"connected","message":"Connected to Sowel engine",
 "version":"0.1.0"}`. A client sends `{"type":"subscribe","topics":[...]}`, which replaces its
 topics (`system` always included; unknown names ignored), and then receives, every 200 ms when
 there is something, one JSON array of Sowel's events in the order they happened, keeping only
@@ -352,12 +353,12 @@ own network (not a guest network) with no router port forwarded to it (decided b
 (`solite-<6 hex digits>`) and its suffixes. The routes and errors are those of the Mac host,
 except:
 
-- `GET` and `POST /api/v1/integrations/solite/permit-join` answer 404 `Pairing from the API is off
-  on the box`; pairing opens at a power-on boot or from the serial console's `pair` line, over the
-  USB cable only (decision D36).
+- `GET` and `POST /api/v1/integrations/solite/permit-join` answer as on the Mac, behind the token
+  (decision D49); pairing also opens at a power-on boot or from the serial console's `pair` line,
+  over the USB cable (decision D36).
 - On `/ws` the refusals come after the upgrade, as close codes: 4003 for a wrong host, 4003 for an
   origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
-  `http://127.0.0.1:5173`) are accepted as on the Mac. Only the subprotocol `bearer.none` is echoed.
+  `http://127.0.0.1:5173`) are accepted as on the Mac. The subprotocol `bearer.none` is echoed; the token is read from the second subprotocol (or the `Authorization` header), so a client that offers only `bearer.<token>` gets no subprotocol echoed and its browser drops the socket.
   A dead client is found by TCP keep-alive (about 45 s) instead of 60 s of silence.
 - A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413; a body
   that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 1024 bytes,
@@ -368,6 +369,75 @@ except:
 The interface is served from the firmware: every file is gzip (`Content-Encoding: gzip`), with the
 cache headers of the Mac. The engine never waits for the network: a lost link is retried while the
 garage runs.
+
+### Protects the home with a password
+
+A home with no password asks for one: no default password exists. The first person to open the
+interface (or to call `POST /api/v1/auth/setup`) gives a user name, a display name and a password,
+and a person at the box confirms (decisions D47 to D49).
+
+- **One account**, Sowel's admin: an id, a `username` (1 to 64 characters, no control character), a
+  `displayName`, a `language` (`fr` or `en`, `fr` when missing), a creation date. The password is
+  8 to 128 characters and at most 512 bytes (400 `Invalid field: password` otherwise). It is
+  hashed with PBKDF2-HMAC-SHA256 (a 16-byte random salt, 10 000 iterations stored with the hash)
+  and compared in constant time; on the box a hash takes about a second, with the home's lock
+  released, so the radio loop is never held by a login. The account and its hash are in
+  `auth.json` (`/data` on the box, the data folder on the Mac), written by the saver within 2
+  seconds, once per setup or reset, never per login; `{"version":1}` means no account. An
+  `auth.json` that cannot be read, or whose version, user, scheme (`pbkdf2-sha256`), iterations
+  (1 000 to 1 000 000), salt or hash is wrong, stops the start (`auth: <file>: cannot read:
+  <reason>`), never read as "no account". A home from before this change has no `auth.json`: setup
+  is required and nothing of the home is changed. The password and the tokens are never stored,
+  logged, or sent but in the tokens' own answers.
+- **The confirmation at the box.** The core asks an adapter, `Presence`, whether a person at the
+  box confirmed. The Mac host (loopback only) confirms always. The box, until its button is wired,
+  confirms during the 10 minutes after a power-on boot (power-on, external reset or USB, as the
+  pairing window), never after a software restart or a crash; the refusal says "Unplug the box and
+  plug it back in, then try again within 10 minutes". A button adapter (confirms 120 s after a
+  press: "Press the button on the box, then try again") is in the core, not yet wired. A refusal is
+  403 `{"error": "<what to do>", "confirmRequired": true}`; nothing is written.
+- **Sowel's routes**, mirrored from `src/api/routes/auth.ts`. `GET /api/v1/auth/status` →
+  `{"setupRequired": <bool>}`. `POST /api/v1/auth/setup` `{username, password, displayName,
+  language?}` → 201 with Sowel's `AuthTokens` (`accessToken`, `refreshToken`, `expiresIn` 900,
+  `user` as Sowel's `User` with `role` `admin`, `preferences.language`, `enabled`, `lastLoginAt`,
+  `createdAt`); an account already there is 403 `Setup already completed` (checked before the body),
+  two setups at once make one account. `POST /api/v1/auth/login` `{username, password}` → 200
+  `AuthTokens`, else 401 `Invalid credentials` (no account included; a wrong user name costs the
+  same hash as a wrong password). `POST /api/v1/auth/refresh` `{refreshToken}` → 200 a new
+  `AuthTokens` (the old session is closed), else 401 `Invalid refresh token`. `POST
+  /api/v1/auth/logout` `{refreshToken?}`, behind the gate → 204; the session of that refresh token
+  is closed, its access token too. Bodies are checked as the other routes (`Invalid JSON`,
+  `Unknown field: <f>`, `Invalid field: <f>`, `Missing field: <f>`, 415 without `Content-Type:
+  application/json`).
+- **Sessions** are opaque (not JWTs): an access token (32 hex characters, 15 minutes) and a refresh
+  token (30 days). At most 8 are kept, in RAM only; a 9th login drops the one opened first, and a
+  restart ends them all (the user logs in again; the account stays). A refresh token sent as a
+  bearer is refused. `lastLoginAt` is the last login since the start. A session or an attempt dated
+  before the box's clock was set moves with the clock's jump, and the account's creation date too
+  (`auth.json` is written again).
+- **The gate.** Every route of `/api/v1`, existing or not, but `/auth/status`, `/auth/setup`,
+  `/auth/login` and `/auth/refresh`, goes through Sowel's gate before the 413 and 415 checks (an
+  unauthenticated POST is 401, not 415 or 413), in Sowel's order: no account 403 `{"error":"Setup
+  required","setupRequired":true}`; no `Authorization: Bearer <token>` 401 `Authentication
+  required`; a token that is not a live access token 401 `Invalid or expired token`. The interface's
+  files need no token. The `Host` check comes first (403 `Forbidden host`). The Mac host and the
+  box apply the same rules, except that the box answers what it decides from the request's head
+  before the gate: 411 `Length required`, 413 for a body announced over 16 KB, 408 for a body that
+  stops (see "Serves Sowel's API from the box").
+- **Brute force.** Setup and login together: at most 10 attempts per minute for the whole box (the
+  core does not see addresses), then 429 `Rate limit exceeded, retry in 1 minute` without hashing.
+  Only an attempt that would hash counts (a 400, 403 or 415 does not). Open sessions and their
+  refresh keep working while the limit is reached.
+- **`/ws`** needs the token too (see "Live events").
+- **Factory reset**: `POST /api/v1/system/factory-reset` (Solite's, an empty body or `{}`), behind
+  the gate, then the confirmation (403 as above), then 409 `Pairing in progress` while the pairing
+  window is open or a device is still being set up. It erases, with their live events, every
+  recipe instance, equipment, device (forgotten: it stays in the Zigbee network) and zone but the
+  root (its name and description back to a first start's), the settings, the account and every
+  session, then answers 204; `auth.json` becomes `{"version":1}`. The API then answers 403 `Setup
+  required`. It keeps the Zigbee network and its keys (`zigbee.json`), the Wi-Fi settings and the
+  network setting, so the deletion is partial: forgotten devices come back when they announce
+  themselves during a pairing window.
 
 ### Organises the home in zones and equipments
 
@@ -575,9 +645,21 @@ as showing them. The interface also opens at
 `http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
 copy embedded in the radio image at build time.
 
+- **First start and login**: the interface first reads `GET /auth/status`. With no account it shows
+  the **first-start screen** (Sowel's setup page): the Solite mark, "Set up your Solite", user
+  name, display name, password and confirmation; "Passwords do not match" and "At least 8
+  characters" (8 to 128 characters, counted as the host counts them) are checked before sending;
+  the host's refusal (for example the confirmation at the box) shows under the form; on success the
+  home shows. With an account and no stored token it shows the **login screen** (user name,
+  password, "Log in"; "Invalid credentials" or the host's text on a refusal). The tokens are kept in
+  `localStorage` (`sowel_access_token`, `sowel_refresh_token`); every request carries `Authorization:
+  Bearer <access>`; a 401 asks `POST /auth/refresh` once (one at a time) and repeats the request, a
+  refresh refused clears the tokens and shows the login screen, a 403 `setupRequired` shows the
+  first-start screen. `/ws` offers `bearer.none` and `bearer.<access>`; a close 4001 refreshes the
+  token and reconnects.
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
-  Topology, Discovery, Settings; open on an administration page, opened or closed by its title; the room shown is kept in the address
+  Topology, Discovery, Settings; open on an administration page, opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
@@ -637,13 +719,16 @@ copy embedded in the radio image at build time.
   `solite-backup-<date>.json`; "Import" takes a `.json` file of 16384 bytes at most ("File too
   large (16 KB at most)" otherwise, nothing sent), asks to confirm what it replaces, then shows
   "Imported: <n> settings, <c> rooms created, <u> rooms updated" or the host's refusal, and reads
-  the rooms and settings again.
+  the rooms and settings again. At the foot of the page, the **Factory reset** card: what is erased, a
+  "Factory reset" button and a confirmation dialog (what is erased, "Erase everything"); success
+  clears the tokens and shows the first-start screen, a refusal (the confirmation's text, "Pairing in
+  progress") shows the host's text.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is lost for 3 s a banner says so; the interface reconnects (1 s, 2 s, 4 s... up to
   30 s) and reloads everything when it is back.
 - **A light's button** sends the order (`ON` or `OFF`); the button waits, and the light shows its
   new state when the device confirms it; a refusal shows its text for 5 s.
-- **Language**: French when the browser is in French, English otherwise.
+- **Language**: French when the browser is in French, English otherwise (the first-start and login screens included).
 - The pages carry headers that forbid showing them inside another site's page.
 
 ### Runs without the dongle
@@ -670,17 +755,17 @@ apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
 relay).
 
-`sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API: a
+`SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing
 listening: `demo-garage: no host answers at <address>:<port> ...`, exit 1.
-`sh scripts/measure-api.sh <address>[:<port>] [--keep]` sends, one after the other, the 33 requests
+`SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:<port>] [--keep]` sends, one after the other, the 33 requests
 of an equipment with 16 data and 16 order bindings (the same data and order under 16 aliases),
-times each one, and prints `measure: 33 requests, <k> answered 201, <b> Busy, total <s> s, slowest
+times each one (its login is not counted), and prints `measure: 33 requests, <k> answered 201, <b> Busy, total <s> s, slowest
 <t> s (request <i>)`; it exits 0 only when the 33 answered 201, none was 503 and the total is at
 most 10 s, else 1 with the first answer that was not 201. It needs a device with an order (`no
 device with an order: pair a relay first`, exit 1), refuses when a zone `Measure 33` exists, and
 deletes its zone and equipment afterwards (kept with `--keep`). It is run on the Mac against the
-simulator (`--sim scenarios/garage.json --serve`, then `sh scripts/measure-api.sh 8080`); against
+simulator (`--sim scenarios/garage.json --serve`, then `SOLITE_PASSWORD=<password> sh scripts/measure-api.sh 8080`); against
 the box at most once per milestone, inside `box.sh saves` (decision D39), and no script loops it.
 
 ### Flashes the box and brings it back
@@ -843,11 +928,11 @@ of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet 
 wiring and its risks.
 
 No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
-zones, equipments, recipe instances and the network backup, serves Sowel's device, zone,
+zones, equipments, recipe instances, the account and the network backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
 measures; the firmware's radio image does the same over the serial link and serves the API, the
-live events and the interface over Wi-Fi, without the pairing route.
+live events and the interface over Wi-Fi, behind the home's password.
 
 ## History
 
@@ -881,3 +966,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 026 | The home's settings (location, time zone, sun offsets) and the sun times on the root zone, so "Inactive during day" works; a Settings page; export and import of the settings and zones |
 | 027 | The Sowel contract checked (snapshot, subset and deviations); Sowel's 31 equipment types and optional equipment fields; `light_color`; a paired device's type and bindings proposed in the core; `GET /api/v1/system/timezone` |
 | 028 | Core fixes: the dates of a device taken before the clock is set move by its jump; a motion-light button without an `action` binding leaves the settings instead of disabling the recipe; a running motion-light follows its zone's motion sensors as they change |
+| 029 | A password at commissioning, confirmed at the box: one account, Sowel's `/auth` routes and bearer token on every route and on `/ws`, the box's pairing route behind the token, a factory reset |

@@ -35,6 +35,7 @@ fn call(
             port: PORT,
             reach: Reach::Loopback,
             content_type: Some(content_type),
+            authorization: None,
             body: body.as_bytes(),
         },
         T0,

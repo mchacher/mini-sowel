@@ -2,15 +2,15 @@
 
 ## Steps
 
-- [ ] 1. Living spec updated (the delta of `spec.md`)
-- [ ] 2. Core types: `auth` module (account, hash, sessions, attempts, presence), `User`/`AuthTokens` JSON
-- [ ] 3. Core logic: `Home`'s auth side, `auth.json` load and save, `factory_reset`, `observe_wall`
-- [ ] 4. Core API: `/auth` routes, the gate, `handle_guarded`, `factory-reset`, the box's pairing route, `bearer_token`
-- [ ] 5. Host adapter: `serve.rs`, `ws.rs`, `AlwaysConfirmed`; host tests' helpers
-- [ ] 6. Firmware adapter: `http_server.rs`, `live_ws.rs`, `BootPresence`
-- [ ] 7. Scripts: `demo-garage.sh`, `measure-api.sh`
-- [ ] 8. Interface: auth API and store, client, live, setup and login screens, log out, factory reset; e2e
-- [ ] 9. Docs: decisions D47 to D49, roadmap, specs-index, sowel-subset, architecture, memory-budget, README, CLAUDE.md
+- [x] 1. Living spec updated (the delta of `spec.md`)
+- [x] 2. Core types: `auth` module (account, hash, sessions, attempts, presence), `User`/`AuthTokens` JSON
+- [x] 3. Core logic: `Home`'s auth side, `auth.json` load and save, `factory_reset`, `observe_wall`
+- [x] 4. Core API: `/auth` routes, the gate, `handle_guarded`, `factory-reset`, the box's pairing route, `bearer_token`
+- [x] 5. Host adapter: `serve.rs`, `ws.rs`, `AlwaysConfirmed`; host tests' helpers
+- [x] 6. Firmware adapter: `http_server.rs`, `live_ws.rs`, `BootPresence`
+- [x] 7. Scripts: `demo-garage.sh`, `measure-api.sh`
+- [x] 8. Interface: auth API and store, client, live, setup and login screens, log out, factory reset; e2e
+- [x] 9. Docs: decisions D47 to D49, roadmap, specs-index, sowel-subset, architecture, memory-budget, README, CLAUDE.md
 
 ## Test plan
 
@@ -35,7 +35,7 @@
 | core API setup | nominal | 201, `AuthTokens` with Sowel's `User` (JSON compared with an example from `types.ts`), `auth.json` changed flag set |
 | core API setup | account exists | 403 `Setup already completed` |
 | core API setup | presence not confirmed | 403 `confirmRequired`, no account |
-| core API setup | password of 7 characters, 129 characters, 4 emoji (16 bytes) and 8 emoji; username 65 chars, with `\n`; missing `displayName`; unknown field; `language` `de` | 400 each |
+| core API setup | password of 7 characters, 129 characters, 4 emoji (16 bytes: refused), 8 emoji (accepted); username 65 chars, with `\n`; missing `displayName`; unknown field; `language` `de` | 400 each |
 | core API setup | two setups prepared at once, finished one after the other | the second 403 `Setup already completed` |
 | core API login | right pair; wrong password; wrong username; no account | 200; 401 ×3 `Invalid credentials` |
 | core API login | 11th attempt within 60 s | 429, and no hash computed (a counter of hashes stays) |

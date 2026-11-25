@@ -1,6 +1,15 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aggregate, mockApi, resetStores, zone, type Route } from "../../test-utils";
+import {
+  aggregate,
+  homeRoutes,
+  mockApi,
+  resetStores,
+  storeSession,
+  zone,
+  type Route,
+} from "../../test-utils";
+import { useAuth } from "../../store/useAuth";
 import { useZoneAggregation } from "../../store/useZoneAggregation";
 import { SettingsPage } from "./SettingsPage";
 import { App } from "../../App";
@@ -226,15 +235,61 @@ function importResult() {
 describe("Settings in the navigation", () => {
   it("has its entry in Administration, and #/settings shows the page", async () => {
     mockApi({
+      ...homeRoutes({ zones: [zone(ROOT, "Home")] }),
       "GET /api/v1/settings": { body: {} },
       "GET /api/v1/settings/timezones": { body: ZONES },
-      "GET /api/v1/zones": { body: [zone(ROOT, "Home")] },
     });
     window.location.hash = "#/settings";
+    storeSession();
     render(<App />);
     expect(await screen.findByRole("heading", { level: 1, name: "Settings" })).toBeTruthy();
     const link = screen.getAllByRole("link", { name: "Settings" })[0];
     expect(link.getAttribute("href")).toBe("#/settings");
     expect(link.getAttribute("aria-current")).toBeTruthy();
+  });
+});
+
+describe("SettingsPage, factory reset card", () => {
+  const open = () => fireEvent.click(screen.getByRole("button", { name: "Factory reset" }));
+  const RESET = "POST /api/v1/system/factory-reset";
+
+  it("asks for a confirmation first, and Cancel sends nothing", async () => {
+    const api = await setup();
+    open();
+    const dialog = screen.getByRole("dialog", { name: "Erase everything?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.count(RESET)).toBe(0);
+  });
+
+  it("success: sends {} as JSON, clears the tokens and shows the first-start state", async () => {
+    storeSession();
+    useAuth.setState({ isAuthenticated: true, loading: false, setupRequired: false });
+    const api = await setup({}, { [RESET]: { status: 204 } });
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Erase everything" }));
+    await waitFor(() => expect(useAuth.getState().setupRequired).toBe(true));
+    expect(api.calls.find((c) => c.key === RESET)!.body).toEqual({});
+    expect(useAuth.getState().isAuthenticated).toBe(false);
+    expect(localStorage.getItem("sowel_refresh_token")).toBeNull();
+  });
+
+  it("refusal: shows the host's text and keeps the session", async () => {
+    storeSession();
+    useAuth.setState({ isAuthenticated: true, loading: false, setupRequired: false });
+    await setup(
+      {},
+      {
+        [RESET]: {
+          status: 403,
+          body: { error: "Press the button on the box, then try again", confirmRequired: true },
+        },
+      },
+    );
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Erase everything" }));
+    expect(await screen.findByText("Press the button on the box, then try again")).toBeTruthy();
+    expect(useAuth.getState().isAuthenticated).toBe(true);
+    expect(localStorage.getItem("sowel_refresh_token")).toBe("refresh-0");
   });
 });

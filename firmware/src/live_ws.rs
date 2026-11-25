@@ -1,8 +1,8 @@
 //! The radio image's live events (feature `radio`, spec 023 R5): `/ws` as an ESP-IDF WebSocket
 //! handler registered directly, so that ESP-IDF answers the handshake and then calls
 //! `after_handshake` on that same request (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT`): the
-//! `Host`, the `Origin` and a slot of the core's `LiveHub` are checked there, a refusal being a
-//! close code (4003, 4003, 1013), and the welcome is sent. ESP-IDF 5.5 never calls a WebSocket
+//! `Host`, the `Origin`, the token (spec 029) and a slot of the core's `LiveHub` are checked
+//! there, a refusal being a close code (4003, 4003, 4001, 1013), and the welcome is sent. ESP-IDF 5.5 never calls a WebSocket
 //! URI handler for the handshake itself, only for the frames that follow, so esp-idf-svc's
 //! `ws_handler` (whose `New` case is the handshake) never sees it. Each session holds a context
 //! whose release, when ESP-IDF deletes the socket, frees its slot. A live thread on core 0 sends
@@ -19,18 +19,20 @@ use std::time::{Duration, Instant};
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::ThreadSpawnConfiguration;
 use esp_idf_svc::sys::{
-    ESP_FAIL, ESP_OK, SHUT_RDWR, esp_err_t, http_method_HTTP_GET, httpd_handle_t, httpd_queue_work,
-    httpd_register_uri_handler, httpd_req_get_hdr_value_len, httpd_req_get_hdr_value_str,
-    httpd_req_t, httpd_req_to_sockfd, httpd_sess_trigger_close, httpd_uri_t, httpd_ws_frame_t,
-    httpd_ws_recv_frame, httpd_ws_send_frame, httpd_ws_send_frame_async,
-    httpd_ws_type_t_HTTPD_WS_TYPE_BINARY, httpd_ws_type_t_HTTPD_WS_TYPE_CLOSE,
-    httpd_ws_type_t_HTTPD_WS_TYPE_CONTINUE, httpd_ws_type_t_HTTPD_WS_TYPE_PING,
-    httpd_ws_type_t_HTTPD_WS_TYPE_TEXT, lwip_shutdown,
+    ESP_FAIL, ESP_OK, SHUT_RDWR, esp_err_t, esp_log_level_set, esp_log_level_t_ESP_LOG_ERROR,
+    http_method_HTTP_GET, httpd_handle_t, httpd_queue_work, httpd_register_uri_handler,
+    httpd_req_get_hdr_value_len, httpd_req_get_hdr_value_str, httpd_req_t, httpd_req_to_sockfd,
+    httpd_sess_trigger_close, httpd_uri_t, httpd_ws_frame_t, httpd_ws_recv_frame,
+    httpd_ws_send_frame, httpd_ws_send_frame_async, httpd_ws_type_t_HTTPD_WS_TYPE_BINARY,
+    httpd_ws_type_t_HTTPD_WS_TYPE_CLOSE, httpd_ws_type_t_HTTPD_WS_TYPE_CONTINUE,
+    httpd_ws_type_t_HTTPD_WS_TYPE_PING, httpd_ws_type_t_HTTPD_WS_TYPE_TEXT, lwip_shutdown,
 };
 use solite_core::api::{Reach, host_allowed};
 use solite_core::devices::lock;
+use solite_core::home::Home;
 use solite_core::live::session::{
-    MAX_INCOMING_BYTES, PING_SECONDS, TICK_MS, close_reason, origin_allowed,
+    CLOSE_UNAUTHENTICATED, MAX_INCOMING_BYTES, PING_SECONDS, REASON_AUTHENTICATION_REQUIRED,
+    REASON_INVALID_TOKEN, TICK_MS, bearer_token, close_reason, origin_allowed,
 };
 use solite_core::live::{ClientId, LiveHandle, MAX_CLIENTS};
 
@@ -38,7 +40,9 @@ use solite_core::live::{ClientId, LiveHandle, MAX_CLIENTS};
 const LIVE_STACK_BYTES: usize = 4 * 1024;
 /// The longest header read during the handshake (the head is at most 1024 bytes, R4.2).
 const MAX_HEADER_BYTES: usize = 1024;
-/// The subprotocol the interface offers (`ui/src/store/useLive.ts`), the only one echoed.
+/// The subprotocol echoed. The interface offers `bearer.none` then `bearer.<token>`
+/// (`ui/src/store/useLive.ts`): ESP-IDF echoes only this fixed one, and reads at most 49
+/// characters of the header it matches, so the token is read whole from the header (spec 029 R5).
 const SUBPROTOCOL: &CStr = c"bearer.none";
 /// The first message, as the host sends it (spec 013, `crates/host/src/ws.rs`).
 const WELCOME: &str =
@@ -47,6 +51,8 @@ const WELCOME: &str =
 /// What the handlers and the live thread share.
 struct Live {
     hub: LiveHandle,
+    /// The home, taken once for each new client to check its token.
+    home: Arc<Mutex<Home>>,
     name: &'static str,
     port: u16,
     server: httpd_handle_t,
@@ -102,9 +108,17 @@ fn raw_frame(kind: Frame, payload: &[u8]) -> httpd_ws_frame_t {
     }
 }
 
-/// `Host` and `Origin` of the handshake, copied while the request is valid.
+/// What the handshake's headers say, copied while the request is valid.
+struct Handshake {
+    host: Option<String>,
+    origin: Option<String>,
+    /// `Sec-WebSocket-Protocol`, whole: the token may be in it.
+    protocols: Option<String>,
+    authorization: Option<String>,
+}
+
 #[allow(unsafe_code)]
-fn handshake_headers(request: *mut httpd_req_t) -> (Option<String>, Option<String>) {
+fn handshake_headers(request: *mut httpd_req_t) -> Handshake {
     let read = |name: &CStr| -> Option<String> {
         // SAFETY: `request` is the handshake's request, valid during `after_handshake`; `name` is
         // NUL-terminated; ESP-IDF writes at most `buffer.len()` bytes, NUL included, into
@@ -128,7 +142,33 @@ fn handshake_headers(request: *mut httpd_req_t) -> (Option<String>, Option<Strin
             Some(String::from_utf8_lossy(&buffer).into_owned())
         }
     };
-    (read(c"Host"), read(c"Origin"))
+    Handshake {
+        host: read(c"Host"),
+        origin: read(c"Origin"),
+        protocols: read(c"Sec-WebSocket-Protocol"),
+        authorization: read(c"Authorization"),
+    }
+}
+
+/// The close to send when the handshake carries no live access token: `None` when it does. The
+/// wall clock is observed first, as every request does. Checked once, here: a session that ends
+/// later does not close the socket (Sowel's rule).
+fn token_refusal(live: &Live, handshake: &Handshake) -> Option<&'static str> {
+    let token = bearer_token(
+        handshake.protocols.iter().map(String::as_str),
+        handshake.authorization.as_deref(),
+    );
+    let Some(token) = token else {
+        return Some(REASON_AUTHENTICATION_REQUIRED);
+    };
+    let now = crate::radio_engine::wall_ms();
+    let mut home = lock(&live.home);
+    home.observe_wall(now);
+    if home.access_valid(&token, now) {
+        None
+    } else {
+        Some(REASON_INVALID_TOKEN)
+    }
 }
 
 /// The payload of a close frame: the code, then its reason.
@@ -193,13 +233,18 @@ extern "C" fn after_handshake(request: *mut httpd_req_t) -> esp_err_t {
         return ESP_OK;
     };
     let fd = socket_of(request);
-    let (host, origin) = handshake_headers(request);
+    let handshake = handshake_headers(request);
+    let (host, origin) = (&handshake.host, &handshake.origin);
     if !host_allowed(host.as_deref(), live.port, Reach::Lan { name: live.name }) {
         refuse(request, live.server, fd, 4003, "Forbidden host");
         return ESP_OK;
     }
     if !origin_allowed(origin.as_deref(), host.as_deref()) {
         refuse(request, live.server, fd, 4003, "Origin not allowed");
+        return ESP_OK;
+    }
+    if let Some(reason) = token_refusal(live, &handshake) {
+        refuse(request, live.server, fd, CLOSE_UNAUTHENTICATED, reason);
         return ESP_OK;
     }
     let Some(client) = live.hub.connect() else {
@@ -447,11 +492,13 @@ fn live_loop() {
 pub fn register(
     server: httpd_handle_t,
     hub: LiveHandle,
+    home: Arc<Mutex<Home>>,
     name: &'static str,
     port: u16,
 ) -> Result<(), String> {
     let live = Live {
         hub,
+        home,
         name,
         port,
         server,
@@ -470,6 +517,10 @@ pub fn register(
         supported_subprotocol: SUBPROTOCOL.as_ptr(),
         ws_post_handshake_cb: Some(after_handshake),
     };
+    // ESP-IDF's `httpd_ws` logs the subprotocols offered at the handshake, and the token is one
+    // of them: only its errors reach the serial log (spec 029 R5.4).
+    // SAFETY: the tag is a NUL-terminated static string; the call only sets a log level.
+    unsafe { esp_log_level_set(c"httpd_ws".as_ptr(), esp_log_level_t_ESP_LOG_ERROR) };
     // SAFETY: the server handle is live; ESP-IDF copies the description; the path and the
     // subprotocol are static.
     let code = unsafe { httpd_register_uri_handler(server, &conf) };

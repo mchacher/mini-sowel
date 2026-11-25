@@ -1,8 +1,10 @@
 // Helpers of the tests: a WebSocket that the test drives, a `fetch` that answers from a table,
 // and builders of the zones and equipments of Sowel's API.
 import { act } from "@testing-library/preact";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { disconnect, useLive } from "./store/useLive";
+import { setAccessToken } from "./api/client";
+import { useAuth } from "./store/useAuth";
 import { useEquipments } from "./store/useEquipments";
 import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
@@ -36,7 +38,7 @@ export class FakeWebSocket {
   sent: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((message: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
 
   url: string;
@@ -68,9 +70,9 @@ export class FakeWebSocket {
   }
 
   /** The connection ends (the server stops, or refuses it with a 503). */
-  drop(): void {
+  drop(code = 1006): void {
     this.readyState = 3;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 
   static get last(): FakeWebSocket {
@@ -261,6 +263,15 @@ export function resetStores(): void {
   useZoneAggregation.setState({ data: {}, loading: false, error: null });
   useLive.setState({ status: "connecting" });
   resetPairingTimers();
+  localStorage.clear();
+  setAccessToken(null);
+  useAuth.setState({
+    user: null,
+    isAuthenticated: false,
+    setupRequired: null,
+    loading: true,
+    unreachable: false,
+  });
   useDevices.setState({ devices: {}, loading: false, error: null });
   useRecipes.setState({ recipes: [], instances: [], loading: false, error: null });
   usePairing.setState({ open: false, remaining: 0, error: null, newIds: [], pageOpen: false });
@@ -285,6 +296,32 @@ export function device(id: string, name: string, extra: Partial<Device> = {}): D
   };
 }
 
+/** A session of the host, as `POST /auth/login` and `/auth/refresh` give it. */
+export function authTokens(access = "access-1", refresh = "refresh-1") {
+  return {
+    accessToken: access,
+    refreshToken: refresh,
+    expiresIn: 900,
+    user: {
+      id: "u1",
+      username: "admin",
+      displayName: "Admin",
+      role: "admin" as const,
+      preferences: { language: "en" as const },
+      enabled: true,
+      lastLoginAt: null,
+      createdAt: "2026-11-25T10:00:00.000Z",
+    },
+  };
+}
+
+/** The browser holds a session: the stored tokens, as after a login. */
+export function storeSession(access = "access-0", refresh = "refresh-0"): void {
+  localStorage.setItem("sowel_access_token", access);
+  localStorage.setItem("sowel_refresh_token", refresh);
+  setAccessToken(access);
+}
+
 /** The GETs the stores make when the socket opens. */
 export function homeRoutes(home: {
   zones: ZoneWithChildren[];
@@ -293,6 +330,8 @@ export function homeRoutes(home: {
   devices?: Device[];
 }): Record<string, Route> {
   return {
+    "GET /api/v1/auth/status": { body: { setupRequired: false } },
+    "POST /api/v1/auth/refresh": { body: authTokens() },
     "GET /api/v1/zones": { body: home.zones },
     "GET /api/v1/equipments": { body: home.equipments ?? [] },
     "GET /api/v1/zones/aggregation": { body: home.aggregation ?? {} },
@@ -475,3 +514,9 @@ export const fixtures = {
   /** A device with only `voltage`: nothing any type uses. */
   voltageOnly: (id = "volt") => deviceWithData(id, "Voltage only", [["voltage", "voltage"]]),
 };
+
+/** The home mounts its socket once the session is checked: waits for it, then the server accepts. */
+export async function openSocket(): Promise<void> {
+  await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+  act(() => FakeWebSocket.last.open());
+}

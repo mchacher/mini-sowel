@@ -13,6 +13,10 @@ workspace = true
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# Password hash (spec 029, D47): PBKDF2-HMAC-SHA256, no default features (no_std-friendly crates).
+sha2 = { version = "0.11", default-features = false }
+hmac = { version = "0.13", default-features = false }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 
 [dev-dependencies]
 peak_alloc = "0.3"

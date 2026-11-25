@@ -280,11 +280,35 @@ fn serve_adds_the_tamper_data_when_a_motion_sensor_first_sends_the_tamper_bit() 
             .expect("the host program starts"),
     );
     let start = Instant::now();
+    // The account is set up once the host listens (spec 029); its token goes with every read.
+    let mut token = String::new();
     let tamper = loop {
-        if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+        if token.is_empty()
+            && let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port))
+        {
+            let body =
+                r#"{"username":"admin","password":"test-password-1234","displayName":"Admin"}"#;
             write!(
                 stream,
-                "GET /api/v1/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+                "POST /api/v1/auth/setup HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+            let mut answer = String::new();
+            let _ = stream.read_to_string(&mut answer);
+            if let Some((_, json)) = answer.split_once("\r\n\r\n")
+                && let Ok(tokens) = serde_json::from_str::<serde_json::Value>(json)
+                && let Some(access) = tokens["accessToken"].as_str()
+            {
+                token = access.to_string();
+            }
+        }
+        if !token.is_empty()
+            && let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port))
+        {
+            write!(
+                stream,
+                "GET /api/v1/devices HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
             )
             .unwrap();
             let mut body = String::new();

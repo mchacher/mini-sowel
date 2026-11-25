@@ -21,8 +21,16 @@ function check(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+// The host asks for a password (spec 029): the first step sets one up in the browser, then reads
+// the access token the interface stored, for the checks that go through the API.
+const USER = "e2e-admin";
+const PASSWORD = "e2e-synthetic-password-1"; // synthetic, for this throwaway host only
+let token = null;
+
 async function api(path) {
-  const res = await fetch(`${base}/api/v1${path}`);
+  const res = await fetch(`${base}/api/v1${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   check(res.ok, `GET ${path} answered ${res.status}`);
   return res.json();
 }
@@ -75,6 +83,23 @@ try {
 
   const row = (name) => page.locator("tr", { hasText: name });
   const modal = () => page.locator(".fixed").filter({ has: page.locator("#equipment-name") });
+
+  await step("first-start", async () => {
+    const before = await fetch(`${base}/api/v1/zones`);
+    check(before.status === 403, `GET /zones before the setup answered ${before.status}, not 403`);
+    await page.goto(`${base}/`);
+    await page.getByText("Set up your Solite").waitFor();
+    await page.getByLabel("Username").fill(USER);
+    await page.getByLabel("Display name").fill("E2E");
+    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+    await page.getByLabel("Confirm password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Create account" }).click();
+    await page.getByRole("button", { name: "Log out" }).waitFor();
+    token = await page.evaluate(() => localStorage.getItem("sowel_access_token"));
+    check(token, "the interface kept no access token after the setup");
+    const refused = await fetch(`${base}/api/v1/zones`);
+    check(refused.status === 401, `GET /zones without a token answered ${refused.status}, not 401`);
+  });
 
   await step("open-topology", async () => {
     await page.goto(`${base}/#/zones`);
@@ -237,6 +262,19 @@ try {
     }
     const again = await api("/equipments");
     check(again.length === 2, "the equipments changed after the reload");
+  });
+
+  await step("log-out-and-in", async () => {
+    await page.getByRole("button", { name: "Log out" }).click();
+    await page.getByRole("button", { name: "Log in" }).waitFor();
+    await page.getByLabel("Username").fill(USER);
+    await page.getByLabel("Password").fill("not-the-password-1");
+    await page.getByRole("button", { name: "Log in" }).click();
+    await page.getByText("Invalid credentials").waitFor();
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Log in" }).click();
+    await page.getByRole("button", { name: "Log out" }).waitFor();
+    await row("ZBMINIR2").waitFor();
   });
   void modal;
 } catch (error) {

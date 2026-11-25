@@ -130,8 +130,14 @@ interface's files).
 | `GET /api/v1/system/timezone` | The home's time zone |
 | `GET /api/v1/backup` | Export (Solite's document, D42) |
 | `POST /api/v1/backup` | Import (Solite's document, D42) |
-| `GET /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28) |
-| `POST /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28) |
+| `GET /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28; behind the token, D49) |
+| `POST /api/v1/integrations/solite/permit-join` | Pairing window (deviation, D28; behind the token, D49) |
+| `GET /api/v1/auth/status` | First start or login (Sowel's, D47) |
+| `POST /api/v1/auth/setup` | The one account, confirmed at the box (Sowel's, D47, D48) |
+| `POST /api/v1/auth/login` | Tokens (Sowel's, D47) |
+| `POST /api/v1/auth/refresh` | New tokens (Sowel's, D47) |
+| `POST /api/v1/auth/logout` | Closes the session (Sowel's, D47) |
+| `POST /api/v1/system/factory-reset` | Erases the home and the account (deviation, D48) |
 
 ## Equipment types with behaviour
 
@@ -153,10 +159,20 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44).
+D44, D47 to D49).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
 | route | `GET /api/v1/settings/timezones` | D41 |
 | route | `GET /api/v1/integrations/solite/permit-join` | D28 |
 | route | `POST /api/v1/integrations/solite/permit-join` | D28 |
+| route | `POST /api/v1/system/factory-reset` | D48 |
+
+Differences of value in the authentication (D47 to D49), none a new name: one account, always
+`admin` (no other user, no `/me`, no `/users`, no API token, no MFA: `trustedDeviceToken` is
+accepted and ignored); `preferences` has `language` only; opaque tokens (32 hex characters), not
+JWTs, and logout closes the access token too; passwords of 8 characters or more (Sowel: 6); setup
+answers 403 `{"error", "confirmRequired": true}` until a person at the box confirmed (D48); one
+rate limit for the box (10 attempts per minute on setup and login together); `/ws` reads the token
+from the first `bearer.` subprotocol other than `bearer.none`, and the box echoes `bearer.none`
+only, so a client that offers `bearer.<token>` alone gets no subprotocol echoed there (D49).

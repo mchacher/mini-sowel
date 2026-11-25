@@ -1,5 +1,5 @@
 //! Who may call over the local network (spec 022 R4): the `Host` rule of `Reach::Lan`, the pairing
-//! route's refusal there, and the answers being the same as under `Reach::Loopback`.
+//! route answering there as on the Mac, and the answers being the same as under `Reach::Loopback`.
 
 use serde_json::{Value, json};
 use solite_core::api::{MAX_BODY_BYTES, Reach, Request, Response, handle};
@@ -65,6 +65,7 @@ fn call(
             port,
             reach,
             content_type: Some("application/json"),
+            authorization: None,
             body,
         },
         T0 + 2000,
@@ -162,36 +163,31 @@ fn the_loopback_rule_is_unchanged() {
 }
 
 #[test]
-fn the_pairing_route_is_404_on_the_lan_and_the_pairing_state_is_untouched() {
+fn the_pairing_route_answers_on_the_lan_as_on_the_mac() {
+    // Spec 029, D49: the 404 of D28 is gone; the token is the gate's (see `tests/auth.rs`).
     let mut home = home();
-    for method in ["GET", "POST"] {
-        let response = call(
-            &mut home,
+    let lan = |home: &mut Home, method| {
+        call(
+            home,
             Reach::Lan { name: NAME },
             80,
             Some("192.168.1.20"),
             method,
             PAIRING,
             br#"{"time":30}"#,
-        );
-        assert_eq!(response.status, 404, "{method}");
-        assert_eq!(
-            response.body.as_deref(),
-            Some(r#"{"error":"Pairing from the API is off on the box"}"#)
-        );
-    }
-    let state = call(
-        &mut home,
-        Reach::Loopback,
-        8080,
-        Some("127.0.0.1:8080"),
-        "GET",
-        PAIRING,
-        b"",
-    );
+        )
+    };
+    let get = lan(&mut home, "GET");
+    assert_eq!(get.status, 200);
     assert_eq!(
-        state.body.as_deref(),
+        get.body.as_deref(),
         Some(r#"{"permitJoin":false,"remaining":0}"#)
+    );
+    let post = lan(&mut home, "POST");
+    assert_eq!(post.status, 202);
+    assert_eq!(
+        post.body.as_deref(),
+        Some(r#"{"permitJoin":true,"remaining":30}"#)
     );
 }
 

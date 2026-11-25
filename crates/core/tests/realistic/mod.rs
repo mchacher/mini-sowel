@@ -24,6 +24,7 @@ pub fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a
         port: 8080,
         reach: Reach::Loopback,
         content_type: Some("application/json"),
+        authorization: None,
         body,
     }
 }

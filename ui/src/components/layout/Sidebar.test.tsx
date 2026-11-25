@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenZones } from "../../zones";
-import { zone } from "../../test-utils";
+import { mockApi, resetStores, storeSession, zone } from "../../test-utils";
+import { useAuth } from "../../store/useAuth";
 import { MobileDrawer, Sidebar, type Page } from "./Sidebar";
 
 const flat = flattenZones([
@@ -11,7 +12,11 @@ const flat = flattenZones([
 beforeEach(() => {
   window.location.hash = "";
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  resetStores();
+  vi.unstubAllGlobals();
+});
 
 const show = (page: Page | null = null) =>
   render(<Sidebar zones={flat} activeId="garage" page={page} />);
@@ -50,7 +55,9 @@ describe("Sidebar, Administration section", () => {
     const section = title().parentElement!;
     expect(section.className).toContain("border-t");
     expect(section.className).toContain("border-border-light");
-    expect(section.nextElementSibling).toBeNull();
+    // Log out follows, and nothing after it.
+    expect(section.nextElementSibling?.textContent).toBe("Log out");
+    expect(section.nextElementSibling?.nextElementSibling).toBeNull();
   });
 
   it.each([
@@ -90,5 +97,22 @@ describe("Sidebar, Administration section", () => {
     fireEvent.click(within(screen.getByRole("dialog")).getByText("Devices"));
     expect(window.location.hash).toBe("#/devices");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Sidebar, Log out", () => {
+  it("sends the logout, clears the tokens and ends the session", async () => {
+    storeSession("access-0", "refresh-0");
+    useAuth.setState({ isAuthenticated: true });
+    const api = mockApi({ "POST /api/v1/auth/logout": { status: 204 } });
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Log out" }));
+    await waitFor(() => expect(useAuth.getState().isAuthenticated).toBe(false));
+    expect(api.calls[0]).toEqual({
+      key: "POST /api/v1/auth/logout",
+      body: { refreshToken: "refresh-0" },
+    });
+    expect(localStorage.getItem("sowel_access_token")).toBeNull();
+    expect(localStorage.getItem("sowel_refresh_token")).toBeNull();
   });
 });
