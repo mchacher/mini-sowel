@@ -1,0 +1,78 @@
+# The toolchains of ci.yml's firmware job, shared by the build jobs of release.yml. The caches
+# are restored, never saved: a cache written by a run that held the signing key is never reused
+# (the ones found are those ci.yml's firmware job writes on main, under the same keys).
+# A composite action cannot read `secrets.*`: espup's token is the workflow's `github.token`.
+name: Firmware toolchain
+description: System packages, Rust, Node, the ESP32 toolchain and the caches (restore only)
+
+inputs:
+  espup-version:
+    description: The espup release to install
+    default: v0.19.0
+
+runs:
+  using: composite
+  steps:
+    - name: System packages for ESP-IDF
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y ninja-build python3-venv
+
+    - name: Rust, at the version pinned in rust-toolchain.toml
+      shell: bash
+      run: rustup toolchain install
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+
+    # No npm cache: `cache: npm` would save one in a post step on a miss, and a cache written by a
+    # run of the release workflow is never wanted; `npm ci` downloads the packages.
+    - name: Interface packages
+      shell: bash
+      working-directory: ui
+      run: npm ci
+
+    # Swatinem/rust-cache v2.9.3, pinned by its commit SHA (ci.yml pins the same one: the keys are
+    # computed by the same version).
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        workspaces: |
+          firmware -> target
+        shared-key: firmware
+        save-if: "false"
+
+    - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        workspaces: |
+          . -> target
+        shared-key: rust
+        save-if: "false"
+
+    - name: ESP32 toolchain cache (restore only)
+      id: esp-toolchain
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          ~/.rustup/toolchains/esp
+          ~/.cargo/bin/ldproxy
+          ~/export-esp.sh
+        key: esp-toolchain-${{ runner.os }}-${{ inputs.espup-version }}-${{ hashFiles('firmware/rust-toolchain.toml') }}
+
+    - name: ESP32 toolchain (espup, ldproxy)
+      if: steps.esp-toolchain.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        ESPUP_VERSION: ${{ inputs.espup-version }}
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/espup" \
+          "https://github.com/esp-rs/espup/releases/download/${ESPUP_VERSION}/espup-x86_64-unknown-linux-gnu"
+        chmod +x "$RUNNER_TEMP/espup"
+        "$RUNNER_TEMP/espup" install --targets esp32 --export-file "$HOME/export-esp.sh"
+        cargo install ldproxy --locked
+
+    - name: ESP-IDF download cache (restore only)
+      uses: actions/cache/restore@v4
+      with:
+        path: firmware/.embuild
+        key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml', 'firmware/Cargo.lock') }}

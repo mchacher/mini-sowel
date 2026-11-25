@@ -981,7 +981,7 @@ the box at most once per milestone, inside `box.sh saves` (decision D39), and no
 
 A box is updated from a **signed update file** (`.sup`, "Solite update package") sent to Sowel's
 `POST /api/v1/system/update`. The file is a header of exactly 128 bytes, then the image (the ESP32
-application image of the slot, as `espflash save-image` writes it). Integers are little-endian.
+application image of the slot, as `esptool elf2image` writes it, the same as `scripts/box.sh` and `scripts/release.sh` make). Integers are little-endian.
 
 | Offset | Bytes | Field |
 | ------ | ----- | ----- |
@@ -1146,10 +1146,10 @@ way in. Nothing of this writes the flash.
 - **Not supervised.** The host program (it has no restart of its own), the image QEMU runs and the
   box's image without the radio: only the radio image is.
 
-### Signing a release
+### Publishing a release
 
-The steps a maintainer follows (the `/solite-release` skill points here). Publishing the signed file
-(where it is hosted, a manifest) is not covered.
+A release is made by the CI from a tag, and by `scripts/release.sh` (which the CI runs) on the Mac.
+The steps a maintainer follows are in `docs/release.md` (the `/solite-release` skill points there).
 
 1. **Key, once.** `cargo run -p solite-host -- --update-keygen <file>` writes a new signing key
    (32 random bytes, as 64 hex characters and a newline) to `<file>`, created new with mode `0600`,
@@ -1157,21 +1157,84 @@ The steps a maintainer follows (the `/solite-release` skill points here). Publis
    tree (a `.git` in the file's folder or above), exit 2 with the reason. Keep the file outside the
    repository, offline (an encrypted volume or a password manager), and back it up: a lost key
    means a box can only be updated by a USB flash. `*.update-key` and `*.sup` are ignored by git.
-2. **Build** the firmware with `SOLITE_UPDATE_PUBLIC_KEY=<the printed hex>` (the radio image, see
-   the firmware's README). The version of the image is the workspace's `version`; `firmware/Cargo.toml`
-   carries the same one, and `scripts/validate.sh` fails naming both when they differ.
-3. **Image.** `espflash save-image --chip esp32` of the radio image makes the application image.
-4. **Sign.** `cargo run -p solite-host -- --update-sign <image> --version <x.y.z> --key <file>
-   --out <file>.sup` writes the file above and prints `signed: <out>, version <x.y.z>, <bytes>
-   bytes, key <first 8 hex>` (the bytes are the image's). It refuses (exit 2, nothing written) an
-   empty image or one over 4 MB, a version that is not `x.y.z` of numbers up to 65535, a key file
-   that is not 64 hex characters, and an existing `<out>`. When the image is an ESP32 application
-   image (first byte `0xE9`, magic `0xABCD5432` at offset 32), the version of its application
-   descriptor (offset 48, 32 bytes) must equal `--version` (else exit 2); an image without a
-   descriptor (the Mac demo's bytes) is signed with the line `signed: no application descriptor,
-   version not checked`. The core only verifies; the signing is in the host.
-5. **Install** from the Settings page's Firmware update card (see "Shows the home in the browser"),
-   or `POST` the file to `/api/v1/system/update` with the token.
+   The public key is committed as `release/update-key.pub`; the private key is the secret
+   `SOLITE_UPDATE_KEY` of the GitHub environment `release` (deployment rule: tags `v*` only).
+2. **Tag.** A tag `vX.Y.Z` on the merge commit of `main` starts `.github/workflows/release.yml`.
+   Its `firmware` job (no environment, no secret, `contents: read`) refuses a missing
+   `release/update-key.pub` and a tagged commit that is not on `main` before its build, then runs
+   `sh scripts/release.sh X.Y.Z --build-only` and uploads `app.bin` and `flash.bin`. Its `sign` job
+   (the environment `release`, `needs: firmware`) refuses (before the host is built, an
+   `::error::`) an empty secret, a missing `release/update-key.pub` and a tagged commit that is not
+   on `main`; it builds the host program only (no ESP32 toolchain, no npm), downloads the artifact
+   and runs `sh scripts/release.sh X.Y.Z --key-env SOLITE_UPDATE_KEY --prebuilt <folder>`. Its
+   `publish` job (`needs: sign`), the only one with
+   `contents: write`, makes the GitHub release (not a draft, not a pre-release; an existing release
+   for the tag makes it fail: a release is never replaced). Run by hand (Run workflow), the
+   workflow is a dry run: a throwaway key, the script, and only `manifest.json` and `SHA256SUMS`
+   kept as an artifact; nothing is published and the secret is not read. The concurrency group is
+   `release-<event>`: a dry run never cancels a tag run, and a second tag run waits for the first.
+3. **The script.** `sh scripts/release.sh <x.y.z|vx.y.z> (--key-file <path> | --key-env <NAME>)
+   [--prebuilt <folder>] [--public-key-file <path>] [--out <folder>] [--notes <file>]
+   [--min-version <x.y.z>] [--repo <owner/name>]`, or `sh scripts/release.sh <x.y.z> --build-only
+   [--public-key-file <path>] [--out <folder>] [--notes <file>]`. It refuses (exit 2, nothing built) a version that is not `x.y.z` or that is not
+   the `version` of `Cargo.toml`'s `[workspace.package]`, of `firmware/Cargo.toml` and of
+   `ui/package.json`; no key option, both, a key variable that is unset or empty, or a key file
+   that is missing or inside a git working tree or the output folder; a public key file
+   (`release/update-key.pub` by default) that is missing or not 64 hex characters; no section
+   `## <version>` in `docs/release-notes.md` (or an empty one); a non-empty output folder
+   (`target/solite-release/<version>` by default); a `--min-version` that is not lower than the
+   version. A probe (16 bytes signed and verified) stops a key that does not match the public key
+   (exit 1) before the build. `--build-only` takes no key (a key option is refused, exit 2), makes
+   every check above that needs none, builds, and writes only `app.bin` and `flash.bin` to the
+   output folder (the line `release: built, not signed (--build-only)`); no probe, no signing.
+   `--prebuilt <folder>` takes `app.bin` and `flash.bin` from that folder instead of building (it
+   needs a key; a missing file is exit 2) and refuses (exit 1, `the prebuilt image does not carry
+   <public key file>'s key`) an `app.bin` that does not hold the public key's 64 hex characters.
+   The build is the radio image with `SOLITE_UPDATE_PUBLIC_KEY` set to
+   the public key, in `firmware/target/release-radio` (never `target/radio`), checked as
+   `box.sh flash --image radio` checks it, made into the application image (`esptool elf2image`,
+   as `box.sh`) and a full-flash image (`esptool merge_bin`: bootloader at `0x1000`, partition
+   table at `0x8000`, application at the `ota_0` offset, from `0x0` padded with `0xFF`). The
+   application is signed (the line `signed: no application descriptor` is refused here) and the
+   signed file is verified with `--update-verify` and the public key. The radio build, before it
+   is accepted, must hold the public key's text (`grep`). The signing key is never in the
+   environment of a job that builds with third-party tools (the `firmware` job has no secret, the
+   `sign` job builds only the host program), and the script takes it from the environment before
+   assigning any variable (`--key-env` reads it with `printenv`, then unsets it), so no command it
+   runs inherits it; it is neither on a command line, in the output nor in the log; the staging
+   folder and the log are searched for it before anything is kept. A signal (Ctrl-C) stops the
+   script's whole process group (the build's children included) and removes its folders.
+4. **What a release holds**, in the output folder and as the GitHub release's assets:
+   `solite-<version>.sup` (the signed update file), `solite-<version>-flash.bin` (the full-flash
+   image for a first USB flash, written at `0x0` after a whole erase), `SHA256SUMS` (`<sha256>`,
+   two spaces, the name; sorted; `shasum -a 256 -c` reads it; not signed) and `manifest.json`;
+   the folder also holds `notes.md` (the release's text on GitHub, not an asset).
+5. **`manifest.json`**, at `https://github.com/<repo>/releases/latest/download/manifest.json`:
+   `{"format": 1, "version", "releasedAt" (UTC, ISO 8601 to the second), "notes", "minVersion"
+   (null, or `x.y.z`: a box below it goes through an intermediate release), "image": {"name",
+   "size", "sha256" (of the `.sup`), "url"}}`, two spaces of indent. Solite's own JSON, not
+   Sowel's (decision D63).
+6. **Install** from the Settings page's Firmware update card (see "Shows the home in the browser"),
+   or `POST` the `.sup` to `/api/v1/system/update` with the token. A box never flashed with Solite
+   takes the full-flash image over USB (`docs/release.md`).
+
+`solite-host --update-sign <image> --version <x.y.z> --key <file> --out <file>.sup` writes the file
+above and prints `signed: <out>, version <x.y.z>, <bytes> bytes, key <first 8 hex>` (the bytes are
+the image's). It refuses (exit 2, nothing written) an empty image or one over 4 MB, a version that
+is not `x.y.z` of numbers up to 65535, a key file that is not 64 hex characters, and an existing
+`<out>`. When the image is an ESP32 application image (first byte `0xE9`, magic `0xABCD5432` at
+offset 32), the version of its application descriptor (offset 48, 32 bytes) must equal
+`--version` (else exit 2); an image without a descriptor (the Mac demo's bytes) is signed with the
+line `signed: no application descriptor, version not checked`. The core only verifies; the signing
+is in the host.
+
+`solite-host --update-verify <file> --public-key <64 hex>` checks a signed file as the box does,
+without installing it: the header (as the box, with a running version of `0.0.0` and the slot's
+capacity), then the image's length and SHA-256 against the header. It prints `verified: <file>,
+version <x.y.z>, <n> bytes, key <first 8 hex>` (exit 0). A public key that is not 64 hex characters
+or not a valid Ed25519 key, an unreadable file, a file shorter than the 128-byte header, a refused
+header, an image shorter or longer than the header says, or a digest that differs: exit 2 with
+`update-verify: <reason>`. One of `--update-verify` and `--public-key` without the other: usage, exit 2.
 
 ### Flashes the box and brings it back
 
@@ -1444,3 +1507,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 032 | Signed updates: a signed update file streamed into the inactive slot, a probation with automatic rollback, `--update-keygen` and `--update-sign`, a Firmware update card |
 | 035 | The full backup: one password-protected file with the home, the Zigbee network and the Wi-Fi settings, streamed both ways, checked whole before a restore replaces the home at the next start; the radio forms the restored network; a Backup card |
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
+| 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
