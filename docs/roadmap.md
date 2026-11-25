@@ -35,7 +35,7 @@ this order (each through `/solite-feature` or `/solite-fix`):
 
 1. A batch of core fixes: done (spec 028).
 2. J4: the password at commissioning: built (spec 029); its box checks are in the list below.
-3. J2: equipments from the interface (detail page, bindings one by one, enable and disable).
+3. J2: equipments from the interface (detail page, bindings one by one, enable and disable): built (spec 030).
 4. The colour cluster `0x0300` with a simulated bulb, then J5 (signed updates, the core part).
 
 ### Tests to run with the box in hand
@@ -78,7 +78,7 @@ in a real annex without intervention (the true north's test).
 | # | Increment | Done when | Status |
 | - | --------- | --------- | ------ |
 | J1 | Add a device from the interface: pairing while serving, per integration (Administration › Discovery), the device appears live and named; it has no room of its own (the room is its equipment's, J2) | The ZBMINIR2 is added without a terminal | |
-| J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | |
+| J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | built 2026-11-25 (spec 030): an equipment's page (its bindings added and removed one by one, the missing ones offered, its devices changed, enabled or disabled, deleted) and a device's page; an equipment can be created with no device; box check not needed (interface only) |
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | built 2026-11-25 (spec 029): Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, factory reset, first-start and login screens; the confirmation is the 10 minutes after a power-on until the button is wired; box check pending |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
@@ -164,17 +164,14 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-21 | Stream the loading of the home (its files are read whole and parsed: the largest transient of the engine's peak, 312 KB in QEMU); measure the peak again on the box | Spec 016 |
 | 2026-11-21 | The 3 `motion-light` instances of the realistic home queue 48 start orders against `MAX_UNATTENDED` = 32: 16 are dropped with a warning at every start; decide whether the queue bound or the start sync of recipes changes | Spec 016 review |
 | 2026-11-21 | Optimise the engine back under 300 KB (stream the home's loading first) | D27 |
-| 2026-11-22 | The equipment detail page (Sowel's `EquipmentDetailPage`: its bindings, values, history), to complete an equipment or replace its devices (Sowel's `ChangeDeviceModal`); until then the form needs at least one device. Replaces spec 018's line of the same name, which it widens | Spec 019 |
-| 2026-11-22 | Bindings added and removed one by one from the interface (Sowel's `AddBindingModal`, `MissingBindingsModal`); the routes exist (spec 010) | Spec 018 |
 | 2026-11-22 | Zone reorder (Sowel's up and down arrows): needs Sowel's `PUT /api/v1/zones/reorder` in the core first | Spec 018 |
-| 2026-11-22 | An equipment enabled or disabled from the interface (`PUT {"enabled"}` exists) | Spec 018 |
 | 2026-11-22 | mDNS on the box (`solite-xxxxxx.local` without the router's help) | Spec 023 |
 | 2026-11-22 | The server in QEMU through `open_eth`, so the serving path is tested without the box | Spec 023 |
 | 2026-11-22 | The realistic home measured on the radio image with Wi-Fi and the server up (the radio image seeded from `firmware/fixtures/`), so the "Internal RAM with Wi-Fi up" row stops being a subtraction for it | Spec 023 |
 | 2026-11-22 | The 33 requests of `measure-api.sh` on the box: eight runs, no `Busy`, totals 9.0 to 22.3 s against 10 s (rising over the runs), each creation 0.15 to 0.65 s (GETs about 0.05 s), likely the save to flash at every write; in two runs one request got no answer at all (curl status 000; 60 zone creations and deletions in a row lost none). Find where the time goes and why a connection is lost, before E3d's day-long run | Spec 023 run |
 | 2026-11-22 | Investigate on the box the `devices.json` save (98 KB): it blocks the radio loop 3.8 s, 51 saves in 172 s in the realistic home. Accepted: a message may be lost while a save runs; what counts is the performance in normal running. Leads: one file per device, the radio on its own core, apart from the engine and the writer (a flash write stalls both cores for tens of ms, and the serial chip holds 128 bytes: about 11 ms at 115200 baud, so a large buffer is needed), where the time goes (erase, write, rename); UART interrupt in internal RAM (E3b) | Spec 020 |
 | 2026-11-22 | `box.sh backup` prints `tr: stdout: Broken pipe` after a valid backup (cosmetic); the radio and the Wi-Fi of E3 settle the original firmware version, unread in E3a | Spec 020 |
-| 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
+| 2026-11-22 | The Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
 | 2026-11-22 | Remove the box's pairing windows at a power-on boot and from the serial console's `pair` (D32, D36) once the button is wired: the authenticated route exists (spec 029, D49) | Spec 021, D36, spec 029 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
@@ -358,3 +355,8 @@ Every change to this roadmap: date, what changed, why.
   RAM, factory reset, first-start and login screens (D47 to D49). Lines removed: the bearer on
   `/ws`; rewritten: the box's pairing windows. New lines: password change, a whole factory reset,
   the SHA accelerator, a rate limit per address; J4's box checks added to the list.
+- 2026-11-25: spec 030 (J2) built on the Mac (the user away): the equipment page (bindings one by
+  one, the missing ones, change of devices, an Activation row, delete) and the device page, an
+  equipment created with no device (D50). Lines removed: the equipment detail page, bindings one by
+  one, enable and disable; narrowed: the device detail page to the Devices page's search, sort and
+  columns.

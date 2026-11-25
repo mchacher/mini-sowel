@@ -7,11 +7,25 @@
 // `computeBindingPlan` (candidate path for lights, switches and shutters, legacy path for the
 // rest). Changes: no VMC, door, contract, historize or skip options; the plan keeps at most 16 data
 // and 16 order bindings and aliases of at most 32 characters (the API's bounds); `applyBindingPlan`
-// stops at the first refusal and throws it (Sowel's carries on). The rest of Sowel's file (the
-// device API, the missing-bindings plan, the EV contracts) is not used by Solite's screens.
-import type { DataCategory, EquipmentType, OrderCategory } from "../../types";
-import type { DeviceWithData } from "../../api/devices";
-import { addDataBinding, addOrderBinding } from "../../api/equipments";
+// stops at the first refusal and throws it (Sowel's carries on). Spec 030, the equipment page:
+// `computeMissingBindings` (Sowel's name; the plan of the bound devices minus what is bound, aliases
+// unique against the bound ones, the 16 per kind counting the bound ones), `fetchDevices` and
+// `removeAllBindings` (which stops at the first refusal, as `applyBindingPlan`). The rest of
+// Sowel's file (the EV contracts) is not used by Solite's screens.
+import type {
+  DataBindingWithValue,
+  DataCategory,
+  EquipmentType,
+  OrderBindingWithDetails,
+  OrderCategory,
+} from "../../types";
+import { getDevice, type DeviceWithData } from "../../api/devices";
+import {
+  addDataBinding,
+  addOrderBinding,
+  removeDataBinding,
+  removeOrderBinding,
+} from "../../api/equipments";
 import {
   CANDIDATE_BASED_TYPES,
   THERMOSTAT_STATE_ALIAS,
@@ -261,10 +275,22 @@ function uniqueAlias(base: string, used: Set<string>): string {
   return `${base}_${n}`;
 }
 
+/** What an equipment already has, when the plan is for the rest (the missing bindings). */
+interface PlanOptions {
+  usedDataAliases: readonly string[];
+  usedOrderAliases: readonly string[];
+  /** `device_data.id` and `device_order.id` already bound: not planned again. */
+  skipSourceIds: ReadonlySet<string>;
+}
+
 /** The bindings of these devices, in the order given, before the 16 and 16 cut. */
-function planAll(devices: readonly DeviceWithData[], equipmentType: string): PlannedBinding[] {
-  const usedData = new Set<string>();
-  const usedOrders = new Set<string>();
+function planAll(
+  devices: readonly DeviceWithData[],
+  equipmentType: string,
+  options?: PlanOptions,
+): PlannedBinding[] {
+  const usedData = new Set<string>(options?.usedDataAliases);
+  const usedOrders = new Set<string>(options?.usedOrderAliases);
   const plan: PlannedBinding[] = [];
 
   const push = (
@@ -273,6 +299,7 @@ function planAll(devices: readonly DeviceWithData[], equipmentType: string): Pla
     item: { id: string; key: string; category?: string },
     base: string,
   ) => {
+    if (options?.skipSourceIds.has(item.id)) return;
     const used = kind === "data" ? usedData : usedOrders;
     const alias = uniqueAlias(base, used);
     // An alias the API would refuse is left out, and does not take the name.
@@ -380,4 +407,60 @@ export async function applyBindingPlan(
       await addOrderBinding(equipmentId, { deviceOrderId: item.sourceId, alias: item.alias });
     }
   }
+}
+
+/**
+ * What the plan of the creation form would add today to an equipment: the plan of its bound
+ * devices (in the order they are first bound), minus the items already bound, with aliases unique
+ * against those it already uses, and at most 16 of each kind counting the bound ones. Pure.
+ */
+export function computeMissingBindings(
+  devices: readonly DeviceWithData[],
+  equipmentType: string,
+  dataBindings: readonly DataBindingWithValue[],
+  orderBindings: readonly OrderBindingWithDetails[],
+): PlannedBinding[] {
+  const all = planAll(devices, equipmentType, {
+    usedDataAliases: dataBindings.map((b) => b.alias),
+    usedOrderAliases: orderBindings.map((b) => b.alias),
+    skipSourceIds: new Set([
+      ...dataBindings.map((b) => b.deviceDataId),
+      ...orderBindings.map((b) => b.deviceOrderId),
+    ]),
+  });
+  return [
+    ...all
+      .filter((b) => b.kind === "data")
+      .slice(0, Math.max(0, MAX_BINDINGS - dataBindings.length)),
+    ...all
+      .filter((b) => b.kind === "order")
+      .slice(0, Math.max(0, MAX_BINDINGS - orderBindings.length)),
+  ];
+}
+
+/** The devices behind these ids with their data and orders, one read after the other; one that cannot be read is skipped. */
+export async function fetchDevices(deviceIds: readonly string[]): Promise<DeviceWithData[]> {
+  const devices: DeviceWithData[] = [];
+  for (const id of deviceIds) {
+    try {
+      devices.push(await getDevice(id));
+    } catch {
+      // Skipped, as Sowel's: its items are not offered.
+    }
+  }
+  return devices;
+}
+
+/**
+ * Removes every binding of an equipment, data first, one request after the previous one answered.
+ * The first refusal stops it and is thrown, so no binding is written over one that could not be
+ * removed (Sowel's carries on).
+ */
+export async function removeAllBindings(
+  equipmentId: string,
+  dataBindings: readonly { id: string }[],
+  orderBindings: readonly { id: string }[],
+): Promise<void> {
+  for (const b of dataBindings) await removeDataBinding(equipmentId, b.id);
+  for (const b of orderBindings) await removeOrderBinding(equipmentId, b.id);
 }

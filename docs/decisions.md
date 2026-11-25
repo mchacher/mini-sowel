@@ -871,3 +871,20 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   home network) is gone, and the interface can open pairing from "Add a device" on the box as on
   the Mac. The token goes where a browser can put it (the subprotocol: a browser cannot set
   headers on a WebSocket), and the fixed echo is the one thing the box's server allows.
+
+## D50: The equipment and device pages, Solite's Enabled row, an equipment created without a device (narrows D19 and D30)
+
+- **Date**: 2026-11-25 (spec 030, decided in an autonomous run, for the user's review)
+- **Choice**: Sowel's `EquipmentDetailPage` and `DeviceDetailPage` are ported, cut to what Solite
+  serves (no history, no type panels, no raw expose), at `#/equipments/<id>` and `#/devices/<id>`
+  (no router, D19's hash); D19's "leaf components, not its pages" is narrowed: whole pages are
+  ported when they fit the budget. The equipment page adds one row Sowel's interface does not
+  have, **Activation** (titled so, its summary "Enabled" or "Disabled"; Sowel's `ConfigRow` and `Switch`, `PUT {"enabled"}`, which Sowel's API
+  takes), so a disabled equipment is enabled again without `curl`. The creation form no longer
+  needs a device (D30's "at least one device, since Solite has no equipment page" goes): with none,
+  the equipment is created alone and its page opens. "Change devices" removes the bindings then
+  writes the creation form's plan, stopping at the first refusal (Sowel skips a refused removal),
+  not atomic, as Sowel's.
+- **Why**: J2: an equipment completed, trimmed or moved to another device from the mouse; Sowel's
+  form allows an equipment without device; a refused removal skipped could leave a binding under
+  an alias the new plan then fails to write.

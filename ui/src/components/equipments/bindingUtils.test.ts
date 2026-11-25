@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
-import { deviceWithData, fixtures, mockApi } from "../../test-utils";
-import { applyBindingPlan, computeBindingPlan, countPlanned } from "./bindingUtils";
+import { dataBinding, deviceWithData, fixtures, mockApi } from "../../test-utils";
+import type { OrderBindingWithDetails } from "../../types";
+import {
+  applyBindingPlan,
+  computeBindingPlan,
+  computeMissingBindings,
+  countPlanned,
+  fetchDevices,
+  removeAllBindings,
+} from "./bindingUtils";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -200,6 +208,126 @@ describe("applyBindingPlan", () => {
     });
     const plan = computeBindingPlan([fixtures.th01()], "sensor");
     await expect(applyBindingPlan("e", plan)).rejects.toThrow(ApiError);
+    expect(api.calls).toHaveLength(2);
+  });
+});
+
+const orderBinding = (deviceOrderId: string, alias: string): OrderBindingWithDetails => ({
+  id: `ob-${alias}`,
+  equipmentId: "e",
+  deviceOrderId,
+  alias,
+  deviceId: "zb",
+  deviceName: "ZBMINIR2",
+  key: alias,
+  type: "enum",
+});
+
+describe("computeMissingBindings (spec 030, R6)", () => {
+  it("offers a light's state data when its binding was removed, with the device data id", () => {
+    const missing = computeMissingBindings(
+      [fixtures.zbminir2()],
+      "light_onoff",
+      [],
+      [orderBinding("zb-o-state", "state")],
+    );
+    expect(summary(missing)).toEqual(["data:state>state"]);
+    expect(missing[0]).toMatchObject({ deviceId: "zb", sourceId: "zb-state" });
+  });
+
+  it("offers nothing when everything is bound", () => {
+    const missing = computeMissingBindings(
+      [fixtures.zbminir2()],
+      "light_onoff",
+      [dataBinding("state", "light_state", true, { deviceDataId: "zb-state" })],
+      [orderBinding("zb-o-state", "state")],
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("names a second battery battery_2, unique against the aliases already bound", () => {
+    const bound = [
+      dataBinding("temperature", "temperature", 1, { deviceDataId: "th-temperature" }),
+      dataBinding("humidity", "humidity", 1, { deviceDataId: "th-humidity" }),
+      dataBinding("battery", "battery", 1, { deviceDataId: "th-battery" }),
+      dataBinding("occupancy", "motion", true, { deviceDataId: "ms-occupancy" }),
+    ];
+    const missing = computeMissingBindings([fixtures.th01(), fixtures.ms01()], "sensor", bound, []);
+    expect(summary(missing)).toEqual(["data:battery>battery_2"]);
+    expect(missing[0].sourceId).toBe("ms-battery");
+  });
+
+  it("offers no data past the 16 an equipment may bind, the bound ones counted", () => {
+    const bound = Array.from({ length: 16 }, (_, i) =>
+      dataBinding(`x${i}`, "generic", 1, { deviceDataId: `other-${i}` }),
+    );
+    expect(computeMissingBindings([fixtures.th01()], "sensor", bound, [])).toEqual([]);
+    expect(
+      computeMissingBindings([fixtures.th01()], "sensor", bound.slice(0, 14), []),
+    ).toHaveLength(2);
+  });
+
+  it("offers nothing for a type without binding rules", () => {
+    expect(computeMissingBindings([fixtures.zbminir2()], "door", [], [])).toEqual([]);
+  });
+});
+
+describe("fetchDevices", () => {
+  it("reads the devices one after the other and skips the one that cannot be read", async () => {
+    let inFlight = 0;
+    let overlapped = false;
+    const answer =
+      (body: unknown, status = 200) =>
+      async () => {
+        inFlight++;
+        if (inFlight > 1) overlapped = true;
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight--;
+        return { status, body };
+      };
+    const api = mockApi({
+      "GET /api/v1/devices/a": answer(fixtures.th01("a")),
+      "GET /api/v1/devices/b": answer({ error: "boom" }, 500),
+      "GET /api/v1/devices/c": answer(fixtures.ms01("c")),
+    });
+    const devices = await fetchDevices(["a", "b", "c"]);
+    expect(devices.map((d) => d.id)).toEqual(["a", "c"]);
+    expect(api.calls.map((c) => c.key)).toEqual([
+      "GET /api/v1/devices/a",
+      "GET /api/v1/devices/b",
+      "GET /api/v1/devices/c",
+    ]);
+    expect(overlapped).toBe(false);
+  });
+});
+
+describe("removeAllBindings", () => {
+  it("deletes the data bindings then the order bindings, one after the other", async () => {
+    const api = mockApi({
+      "DELETE /api/v1/equipments/e/data-bindings/d1": { status: 204 },
+      "DELETE /api/v1/equipments/e/data-bindings/d2": { status: 204 },
+      "DELETE /api/v1/equipments/e/order-bindings/o1": { status: 204 },
+    });
+    await removeAllBindings("e", [{ id: "d1" }, { id: "d2" }], [{ id: "o1" }]);
+    expect(api.calls.map((c) => c.key)).toEqual([
+      "DELETE /api/v1/equipments/e/data-bindings/d1",
+      "DELETE /api/v1/equipments/e/data-bindings/d2",
+      "DELETE /api/v1/equipments/e/order-bindings/o1",
+    ]);
+  });
+
+  it("stops at the first refusal and throws, the third request not sent", async () => {
+    const api = mockApi({
+      "DELETE /api/v1/equipments/e/data-bindings/d1": { status: 204 },
+      "DELETE /api/v1/equipments/e/data-bindings/d2": {
+        status: 404,
+        body: { error: "Binding not found" },
+      },
+      "DELETE /api/v1/equipments/e/order-bindings/o1": { status: 204 },
+    });
+    await expect(
+      removeAllBindings("e", [{ id: "d1" }, { id: "d2" }], [{ id: "o1" }]),
+    ).rejects.toThrow(ApiError);
     expect(api.calls).toHaveLength(2);
   });
 });

@@ -10,6 +10,7 @@ import { useZoneAggregation } from "./store/useZoneAggregation";
 import { useZones } from "./store/useZones";
 import { useRecipes } from "./store/useRecipes";
 import { useDevices } from "./store/useDevices";
+import { useDeviceDetail } from "./store/useDeviceDetail";
 import { resetPairingTimers, usePairing } from "./store/usePairing";
 import type {
   DataBindingWithValue,
@@ -259,7 +260,7 @@ export function sensor(
 export function resetStores(): void {
   disconnect();
   useZones.setState({ tree: [], loading: false, error: null });
-  useEquipments.setState({ equipments: [], loading: false, error: null });
+  useEquipments.setState({ equipments: [], loading: false, error: null, loaded: false });
   useZoneAggregation.setState({ data: {}, loading: false, error: null });
   useLive.setState({ status: "connecting" });
   resetPairingTimers();
@@ -273,6 +274,7 @@ export function resetStores(): void {
     unreachable: false,
   });
   useDevices.setState({ devices: {}, loading: false, error: null });
+  useDeviceDetail.getState().clear();
   useRecipes.setState({ recipes: [], instances: [], loading: false, error: null });
   usePairing.setState({ open: false, remaining: 0, error: null, newIds: [], pageOpen: false });
 }

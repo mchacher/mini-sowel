@@ -114,14 +114,17 @@ describe("EquipmentForm", () => {
     expect(sent.devices[0].orders).toHaveLength(1);
   });
 
-  it("keeps Create disabled with no device ticked, and says to choose one", async () => {
+  it("keeps Create enabled with no device ticked, and says devices can be added later", async () => {
     const { onSubmit } = setup();
     await toDevices("Empty");
     const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
-    expect(create.disabled).toBe(true);
-    expect(screen.getByText("Choose at least one device")).toBeTruthy();
+    expect(create.disabled).toBe(false);
+    expect(
+      screen.getByText("You can also add devices later from the equipment's page"),
+    ).toBeTruthy();
     fireEvent.click(create);
-    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ deviceIds: [], devices: [] }));
   });
 
   it("sends Create once when it is clicked twice", async () => {

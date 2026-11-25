@@ -4,7 +4,9 @@ import { MobileDrawer, MobileTopBar, Sidebar } from "./components/layout/Sidebar
 import { ZonePage } from "./components/home/ZonePage";
 import { DevicesPage } from "./components/devices/DevicesPage";
 import { DiscoveryPage } from "./components/discovery/DiscoveryPage";
-import { adminPageFromHash } from "./components/layout/admin-nav-items";
+import { adminPageFromHash, detailIdFromHash } from "./components/layout/admin-nav-items";
+import { DeviceDetailPage } from "./components/devices/DeviceDetailPage";
+import { EquipmentDetailPage } from "./components/equipments/EquipmentDetailPage";
 import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { ZonesPage } from "./components/zones/ZonesPage";
@@ -82,6 +84,9 @@ function Home() {
   const hash = useHash();
   const hashId = zoneIdFromHash(hash);
   const page = adminPageFromHash(hash);
+  // An equipment's or a device's page when the address carries an id; the list otherwise.
+  const equipmentId = detailIdFromHash(hash, "equipments");
+  const deviceId = detailIdFromHash(hash, "devices");
   const [menuOpen, setMenuOpen] = useState(false);
 
   // The stores fetch when the socket opens, the first time and after each reconnection. The
@@ -113,9 +118,17 @@ function Home() {
           <Banner />
           {error && <p className="text-body text-error">{error}</p>}
           {page === "devices" ? (
-            <DevicesPage />
+            deviceId ? (
+              <DeviceDetailPage key={deviceId} deviceId={deviceId} />
+            ) : (
+              <DevicesPage />
+            )
           ) : page === "equipments" ? (
-            <EquipmentsPage />
+            equipmentId ? (
+              <EquipmentDetailPage key={equipmentId} equipmentId={equipmentId} />
+            ) : (
+              <EquipmentsPage />
+            )
           ) : page === "zones" ? (
             <ZonesPage />
           ) : page === "discovery" ? (

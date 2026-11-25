@@ -4,6 +4,7 @@
 // backoff and jitter, refetch on every open, reconnection when the page comes back) and nothing else.
 import { create } from "zustand";
 import type { Device, DeviceStatus, EquipmentStatus, Zone, ZoneAggregatedData } from "../types";
+import { useDeviceDetail } from "./useDeviceDetail";
 import { useDevices } from "./useDevices";
 import { usePairing } from "./usePairing";
 import { useEquipments } from "./useEquipments";
@@ -43,6 +44,14 @@ type LiveEvent =
   | { type: "equipment.data.changed"; equipmentId: string; alias: string; value: unknown }
   | { type: "equipment.status.changed"; equipmentId: string; newStatus: EquipmentStatus }
   | { type: "device.discovered"; device: Device }
+  | {
+      type: "device.data.updated";
+      deviceId: string;
+      dataId: string;
+      key: string;
+      value: unknown;
+      timestamp: string;
+    }
   | { type: "device.removed"; deviceId: string }
   | { type: "device.status_changed"; deviceId: string; status: DeviceStatus }
   | {
@@ -92,6 +101,7 @@ function refetchAll(): void {
   void usePairing.getState().refresh();
   void useRecipes.getState().fetchRecipes();
   void useRecipes.getState().fetchInstances();
+  void useDeviceDetail.getState().reload();
 }
 
 function apply(event: LiveEvent): void {
@@ -131,6 +141,10 @@ function apply(event: LiveEvent): void {
       break;
     case "device.removed":
       useDevices.getState().removeDevice(event.deviceId);
+      useDeviceDetail.getState().handleRemoved(event.deviceId);
+      break;
+    case "device.data.updated":
+      useDeviceDetail.getState().handleDataUpdated(event);
       break;
     case "device.status_changed":
       useDevices.getState().updateDeviceStatus(event.deviceId, event.status);

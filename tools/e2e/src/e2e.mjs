@@ -1,7 +1,7 @@
 // End-to-end test of the simulated path (spec 019, J1 and J2). Started by scripts/e2e-sim.sh, which
 // runs the host and gives its address in E2E_URL. Drives the interface in a headless Chromium (the
 // one in Playwright's cache; nothing is downloaded), takes a screenshot after each step in
-// E2E_SHOTS, and exits 1 on the first failed check. Every wait is on a condition.
+// E2E_SHOTS (spec 030: the equipment and device pages, in the dark and Hybrid themes), and exits 1 on the first failed check. Every wait is on a condition.
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -28,10 +28,29 @@ const PASSWORD = "e2e-synthetic-password-1"; // synthetic, for this throwaway ho
 let token = null;
 
 async function api(path) {
+  // The interface renews its token (reload, log-in): always use the one it holds now.
+  if (page)
+    token = (await page.evaluate(() => localStorage.getItem("sowel_access_token"))) ?? token;
   const res = await fetch(`${base}/api/v1${path}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   check(res.ok, `GET ${path} answered ${res.status}`);
+  return res.json();
+}
+
+/** POSTs `body` as JSON with the interface's token, returns the answer's JSON. */
+async function apiPost(path, body) {
+  if (page)
+    token = (await page.evaluate(() => localStorage.getItem("sowel_access_token"))) ?? token;
+  const res = await fetch(`${base}/api/v1${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  check(res.ok, `POST ${path} answered ${res.status}`);
   return res.json();
 }
 
@@ -276,6 +295,204 @@ try {
     await page.getByRole("button", { name: "Log out" }).waitFor();
     await row("ZBMINIR2").waitFor();
   });
+
+  // Spec 030: the pages of an equipment and of a device. The token changed at the log-in above.
+  token = await page.evaluate(() => localStorage.getItem("sowel_access_token"));
+  const lightId = async () =>
+    (await api("/equipments")).find((e) => e.name === "Lumière garage").id;
+  const lightFromApi = async () => api(`/equipments/${await lightId()}`);
+
+  const openActivation = async () => {
+    const sw = page.getByRole("switch", { name: "Activation" });
+    if (!(await sw.isVisible()))
+      await page
+        .getByRole("button", { name: /Activation/ })
+        .first()
+        .click();
+    await sw.waitFor();
+  };
+
+  await step("equipment-page-from-room", async () => {
+    await page.goto(`${base}/#/devices`);
+    await page
+      .locator("aside a, nav a")
+      .filter({ hasText: /^Garage$/ })
+      .first()
+      .click();
+    await page.getByRole("link", { name: "Lumière garage" }).first().click();
+    await page.getByRole("heading", { name: "Lumière garage" }).first().waitFor();
+    await page
+      .getByRole("button", { name: /Activation/ })
+      .first()
+      .waitFor();
+    check(page.url().includes(`#/equipments/${await lightId()}`), `the address is ${page.url()}`);
+  });
+
+  await step("disable-light", async () => {
+    await openActivation();
+    await page.getByRole("switch", { name: "Activation" }).click();
+    await until(
+      "the API to report enabled:false",
+      async () => (await lightFromApi()).enabled === false,
+    );
+    await page
+      .getByRole("switch", { name: "Activation" })
+      .and(page.locator('[aria-checked="false"]'))
+      .waitFor();
+  });
+
+  await step("room-row-dimmed", async () => {
+    await page.goto(`${base}/#/devices`);
+    await page
+      .locator("aside a, nav a")
+      .filter({ hasText: /^Garage$/ })
+      .first()
+      .click();
+    await page.getByRole("link", { name: "Lumière garage" }).first().waitFor();
+    await until("the room row to be dimmed", () =>
+      page.evaluate(() => {
+        const link = [...document.querySelectorAll("a")].find(
+          (a) => a.textContent === "Lumière garage",
+        );
+        return !!link?.closest(".opacity-50");
+      }),
+    );
+  });
+
+  await step("enable-light", async () => {
+    await page.getByRole("link", { name: "Lumière garage" }).first().click();
+    await openActivation();
+    await page.getByRole("switch", { name: "Activation" }).click();
+    await until(
+      "the API to report enabled:true",
+      async () => (await lightFromApi()).enabled === true,
+    );
+  });
+
+  const openBindings = async () => {
+    const toggleBindings = page.getByRole("button", { name: /^Bindings/ });
+    await toggleBindings.waitFor();
+    if ((await toggleBindings.getAttribute("aria-expanded")) !== "true")
+      await toggleBindings.click();
+    await page.locator('[data-testid="data-binding"]').first().waitFor();
+  };
+
+  // A motion-light instance on the light, so the check below is not empty: taking the `state` DATA
+  // binding away and putting it back must leave it enabled (only the order binding is required).
+  const lightNow = await lightFromApi();
+  await apiPost("/recipe-instances", {
+    recipeId: "motion-light",
+    params: { zone: lightNow.zoneId, lights: [lightNow.id], timeout: "10m" },
+  });
+  const instancesBefore = await api("/recipe-instances");
+  check(
+    instancesBefore.some((i) => i.enabled === true),
+    "no enabled recipe instance to check after the binding change",
+  );
+
+  await step("remove-state-data-binding", async () => {
+    await openBindings();
+    const binding = page.locator('[data-testid="data-binding"]').filter({ hasText: "state" });
+    await binding.hover();
+    await binding.getByRole("button", { name: "Remove" }).click();
+    await until("the state data binding to be gone", async () => {
+      const l = await lightFromApi();
+      return !l.dataBindings.some((b) => b.alias === "state");
+    });
+    await page.getByText("1 new data point available").waitFor();
+  });
+
+  await step("review-and-add-missing", async () => {
+    await page.getByRole("button", { name: "Review" }).click();
+    await page.getByText("Add the missing bindings").waitFor();
+    await page.getByRole("button", { name: /^Add 1$/ }).click();
+    await until("the state data binding to be back", async () => {
+      const l = await lightFromApi();
+      return l.dataBindings.some((b) => b.alias === "state");
+    });
+    await page.getByText("Add the missing bindings").waitFor({ state: "hidden" });
+  });
+
+  await step("recipe-instances-unchanged", async () => {
+    const after = await api("/recipe-instances");
+    console.log(`e2e: ${instancesBefore.length} recipe instance(s) before, ${after.length} after`);
+    for (const before of instancesBefore) {
+      const now = after.find((i) => i.id === before.id);
+      if (!now) throw new Error(`recipe instance ${before.id} is gone`);
+      if (now.enabled !== before.enabled)
+        throw new Error(`recipe instance ${before.id} enabled changed`);
+    }
+  });
+
+  const sensorDevice = async () => (await api("/devices")).find((d) => d.model === "TH01");
+
+  await step("device-page-from-devices", async () => {
+    await page.goto(`${base}/#/devices`);
+    await row("TH01").waitFor();
+    await row("TH01")
+      .locator("td")
+      .nth(1)
+      .click({ position: { x: 4, y: 4 } });
+    const id = (await sensorDevice()).id;
+    await until("the device page address", () => page.url().includes(`#/devices/${id}`));
+    const temperature = page.locator("tr", { hasText: "temperature" }).first();
+    await temperature.waitFor();
+    await until("a value in the temperature row", async () =>
+      /\d/.test(await temperature.innerText()),
+    );
+  });
+
+  // Four screenshots of the pages, in the current theme.
+  const four = async (theme) => {
+    const eq = await lightId();
+    const dev = (await sensorDevice()).id;
+    // The sidebar slides while the page changes: wait for it to rest before a screenshot.
+    const settled = async () => {
+      await page.waitForFunction(() =>
+        document.getAnimations().every((a) => a.playState !== "running"),
+      );
+    };
+    await step(`${theme}-equipment-page`, async () => {
+      await page.goto(`${base}/#/equipments/${eq}`);
+      await openBindings();
+      await settled();
+    });
+    await step(`${theme}-add-binding-dialog`, async () => {
+      await page.getByRole("button", { name: "Add", exact: true }).first().click();
+      await page.getByText("Add a data binding").waitFor();
+      await settled();
+    });
+    await page.keyboard.press("Escape");
+    await page.getByText("Add a data binding").waitFor({ state: "hidden" });
+    await step(`${theme}-change-devices-dialog`, async () => {
+      const change = page.getByRole("button", { name: "Change devices" });
+      if (!(await change.isVisible()))
+        await page
+          .getByRole("button", { name: /^Devices/ })
+          .first()
+          .click();
+      await change.click();
+      await page.locator('[role="dialog"]').waitFor();
+      await settled();
+    });
+    await page.keyboard.press("Escape");
+    await page.locator('[role="dialog"]').waitFor({ state: "hidden" });
+    await step(`${theme}-device-page`, async () => {
+      await page.goto(`${base}/#/devices/${dev}`);
+      await page.locator("tr", { hasText: "temperature" }).first().waitFor();
+      await settled();
+    });
+  };
+
+  // The interface follows the system theme (main.tsx applies "system"; the stored `sowel_theme`
+  // is read by nothing yet): the browser's colour scheme is what is switched.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  await four("dark");
+
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "hybrid");
+  await four("hybrid");
   void modal;
 } catch (error) {
   console.error(`e2e: ${error.message}`);
