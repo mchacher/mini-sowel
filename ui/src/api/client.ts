@@ -90,6 +90,8 @@ interface Mode {
   token: boolean;
   /** Ask for a refresh on a 401 and repeat the request once. */
   refresh: boolean;
+  /** Read a successful answer as a file (the backup's download) instead of JSON. */
+  blob?: boolean;
 }
 
 async function request<T>(
@@ -140,12 +142,18 @@ async function request<T>(
   if (!response.ok) throw await failure(response);
 
   if (response.status === 204) return undefined as T;
+  if (mode.blob) return response.blob() as Promise<T>;
   return response.json() as Promise<T>;
 }
 
 /** An authenticated request: the token, refreshed on a 401. */
 export function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   return request<T>(url, options, { token: true, refresh: true });
+}
+
+/** An authenticated download (spec 035): the token and its refresh, the answer as a `Blob`. */
+export function fetchBlob(url: string, options?: RequestInit): Promise<Blob> {
+  return request<Blob>(url, options, { token: true, refresh: true, blob: true });
 }
 
 /** A request without a token (status, setup, login, refresh). */

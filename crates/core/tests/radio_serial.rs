@@ -275,6 +275,7 @@ fn network() -> Network {
         extended_pan_id: [1; 8],
         channel: 15,
         formed: false,
+        from_backup: false,
         keys: None,
     }
 }

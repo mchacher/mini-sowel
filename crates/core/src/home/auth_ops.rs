@@ -3,11 +3,13 @@
 //! factory reset. The password hash itself is computed by the API, outside the lock.
 
 use std::fmt;
+use std::sync::Arc;
 
 use super::{CLOCK_SET_AFTER_MS, Home, ListCursor};
 use crate::auth::{
     ACCESS_TTL_S, Account, AuthTokens, NeverConfirmed, Presence, to_file_json, token_hex,
 };
+use crate::backup::{BackupState, BackupTicket};
 use crate::devices::Id;
 use crate::devices::Random;
 use crate::failure::{Failure, Outcome};
@@ -209,7 +211,7 @@ impl Home {
 
     /// True while the pairing window is open, or devices that joined are still being set up
     /// after it closed (or an opening was asked and not taken yet).
-    fn pairing_in_progress(&self) -> bool {
+    pub fn pairing_in_progress(&self) -> bool {
         let window = self.pairing();
         window.phase() != super::Phase::Closed || window.state(window.now()).0
     }
@@ -299,5 +301,18 @@ impl Home {
         self.auth_changed = true;
         self.recompute(now);
         Ok(())
+    }
+
+    // ---- Backup (spec 035) ----
+
+    /// The backup state, shared with the saver (it writes no file while an export reads them).
+    pub fn backup_state(&self) -> Arc<BackupState> {
+        Arc::clone(&self.backup)
+    }
+
+    /// Starts a backup job: 409 `A restore waits for the restart` or `Backup already in
+    /// progress`. The ticket ends the job when it is dropped.
+    pub fn backup_begin(&self, restore: bool) -> Outcome<BackupTicket> {
+        self.backup.begin(restore)
     }
 }

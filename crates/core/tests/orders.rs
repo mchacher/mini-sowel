@@ -265,6 +265,8 @@ fn paired(devices: Vec<SimDevice>) -> Harness {
     h.radio
         .start_network(
             &NetworkSettings::default(),
+            None,
+            false,
             &mut scripted(),
             &mut |_| Ok(()),
         )

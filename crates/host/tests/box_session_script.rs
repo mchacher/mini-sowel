@@ -567,8 +567,13 @@ fn home_fake(devices: Arc<Mutex<String>>, sunrise: &'static str) -> Handler {
         ("POST", "/api/v1/integrations/solite/permit-join") => {
             (202, r#"{"permitJoin":false,"remaining":0}"#.into())
         }
-        ("GET", "/api/v1/backup") => (200, r#"{"version":1,"settings":{},"zones":[]}"#.into()),
-        ("POST", "/api/v1/backup") => (200, r#"{"success":true}"#.into()),
+        ("GET", "/api/v1/system/backup") => match r.header("x-backup-password") {
+            Some(_) => (200, "SOLITEBK-fake-archive".into()),
+            None => (400, r#"{"error":"Backup password required"}"#.into()),
+        },
+        ("POST", "/api/v1/system/backup") => {
+            (400, r#"{"error":"Wrong backup password"}"#.into())
+        }
         ("PUT", "/api/v1/settings") => (200, r#"{"success":true}"#.into()),
         ("GET", "/api/v1/settings") => {
             if sunrise == "location" {
@@ -597,6 +602,43 @@ fn home_fake(devices: Arc<Mutex<String>>, sunrise: &'static str) -> Handler {
         _ => (404, r#"{"error":"Not found"}"#.into()),
     }
     })
+}
+
+#[test]
+fn a_restore_refused_for_presence_or_pairing_is_not_checked_rather_than_ko() {
+    for (status, text, reason) in [
+        (
+            403,
+            r#"{"error":"Confirm on the box","confirmRequired":true}"#,
+            "presence: Confirm on the box",
+        ),
+        (
+            409,
+            r#"{"error":"Pairing in progress"}"#,
+            "pairing window open: Pairing in progress",
+        ),
+    ] {
+        let devices = Arc::new(Mutex::new("[]".to_string()));
+        let inner = home_fake(devices, "none");
+        let handler: Handler = Arc::new(move |r: &Req| {
+            if r.method == "POST" && r.path == "/api/v1/system/backup" {
+                (status, text.to_string())
+            } else {
+                inner(r)
+            }
+        });
+        let port = fake_server(handler);
+        let (out, _dir) = group(
+            "home",
+            &format!("127.0.0.1:{port}"),
+            &[
+                ("SOLITE_PASSWORD", PASSWORD),
+                ("SOLITE_SESSION_API_ONLY", "1"),
+                ("SOLITE_SESSION_CLOCK_WAIT", "1"),
+            ],
+        );
+        out.skipped("B7.1", &format!("exported; restore not checked ({reason})"));
+    }
 }
 
 #[test]
@@ -671,8 +713,11 @@ fn busy_fake(fifth_answers_200: bool) -> Handler {
         ("POST", "/api/v1/integrations/solite/permit-join") => {
             (202, r#"{"permitJoin":false,"remaining":0}"#.into())
         }
-        ("GET", "/api/v1/backup") => (200, r#"{"version":1,"settings":{},"zones":[]}"#.into()),
-        ("POST", "/api/v1/backup") => (200, r#"{"success":true}"#.into()),
+        ("GET", "/api/v1/system/backup") => match r.header("x-backup-password") {
+            Some(_) => (200, "SOLITEBK-fake-archive".into()),
+            None => (400, r#"{"error":"Backup password required"}"#.into()),
+        },
+        ("POST", "/api/v1/system/backup") => (400, r#"{"error":"Wrong backup password"}"#.into()),
         ("GET", "/api/v1/settings") => (200, "{}".into()),
         ("PUT", "/api/v1/settings") => (200, r#"{"success":true}"#.into()),
         ("GET", "/api/v1/system/timezone") => (

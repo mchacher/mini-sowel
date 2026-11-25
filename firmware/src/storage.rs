@@ -23,7 +23,7 @@ const LABEL: &str = "storage";
 static WRITES: WriteCounter = WriteCounter::new();
 
 /// Counts one write (attempted, failed or not) and logs `flash: <n> writes since boot`.
-fn counted<T>(result: T) -> T {
+pub(crate) fn counted<T>(result: T) -> T {
     log::info!("{}", flash_line(WRITES.record()));
     result
 }

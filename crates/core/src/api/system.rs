@@ -1,7 +1,8 @@
 //! `/system/timezone` (Sowel's `src/api/routes/system.ts`): the home's time zone as
 //! `{tz, source, offsetHours}`; `GET /system/version`: Sowel's `VersionInfo` (spec 032, a subset:
 //! no Docker fields, `latest` always null). `POST /system/update` is the streaming handler's
-//! (`Reply::Update`, spec 032, D53): only its other methods are answered here. Sowel's other
+//! (`Reply::Update`, spec 032, D53), and so is `/system/backup` (spec 035): only their other
+//! methods are answered here. Sowel's other
 //! `/system` routes (mode...) are not Solite's. `POST /system/factory-reset` is Solite's (spec 029,
 //! D48).
 
@@ -20,7 +21,11 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["system", "factory-reset"], "POST") => factory_reset(home, request.body, now),
         (["system", "factory-reset"], _) => method_not_allowed(),
         (["system", "version"], "GET") => version(),
-        (["system", "version"] | ["system", "update"], _) => method_not_allowed(),
+        // `GET` and `POST /system/backup` are the streaming handler's (`Reply::BackupExport` and
+        // `BackupRestore`, spec 035, D56): only its other methods are answered here.
+        (["system", "version"] | ["system", "update"] | ["system", "backup"], _) => {
+            method_not_allowed()
+        }
         _ => error(404, "Not found"),
     }
 }

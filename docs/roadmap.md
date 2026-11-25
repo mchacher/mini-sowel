@@ -49,7 +49,7 @@ stays a person's. The first run is expected to show route or timing mismatches (
 
 - Spec 025: the flash (B2), `measure-api.sh` inside `saves --budget 5` (B6), the boot log with
   its budget (B3). Run by the script.
-- Spec 026: the backup exported and imported back, the location and time zone set, the sun times
+- Spec 026: the full backup exported and its restore with a wrong password refused (spec 035), the location and time zone set, the sun times
   (B7), kept after a restart (B8). Run by the script. By day, motion does not switch the ZBMINIR2
   on with "Inactive during day": a person's (H3).
 - Spec 027: the time zone then `GET /api/v1/system/timezone` (B7). Run by the script. The home
@@ -82,6 +82,14 @@ stays a person's. The first run is expected to show route or timing mismatches (
   by the script. An unplug during the minute after an update (H9) and the Firmware update card's
   error (H10): a person's. The stack high-water marks of an API worker and of the OTA thread just
   after an install: not run (B9 reads a fresh boot).
+- Spec 035 (the full backup), the box check, the user present: a first run of the script checks
+  B7.1 (the export, then a restore with a wrong password refused). The rest is a person's, on the
+  radio image with devices paired: export a backup with a password from the Settings page (the
+  export takes 5 to 10 s: no `task_wdt` line in the serial log); restore it on the same box (the
+  box restarts, log in again, the devices, rooms, equipments and recipes are back); factory-reset
+  the box, or flash a second one while the first is off, restore the file there; count the devices
+  that report again without pairing, and those that need pairing (D57's best effort), and note the
+  numbers in spec 035; read the flash write count of the restore (`box.sh log`).
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -201,9 +209,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); looked at again in J6 (spec 026): kept, and the aggregation, GET included, also emits `sunlight.changed` when the sun data changed | Architecture review 2026-11-22 |
 | 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `SOLITE_PASSWORD=<password> box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
-| 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 3`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
-| 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
-| 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
+| 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 3`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `GET /api/v1/system/backup` and its `POST` with a wrong password, refused (spec 035; the full backup's own check is in the list of the tests to run); then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
 | 2026-11-24 | Sowel alignment, what is left of D41 (D44): `GET /api/v1/settings/timezones` has no Sowel counterpart; `GET /api/v1/system/timezone` answers `source: "env"` for the setting, `fallback` with a location, and the offset now | Spec 026, spec 027 |
 | 2026-11-24 | A "current time" pill in the header (Sowel's `CurrentTimePill`) and local time in the logs, from `home.timezone` | Spec 026 |
 | 2026-11-24 | Run spec 027's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 1`, one `PUT /api/v1/settings` of the time zone, then `GET /api/v1/system/timezone`; the home lock per batch of measures timed on the box (a log line to add); note the figures in spec 027 and `docs/memory-budget.md` | Spec 027 |
@@ -213,6 +219,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | Password change (Sowel's `PUT /api/v1/me/password`) from the interface | Spec 029 |
 | 2026-11-25 | A factory reset that also erases the Wi-Fi settings (`wifi.json`) and leaves the Zigbee network (forgets `zigbee.json`'s keys), so EN 18031-2's deletion is whole | Spec 029, D48 |
 | 2026-11-25 | The ESP32's SHA accelerator for the password hash, through an adapter, to raise PBKDF2's iterations | Spec 029, D47 |
+| 2026-11-25 | Restore the radio's NWK frame counter and child table (and weigh writing the EUI64) on a restored network, so no device drops the new coordinator's commands or needs pairing again (D57), if the box check of the full backup shows devices lost | Spec 035, D57 |
 | 2026-11-25 | A rate limit per client address on the box (one counter today: a device of the home network can keep the owner from logging in while it tries) | Spec 029, D47 |
 | 2026-11-25 | Read `ColorCapabilities` (`0x400A`) at the pairing setup, so a tunable white bulb gets `color_temp` and no `color` data or order (today every `0x0300` device gets both, D51) | Spec 031 |
 | 2026-11-25 | Zigbee2MQTT's other forms of a `color` order: `{"hex": "#RRGGBB"}` and `{"r","g","b"}` (converted to XY), the form a colour picker gives | Spec 031 |
@@ -409,3 +416,4 @@ Every change to this roadmap: date, what changed, why.
   above says, item by item, the step that runs it or that it stays a person's; `validate.sh`
   prints the firmware images' share of the slot. New inbox line: a raw console line in `box.sh`.
 - 2026-11-25: spec 034 built on the Mac (the user away, the box not run): the radio image's `heap:` line prints the largest free block of internal RAM and PSRAM; the devices read back share the catalog's texts and are read in one pass. The 50 devices hold 65 KB instead of 72 KB (Mac), QEMU 159 KB held and 311 KB peak instead of 176 and 327, internal RAM minimum 110 KB instead of 95; the JSON is unchanged.
+- 2026-11-25: spec 035 built on the Mac (the user away, the box not run): the full backup, one password-protected file (`GET/POST /api/v1/system/backup`, D56) holding the home, the Zigbee network and, on request, the Wi-Fi settings, streamed both ways through a 4 KB buffer, validated whole before a restore replaces the home at the next start; the radio forms the restored network and leaves the one it runs (D57); a Backup card on the Settings page. D42's document and `/api/v1/backup` are gone. Inbox lines of the full backup and of D42's alignment removed; new line: the radio's frame counter and child table on a restored network. The box check is in the list above.

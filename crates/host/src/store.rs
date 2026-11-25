@@ -44,7 +44,7 @@ fn read(path: &Path, what: &str) -> Result<Option<String>, String> {
 }
 
 /// Writes a file under a temporary name, then renames it.
-fn write(path: &Path, text: &str, what: &str) -> Result<(), String> {
+pub(crate) fn write(path: &Path, text: &str, what: &str) -> Result<(), String> {
     let temporary = path.with_extension("json.tmp");
     (|| -> std::io::Result<()> {
         let mut file = OpenOptions::new()

@@ -1,6 +1,7 @@
 //! Solite on the Mac.
 
 mod backup;
+mod backup_files;
 mod front;
 mod logger;
 mod radio_tcp;
@@ -457,6 +458,11 @@ fn main() -> ExitCode {
     {
         eprintln!("{message}");
         return ExitCode::from(1);
+    }
+    // A restore the last run left is finished first (spec 035, R6): before the home is read and
+    // before the radio is started.
+    if !matches!(task, Task::Identify) {
+        backup_files::apply_pending(&args.data);
     }
     // The home must be readable before the radio is touched: a `devices.json`, `zones.json` or
     // `equipments.json` that does not parse stops the host, and is never overwritten.

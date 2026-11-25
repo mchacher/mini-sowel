@@ -228,7 +228,7 @@ export const en: Messages = {
   "settings.sunHint": "Set the location to get the sun times",
   "settings.backup": "Backup",
   "settings.backupDescription":
-    "Export the home's settings and rooms to a file, or import them back.",
+    "One encrypted file holds the whole box: devices, rooms, equipments, recipes, settings, the Zigbee network and, if you wish, the Wi-Fi settings. The password you choose protects it.",
   "settings.update": "Firmware update",
   "settings.updateDescription": "Install a signed update file (.sup) built for this box.",
   "settings.updateVersion": "Running version:",
@@ -237,13 +237,22 @@ export const en: Messages = {
   "settings.updateInstalling": "Installing…",
   "settings.updateRestart": "The box restarts; reload the page in a minute.",
   "settings.export": "Export",
-  "settings.import": "Import",
-  "settings.fileTooLarge": "File too large (16 KB at most)",
-  "settings.importConfirmTitle": "Import this file?",
-  "settings.importConfirm":
-    "The settings are replaced as a whole. The rooms of the file are created, or updated when they differ. The other rooms, the equipments and the recipes are kept.",
-  "settings.imported":
-    "Imported: {{settings}} settings, {{created}} rooms created, {{updated}} rooms updated",
+  "settings.backupExport": "Export",
+  "settings.backupPassword": "Backup password",
+  "settings.backupPasswordConfirm": "Confirm the backup password",
+  "settings.backupPasswordHint":
+    "8 to 128 characters. Keep it: without it the file cannot be restored. Exporting takes a few seconds.",
+  "settings.backupExporting": "Exporting...",
+  "settings.backupRestore": "Restore",
+  "settings.backupFile": "Backup file (.slb)",
+  "settings.backupRestorePassword": "Password of the backup",
+  "settings.backupWifi": "Also restore the Wi-Fi settings",
+  "settings.backupRestoreAction": "Restore",
+  "settings.backupRestoring": "Restoring...",
+  "settings.backupConfirmTitle": "Restore this backup?",
+  "settings.backupConfirm":
+    "The devices, rooms, equipments, recipes, settings and the Zigbee network are replaced by the file's. The account is kept. The box restarts: log in again afterwards.",
+  "settings.backupConfirmWifi": "The Wi-Fi settings are replaced too.",
   "auth.login": "Log in",
   "auth.logout": "Log out",
   "auth.username": "Username",
@@ -565,7 +574,7 @@ export const fr: Messages = {
   "settings.sunHint": "Renseignez la position pour obtenir les heures du soleil",
   "settings.backup": "Sauvegarde",
   "settings.backupDescription":
-    "Exportez les réglages et les pièces de la maison dans un fichier, ou importez-les.",
+    "Un seul fichier chiffré contient tout le boîtier : appareils, pièces, équipements, recettes, réglages, réseau Zigbee et, si vous le souhaitez, les réglages Wi-Fi. Le mot de passe que vous choisissez le protège.",
   "settings.update": "Mise à jour du firmware",
   "settings.updateDescription":
     "Installez un fichier de mise à jour signé (.sup) fait pour ce boîtier.",
@@ -575,13 +584,22 @@ export const fr: Messages = {
   "settings.updateInstalling": "Installation…",
   "settings.updateRestart": "Le boîtier redémarre ; rechargez la page dans une minute.",
   "settings.export": "Exporter",
-  "settings.import": "Importer",
-  "settings.fileTooLarge": "Fichier trop gros (16 Ko au plus)",
-  "settings.importConfirmTitle": "Importer ce fichier ?",
-  "settings.importConfirm":
-    "Les réglages sont remplacés en entier. Les pièces du fichier sont créées, ou modifiées si elles diffèrent. Les autres pièces, les équipements et les recettes sont conservés.",
-  "settings.imported":
-    "Importé : {{settings}} réglages, {{created}} pièces créées, {{updated}} pièces modifiées",
+  "settings.backupExport": "Exporter",
+  "settings.backupPassword": "Mot de passe de la sauvegarde",
+  "settings.backupPasswordConfirm": "Confirmer le mot de passe de la sauvegarde",
+  "settings.backupPasswordHint":
+    "8 à 128 caractères. Gardez-le : sans lui, le fichier ne peut pas être restauré. L'export prend quelques secondes.",
+  "settings.backupExporting": "Export…",
+  "settings.backupRestore": "Restaurer",
+  "settings.backupFile": "Fichier de sauvegarde (.slb)",
+  "settings.backupRestorePassword": "Mot de passe de la sauvegarde",
+  "settings.backupWifi": "Restaurer aussi les réglages Wi-Fi",
+  "settings.backupRestoreAction": "Restaurer",
+  "settings.backupRestoring": "Restauration…",
+  "settings.backupConfirmTitle": "Restaurer cette sauvegarde ?",
+  "settings.backupConfirm":
+    "Les appareils, pièces, équipements, recettes, réglages et le réseau Zigbee sont remplacés par ceux du fichier. Le compte est conservé. Le boîtier redémarre : reconnectez-vous ensuite.",
+  "settings.backupConfirmWifi": "Les réglages Wi-Fi sont remplacés aussi.",
   "auth.login": "Se connecter",
   "auth.logout": "Se déconnecter",
   "auth.username": "Identifiant",

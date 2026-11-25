@@ -492,15 +492,31 @@ group_home() {
   HOME_SET=false
   [ -n "${SOLITE_HOME_LATITUDE:-}" ] && [ -n "${SOLITE_HOME_LONGITUDE:-}" ] && [ -n "${SOLITE_HOME_TIMEZONE:-}" ] && HOME_SET=true
 
-  # 1. The backup round trip: first, an import replaces the settings whole.
-  http GET /backup -H "@$AUTH_FILE"
+  # 1. The full backup (spec 035): the export (a key derivation of 5 to 10 s on the box, hence the
+  # long timeout), then its restore with a wrong password, which must change nothing.
+  HTTP_MAX=60
+  http GET /system/backup -H "@$AUTH_FILE" -H "X-Backup-Password: box-session-test"
   if [ "$CODE" != 200 ]; then
-    check 1 backup KO "GET /backup answered $CODE"
+    check 1 backup KO "GET /system/backup answered $CODE: $(errtext)"
+  elif [ "$(head -c 8 "$TMP/body")" != SOLITEBK ]; then
+    check 1 backup KO "the file does not start with SOLITEBK"
   else
-    cp "$TMP/body" "$TMP/backup.json"
-    http POST /backup -H "@$AUTH_FILE" -H "$JSON" --data-binary "@$TMP/backup.json"
-    if [ "$CODE" = 200 ]; then check 1 backup OK "round trip 200"; else check 1 backup KO "POST /backup answered $CODE: $(errtext)"; fi
+    cp "$TMP/body" "$TMP/backup.slb"
+    http POST /system/backup -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" \
+      -H "X-Backup-Password: not-the-test-password" --data-binary "@$TMP/backup.slb"
+    if [ "$CODE" = 400 ] && [ "$(errtext)" = "Wrong backup password" ]; then
+      check 1 backup OK "exported, wrong-password restore refused 400"
+    elif [ "$CODE" = 403 ]; then
+      # A restore needs the user's presence (10 min after a power-on) before the password is read.
+      check 1 backup skipped "exported; restore not checked (presence: $(errtext))"
+    elif [ "$CODE" = 409 ]; then
+      # The pairing window (180 s after a power-on) refuses a restore before the password is read.
+      check 1 backup skipped "exported; restore not checked (pairing window open: $(errtext))"
+    else
+      check 1 backup KO "POST /system/backup with a wrong password answered $CODE: $(errtext)"
+    fi
   fi
+  HTTP_MAX=30
 
   # 2. The location and the time zone.
   if $HOME_SET; then

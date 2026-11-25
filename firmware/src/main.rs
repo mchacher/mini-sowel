@@ -6,6 +6,7 @@
 //! the interface on port 80, and takes the Wi-Fi settings on its serial console (spec 023).
 
 mod app_desc;
+mod backup_files;
 #[cfg(feature = "radio")]
 mod console;
 #[cfg(feature = "radio")]
@@ -41,7 +42,8 @@ use solite_core::engine::Storage;
 /// The network setting's file, in the data partition.
 const NETWORK_FILE: &str = "network.json";
 
-/// Mounts the data partition and logs it. Without it, nothing else can run.
+/// Mounts the data partition, logs it and finishes a pending restore. Without it, nothing else
+/// can run.
 fn mount_storage() -> Result<(), String> {
     let mounted = storage::mount()?;
     if let Some(reason) = mounted.formatted {
@@ -54,6 +56,9 @@ fn mount_storage() -> Result<(), String> {
         used / 1024,
         total / 1024
     );
+    // A restore the last run left is finished first (spec 035, R6): before the network setting,
+    // the console, the Wi-Fi and the engine read the partition.
+    backup_files::apply_pending();
     Ok(())
 }
 

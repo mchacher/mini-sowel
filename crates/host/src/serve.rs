@@ -23,9 +23,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use solite_core::api::{
     ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_guarded,
-    is_update_request, order_response,
+    is_streamed_request, order_response,
 };
 use solite_core::auth::AlwaysConfirmed;
+use solite_core::backup::{ArchiveReader, MAX_ARCHIVE_BYTES};
 use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
@@ -33,6 +34,7 @@ use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use solite_core::update::{MAX_UPLOAD_BYTES, Updates};
 use tiny_http::{Header, Response, Server};
 
+use crate::backup_files::{DataFiles, HostPacing};
 use crate::front::{self, Door};
 use crate::random::SystemRandom;
 use crate::static_files;
@@ -44,10 +46,12 @@ use crate::{backup, clock};
 /// The update key of this build (spec 032, R2): 64 hexadecimal characters, or absent.
 const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_UPDATE_PUBLIC_KEY");
 
-/// What the API's workers need to install an update: the core's state and the files.
+/// What the API's workers need for the two streamed routes: the update's state and files, and
+/// the data folder of the full backup.
 struct UpdateParts {
     updates: Updates,
     adapter: FileAdapter,
+    data: PathBuf,
 }
 
 /// What the probation reads (R5): the engine's loop is running, the API server is listening.
@@ -185,9 +189,14 @@ fn answer(
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.to_string());
-    // The update's body is a file of megabytes: it is not read here, the core answers the gate
-    // first and the file is then streamed into the installation (spec 032, R6).
-    let streaming = is_update_request(&method, &path);
+    // The update's and the backup's bodies are files of megabytes: they are not read here, the
+    // core answers the gate first and the file is then streamed (spec 032 R6, spec 035).
+    let streaming = is_streamed_request(&method, &path);
+    let backup_password = request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("X-Backup-Password"))
+        .map(|h| h.value.to_string());
     // One byte more than allowed is enough to see that the body is too long.
     let mut body = Vec::new();
     if !streaming {
@@ -215,8 +224,16 @@ fn answer(
             &mut fill,
         )
     };
-    if streaming {
-        return answer_update(request, reply, update, content_type);
+    // A download holds no body to skip, but is streamed all the same.
+    if streaming || matches!(reply, Reply::BackupExport(_)) {
+        return answer_streamed(
+            request,
+            reply,
+            update,
+            content_type,
+            random,
+            backup_password.as_deref(),
+        );
     }
     // The interface's files do not need the home: its lock is already let go.
     if let Reply::Static(file) = &reply {
@@ -245,9 +262,12 @@ fn answer(
             None,
             None,
         )),
-        Reply::Order(_) | Reply::Static(_) | Reply::StaticError(_) | Reply::Update => {
-            request.respond(Response::empty(500))
-        }
+        Reply::Order(_)
+        | Reply::Static(_)
+        | Reply::StaticError(_)
+        | Reply::Update
+        | Reply::BackupExport(_)
+        | Reply::BackupRestore { .. } => request.respond(Response::empty(500)),
         Reply::Whole(response) => match response.body {
             Some(text) => request.respond(
                 Response::from_string(text)
@@ -259,17 +279,81 @@ fn answer(
     };
 }
 
-/// `POST /system/update`, once the core has answered: a refusal of the gate or of the content
-/// type, or the order to stream. The body is streamed from the server's reader, bounded to the
-/// declared length, into `Updates::install`. Every refusal leaves body bytes unread, so the
-/// connection is closed after it: the image's bytes are never read as a next request.
-fn answer_update(
+/// The archive of an export as a chunked answer: no length, so the server sends it as it reads.
+fn send_archive(request: tiny_http::Request, reader: ArchiveReader) {
+    let header = |name: &str, value: &str| Header::from_bytes(name, value).ok();
+    let headers: Vec<Header> = [
+        header("Content-Type", "application/octet-stream"),
+        header(
+            "Content-Disposition",
+            "attachment; filename=\"solite-backup.slb\"",
+        ),
+        header("Cache-Control", "no-store"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    // A read error ends the answer without its end: the client holds a truncated file, which its
+    // MAC refuses. The client may have gone as well: nothing to do about it.
+    let _ = request.respond(Response::new(
+        tiny_http::StatusCode(200),
+        headers,
+        reader,
+        None,
+        None,
+    ));
+}
+
+/// `POST /system/update` and the two backup routes, once the core has answered: a refusal of the
+/// gate or of the content type, or the order to stream. The update's body is streamed from the
+/// server's reader, bounded to the declared length, into `Updates::install`; the backup's, bounded
+/// the same way, into `BackupTicket::restore`; an export streams the archive back, chunked. Every
+/// refusal leaves body bytes unread, so the connection is closed after it (the door asks for it):
+/// the file's bytes are never read as a next request.
+fn answer_streamed(
     mut request: tiny_http::Request,
     reply: Reply,
     update: &UpdateParts,
     content_type: &Header,
+    random: &Mutex<SystemRandom>,
+    backup_password: Option<&str>,
 ) {
     let response = match reply {
+        Reply::BackupExport(ticket) => {
+            let mut fill = |buffer: &mut [u8]| lock(random).fill(buffer);
+            match ticket.export(
+                backup_password,
+                Box::new(DataFiles::new(&update.data)),
+                Box::new(HostPacing),
+                &mut fill,
+            ) {
+                Ok(reader) => return send_archive(request, reader),
+                Err(response) => response,
+            }
+        }
+        Reply::BackupRestore { ticket, wifi } => {
+            let declared = request.body_length().map(|n| n as u64);
+            // Without a length (chunked) the stream is bounded all the same, one byte over
+            // the limit being enough to see it is too long.
+            let limit = declared.unwrap_or(MAX_ARCHIVE_BYTES as u64 + 1);
+            let mut source = request.as_reader().take(limit);
+            let mut files = DataFiles::new(&update.data);
+            let response = ticket.restore(
+                wifi,
+                declared,
+                backup_password,
+                &mut source,
+                &mut files,
+                &mut HostPacing,
+            );
+            if response.status == 200 {
+                println!(
+                    "backup: restored {} files; restart the host to load them",
+                    restored_files(response.body.as_deref()),
+                );
+            }
+            response
+        }
         Reply::Update => {
             let declared = request.body_length().map(|n| n as u64);
             if declared.is_some_and(|n| n > MAX_UPLOAD_BYTES) {
@@ -309,6 +393,13 @@ fn answer_update(
     };
     // The client may have gone: nothing to do about it.
     let _ = request.respond(answer);
+}
+
+/// The `files` count of a restore's answer.
+fn restored_files(body: Option<&str>) -> u64 {
+    body.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value["files"].as_u64())
+        .unwrap_or_default()
 }
 
 /// `x.y.z` of the answer's `Installed x.y.z, restarting`.
@@ -416,7 +507,11 @@ pub fn serve<T: RadioTransport>(
     for line in &start_lines {
         println!("{line}");
     }
-    let update = Arc::new(UpdateParts { updates, adapter });
+    let update = Arc::new(UpdateParts {
+        updates,
+        adapter,
+        data: data.to_path_buf(),
+    });
     let health = Arc::new(Health::default());
     let watch_stop = Arc::new(AtomicBool::new(false));
     {

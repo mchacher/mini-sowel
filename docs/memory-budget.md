@@ -34,21 +34,27 @@ on the stack of the HTTP worker that runs it (inside its 10 KB), nothing on the 
 takes about 0.5 to 1 s on the box (**E**, from software SHA-256 at 240 MHz, D47: one login timed on
 the box is a pending check).
 
+The backup's key derivation (spec 035) is ten times that (100,000 iterations, about 5 to 10 s on
+the box, **E**, from the same rate; under a second on the Mac), run in slices that pause 10 ms every
+5,000 iterations so the task watchdog is fed; its states stay on the HTTP worker's stack, inside
+its 10 KB (the box check reads no `task_wdt` line during an export).
+
 ## PSRAM, 2048 KB
 
 | Item | Bound | Worst case | Where | M / E |
 | ---- | ----- | ---------- | ----- | ----- |
 | The engine: devices, zones, equipments, recipes, events, live queues, orders, largest answer, save path | the core's `MAX_*` (`devices::MAX_DEVICES` 64, `zones::MAX_ZONES` 32, `equipments::MAX_EQUIPMENTS` 64, `recipes::MAX_INSTANCES` 16, ...) | 1024 KB (ceiling; measured 987 KB). Realistic home: 300 KB (ceiling; measured 193 KB), shown beside, not added | Large allocations in PSRAM; small ones first in internal RAM, see below | M |
-| Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes; the box holds no `tungstenite` buffers (the Mac host's WebSocket library): its WebSocket is ESP-IDF's, inside the server's own buffers |
+| Transport buffers outside the core: the HTTP server's and the WebSocket's read and write buffers | 4 HTTP workers, `live::MAX_CLIENTS` 4 clients, about 8 KB each | 64 KB | PSRAM | E, from the ESP-IDF HTTP server's default buffer sizes; the box holds no `tungstenite` buffers (the Mac host's WebSocket library): its WebSocket is ESP-IDF's, inside the server's own buffers; the request head's scratch, `CONFIG_HTTPD_MAX_REQ_HDR_LEN` 4096 (1024 before spec 035, for the backup's password header), held by ESP-IDF's server (one per server as far as the sources are remembered, not per socket): at most 3 KB more, inside the 64 KB (E, not read in the sources here) |
 | The radio image's HTTP body buffers: one per worker, `MAX_BODY_BYTES` + 1 each, allocated once in PSRAM (spec 023) | 4 workers × 16 KB | 64 KB, **not added**: the engine's worst case already counts 4 bodies of 16 KB (above); beside the realistic home, which does not count them, they add 64 KB | PSRAM | E, from the bound |
 | The radio image's HTTP workers' stacks (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023) | 4 workers × 10 KB | 40 KB | PSRAM | E, from the setting |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
 | Update: the one 4096-byte chunk buffer of the OTA thread, allocated once (spec 032); the image is streamed and never held whole, and ESP-IDF's flash write copies from PSRAM through its own internal bounce buffer | 1 update at a time (`update::CHUNK_BYTES`) | 4 KB | PSRAM | M for the core's part (1 MB through a counting fake peaks at under 5 KB of heap), E for the box |
+| Backup (spec 035): one job at a time (export or restore), each with one 4096-byte chunk buffer on the heap (`backup::CHUNK_BYTES`; the box's export holds two, the archive reader's and the HTTP server's send buffer, `http_server.rs`) and the manifest (under 4 KB, `MAX_MANIFEST_BYTES`); the archive is streamed and never held whole; the hash, MAC and cipher states and the key derivation (under 1 KB in all) are on the stack of the HTTP worker that runs the job, inside its 10 KB | 1 job (`backup::MAX_FILES` 7 files, 2 MiB at most) | 10 KB | PSRAM | M for the core's part (a 1 MB archive through counting fakes peaks at about 5 KB of heap exported and about 10 KB restored, `full_backup_memory`, bound 32 KB), E for the box (the worker's stack, which the box check reads) |
 | Margin | | the rest | PSRAM | |
 
-Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 4 =
-1196 KB, margin 2048 − 1196 = **852 KB**. Realistic home: 300 + 64 + body buffers 64 + 40 + 64 + 4
-= 536 KB, margin 1512 KB. The totals
+Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 4 + backup 10 =
+1206 KB, margin 2048 − 1206 = **842 KB**. Realistic home: 300 + 64 + body buffers 64 + 40 + 64 + 4
++ 10 = 546 KB, margin 1502 KB. The totals
 fit with room. The engine's small allocations land in internal RAM first (next section), so the
 PSRAM really used is lower than this sum and the margin larger.
 

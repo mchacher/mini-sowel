@@ -58,8 +58,13 @@ impl Sim {
     /// Identifies the radio and starts its network.
     pub fn start(&mut self) -> Result<Network, RadioError> {
         self.radio.identify()?;
-        self.radio
-            .start_network(&NetworkSettings::default(), &mut random(), &mut |_| Ok(()))
+        self.radio.start_network(
+            &NetworkSettings::default(),
+            None,
+            false,
+            &mut random(),
+            &mut |_| Ok(()),
+        )
     }
 
     /// Resumes the network without forming one.

@@ -258,8 +258,6 @@ fn other_methods_are_405() {
         ("DELETE", SETTINGS),
         ("PUT", "/api/v1/settings/timezones"),
         ("POST", "/api/v1/settings/timezones"),
-        ("PUT", "/api/v1/backup"),
-        ("DELETE", "/api/v1/backup"),
     ] {
         assert_eq!(rig.refused(method, path, "{}").0, 405, "{method} {path}");
     }

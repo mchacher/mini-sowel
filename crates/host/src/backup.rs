@@ -9,12 +9,13 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use solite_core::radio::backup::{is_network, pan_label, text as backup_text};
+use solite_core::backup::BackupFiles;
+use solite_core::radio::backup::{is_network, pan_label, parse, text as backup_text};
 use solite_core::radio::{
     Network, NetworkKeys, NetworkSettings, Radio, RadioError, RadioTransport,
 };
 
-const FILE_NAME: &str = "network.json";
+use crate::backup_files::{DataFiles, NETWORK_FILE as FILE_NAME};
 
 fn path(dir: &Path) -> PathBuf {
     dir.join(FILE_NAME)
@@ -85,9 +86,25 @@ pub fn start<T: RadioTransport, C: FnMut() -> u64>(
     data: &Path,
     fill: &mut dyn FnMut(&mut [u8]) -> Result<(), String>,
 ) -> Result<(Network, bool), String> {
+    // The restored network (spec 035): the file's values when the radio has none, or, with the
+    // mark a restore left, the radio is moved onto it.
+    let mut files = DataFiles::new(data);
+    let restored = match fs::read_to_string(path(data)) {
+        Ok(text) => {
+            let parsed = parse(&text);
+            if parsed.is_none() {
+                log::warn!("backup: {FILE_NAME} cannot be read, a network is formed as usual");
+            }
+            parsed
+        }
+        Err(_) => None,
+    };
+    let replace = files.restore_mark()?;
     let network = radio
         .start_network(
             &NetworkSettings::default(),
+            restored.as_ref(),
+            replace,
             fill,
             &mut |network| match &network.keys {
                 Some(keys) => write(data, network, keys),
@@ -99,6 +116,9 @@ pub fn start<T: RadioTransport, C: FnMut() -> u64>(
             RadioError::OnFormed(message) => message,
             other => format!("radio: {other}"),
         })?;
+    if replace {
+        files.clear_restore_mark()?;
+    }
     let foreign = network.keys.is_none() && !matches(data, &network);
     Ok((network, foreign))
 }

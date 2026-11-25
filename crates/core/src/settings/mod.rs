@@ -2,7 +2,6 @@
 //! settings.ts`, the keys of `src/zones/sunlight-manager.ts`), limited to the six keys Solite knows,
 //! each checked by its rule. No I/O: the home keeps them, the saver writes `settings.json`.
 
-pub mod backup;
 pub mod sun;
 pub mod tz;
 
