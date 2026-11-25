@@ -32,6 +32,7 @@ use crate::radio::MeasureEvent;
 use crate::recipes::{RecipeEngine, Settle};
 use crate::settings::Settings;
 use crate::settings::sun::Sunlight;
+use crate::supervisor::Status;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
 use events::{Event, EventQueue, EventValue, Interest};
@@ -143,6 +144,8 @@ pub struct Home {
     auth_changed: bool,
     /// The backup in progress (spec 035): shared with its ticket and with the saver.
     backup: Arc<BackupState>,
+    /// What the supervisor decided at boot, for `GET /system/supervisor` (spec 036): one value.
+    supervision: Status,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -246,7 +249,19 @@ impl Home {
             presence: auth_ops::PresenceSlot::default(),
             auth_changed: false,
             backup: Arc::new(BackupState::default()),
+            supervision: Status::default(),
         }
+    }
+
+    /// The supervisor's status, as the API shows it: the default (normal, power-on) until the
+    /// firmware sets it.
+    pub fn supervision(&self) -> &Status {
+        &self.supervision
+    }
+
+    /// Sets the supervisor's status (the box, at boot and after its changes).
+    pub fn set_supervision(&mut self, status: Status) {
+        self.supervision = status;
     }
 
     /// Records the wall time of this turn. When the clock was never set at the last call (before

@@ -1219,3 +1219,63 @@ fn a_last_seen_stored_in_1970_loads_as_null_and_unknown_and_a_crossing_keeps_it_
     home.observe_wall(T0 + 1_000);
     assert_eq!(home.devices.list()[0].device.last_seen, None);
 }
+
+// ---- The engine's watchdog (spec 036 R8) ----
+
+#[test]
+fn the_saver_feeds_the_watchdog_once_before_each_file_it_writes() {
+    let mut rig = Rig::new();
+    let garage = rig.garage();
+    rig.garage_instance(&garage, json!({}));
+    let home = Mutex::new(rig.home);
+    let storage = MemStorage::default();
+    let feeds = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&feeds);
+    let mut saver = Saver::new(&storage, 0).with_feed(move || counter.set(counter.get() + 1));
+    saver.tick(&home, 1, false).unwrap();
+    assert!(storage.attempts.get() >= 4, "every file is dirty");
+    assert_eq!(feeds.get(), storage.attempts.get(), "one feed per file");
+    // Nothing due: nothing written, nothing fed.
+    saver.tick(&home, 2, false).unwrap();
+    assert_eq!(feeds.get(), storage.attempts.get());
+}
+
+#[test]
+fn a_saver_without_a_feed_saves_as_before_and_feeds_nothing() {
+    let home = home_with_a_zone();
+    let storage = MemStorage::default();
+    let mut saver = Saver::new(&storage, 0);
+    saver.feed();
+    saver.tick(&home, 1, false).unwrap();
+    assert!(storage.text(ZONES_FILE).is_some());
+}
+
+#[test]
+fn the_loop_feeds_the_watchdog_at_each_turn() {
+    let mut bench = bench(Vec::new());
+    let reads = Cell::new(0);
+    *bench.done.borrow_mut() = Box::new(move || {
+        reads.set(reads.get() + 1);
+        reads.get() > 60
+    });
+    let home = Mutex::new(Home::new(T0));
+    let storage = MemStorage::default();
+    let feeds = Rc::new(Cell::new(0usize));
+    let turns = Rc::new(Cell::new(0usize));
+    let (f, t) = (Rc::clone(&feeds), Rc::clone(&turns));
+    // The gate is asked once at the end of each turn.
+    let mut saver = Saver::new(&storage, T0)
+        .with_feed(move || f.set(f.get() + 1))
+        .with_gate(move || {
+            t.set(t.get() + 1);
+            true
+        });
+    run_engine(&mut bench, &home, &mut saver, false, &mut Vec::new()).unwrap();
+    assert!(turns.get() >= 5, "the loop ran {} turns", turns.get());
+    assert!(
+        feeds.get() >= turns.get(),
+        "{} feeds for {} turns",
+        feeds.get(),
+        turns.get()
+    );
+}

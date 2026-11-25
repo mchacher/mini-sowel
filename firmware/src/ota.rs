@@ -28,6 +28,7 @@ use solite_core::devices::lock;
 use solite_core::update::{CHUNK_BYTES, UpdateAdapter, Updates};
 
 use crate::radio_engine::{STOP, STOPPED};
+use crate::supervisor;
 
 /// The OTA thread's stack, in internal RAM, for the whole run (spec 032 R8).
 pub const STACK_BYTES: usize = 6 * 1024;
@@ -225,7 +226,12 @@ impl Flash {
     /// The running image is marked bad and the box restarts into the previous one: it returns only
     /// when that was not possible.
     fn roll_back(&mut self) -> Result<(), String> {
-        Err(message(self.ota.mark_running_slot_invalid_and_reboot()))
+        // The box restarts into the previous image: the reason is written first (spec 036).
+        supervisor::asked_restart();
+        let error = message(self.ota.mark_running_slot_invalid_and_reboot());
+        // No restart happened: `asked` must not hide a later crash from the boot-loop guard.
+        supervisor::cancel_asked();
+        Err(error)
     }
 
     fn run(&mut self, call: Call, chunk: &Mutex<&'static mut [u8]>) -> Answer {
@@ -354,6 +360,8 @@ fn thread_body(
             ticked = Instant::now();
             let now = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
             updates.watch(&mut flash, now, healthy());
+            // The supervisor's clock, and the safe mode's retry (spec 036).
+            supervisor::tick();
         }
     }
 }
@@ -406,6 +414,7 @@ pub fn restart_after_update() -> ! {
         log::warn!("update: the engine did not stop within 10 s, restarting anyway");
     }
     log::info!("restarting");
+    supervisor::asked_restart();
     // SAFETY: takes no argument, restarts the chip, never returns.
     unsafe { esp_restart() }
 }

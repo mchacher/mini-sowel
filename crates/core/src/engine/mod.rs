@@ -99,6 +99,8 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
     lock(home).pairing_mut().set_clock(clocks.monotonic.clone());
     let mut runner = OrderRunner::new();
     while !stop.load(Ordering::SeqCst) {
+        // The watchdog of the box's engine thread (spec 036 R8): fed at each turn.
+        saver.feed();
         pairing_step(radio, home, clocks, sink)?;
         let events = radio.poll_pairing()?;
         let activity = radio.take_activity();

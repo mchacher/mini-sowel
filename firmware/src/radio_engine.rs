@@ -3,6 +3,9 @@
 //! them on the Mac without HTTP. It resets the radio, finds its serial speed, starts its network
 //! (backup in `/data/zigbee.json`), opens pairing for a few minutes after a power-on boot, runs
 //! the loop, restarts a wedged radio, and logs the serial buffer and the heap every few minutes.
+//! The thread is on the task watchdog; an error that ends it (radio that stays silent or
+//! stopped, no radio start, an engine error) goes through the supervisor's last rung: the files
+//! are saved and the ESP32 restarts with the reason kept (spec 036).
 //! With Wi-Fi (spec 023) it hands the loaded home and its live hub to `main`, which serves them;
 //! its saves wait for the clock (the saver's gate), and a stop asked by the console saves the
 //! files before the ESP32 restarts. The logic (probe, reset steps, boot window, restart, report timing and lines) is in the core,
@@ -47,6 +50,7 @@ use solite_core::radio::{
     Network, NetworkSettings, Radio, RadioError, RadioTransport, TransportError,
 };
 use solite_core::radio::{identity_lines, network_line};
+use solite_core::supervisor::Reason;
 
 use crate::backup_files::DataFiles;
 use crate::http_server;
@@ -54,6 +58,7 @@ use crate::memory;
 use crate::ota::ENGINE_RUNNING;
 use crate::radio_uart::{UartTransport, reset_radio};
 use crate::storage::{self, BASE, FatStorage};
+use crate::supervisor;
 use crate::wifi::{CLOCK_SET, Event, WIFI_STARTED};
 
 /// The engine thread's stack, in bytes, in internal RAM (spec 021 R1.2).
@@ -145,6 +150,9 @@ struct Link {
 
 impl RadioTransport for Link {
     fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
+        // Every read of the radio feeds the engine's watchdog: a slice is far shorter than its
+        // timeout (spec 036 R8).
+        supervisor::feed();
         let count = self.uart.read(buf, timeout_ms)?;
         let running = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(line) = self.uart.serial_report(running) {
@@ -162,7 +170,7 @@ impl RadioTransport for Link {
 /// Why the ESP32 started, from ESP-IDF's reset reason. The reasons are bindgen's constants,
 /// named in lower case.
 #[allow(unsafe_code, non_upper_case_globals)]
-fn reset_reason() -> ResetReason {
+pub fn reset_reason() -> ResetReason {
     // SAFETY: takes no argument and only reads the reason recorded at boot.
     match unsafe { esp_reset_reason() } {
         esp_reset_reason_t_ESP_RST_POWERON
@@ -316,16 +324,43 @@ fn start_network(radio: &mut Wired) -> Result<(Network, bool), String> {
     Ok((network, foreign))
 }
 
+/// Why the engine's run ended in error: the reason the supervisor keeps, the message, and
+/// whether the supervisor's last rung already ran for it (the files saved, the restart asked).
+struct Failure {
+    reason: Reason,
+    message: String,
+    handled: bool,
+}
+
+impl Failure {
+    fn new(reason: Reason, message: impl Into<String>) -> Failure {
+        Failure {
+            reason,
+            message: message.into(),
+            handled: false,
+        }
+    }
+}
+
+/// Start-up errors of the radio: `RadioStart`.
+fn radio_start(message: impl Into<String>) -> Failure {
+    Failure::new(Reason::RadioStart, message)
+}
+
 /// `home_sent` turns true once `main` has the home (its server is then up), so that a later
-/// error is not reported as "no home".
-fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), String> {
+/// error is not reported as "no home". An error that ends the run is a `Failure`; the last rung
+/// (save, restart with the reason kept) is run before it returns, once the home exists.
+fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Failure> {
     let start = Instant::now();
     let mono = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let link = Link {
-        uart: UartTransport::install(0)?,
+        uart: UartTransport::install(0).map_err(radio_start)?,
         start,
     };
-    let home = Arc::new(Mutex::new(load_home(&FatStorage::new(), wall_ms())?));
+    let home = Arc::new(Mutex::new(
+        load_home(&FatStorage::new(), wall_ms())
+            .map_err(|e| Failure::new(Reason::EngineError, e))?,
+    ));
     {
         // The recipes' timers and the orders' deadlines run on the same monotonic clock from the
         // first moment, API calls included (as `crates/host/src/serve.rs` does).
@@ -337,8 +372,10 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
             reset_reason() == ResetReason::PowerOn,
             Arc::new(mono),
         ));
+        supervisor::set_supervision(&mut guard);
         guard.start_recipes(mono(), wall_ms());
     }
+    supervisor::watch_home(&home);
     if let Some(events) = events {
         let hub = lock(&home).live();
         *home_sent = events
@@ -353,24 +390,51 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
     let mut saver = Saver::new(FatStorage::new(), wall_ms())
         .with_gate(|| CLOCK_SET.load(Ordering::SeqCst))
         .with_control(&SAVES)
-        .with_definition_delay(DEFINITION_DELAY_MS);
+        .with_definition_delay(DEFINITION_DELAY_MS)
+        .with_feed(supervisor::feed);
+    // From here the files can be saved by the last rung.
+    let result = drive(&link, &home, &mut saver, start);
+    match result {
+        Ok(()) => Ok(()),
+        Err(mut failure) => {
+            log::error!("{}", failure.message);
+            let mut save = || saver.tick(&home, wall_ms(), true);
+            supervisor::last_rung_restart(failure.reason, &failure.message, &mut save);
+            failure.handled = true;
+            Err(failure)
+        }
+    }
+}
+
+/// The radio's start and the engine's loop, after the home is loaded and the saver made.
+fn drive(
+    link: &Link,
+    home: &Arc<Mutex<Home>>,
+    saver: &mut Saver<FatStorage>,
+    start: Instant,
+) -> Result<(), Failure> {
+    let mono = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let boot = boot_pairing();
 
-    reset_radio()?;
-    // No answer at any speed: the probe said so; the engine does not start and the ESP32 stays up.
-    if find_speed(&link, start)
-        .map_err(|e| format!("radio: {e}"))?
+    reset_radio().map_err(radio_start)?;
+    // No answer at any speed: the probe said so; the box restarts (the last rung) and tries
+    // again, up to the supervisor's safe mode.
+    if find_speed(link, start)
+        .map_err(|e| radio_start(format!("radio: {e}")))?
         .is_none()
     {
-        return Ok(());
+        return Err(Failure::new(
+            Reason::RadioSilent,
+            "radio: no answer at any speed",
+        ));
     }
-    let mut radio = make_radio(&link, start).map_err(|e| format!("radio: {e}"))?;
-    let (network, foreign) = start_network(&mut radio)?;
+    let mut radio = make_radio(link, start).map_err(|e| radio_start(format!("radio: {e}")))?;
+    let (network, foreign) = start_network(&mut radio).map_err(radio_start)?;
     // Joining stays closed until the window opens, and devices are only followed while it is open.
     radio.set_following(false);
     log::info!("{}", network_line(&network, foreign));
     match boot {
-        BootPairing::Open { seconds } => lock(&home).pairing_mut().request(seconds),
+        BootPairing::Open { seconds } => lock(home).pairing_mut().request(seconds),
         other => {
             if let Some(line) = other.line() {
                 show(&line);
@@ -378,7 +442,7 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
         }
     }
 
-    start_pair_watch(&home);
+    start_pair_watch(home);
     let clocks = Clocks {
         now: Arc::new(wall_ms),
         monotonic: Arc::new(mono),
@@ -388,14 +452,17 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
     let mut slot: Option<Wired> = Some(radio);
     loop {
         let Some(radio) = slot.as_mut() else {
-            return Ok(());
+            return Err(Failure::new(
+                Reason::RadioStopped,
+                "radio: none after a restart",
+            ));
         };
         // The update's probation counts the engine's loop as healthy while it runs (spec 032 R5).
         ENGINE_RUNNING.store(true, Ordering::SeqCst);
         let ran = engine::run(
             radio,
-            &home,
-            &mut saver,
+            home,
+            saver,
             &clocks,
             stop,
             &mut fill,
@@ -405,31 +472,39 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
         ENGINE_RUNNING.store(false, Ordering::SeqCst);
         let error = match ran {
             // Stopped (the console's restart): the files due are saved first.
-            Ok(_) => return saver.tick(&home, wall_ms(), true),
-            // A storage error, or a failed measure: logged by the caller, the loop stops and the
-            // radio is left as it is.
-            Err(RunError::Other(message)) => return Err(message),
+            Ok(_) => {
+                return saver
+                    .tick(home, wall_ms(), true)
+                    .map_err(|e| Failure::new(Reason::EngineError, e));
+            }
+            // A storage error, or a failed measure: the last rung saves what it can and restarts
+            // the box.
+            Err(RunError::Other(message)) => {
+                return Err(Failure::new(Reason::EngineError, message));
+            }
             Err(RunError::Radio(error)) => error,
         };
         // A radio error restarts the radio, a few times: each failed attempt counts again.
         let mut last = error.to_string();
         loop {
-            let mut save = || saver.tick(&home, wall_ms(), false);
-            let mut finish = || lock(&home).pairing_mut().finished();
+            let mut save = || saver.tick(home, wall_ms(), false);
+            let mut finish = || lock(home).pairing_mut().finished();
             let mut reset = || {
                 if let Err(e) = reset_radio() {
                     log::error!("{e}");
                 }
             };
-            let mut find = || find_speed(&link, start);
+            let mut find = || find_speed(link, start);
             let mut listen = || -> Result<Network, RadioError> {
-                let mut radio = make_radio(&link, start)?;
+                let mut radio = make_radio(link, start)?;
                 let network = radio.listen()?;
                 radio.set_following(false);
                 slot = Some(radio);
                 Ok(network)
             };
+            let mut feed = supervisor::feed;
             let mut steps = RestartSteps {
+                feed: &mut feed,
                 save: &mut save,
                 finish_pairing: &mut finish,
                 reset: &mut reset,
@@ -440,8 +515,19 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Strin
                 show(line)
             }) {
                 Ok(Restarted::Resumed(_)) => break,
-                // The line says why; the ESP32 stays up.
-                Ok(Restarted::Stopped) => return Ok(()),
+                // The line says why; the last rung restarts the ESP32.
+                Ok(Restarted::Stopped) => {
+                    return Err(Failure::new(
+                        Reason::RadioStopped,
+                        "radio: stopped after its restarts",
+                    ));
+                }
+                Ok(Restarted::Silent) => {
+                    return Err(Failure::new(
+                        Reason::RadioSilent,
+                        "radio: no answer at any speed",
+                    ));
+                }
                 Err(error) => last = error.to_string(),
             }
         }
@@ -467,9 +553,9 @@ fn start_pair_watch(home: &Arc<Mutex<Home>>) {
     }
 }
 
-/// Removes the boot marker after `STABLE_MS` of running, on its own timer: a storage error, a radio
-/// that answers at no speed or a radio stopped after its restarts end the engine's loop, not the
-/// ESP32's run, and must not leave the marker for the next power-on.
+/// Removes the boot marker after `STABLE_MS` of running, on its own timer: the marker says "this
+/// run was stable". An error that ends the engine's loop restarts the ESP32 (spec 036), long
+/// before the marker is due, so the next boot finds it and opens no pairing window.
 fn start_marker_timer() {
     let spawned = std::thread::Builder::new()
         .name("marker".into())
@@ -486,18 +572,25 @@ fn start_marker_timer() {
     }
 }
 
-/// The engine thread's body: any error is logged, the ESP32 stays up. Without a home, `main` is
-/// told why (no server starts); once the home is sent, the server stays up and the error is only
-/// logged.
+/// The engine thread's body, on the task watchdog. Any error is logged and ends in the
+/// supervisor's last rung: the files are saved and the ESP32 restarts with the reason kept (spec
+/// 036). Without a home, `main` is told why first (no server starts). The last rung returns only
+/// when a stop was asked meanwhile: the asked restart wins.
 fn engine_thread(events: Option<Sender<Event>>) {
     start_marker_timer();
+    supervisor::subscribe();
     let mut home_sent = false;
-    if let Err(e) = run(events.as_ref(), &mut home_sent) {
-        log::error!("{e}");
+    if let Err(failure) = run(events.as_ref(), &mut home_sent)
+        && !failure.handled
+    {
+        // No home yet, so nothing to save.
+        log::error!("{}", failure.message);
         if let Some(events) = events.as_ref().filter(|_| !home_sent) {
-            let _ = events.send(Event::NoHome(e));
+            let _ = events.send(Event::NoHome(failure.message.clone()));
         }
+        supervisor::last_rung_restart(failure.reason, &failure.message, &mut || Ok(()));
     }
+    supervisor::unsubscribe();
     STOPPED.store(true, Ordering::SeqCst);
 }
 

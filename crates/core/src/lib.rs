@@ -32,5 +32,6 @@ pub mod network;
 pub mod orders;
 pub mod recipes;
 pub mod settings;
+pub mod supervisor;
 pub mod update;
 pub mod zones;

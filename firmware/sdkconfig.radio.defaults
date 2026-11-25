@@ -28,3 +28,8 @@ CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 # SNTP: `pool.ntp.org` and the time server the DHCP server gives, when it gives one.
 CONFIG_LWIP_DHCP_GET_NTP_SRV=y
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
+# The engine thread's task watchdog (spec 036 R8): 20 s (at least 5 times the longest flash save
+# the thread waits for), and a timeout restarts the chip by a panic, which the supervisor reads at
+# the next boot. The other images keep the default (a log line only).
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
+CONFIG_ESP_TASK_WDT_PANIC=y

@@ -85,6 +85,8 @@
 //! - `update/mod.rs::MAX_UPLOAD_BYTES`: the longest update file an upload may declare; it is
 //!   streamed through one 4096-byte buffer, never held (`update_memory.rs` measures a 1 MB
 //!   installation under 32 KB), so the worst case does not drive it.
+//! - `supervisor.rs::MAX_KEPT`: six restart times (48 bytes) in the supervisor's record, which
+//!   lives in RTC memory (96 bytes in all), not in the heap: nothing to drive here.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};

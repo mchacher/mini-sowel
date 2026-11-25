@@ -165,6 +165,14 @@ if want firmware; then
     # it the handshake succeeds and the client gets nothing.
     grep -aqs '^CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
       || { echo "validate: the radio build lacks CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
+    # The engine's task watchdog (spec 036 R8): 20 s, and a timeout panics (the supervisor reads
+    # it at the next boot) in the radio build; the other images keep the default (a log line).
+    grep -aqs '^CONFIG_ESP_TASK_WDT_TIMEOUT_S=20' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the radio build lacks CONFIG_ESP_TASK_WDT_TIMEOUT_S=20 (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
+    grep -aqs '^CONFIG_ESP_TASK_WDT_PANIC=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the radio build lacks CONFIG_ESP_TASK_WDT_PANIC=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
+    ! grep -aqs '^CONFIG_ESP_TASK_WDT_PANIC=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the other images' build holds CONFIG_ESP_TASK_WDT_PANIC=y: they must keep their settings" >&2; exit 1; }
     # The interface embedded is the one just built: the marker and the name of its hashed script.
     elf=target/radio/xtensa-esp32-espidf/release/solite-firmware
     grep -aqF 'solite-ui ' "$elf" || { echo "validate: the radio image holds no embedded interface (no solite-ui marker)" >&2; exit 1; }

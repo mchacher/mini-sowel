@@ -66,7 +66,9 @@ Each of the three programs starts and says which tool it is, with its version:
   2 seconds after it first sees it unsaved, so a burst of changes gives one write per file; a stop
   (the console's restart) writes at once. A power cut loses at most the definitions of those last
   2 seconds (and one loop turn) and the devices' values of the last 10 minutes (decision D40). Its
-  serial console also reads two lines (never from the network): `saves hold` (logs `saves: held,
+  serial console also reads three lines (never from the network): `panic` (logs `console: panic asked`,
+  then panics on purpose: the box restarts once with the cause `panic`, see "Supervises its
+  engine"; the box check's fault), `saves hold` (logs `saves: held,
   nothing is written until saves flush or a restart`; from then on nothing is written, every change
   stays in RAM, and a restart, the serial port being opened included, forgets the hold) and `saves
   flush` (logs `saves: flush asked`; at its next turn, once the clock is set, the engine writes each
@@ -144,13 +146,15 @@ next is tried; any other failure stops the probe with its error. Found: `radio: 
 baud`, then the `ezsp:` and `radio address:` lines; found at a speed other than 115200 it also
 warns `radio: answered at <baud> baud, RADIO_BAUD is 115200`. No answer at any speed logs
 `radio: no answer at any baud rate (115200, 460800, 921600)`; the engine does not start and the
-ESP32 stays up.
+box restarts (`radio-silent`, see "Supervises its engine").
 
 A radio error while the engine runs (link lost, an ERROR frame, a driver error) restarts the radio:
 what is due is saved, an open pairing phase ends, the reset sequence runs, the speed is probed and
 the network is resumed (never formed, no pairing window). At most 3 restarts in 10 minutes; past
-that the image logs `radio: stopped after 3 restarts in 10 min: <last error>` and stays up. A
-storage error logs and stops the loop without resetting the radio.
+that the image logs `radio: stopped after 3 restarts in 10 min: <last error>` and restarts the
+box (`radio-stopped`). A radio that answers at no speed in a restart restarts the box too
+(`radio-silent`). A storage error stops the loop without resetting the radio and restarts the box
+(`engine-error`).
 
 ### Pairs a device
 
@@ -399,6 +403,9 @@ except:
   the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file", and the backup restore's, streamed up to 2 MiB); a body
   that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 4096 bytes,
   431 (the backup's password header can need 1536 of them). A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
+- In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
+  `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`) and
+  `POST /api/v1/system/update`; a restore and a factory reset are refused too.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -1048,8 +1055,76 @@ application image of the slot, as `espflash save-image` writes it). Integers are
 - **The box** (radio image) serves the same route. One OTA thread, with a 6 KB stack in internal
   RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
   write the flash), receives them through a channel one request at a time, and ticks the probation
-  every second; a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
-  final save runs) and the box restarts, logged `restarting`. Its start lines are the host's.
+  every second (and runs the supervisor's tick); a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
+  final save runs) and the box restarts, logged `restarting`. Its start lines are the host's. A restart the supervisor makes before the confirmation
+  (a panic, a watchdog, the last rung of the ladder) rolls the image back like any other restart,
+  and an image that boots into the safe mode is not healthy (its engine's loop does not run): it
+  rolls back 300 s after its start like any image that does not confirm.
+
+### Supervises its engine
+
+The radio image watches its own engine. When the engine thread ends on an error, or stops answering,
+the whole box restarts and says why; too many restarts put the box in a **safe mode** that keeps the
+way in. Nothing of this writes the flash.
+
+- **The reasons.** Every restart has a reason, a short text kept across the restart: `radio-stopped`
+  (the radio's restart ladder refused a 4th restart in 10 minutes), `radio-silent` (the radio answers
+  at no speed), `radio-start` (any other radio failure before the loop runs), `engine-error` (the
+  home cannot be loaded, or the loop ended on a storage or data error), `panic` (the previous run
+  ended on a panic), `watchdog` (a watchdog reset the chip), `brown-out` (the supply dropped),
+  `unexpected` (a software or other reset that nothing of Solite asked for), `asked` (a restart
+  asked on purpose: the console's restart, an installed update, a restore, an update's rollback)
+  and `safe-mode-retry`. A power-on (power, reset button, USB reset) is not a restart: its cause
+  is `power-on`, and it clears everything the supervisor kept. A brown-out is shown but never
+  counted, nor are `asked` and `safe-mode-retry`.
+- **The last rung.** The radio's ladder runs first (at most 3 restarts of the radio in 10 minutes).
+  When it ends (`radio-stopped`, or `radio-silent`), when the loop ends on another error, or when
+  the start fails, the engine saves what is due once (an error is logged and does not stop the
+  restart), writes the reason, logs `supervisor: restarting the box after <reason>: <detail>`
+  and restarts the box one second later. A stop asked by the console or an update is not an error:
+  nothing is done, the asked restart wins.
+- **The record.** 24 words (96 bytes) in the ESP32's RTC slow memory, in a section the boot does not
+  initialise: it survives a software restart, a panic and a watchdog reset, and is ignored after a
+  power-on or when its magic number, version, checksum, a reason or its count is wrong. It holds
+  the pending reason, the last incident, the supervisor clock (milliseconds run since the last
+  power-on, across restarts, written every 10 s), the start of the safe mode, the times of the last
+  6 counted restarts and two counters. No NVS, no file.
+- **The boot-loop guard.** Each boot logs `supervisor: boot after <cause>, <n> restarts in the last
+  hour, <m> in the last day` (plus `, safe mode` or `, bare safe mode`). With 3 counted restarts
+  within the last 60 minutes of the supervisor clock, or 6 within 24 hours, the box enters the safe
+  mode and logs `supervisor: safe mode: the engine stays stopped, the API and updates stay up;
+  retried in <t>`. A crash in the safe mode does not end it; 3 counted restarts since it began make
+  it the **bare safe mode**, where the home's files are not even read.
+- **The safe mode.** The console, the update thread, the Wi-Fi station and the server run as usual;
+  the engine thread does not start (no radio reset, no loop, no saver, no boot marker, no pairing,
+  no recipe). The home is loaded and served, so one can log in and install an update; a home that
+  cannot be loaded is replaced in RAM by an empty one (logged), and the stored files are never
+  touched. Every request that is not a `GET` is refused with 503 but the account's and the update's;
+  a restore and a factory reset need the presence a power-on gives, so they are refused too: the
+  update is the way out over the network, otherwise a USB flash or a power-on. The first-password
+  setup follows the reset reason as always, so a safe mode never opens it. The safe mode is
+  retried: after 1 hour the first time since the power-on, 4 hours the second, 24 hours from the
+  third on, the box restarts once with the cause `safe-mode-retry`, the restart times cleared; a
+  fault that persists brings the safe mode back after 3 more restarts. A power-on or a restart
+  asked also ends it.
+- **Restarts asked.** Before each restart Solite asks for on purpose, the firmware writes `asked`:
+  the next boot counts nothing and ends a safe mode.
+- **Panics.** A panic aborts (the target's strategy); ESP-IDF prints the panic and restarts the
+  chip, and the next boot reads the reset reason `panic` and counts it. Nothing catches a panic.
+- **The watchdog.** The engine thread is subscribed to the task watchdog, whose timeout is 20
+  seconds and which restarts the chip. The engine feeds it at every read of the radio's serial link
+  (every 50 ms at most, so every radio wait), at each turn of its loop, before each file the saver
+  writes and before each step of the radio's restart ladder. What blocks without reading the radio
+  is a flash write, the longest known being the 3.8 s save of a 98 KB `devices.json`. The two idle
+  tasks stay watched with the same timeout and restart the chip too.
+- **The status.** `GET /api/v1/system/supervisor`, behind the token, answers 200 `{"mode":
+  "normal"|"safe"|"safe-bare", "bootCause": "<reason>"|"power-on", "lastIncident":
+  "<reason>"|null, "restartsLastHour": <n>, "restartsLastDay": <n>}`; `lastIncident` is the last
+  reason other than `asked` and `safe-mode-retry` since the power-on. Another method: 405. The
+  host program answers the default (`normal`, `power-on`, `null`, 0, 0). A deviation from Sowel,
+  which has no supervisor (decision D58).
+- **Not supervised.** The host program (it has no restart of its own), the image QEMU runs and the
+  box's image without the radio: only the radio image is.
 
 ### Signing a release
 
@@ -1348,3 +1423,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 031 | The colour cluster: a colour bulb's colour temperature and colour read, its colour orders sent, proposed as `light_color`; a simulated colour bulb |
 | 032 | Signed updates: a signed update file streamed into the inactive slot, a probation with automatic rollback, `--update-keygen` and `--update-sign`, a Firmware update card |
 | 035 | The full backup: one password-protected file with the home, the Zigbee network and the Wi-Fi settings, streamed both ways, checked whole before a restore replaces the home at the next start; the radio forms the restored network; a Backup card |
+| 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |

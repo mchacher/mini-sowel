@@ -482,3 +482,12 @@ fn saves_alone_or_with_other_words_is_unknown() {
         ConsoleCommand::WifiForget
     );
 }
+
+#[test]
+fn the_console_line_panic_is_the_deliberate_fault_and_nothing_else_is_taken_for_it() {
+    assert_eq!(parse_console_line(b"panic\n"), ConsoleCommand::Panic);
+    assert_eq!(parse_console_line(b"panic\r\n"), ConsoleCommand::Panic);
+    assert_eq!(parse_console_line(b"panic now"), ConsoleCommand::Unknown);
+    assert_eq!(parse_console_line(b"Panic"), ConsoleCommand::Unknown);
+    assert_eq!(parse_console_line(b"pair"), ConsoleCommand::Pair);
+}

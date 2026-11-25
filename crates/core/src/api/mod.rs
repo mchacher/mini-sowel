@@ -30,6 +30,7 @@ use crate::devices::{Random, lock, to_json};
 use crate::failure::Failure;
 use crate::home::Home;
 use crate::orders::OrderWait;
+use crate::supervisor::Mode;
 
 /// Request bodies over this many bytes are refused (413).
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -85,6 +86,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/auth/logout"),
     ("POST", "/api/v1/system/factory-reset"),
     ("GET", "/api/v1/system/version"),
+    ("GET", "/api/v1/system/supervisor"),
     ("POST", "/api/v1/system/update"),
     ("GET", "/api/v1/system/backup"),
     ("POST", "/api/v1/system/backup"),
@@ -345,6 +347,11 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
     if let Some(refusal) = auth::gate(&mut guard, request, now) {
         return Reply::Whole(refusal);
     }
+    // In safe mode nothing is accepted that would never run or never be saved (spec 036 R5); the
+    // restore (`POST /system/backup`) is refused here, before its body is read.
+    if let Some(refusal) = safe_mode_refusal(&guard, request) {
+        return Reply::Whole(refusal);
+    }
     // The update's body is a file of megabytes, streamed by the caller: no 16 KB or JSON check,
     // and the home is let go before the caller reads it.
     if is_update_request(request.method, request.path) {
@@ -361,6 +368,27 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
     }
     dispatch(&mut guard, request, now, random, true)
 }
+
+/// The 503 of the safe mode (spec 036 R5, D58): every request that is not a `GET` but the
+/// account's (`/auth/*`) and the update's (`/system/update`), while the engine is stopped. `None`
+/// otherwise.
+fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
+    if home.supervision().mode == Mode::Normal || request.method == "GET" {
+        return None;
+    }
+    let path = request.path.split(['?', '#']).next().unwrap_or("");
+    let rest = path
+        .strip_prefix(PREFIX)
+        .and_then(|rest| rest.strip_prefix('/'))?;
+    let first = rest.split('/').next().unwrap_or("");
+    if first == "auth" || rest == "system/update" {
+        return None;
+    }
+    Some(error(503, SAFE_MODE_MESSAGE))
+}
+
+/// The body's message of the safe mode's 503.
+pub const SAFE_MODE_MESSAGE: &str = "Safe mode: the engine is stopped";
 
 /// True for `/api/v1/system/backup`, with or without a query.
 fn is_backup_path(path: &str) -> bool {
@@ -476,6 +504,9 @@ fn dispatch(
     // The interface's files come before the API's checks: they take no body and no JSON.
     if let Some(reply) = static_files::route(request) {
         return reply;
+    }
+    if let Some(refusal) = safe_mode_refusal(home, request) {
+        return Reply::Whole(refusal);
     }
     // The update route is the streaming handler's: refused here, before the 16 KB and JSON checks.
     if is_update_request(request.method, request.path) {
