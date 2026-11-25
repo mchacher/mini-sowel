@@ -124,6 +124,53 @@ describe("devices page", () => {
     expect(api.count("GET /api/v1/devices")).toBe(2);
   });
 
+  it("opens the device's page when a row is clicked (spec 030, R2)", async () => {
+    await boot([device("relay", "Relay")], {}, [lamp()]);
+    fireEvent.click(within(row("Relay")).getAllByRole("cell")[2]);
+    expect(window.location.hash).toBe("#/devices/relay");
+  });
+
+  it("opens the device's page with Enter or Space on a focused row, not from an inner button", async () => {
+    await boot([device("relay", "Relay")], {}, [lamp()]);
+    const tr = row("Relay");
+    expect(tr.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(tr, { key: "Enter" });
+    expect(window.location.hash).toBe("#/devices/relay");
+    window.location.hash = "#/devices";
+    fireEvent.keyDown(tr, { key: " " });
+    expect(window.location.hash).toBe("#/devices/relay");
+    window.location.hash = "#/devices";
+    fireEvent.keyDown(within(tr).getAllByRole("button")[0], { key: "Enter" });
+    expect(window.location.hash).toBe("#/devices");
+  });
+
+  it("does not open the page on the name editor, Create equipment or Delete", async () => {
+    await boot([device("a", "Relay")], { "DELETE /api/v1/devices/a": { status: 204 } });
+    fireEvent.click(screen.getByText("Relay"));
+    expect(window.location.hash).toBe("#/devices");
+    fireEvent.click(screen.getByTitle("Edit name"));
+    fireEvent.click(screen.getByRole("textbox"));
+    expect(window.location.hash).toBe("#/devices");
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Create equipment" }));
+    expect(window.location.hash).toBe("#/devices");
+    (window.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(window.location.hash).toBe("#/devices");
+  });
+
+  it("keeps the equipment link and the room link's own address, not the device's", async () => {
+    await boot([device("relay", "Relay")], {}, [lamp()]);
+    const cell = within(row("Relay")).getAllByRole("cell")[4];
+    fireEvent.click(within(cell).getByRole("link", { name: "Lumière" }));
+    expect(window.location.hash).toBe("#/equipments/l");
+    window.location.hash = "#/devices";
+    const room = within(cell).getByRole("link", { name: "Garage" });
+    fireEvent.click(room);
+    expect(room.getAttribute("href")).toBe("#/zone/garage");
+    expect(window.location.hash).not.toBe("#/devices/relay");
+  });
+
   it("Add devices opens Discovery", async () => {
     await boot([device("a", "Relay")]);
     fireEvent.click(screen.getByRole("button", { name: "Add devices" }));

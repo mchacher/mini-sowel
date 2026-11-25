@@ -5,8 +5,9 @@
 // edit is one step with the type locked (Sowel's type change among shutter, awning and door is
 // out of scope); the pool heat pump rule, `excludeTypes` and the bound keys cut; the modal closes
 // on Escape and on a click outside. Spec 019 (decision D30): the form returns the devices ticked
-// and the devices read, and `NewEquipmentForm` sends the plan's requests; at least one device, and
-// a device that gives nothing the type uses blocks "Create" (the plan is empty); changing the type
+// and the devices read, and `NewEquipmentForm` sends the plan's requests; no device is required
+// (spec 030, decision D50, as Sowel's form: "Create" makes the equipment without bindings), but
+// devices ticked that give nothing the type uses block "Create" (the plan is empty); changing the type
 // keeps the devices ticked; the type, name and devices can be given (a device's "Create
 // equipment"); step 2 reads the devices again every 5 s while the plan is empty (also with no device
 // ticked); a type guessed without data is guessed again from each read.
@@ -97,7 +98,7 @@ export function EquipmentForm({
   const ticked = useMemo(() => pickDevices(devicesRead ?? [], deviceIds), [devicesRead, deviceIds]);
   const planEmpty = useMemo(() => computeBindingPlan(ticked, type).length === 0, [ticked, type]);
   const noDevice = deviceIds.length === 0;
-  const blocked = !initial && (noDevice || planEmpty);
+  const blocked = !initial && !noDevice && planEmpty;
 
   const handleDevicesRead = (all: DeviceWithData[]) => {
     setDevicesRead(all);
@@ -221,7 +222,7 @@ export function EquipmentForm({
               />
               {noDevice && (
                 <p className="text-small text-text-secondary">
-                  {t("equipments.form.deviceRequired")}
+                  {t("equipments.form.deviceOptional")}
                 </p>
               )}
               {!noDevice && planEmpty && devicesRead !== null && (

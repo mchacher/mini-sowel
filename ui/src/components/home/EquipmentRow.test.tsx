@@ -16,6 +16,7 @@ import {
 import { App } from "../../App";
 import { useEquipments } from "../../store/useEquipments";
 import { EquipmentRow } from "./EquipmentRow";
+import { equipment as equipmentOf, sensor } from "../../test-utils";
 
 afterEach(() => {
   cleanup();
@@ -105,5 +106,44 @@ describe("a refused order", () => {
   it("shows the translated text of a network error, not the browser's", async () => {
     await pressWith(new ApiError(0, "Failed to fetch"));
     expect(screen.getByRole("alert").textContent).toBe("Cannot reach Solite");
+  });
+});
+
+describe("the name opens the equipment's page (spec 030, R2)", () => {
+  beforeEach(() => {
+    window.location.hash = "";
+  });
+
+  it("links a light's name to its page, the power button still sends its order", async () => {
+    const onExecuteOrder = vi.fn(async () => {});
+    render(
+      <EquipmentRow
+        equipment={light("l", "Garage light", "garage", false)}
+        onExecuteOrder={onExecuteOrder}
+      />,
+    );
+    const link = screen.getByText("Garage light").closest("a")!;
+    expect(link.getAttribute("href")).toBe("#/equipments/l");
+    fireEvent.click(link);
+    expect(window.location.hash).toBe("#/equipments/l");
+    expect(onExecuteOrder).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTitle("Turn on"));
+    await vi.waitFor(() => expect(onExecuteOrder).toHaveBeenCalledWith("l", "state", "ON"));
+  });
+
+  it("links a sensor's and any other equipment's name to its page", () => {
+    render(
+      <>
+        <EquipmentRow equipment={sensor("s", "Climate", "garage")} onExecuteOrder={vi.fn()} />
+        <EquipmentRow
+          equipment={equipmentOf("d", "Front door", "door", "garage")}
+          onExecuteOrder={vi.fn()}
+        />
+      </>,
+    );
+    expect(screen.getByText("Climate").closest("a")!.getAttribute("href")).toBe("#/equipments/s");
+    expect(screen.getByText("Front door").closest("a")!.getAttribute("href")).toBe(
+      "#/equipments/d",
+    );
   });
 });

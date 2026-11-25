@@ -1,7 +1,9 @@
 // Sowel's `EquipmentCell` (ui/src/components/devices/DeviceList.tsx, Sowel commit 5da84dc1): one
 // line per equipment that uses the device, "Room › Equipment"; "—" when none. The room links to
-// its page; the equipment's name is plain text (Solite has no equipment page, spec 019, R3).
+// its page and so does the equipment's name (`#/equipments/<id>`, spec 030, R2).
 import { hashForZone } from "../../zones";
+import { hashForDetail } from "../layout/admin-nav-items";
+import { HashLink } from "../ui/HashLink";
 import type { DeviceEquipment } from "./deviceEquipments";
 
 export function EquipmentCell({ equipments }: { equipments?: DeviceEquipment[] }) {
@@ -23,7 +25,12 @@ export function EquipmentCell({ equipments }: { equipments?: DeviceEquipment[] }
               <span className="text-text-tertiary mx-0.5">›</span>
             </>
           )}
-          <span className="text-text">{eq.name}</span>
+          <HashLink
+            href={hashForDetail("equipments", eq.id)}
+            className="text-text hover:text-primary hover:underline"
+          >
+            {eq.name}
+          </HashLink>
         </span>
       ))}
     </span>

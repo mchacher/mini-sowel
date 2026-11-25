@@ -1,11 +1,17 @@
-// Ported from Sowel ui/src/store/useEquipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: the actions
-// that edit bindings (`createWithBindings` creates them from the plan, decision D30); the order timing (`useOrderTiming`, which only feeds Sowel's
-// pending-order spinners).
+// Ported from Sowel ui/src/store/useEquipments.ts (Sowel commit 5da84dc1, UI 1.87.0). The binding
+// actions are ported (spec 030: the equipment page); `createWithBindings` creates the bindings from
+// the plan, decision D30. Cuts: the order timing (`useOrderTiming`, which only feeds Sowel's
+// pending-order spinners). Added: `loaded`, true once the equipments were read once, so a page
+// does not say "not found" before the first read.
 import { create } from "zustand";
 import type { EquipmentStatus, EquipmentType, EquipmentWithDetails } from "../types";
 import {
   getEquipments,
   createEquipment as apiCreateEquipment,
+  addDataBinding as apiAddDataBinding,
+  removeDataBinding as apiRemoveDataBinding,
+  addOrderBinding as apiAddOrderBinding,
+  removeOrderBinding as apiRemoveOrderBinding,
   updateEquipment as apiUpdateEquipment,
   deleteEquipment as apiDeleteEquipment,
   executeEquipmentOrder as apiExecuteOrder,
@@ -18,6 +24,8 @@ interface EquipmentsState {
   equipments: EquipmentWithDetails[];
   loading: boolean;
   error: string | null;
+  /** True once the equipments were read successfully once. */
+  loaded: boolean;
 
   // Actions
   fetchEquipments: () => Promise<void>;
@@ -31,9 +39,16 @@ interface EquipmentsState {
     data: { name: string; type: EquipmentType; zoneId: string },
     plan: readonly PlannedBinding[],
   ) => Promise<EquipmentWithDetails>;
-  updateEquipment: (id: string, data: { name?: string; zoneId?: string }) => Promise<void>;
+  updateEquipment: (
+    id: string,
+    data: { name?: string; zoneId?: string; enabled?: boolean },
+  ) => Promise<void>;
   deleteEquipment: (id: string) => Promise<void>;
   executeOrder: (equipmentId: string, alias: string, value: unknown) => Promise<void>;
+  addDataBinding: (equipmentId: string, deviceDataId: string, alias: string) => Promise<void>;
+  removeDataBinding: (equipmentId: string, bindingId: string) => Promise<void>;
+  addOrderBinding: (equipmentId: string, deviceOrderId: string, alias: string) => Promise<void>;
+  removeOrderBinding: (equipmentId: string, bindingId: string) => Promise<void>;
   // WebSocket handlers
   handleEquipmentCreated: () => void;
   handleEquipmentUpdated: () => void;
@@ -51,12 +66,13 @@ export const useEquipments = create<EquipmentsState>((set, get) => ({
   equipments: [],
   loading: false,
   error: null,
+  loaded: false,
 
   fetchEquipments: async () => {
     set({ loading: true, error: null });
     try {
       const equipments = await getEquipments();
-      set({ equipments, loading: false });
+      set({ equipments, loading: false, loaded: true });
     } catch (err) {
       set({
         loading: false,
@@ -100,6 +116,27 @@ export const useEquipments = create<EquipmentsState>((set, get) => ({
 
   executeOrder: async (equipmentId, alias, value) => {
     await apiExecuteOrder(equipmentId, alias, value);
+  },
+
+  // The request, then the list read again at once (the page does not wait for the event).
+  addDataBinding: async (equipmentId, deviceDataId, alias) => {
+    await apiAddDataBinding(equipmentId, { deviceDataId, alias });
+    await get().fetchEquipments();
+  },
+
+  removeDataBinding: async (equipmentId, bindingId) => {
+    await apiRemoveDataBinding(equipmentId, bindingId);
+    await get().fetchEquipments();
+  },
+
+  addOrderBinding: async (equipmentId, deviceOrderId, alias) => {
+    await apiAddOrderBinding(equipmentId, { deviceOrderId, alias });
+    await get().fetchEquipments();
+  },
+
+  removeOrderBinding: async (equipmentId, bindingId) => {
+    await apiRemoveOrderBinding(equipmentId, bindingId);
+    await get().fetchEquipments();
   },
 
   // WebSocket handlers

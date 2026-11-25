@@ -1,7 +1,9 @@
 // Ported from Sowel ui/src/components/devices/DeviceList.tsx (Sowel commit 5da84dc1, UI 1.87.0),
 // cut (spec 019, R3): the table (status, name with its editor and the "New" mark, manufacturer,
 // model, the Equipment column, the actions); no sort buttons, source, battery, LQI or last-seen
-// columns, no row link (Solite has no device page); the rows come in the order given. Added:
+// columns; the rows come in the order given. A click on a row opens the device's page
+// (`#/devices/<id>`, spec 030, R2), except on the name editor, the buttons and the links (the
+// equipment and room links of the Equipment column go to their own page). Added:
 // "Create equipment" on a row with no equipment, which reads the device and opens the equipment
 // form with it ticked; delete with confirmation (a refusal shows its text under the row for 5 s,
 // a 404 removes the row).
@@ -14,6 +16,7 @@ import { useDevices } from "../../store/useDevices";
 import { useEquipments } from "../../store/useEquipments";
 import { useZones } from "../../store/useZones";
 import type { Device } from "../../types";
+import { hashForDetail } from "../layout/admin-nav-items";
 import { NewEquipmentForm } from "../equipments/NewEquipmentForm";
 import { deduceType } from "../equipments/equipment-type-meta";
 import { DeviceNameEditor } from "./DeviceNameEditor";
@@ -87,7 +90,21 @@ function Row({
 
   return (
     <>
-      <tr className={`${error ? "" : "border-b border-border-light"} last:border-b-0`}>
+      <tr
+        tabIndex={0}
+        onClick={(e) => {
+          // A button or a link inside the row (the editor's stopped before) keeps its own action.
+          if ((e.target as Element).closest("a, button, input")) return;
+          window.location.hash = hashForDetail("devices", device.id);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          if ((e.target as Element).closest("a, button, input")) return;
+          e.preventDefault();
+          window.location.hash = hashForDetail("devices", device.id);
+        }}
+        className={`${error ? "" : "border-b border-border-light"} last:border-b-0 cursor-pointer hover:bg-border-light/40`}
+      >
         <td className="py-2.5 px-3 text-center">
           <span
             role="img"
@@ -98,10 +115,13 @@ function Row({
         </td>
         <td className="py-2.5 px-3">
           <div className="flex items-center gap-2 min-w-0">
-            <DeviceNameEditor
-              name={device.name}
-              onSave={(name) => useDevices.getState().updateDeviceName(device.id, name)}
-            />
+            {/* The editor keeps its clicks: they never open the page. */}
+            <div className="min-w-0" onClick={(e) => e.stopPropagation()}>
+              <DeviceNameEditor
+                name={device.name}
+                onSave={(name) => useDevices.getState().updateDeviceName(device.id, name)}
+              />
+            </div>
             {isNew && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm bg-primary-light text-caption font-medium text-primary">
                 {t("devices.new")}

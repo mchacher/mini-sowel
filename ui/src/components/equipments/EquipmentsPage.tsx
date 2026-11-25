@@ -1,7 +1,7 @@
 // Ported from Sowel ui/src/pages/EquipmentsPage.tsx (Sowel commit 5da84dc1, UI 1.87.0). Changes (spec
 // 018): no auth, no `useWsSubscription`, no search, no singleton types; the header is written out;
-// Sowel's `EquipmentCard` (its detail page, 1288 lines, is out of scope) is a row: name, type,
-// status badge, number of devices, "Edit" and "Delete"; the form sends the plan's requests
+// Sowel's `EquipmentCard` is a row: name (a link to the equipment's page, ported in spec 030),
+// type, status badge, number of devices, "Edit" and "Delete"; the form sends the plan's requests
 // (decision D30).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -15,7 +15,8 @@ import {
   groupEquipmentsByZone,
   ZONE_PATH_SEPARATOR,
 } from "../../lib/zone-path";
-import { hashForZone } from "../../zones";
+import { hashForDetail } from "../layout/admin-nav-items";
+import { HashLink } from "../ui/HashLink";
 import { EquipmentStatusBadge } from "./EquipmentStatusBadge";
 import { EquipmentForm } from "./EquipmentForm";
 import { NewEquipmentForm } from "./NewEquipmentForm";
@@ -147,16 +148,12 @@ function EquipmentListRow({
     >
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <span className="flex-shrink-0 text-text-secondary">{TYPE_ICONS[equipment.type]}</span>
-        <a
-          href={hashForZone(equipment.zoneId)}
-          onClick={(e) => {
-            e.preventDefault();
-            window.location.hash = hashForZone(equipment.zoneId);
-          }}
+        <HashLink
+          href={hashForDetail("equipments", equipment.id)}
           className="flex-1 basis-40 min-w-0 text-body font-medium text-text truncate hover:text-primary"
         >
           {equipment.name}
-        </a>
+        </HashLink>
         <span className="text-caption text-text-secondary">
           {label ? t(label) : equipment.type}
         </span>

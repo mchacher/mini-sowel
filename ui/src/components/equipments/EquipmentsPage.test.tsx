@@ -66,10 +66,12 @@ describe("EquipmentsPage", () => {
     expect(within(rowOf("Spare")).getByText("0 devices")).toBeTruthy();
   });
 
-  it("opens the room's page when the name is clicked", () => {
+  it("opens the equipment's page when the name is clicked", () => {
     setup([garageLight()]);
-    fireEvent.click(screen.getByText("Lumière garage"));
-    expect(window.location.hash).toBe("#/zone/garage");
+    const link = screen.getByText("Lumière garage").closest("a")!;
+    expect(link.getAttribute("href")).toBe("#/equipments/l");
+    fireEvent.click(link);
+    expect(window.location.hash).toBe("#/equipments/l");
   });
 
   it("dims a disabled equipment", () => {
@@ -86,7 +88,7 @@ describe("EquipmentsPage", () => {
     expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
   });
 
-  it("opens the create form from Add equipment, Create needing a device", async () => {
+  it("opens the create form from Add equipment, Create needing no device", async () => {
     setup([garageLight()]);
     fireEvent.click(screen.getByRole("button", { name: "Add equipment" }));
     expect(screen.getByRole("dialog", { name: "Create equipment" })).toBeTruthy();
@@ -95,9 +97,11 @@ describe("EquipmentsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next: Select devices" }));
     await waitFor(() => expect(screen.queryByText("Loading devices...")).toBeNull());
     expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(
-      true,
+      false,
     );
-    expect(screen.getByText("Choose at least one device")).toBeTruthy();
+    expect(
+      screen.getByText("You can also add devices later from the equipment's page"),
+    ).toBeTruthy();
   });
 
   it("edits the name and the room with a PUT", async () => {

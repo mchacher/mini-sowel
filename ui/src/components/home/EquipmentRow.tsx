@@ -2,6 +2,7 @@
 // about 35 modules: every control of Sowel). One row of an equipment, with Sowel's row classes:
 // a `light_onoff` has Sowel's LightControl (compact), a `sensor` Sowel's SensorValues, any other
 // type its name, its icon and its status badge. A disabled equipment is dimmed, without control.
+// The name is a link to the equipment's page (spec 030).
 import { useEffect, useRef, useState } from "react";
 import { Box, Lightbulb } from "lucide-react";
 import { ApiError } from "../../api/client";
@@ -12,6 +13,8 @@ import { EquipmentStatusBadge } from "../equipments/EquipmentStatusBadge";
 import { LightControl } from "../equipments/LightControl";
 import { SensorValues } from "../equipments/SensorValues";
 import { relayStateOn } from "../equipments/bindingUtils";
+import { hashForDetail } from "../layout/admin-nav-items";
+import { HashLink } from "../ui/HashLink";
 import { getAllBatteryBindings, getSensorBindings, getSensorIcon } from "../equipments/sensorUtils";
 
 /** How long the text of a refused order stays under the equipment, in milliseconds. */
@@ -86,7 +89,12 @@ export function EquipmentRow({
           {icon(equipment)}
         </span>
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <span className="text-body font-medium text-text truncate">{equipment.name}</span>
+          <HashLink
+            href={hashForDetail("equipments", equipment.id)}
+            className="text-body font-medium text-text truncate hover:text-primary"
+          >
+            {equipment.name}
+          </HashLink>
           <EquipmentStatusBadge status={equipment.status} reason={equipment.statusReason} />
         </div>
         {values && <div className="flex items-center gap-3 min-w-0">{values}</div>}

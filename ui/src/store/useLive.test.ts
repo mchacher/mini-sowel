@@ -7,6 +7,7 @@ import {
   homeRoutes,
   installFakeWebSocket,
   device,
+  deviceWithData,
   mockApi,
   resetStores,
   zone,
@@ -15,6 +16,7 @@ import { connect, reconnectDelay, useLive } from "./useLive";
 import { useAuth } from "./useAuth";
 import { useZoneAggregation } from "./useZoneAggregation";
 import { useDevices } from "./useDevices";
+import { useDeviceDetail } from "./useDeviceDetail";
 import { usePairing } from "./usePairing";
 
 let api: ReturnType<typeof mockApi>;
@@ -112,6 +114,20 @@ describe("live store", () => {
     FakeWebSocket.last.receive({ type: "equipment.removed" });
     await vi.advanceTimersByTimeAsync(1500);
     expect(api.count("GET /api/v1/equipments")).toBeGreaterThan(equipments);
+  });
+
+  it("a reconnection reads the open device page again, with no spinner", async () => {
+    api = mockApi({
+      ...homeRoutes({ zones: [zone("root", "Home")] }),
+      "GET /api/v1/devices/zb": { body: deviceWithData("zb", "ZBMINIR2", [["t", "temperature"]]) },
+    });
+    await useDeviceDetail.getState().load("zb");
+    expect(api.count("GET /api/v1/devices/zb")).toBe(1);
+    connect();
+    FakeWebSocket.last.open();
+    expect(useDeviceDetail.getState().loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.count("GET /api/v1/devices/zb")).toBe(2);
   });
 
   it("reconnects after 1 s, 2 s, 4 s... capped at 30 s, and every open refetches", async () => {

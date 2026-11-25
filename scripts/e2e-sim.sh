@@ -2,7 +2,9 @@
 # End-to-end test of the simulated path (spec 019, J1 and J2), with no human: starts the host on
 # the demo garage in the simulator with an empty data folder, then drives the interface in a
 # headless Chromium (Playwright, tools/e2e): zone, Discovery, two equipments, Devices, the garage
-# page, the API, a reload. Prints one verdict line; the screenshots of each step are kept in
+# page, the API, a reload, the equipment page (enable, bindings), the device
+# page, screenshots of the pages in the dark and Hybrid themes.
+# Prints one verdict line; the screenshots of each step are kept in
 # $E2E_SHOTS (a folder in $TMPDIR by default, never in the repository).
 #
 #   sh scripts/e2e-sim.sh [--port N]

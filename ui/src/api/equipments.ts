@@ -1,4 +1,4 @@
-// Ported from Sowel ui/src/api/equipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: everything but `getEquipments`, `createEquipment`, `addDataBinding`, `addOrderBinding`, `updateEquipment`, `deleteEquipment` and `executeEquipmentOrder`.
+// Ported from Sowel ui/src/api/equipments.ts (Sowel commit 5da84dc1, UI 1.87.0). Cuts: everything but `getEquipments`, `createEquipment`, `addDataBinding`, `removeDataBinding`, `addOrderBinding`, `removeOrderBinding`, `updateEquipment` (`enabled` included), `deleteEquipment` and `executeEquipmentOrder`; `getEquipment` is not needed (the store holds every equipment).
 import type {
   DataBinding,
   Equipment,
@@ -40,6 +40,12 @@ export async function addDataBinding(
   });
 }
 
+export async function removeDataBinding(equipmentId: string, bindingId: string): Promise<void> {
+  return fetchJSON<void>(`${API_BASE}/equipments/${equipmentId}/data-bindings/${bindingId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function addOrderBinding(
   equipmentId: string,
   data: { deviceOrderId: string; alias: string },
@@ -50,9 +56,15 @@ export async function addOrderBinding(
   });
 }
 
+export async function removeOrderBinding(equipmentId: string, bindingId: string): Promise<void> {
+  return fetchJSON<void>(`${API_BASE}/equipments/${equipmentId}/order-bindings/${bindingId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function updateEquipment(
   id: string,
-  data: { name?: string; zoneId?: string },
+  data: { name?: string; zoneId?: string; enabled?: boolean },
 ): Promise<Equipment> {
   return fetchJSON<Equipment>(`${API_BASE}/equipments/${id}`, {
     method: "PUT",

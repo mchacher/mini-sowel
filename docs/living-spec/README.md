@@ -443,8 +443,9 @@ and a person at the box confirms (decisions D47 to D49).
 
 As in Sowel, nothing acts on a device directly: a **zone** holds **equipments**, and an equipment
 binds device data and orders under **aliases**. A device has no room of its own: it is in the
-rooms of the equipments that bind it. Zones and equipments are also made from the interface (see
-"Shows the home in the browser").
+rooms of the equipments that bind it. Zones and equipments are also made from the interface, and an
+equipment is completed from it: its bindings added and removed one by one, its devices replaced,
+enabled and disabled (see "Shows the home in the browser").
 
 - **Zones**: a tree under the root zone `Maison` (id `00000000-0000-0000-0000-000000000001`,
   always present). `GET/POST /api/v1/zones`, `GET/PUT/DELETE /api/v1/zones/:id` with Sowel's
@@ -641,7 +642,8 @@ prints `interface: <folder> not found, run npm run build in ui/`. `cd ui && npm 
 it on `http://localhost:5173` with the API of a host running on port 8080. The interface pairs
 the devices (Discovery), makes the rooms (Topology) and the equipments (Equipments, a room's "Add
 equipment", a device's "Create equipment"), sets the recipes (a room's Recipes panel) and the home's location and time zone (Settings), as well
-as showing them. The interface also opens at
+as showing them. It also shows an equipment's page (its values, devices and bindings, completed or
+changed one by one, enabled or disabled) and a device's page (its data and orders). The interface also opens at
 `http://<box address>/` or `http://solite-xxxxxx/` (when the router resolves DHCP names), from the
 copy embedded in the radio image at build time.
 
@@ -659,12 +661,13 @@ copy embedded in the radio image at build time.
   token and reconnects.
 - **Sidebar**: on a phone, behind a menu button at the top, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
-  Topology, Discovery, Settings; open on an administration page, opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
+  Topology, Discovery, Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments.
 - **The room**: its name; Sowel's pills (temperature, humidity, luminosity, motion) and lights
   line ("1 light on"); its equipments in Sowel's order: a light with its power button, a sensor
   with its values, any other equipment with its name, icon and status badge; a disabled one
-  dimmed without control; an "Add equipment" button opens the equipment form with the room chosen.
+  dimmed without control; the equipment's name opens its page (the light's button and the values
+  keep working as before); an "Add equipment" button opens the equipment form with the room chosen.
   "No room yet: create one in the Topology page" when only the home's root exists and it holds no equipment; "No equipment
   in this room".
 - **The room's recipes**: under its equipments, the **Recipes** panel (when the host has a
@@ -689,8 +692,23 @@ copy embedded in the radio image at build time.
   then once more after 1 s).
 - **Devices**: `#/devices`: every device by name, with its status, name (editable), manufacturer,
   model and Equipment column ("Room › Equipment" for each equipment that binds it, the room a link
-  to its page; "—" when none); "Create equipment" on a device with none; delete (confirmed; a
-  refusal shows its text for 5 s); "Add devices" opens Discovery. A device has no room select.
+  to its page, the equipment's name a link to its own page; "—" when none); "Create equipment" on
+  a device with none; delete (confirmed; a refusal shows its text for 5 s); "Add devices" opens
+  Discovery. A click on a row opens the device's page, except on the name editor, "Create
+  equipment", delete and the links, which keep their action. A device has no room select.
+- **Device page** (`#/devices/<id>`): a back link "Devices"; a radio icon, the name (editable, as
+  on the list) and the status badge (online, offline, unknown), read like the list's, so a rename
+  and a status change show at once. The information: manufacturer and model, the source device id,
+  the IEEE address, when it was last seen ("never" when it was not) and when it was created; a
+  field the device does not give is left out. The **Data**: key, category, value with its unit ("—"
+  when none) and when it was updated, sorted by category then key ("No data" when empty); the
+  **Orders** (only when the device has some): key, type and range (min to max with the unit, or
+  the values of an enumeration). It follows `device.data.updated` live, and a
+  `device.removed` for it shows "Device not found". **Delete** (confirmed; the device stays
+  in the Zigbee network) goes back to the list; a refusal (for example "Device is being paired")
+  shows its text. An unknown device shows "Device not found" with the back link; another failure
+  shows its text and "Retry". A malformed or empty id (`#/devices/%`, `#/devices/`) shows the
+  list.
 - **Discovery** (`#/discovery/<integration>`, Zigbee's is `#/discovery/solite`): the integration's
   name as a heading (Zigbee), a tab bar only past one integration; "Add a device" opens pairing for 180 s (a countdown from the route's
   `remaining`, and "Stop"); the devices discovered while the screen is open appear first, marked
@@ -699,10 +717,13 @@ copy embedded in the radio image at build time.
 - **Topology** (`#/zones`): the tree from `Maison`; add a zone (under the root) or a sub-zone; edit
   its name, parent (never under itself or a descendant) and description; delete it (confirmed;
   refused with Sowel's text when it has sub-zones or equipments, shown 5 s). The root is renamed but never deleted or moved.
-- **Equipments** (`#/equipments`): grouped by room, each with its type, status and number of
-  devices; "Add equipment" in two steps: type (light on/off, dimmable light, colour light,
-  shutter, sensor, switch, thermostat, button), name and room, then the devices (at least one; those ticked first,
-  then the compatible ones, all on demand); only what the type uses is bound, under Sowel's names
+- **Equipments** (`#/equipments`): grouped by room, each with its name (a link to the equipment's
+  page), type, status and number of devices; "Add equipment" in two steps: type (light on/off,
+  dimmable light, colour light, shutter, sensor, switch, thermostat, button), name and room, then
+  the devices (those ticked first, then the compatible ones, all on demand); none is needed: with
+  none ticked, "Create" makes the equipment without bindings and its page opens, the hint under the
+  list saying devices can be added later from that page; devices ticked that give nothing the type
+  uses still block "Create". Only what the type uses is bound, under Sowel's names
   (`state`, `brightness`, `position`, `battery`; `battery_2` for a second one), one request per
   binding after the equipment's; if one is refused the equipment is deleted again and the form
   shows the text; edit the name and room; delete (confirmed). A device's "Create equipment" opens
@@ -711,6 +732,51 @@ copy embedded in the radio image at build time.
   offer (made through the API, `door`...) keeps its type when edited, shown as written; the room is chosen there. A refusal keeps the form open with its
   text. At most 64 devices chosen; a warning when they give more than
   16 values, of which only 16 are bound.
+- **Equipment page** (`#/equipments/<id>`): a back link to the equipment's room ("Equipments" when
+  its room is unknown); the header: the type's icon, the name, the status badge (with its reason),
+  and under it the type, the room and "Disabled" when it is, with an **Edit** button (name and
+  room, the type locked). **Controls**, only while it is enabled: a light, plug or switch whose
+  on/off order is bound has its power button (`ON`/`OFF`; a refusal shows its text for 5 s); an
+  equipment with sensor data shows the values the room's row shows, also when disabled. The
+  **Configuration** card, in this order:
+  - **Activation**: "Enabled" or "Disabled", and, opened, a switch that sends `enabled` to the host
+    and waits for its answer; a refusal shows the host's text in the row and the switch goes
+    back.
+  - **Devices**: closed at first, the number of devices bound; opened, each with its name (a link
+    to its page), when it was last seen ("never" when it was not) and "<n> data · <m> orders"
+    bound to it; "No device" when none. **Change devices** (or "Add" with none) opens a dialog with
+    the creation form's device list for the equipment's type, nothing ticked at first: "Save"
+    removes every binding, then writes what the type uses from the devices ticked (under Sowel's
+    names, at most 16 of each kind), one request after the other. The first refusal stops it and
+    shows the host's text; what was written so far stays (the bindings list shows it). "Save" stays
+    disabled with no device ticked or when the devices give nothing the type uses; for a type with
+    no binding rules (one of Sowel's 23 others) it says "This type is completed binding by
+    binding".
+  - **Bindings**: closed at first, the total count; opened, the data bindings (alias, category,
+    device, key, value with its unit, "—" when none) and the order bindings (alias, type, device,
+    key), each list with an "Add" button and, on each row, a remove button (on hover, always on a
+    touch screen) that removes it at once, without confirmation; a refusal shows its text for 5 s
+    under the list; "None" for an empty list. "Add" opens a dialog: the devices, then the device's
+    data (or orders) with their key, category or type and value; a click picks one and fills the
+    alias with Sowel's name for it (`state`, `brightness`, `battery`...), editable. "Add" sends it
+    with the alias trimmed; nothing is sent for an empty alias, an alias the equipment already
+    uses in that kind ("already in use") or one over 32 characters ("At most 32 characters"); the
+    host's refusal (the 17th binding, a device item gone) shows in the dialog, which stays open.
+    When the devices bound give data or orders the type uses and the equipment does not bind
+    (read only once the section is opened, one device after the other, a device that cannot be
+    read skipped), a banner "<n> new data points available" has a "Review" button: a dialog lists
+    them all ticked (alias, data or order, device, key), "Add <n>" writes the ticked ones one after
+    the other, the first refusal stops it and shows its text, and what was written leaves the list.
+    Removing a binding a recipe needs disables that recipe (the core's rule: a motion light whose
+    light loses its `state` order binding is disabled), and putting the binding back does not
+    enable it again: it is enabled again from the room's Recipes panel.
+  - **Delete equipment** (confirmed): goes back to the list; a refusal shows its text.
+
+  An id the equipments do not hold shows "Equipment not found" with the back link (nothing before
+  the first read; when the equipments cannot be read, the error and "Retry"); an equipment deleted
+  while its page is open shows the same. Values, status, bindings and the enabled state follow the
+  equipment events. A malformed or empty id (`#/equipments/%`, `#/equipments/`) shows the list.
+  The dialogs close on Escape and on a click outside.
 - **Settings** (`#/settings`): the **Home** card (Sowel's): name, latitude, longitude (a typed `,`
   becomes `.`), sunrise and sunset offsets, and the time zone, picked in the list (`UTC` when
   unset); Save shows when something changed and sends the six keys; a refusal shows the host's

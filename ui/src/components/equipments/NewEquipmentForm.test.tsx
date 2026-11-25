@@ -6,6 +6,7 @@ import { fixtures, light, mockApi, resetStores, zone, type Route } from "../../t
 import { NewEquipmentForm } from "./NewEquipmentForm";
 
 beforeEach(() => {
+  window.location.hash = "";
   useZones.setState({
     tree: [zone("root", "Home", [zone("garage", "Garage", [], "root")])],
     loading: false,
@@ -142,5 +143,25 @@ describe("NewEquipmentForm", () => {
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(api.count(`POST ${EQ}`)).toBe(1);
+  });
+
+  it("creates the equipment alone with no device, and opens its page", async () => {
+    const { api, onClose } = setup([fixtures.zbminir2()]);
+    await fill("Test", "sensor", []);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(write(api)).toEqual([
+      { key: `POST ${EQ}`, body: { name: "Test", type: "sensor", zoneId: "garage" } },
+    ]);
+    expect(window.location.hash).toBe("#/equipments/new");
+  });
+
+  it("does not open the page when devices were ticked", async () => {
+    window.location.hash = "";
+    const { onClose } = setup([fixtures.zbminir2()]);
+    await fill("Lumière", "light_onoff", ["ZBMINIR2"]);
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(window.location.hash).toBe("");
   });
 });

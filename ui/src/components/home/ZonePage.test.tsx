@@ -148,7 +148,7 @@ describe("ZonePage", () => {
     expect((screen.getByLabelText("Zone") as HTMLSelectElement).value).toBe("garage");
   });
 
-  it("keeps Create disabled until a device is ticked, from Add equipment", async () => {
+  it("keeps Create enabled with no device, from Add equipment", async () => {
     mockApi({ "GET /api/v1/devices": { body: [fixtures.zbminir2()] } });
     useZones.setState({ tree: [zone("root", "Home", [garage])] });
     render(
@@ -159,8 +159,10 @@ describe("ZonePage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next: Select devices" }));
     await waitFor(() => expect(screen.queryByText("Loading devices...")).toBeNull());
     const create = screen.getByRole("button", { name: "Create" }) as HTMLButtonElement;
-    expect(create.disabled).toBe(true);
-    expect(screen.getByText("Choose at least one device")).toBeTruthy();
+    expect(create.disabled).toBe(false);
+    expect(
+      screen.getByText("You can also add devices later from the equipment's page"),
+    ).toBeTruthy();
     fireEvent.click(screen.getByLabelText("ZBMINIR2"));
     expect(create.disabled).toBe(false);
   });

@@ -7,6 +7,8 @@ import {
   openSocket,
   storeSession,
   aggregate,
+  device,
+  deviceWithData,
   homeRoutes,
   installFakeWebSocket,
   light,
@@ -14,6 +16,7 @@ import {
   resetStores,
   sensor,
   zone,
+  type Route,
 } from "./test-utils";
 
 beforeEach(() => {
@@ -37,8 +40,8 @@ const tree = () => [
 
 const nav = () => screen.getByRole("navigation");
 
-async function boot(home: Parameters<typeof homeRoutes>[0]) {
-  const api = mockApi(homeRoutes(home));
+async function boot(home: Parameters<typeof homeRoutes>[0], extra: Record<string, Route> = {}) {
+  const api = mockApi({ ...homeRoutes(home), ...extra });
   storeSession();
   render(<App />);
   await openSocket();
@@ -56,7 +59,10 @@ describe("App", () => {
       ],
     });
     expect(await screen.findByRole("heading", { level: 1, name: "Garage" })).toBeTruthy();
-    const links = screen.getAllByRole("link");
+    // The zone tree's links, not the equipment names (links to their pages) of the room.
+    const links = within(nav())
+      .getAllByRole("link")
+      .filter((l) => (l.getAttribute("href") ?? "").startsWith("#/zone/"));
     expect(links.map((l) => l.textContent)).toEqual(["Home", "Garage", "Workshop", "House"]);
     const padding = (name: string) =>
       (within(nav()).getByText(name).closest("a")!.parentElement as HTMLElement).style.paddingLeft;
@@ -275,6 +281,46 @@ describe("App", () => {
       expect(marked).toHaveLength(1);
     },
   );
+
+  it("shows the equipment's page at #/equipments/<id>, Equipments marked in the sidebar", async () => {
+    window.location.hash = "#/equipments/l";
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    expect(await screen.findByRole("heading", { level: 1, name: "House light" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "Configuration" })).toBeTruthy();
+    expect(
+      within(nav()).getByRole("link", { name: "Equipments" }).getAttribute("aria-current"),
+    ).toBe("page");
+    expect(screen.queryByRole("heading", { level: 1, name: "Equipments" })).toBeNull();
+  });
+
+  it("shows the device's page at #/devices/<id>, Devices marked in the sidebar", async () => {
+    window.location.hash = "#/devices/dev-1";
+    await boot(
+      {
+        zones: tree(),
+        equipments: [light("l", "House light", "house", false)],
+        devices: [device("dev-1", "Relay")],
+      },
+      { "GET /api/v1/devices/dev-1": { body: deviceWithData("dev-1", "Relay", []) } },
+    );
+    expect(await screen.findByRole("heading", { level: 2, name: "Data" })).toBeTruthy();
+    expect(screen.getByText("Relay")).toBeTruthy();
+    expect(within(nav()).getByRole("link", { name: "Devices" }).getAttribute("aria-current")).toBe(
+      "page",
+    );
+    expect(screen.queryByRole("heading", { level: 1, name: "Devices" })).toBeNull();
+  });
+
+  it.each([
+    ["#/equipments/%", "Equipments"],
+    ["#/equipments/", "Equipments"],
+    ["#/devices/%", "Devices"],
+    ["#/devices/", "Devices"],
+  ])("shows the list at the malformed address %s", async (hash, title) => {
+    window.location.hash = hash;
+    await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
+    expect(await screen.findByRole("heading", { level: 1, name: title })).toBeTruthy();
+  });
 
   it.each(["#/discovery", "#/discovery/unknown"])(
     "shows Zigbee's Discovery at %s",
