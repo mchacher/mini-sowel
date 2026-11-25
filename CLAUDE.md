@@ -64,7 +64,7 @@ cargo test --workspace [-- --include-ignored]     # Rust tests (core, host); the
 cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.tsx   # one Rust, one UI test file
 cd tools/z2m-coverage && npm run report          # the Zigbee2MQTT coverage report
 sh scripts/qemu.sh                               # the engine run in the firmware, in Espressif's QEMU
-sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them)
+sh scripts/box.sh identify|log                   # the Dongle Max over USB, read-only (backup, restore, flash, wifi: the user runs them, or says yes; `wifi --from-file ~/.config/solite/wifi.env` puts the Wi-Fi back with no terminal)
 sh scripts/box.sh saves --budget <n> -- <command>  # one test on the box, saves held then flushed once (D39: no loop on the box)
 sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
 sh scripts/box-session.sh --yes-flash --backup <file> | --api-only <port>  # the box session in one pass (the user types it, D55) | its API checks on the Mac

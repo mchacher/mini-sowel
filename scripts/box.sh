@@ -6,7 +6,7 @@
 #   sh scripts/box.sh backup --out <folder> [--dry-run]
 #   sh scripts/box.sh restore <backup file> [--dry-run]
 #   sh scripts/box.sh flash --image box|sim|radio [--backup <backup file>] [--keep-storage] [--dry-run]
-#   sh scripts/box.sh wifi [--forget] [--port <device>]
+#   sh scripts/box.sh wifi [--forget] [--from-file <settings file>] [--port <device>]
 #   sh scripts/box.sh pair [--port <device>]   (opens the pairing window for 180 s, on the radio image)
 #   sh scripts/box.sh log --image box|sim|radio [--seconds <n>] [--replug] [--expect-kept]
 #   sh scripts/box.sh log --from-file <log> --image box|sim|radio [--expect-kept]   (no port)
@@ -37,7 +37,10 @@
 # `flash --image radio --keep-storage` erases nvs and otadata only: the home, the network's backup
 # and the Wi-Fi settings (the files of `storage`) stay. `wifi` asks on the terminal for the Wi-Fi
 # network's name and password (echo off, never shown, logged or kept) and sends them to the radio
-# image's serial console (spec 022 R9); `wifi --forget` removes them.
+# image's serial console (spec 022 R9); `wifi --forget` removes them. `wifi --from-file <file>` reads them
+# from a file of the user's, outside the repository and readable by its owner only, instead (the lines
+# `SOLITE_WIFI_SSID=` and `SOLITE_WIFI_PASSWORD=`, read as text), so that a run with no terminal can put
+# the Wi-Fi back when the box loses it.
 #
 # Exit codes: 0 done, 1 failed or refused at the prompt, 2 wrong usage or port, 3 the box is
 # unfit (secure boot, flash encryption, chip revision below 3, flash not 16 MB), 4 no answer from
@@ -875,6 +878,28 @@ cmd_wifi() {
     resolve_port
     code=0
     : | console_exchange "$PORT" forget || code=$?
+    exit "$code"
+  fi
+  if [ -n "$FROM_FILE" ]; then
+    # The settings come from a file the user made outside the repository (mode 600), never from an
+    # argument: two lines `SOLITE_WIFI_SSID=<name>` and `SOLITE_WIFI_PASSWORD=<password>`, read as
+    # text, never sourced. The values go to the console as the terminal's would and are hidden in
+    # what the script prints.
+    [ -f "$FROM_FILE" ] || { echo "box: no Wi-Fi settings file at $FROM_FILE, nothing done" >&2; exit 1; }
+    case "$(cd "$(dirname "$FROM_FILE")" && pwd -P)/" in
+      "$ROOT"/*) echo "box: the Wi-Fi settings file is inside the repository, nothing done" >&2; exit 1 ;;
+    esac
+    # Group and other permission bits of `ls -ld` (`-rw-------`: characters 5 to 10), portable.
+    others=$(ls -ld "$FROM_FILE" | cut -c5-10)
+    [ "$others" = "------" ] || { echo "box: the Wi-Fi settings file must be readable by its owner only (chmod 600), nothing done" >&2; exit 1; }
+    resolve_port
+    name=$(sed -n 's/^SOLITE_WIFI_SSID=//p' "$FROM_FILE" | head -n 1 | tr -d '\r')
+    pass=$(sed -n 's/^SOLITE_WIFI_PASSWORD=//p' "$FROM_FILE" | head -n 1 | tr -d '\r')
+    [ -n "$name" ] || { echo "box: no SOLITE_WIFI_SSID in $FROM_FILE, nothing sent" >&2; exit 1; }
+    code=0
+    printf '%s\n%s\n' "$name" "$pass" | console_exchange "$PORT" set || code=$?
+    name=
+    pass=
     exit "$code"
   fi
   if ! (exec </dev/tty) 2>/dev/null; then
