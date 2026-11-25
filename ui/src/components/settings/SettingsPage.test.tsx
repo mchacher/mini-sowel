@@ -15,6 +15,7 @@ import { SettingsPage } from "./SettingsPage";
 import { App } from "../../App";
 
 const ROOT = "00000000-0000-0000-0000-000000000001";
+const VERSION = { current: "0.1.0", latest: null, updateAvailable: false, releaseUrl: null };
 const ZONES = ["UTC", "Europe/Paris", "America/New_York"];
 
 beforeEach(() => {
@@ -35,6 +36,7 @@ async function setup(settings: Record<string, string> = {}, routes: Record<strin
     "GET /api/v1/settings/timezones": { body: ZONES },
     "GET /api/v1/zones": { body: [zone(ROOT, "Home")] },
     "GET /api/v1/zones/aggregation": { body: {} },
+    "GET /api/v1/system/version": { body: VERSION },
     ...routes,
   });
   render(<SettingsPage />);
@@ -291,5 +293,72 @@ describe("SettingsPage, factory reset card", () => {
     expect(await screen.findByText("Press the button on the box, then try again")).toBeTruthy();
     expect(useAuth.getState().isAuthenticated).toBe(true);
     expect(localStorage.getItem("sowel_refresh_token")).toBe("refresh-0");
+  });
+});
+
+describe("SettingsPage, Update card", () => {
+  const sup = () => new File(["SUP"], "solite.sup");
+  const choose = (file: File) =>
+    fireEvent.change(screen.getByLabelText("Update file"), { target: { files: [file] } });
+  const install = () => screen.getByRole("button", { name: /^Install/ }) as HTMLButtonElement;
+
+  it("shows the running version", async () => {
+    await setup();
+    expect(await screen.findByText("Running version: 0.1.0")).toBeTruthy();
+  });
+
+  it("keeps Install disabled until a file is chosen", async () => {
+    await setup();
+    expect(install().disabled).toBe(true);
+    choose(sup());
+    await waitFor(() => expect(install().disabled).toBe(false));
+  });
+
+  it("posts the file as octet-stream with the token, shows the message and the reload line", async () => {
+    storeSession();
+    const api = await setup(
+      {},
+      { "POST /api/v1/system/update": { body: { message: "Installed 0.2.0, restarting" } } },
+    );
+    choose(sup());
+    fireEvent.click(install());
+    expect(await screen.findByText("Installed 0.2.0, restarting")).toBeTruthy();
+    expect(screen.getByText("The box restarts; reload the page in a minute.")).toBeTruthy();
+    const at = api.calls.findIndex((c) => c.key === "POST /api/v1/system/update");
+    const call = api.calls[at]!;
+    expect(api.headersOf[at]!["Content-Type"]).toBe("application/octet-stream");
+    expect(api.headersOf[at]!["Authorization"]).toMatch(/^Bearer /);
+    expect(call.body).toBeInstanceOf(File);
+  });
+
+  it("shows the error text of a refused file, no reload line", async () => {
+    await setup(
+      {},
+      { "POST /api/v1/system/update": { status: 400, body: { error: "Bad signature" } } },
+    );
+    choose(sup());
+    fireEvent.click(install());
+    expect(await screen.findByText("Bad signature")).toBeTruthy();
+    expect(screen.queryByText("The box restarts; reload the page in a minute.")).toBeNull();
+  });
+
+  it("shows Installing… and disables the button while the upload runs", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await setup(
+      {},
+      {
+        "POST /api/v1/system/update": async () => {
+          await gate;
+          return { body: { message: "Installed 0.2.0, restarting" } };
+        },
+      },
+    );
+    choose(sup());
+    fireEvent.click(install());
+    const busy = await screen.findByRole("button", { name: "Installing…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    release();
+    expect(await screen.findByText("Installed 0.2.0, restarting")).toBeTruthy();
   });
 });

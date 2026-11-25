@@ -132,7 +132,7 @@ impl Server {
                 (200, serde_json::from_str(&text).unwrap())
             }
             Reply::Static(_) => (200, Value::Null),
-            Reply::Order(_) => (202, Value::Null),
+            Reply::Order(_) | Reply::Update => (202, Value::Null),
         }
     }
 

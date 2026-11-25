@@ -18,3 +18,7 @@
 .claude/settings.local.json
 # System
 .DS_Store
+
+# Update signing keys and signed update files (spec 032)
+*.update-key
+*.sup

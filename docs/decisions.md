@@ -913,3 +913,67 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (`src/shared/constants.ts`, `binding-candidates.test.ts`), with Zigbee2MQTT's payload; one
   update per colour keeps clients and recipes from seeing a half-changed colour; reading the
   capabilities is a new step of the pairing setup, left for later (inbox).
+
+## D52: Updates are signed with Ed25519 over a header carrying the image's SHA-256; the key is given at build time
+
+- **Date**: 2026-11-25 (spec 032, decided in an autonomous run, for the user's review)
+- **Choice**: an update is one file (`.sup`): a 128-byte header (magic `SOLITEUP`, format 1,
+  version as three u16, image length, the image's SHA-256), whose first 64 bytes are signed with
+  Ed25519 (RFC 8032, checked with `ed25519-dalek`'s `verify_strict`, small-order keys refused),
+  then the image. The program checks the signature and the version before writing anything, then
+  hashes the image as it streams it into the inactive slot, and marks it bootable only when the
+  digest matches. The public key is the build-time variable `SOLITE_UPDATE_PUBLIC_KEY` (64 hex),
+  read by the host and the firmware with `option_env!`; a build without it refuses updates (503).
+  The private key is made by `solite-host --update-keygen` into a file outside any git working
+  tree, and used by `--update-sign`; it is never in the repository, and the tests make their key
+  pairs at run time.
+- **Why**: signing a small header rather than the image lets the box refuse a forged file before
+  erasing a byte and verify a 4 MB image with a 4 KB buffer (Ed25519 needs its whole message;
+  the prehashed variant brings nothing over a signed digest). Ed25519: small keys and signatures,
+  fast verification without tables, a pure-Rust crate that builds for the Xtensa target, and
+  `sha2` already in the core. The key at build time, not in a file of the box, so that a reset
+  data partition cannot swap it. ESP-IDF's Secure Boot V2 (and flash encryption) would also
+  protect against a USB flash, but it burns eFuses irreversibly and would end the Dongle Max's
+  return to its original firmware (D6): it stays in the inbox, the update's own signature protects
+  the channel the true north opens (updates from afar).
+- **Rejected**: RSA-PSS (keys and signatures ten times larger, slower on the ESP32); ESP-IDF's
+  signed app verification without Secure Boot (needs the ECDSA/RSA scheme tied to the
+  bootloader's settings, and a flash to change); a key file on the data partition (a factory
+  reset or a lost partition would change who can update the box).
+
+## D53: Sowel's `POST /api/v1/system/update` takes the signed file as its body; `GET /api/v1/system/version` as a subset
+
+- **Date**: 2026-11-25 (spec 032, decided in an autonomous run, for the user's review)
+- **Choice**: the update is uploaded to Sowel's route `POST /api/v1/system/update`, behind the
+  token of spec 029, with the signed file as its body (`application/octet-stream`), streamed
+  without the 16 KB body limit of the other routes; it answers Sowel's `{success, message}`, and
+  Sowel's errors `{error}` (409 `Update already in progress`, 503 when updates cannot run). One
+  installation at a time; none while the running image is on probation (the inactive slot holds the
+  image to fall back to) or while an installed update waits for the restart. A version equal to or
+  older than the running one is refused (no downgrade through the API). `GET
+  /api/v1/system/version` answers Sowel's `VersionInfo` without its two Docker fields, `latest`
+  `null` and `updateAvailable` `false` (no release poll yet). Every refusal of the upload route
+  closes the connection, so the image's bytes are never read as a next request.
+- **Why**: the same path and answer as Sowel keeps one API for both (D3); Sowel's route takes no
+  body because it pulls its Docker image itself, which a box without a release feed cannot do yet:
+  the body is the deviation, recorded in `docs/sowel-subset.md`. A downgrade would let a stolen
+  token reinstall an old signed image with a known flaw; going back is a USB flash with the
+  user's yes (D6).
+
+## D54: An updated image confirms itself after a healthy minute, or rolls back after five; a release reads what its successor wrote
+
+- **Date**: 2026-11-25 (spec 032, decided in an autonomous run, for the user's review)
+- **Choice**: an image booted from an update is on probation. Healthy means the engine's loop is
+  running and the API server is listening (not the Wi-Fi link). Healthy for 60 s without a break:
+  the image confirms itself; not confirmed 300 s after the start (monotonic clock): it is marked
+  bad and the previous image becomes the next boot (the box restarts). A crash, a restart or a
+  power cut before the confirmation rolls back at the next boot, by ESP-IDF's bootloader
+  (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`); that setting lives in the bootloader, which an update
+  never replaces, so it reaches a box through one USB flash of a spec 032 image. From now on, a
+  change of a stored file's format stays readable by the previous release (it adds, it does not
+  rename or retype), because a rollback runs the previous release on the data its successor
+  wrote. The first image that can roll back is spec 032's, which already reads `json` data (D51).
+- **Why**: a running engine and a reachable API are what the user needs from the box; requiring
+  the Wi-Fi link would roll back a good update when the router is off. A minute catches an image
+  that crashes or stalls at start; five minutes leave room for a slow radio start. Without a USB
+  flash first, a box keeps working and accepts updates but cannot roll back: said in the box run.

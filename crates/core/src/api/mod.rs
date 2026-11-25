@@ -86,6 +86,8 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/auth/refresh"),
     ("POST", "/api/v1/auth/logout"),
     ("POST", "/api/v1/system/factory-reset"),
+    ("GET", "/api/v1/system/version"),
+    ("POST", "/api/v1/system/update"),
 ];
 
 /// Who can reach the server: it decides which `Host` headers are accepted (spec 022, D33).
@@ -134,6 +136,10 @@ pub enum Reply {
     /// A refusal (404, 405) of a path of the interface: a whole response like `Whole`, but the host
     /// adds the interface's security headers to it.
     StaticError(Response),
+    /// `POST /system/update` with its gate and content type passed (spec 032, R6): the body is the
+    /// signed update file, not read yet. The caller streams it into `Updates::install` (the host
+    /// from its server's reader, the box from its socket), the home's lock being released.
+    Update,
 }
 
 /// The answer: a status, and a JSON body (`None` for 204). The content type is
@@ -259,6 +265,8 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
         // The interface's files are the host's to send.
         Reply::Static(_) => error(404, "Not found"),
         Reply::StaticError(response) => response,
+        // Not reachable: the plain handler refuses the route before the gate.
+        Reply::Update => error(501, UPDATES_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
             loop {
@@ -325,7 +333,22 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
     if let Some(refusal) = auth::gate(&mut guard, request, now) {
         return Reply::Whole(refusal);
     }
+    // The update's body is a file of megabytes, streamed by the caller: no 16 KB or JSON check,
+    // and the home is let go before the caller reads it.
+    if is_update_request(request.method, request.path) {
+        return if octet_stream_content_type(request.content_type) {
+            Reply::Update
+        } else {
+            Reply::Whole(error(415, "Unsupported Media Type"))
+        };
+    }
     dispatch(&mut guard, request, now, random, true)
+}
+
+/// True for `POST /api/v1/system/update`: the one request whose body the caller must not read
+/// before `handle_guarded` has answered, and streams (spec 032, R6).
+pub fn is_update_request(method: &str, path: &str) -> bool {
+    method == "POST" && path.split(['?', '#']).next() == Some("/api/v1/system/update")
 }
 
 /// The interface's answer for the box's server (spec 023 R4.6): `None` when the path is not the
@@ -338,6 +361,18 @@ pub fn static_reply(request: &Request) -> Option<Reply> {
         return Some(Reply::Whole(error(403, "Forbidden host")));
     }
     Some(reply)
+}
+
+/// What the plain handlers answer to the update route: they cannot stream a body.
+const UPDATES_NEED_STREAMING: &str = "Updates need the streaming handler";
+
+/// True when the body is declared `application/octet-stream` (parameters allowed).
+fn octet_stream_content_type(value: Option<&str>) -> bool {
+    value.is_some_and(|v| {
+        v.split(';')
+            .next()
+            .is_some_and(|t| t.trim().eq_ignore_ascii_case(crate::update::CONTENT_TYPE))
+    })
 }
 
 /// What the plain `handle` answers to an order: it cannot wait for the radio, so it does not
@@ -368,6 +403,10 @@ fn dispatch(
     // The interface's files come before the API's checks: they take no body and no JSON.
     if let Some(reply) = static_files::route(request) {
         return reply;
+    }
+    // The update route is the streaming handler's: refused here, before the 16 KB and JSON checks.
+    if is_update_request(request.method, request.path) {
+        return Reply::Whole(error(501, UPDATES_NEED_STREAMING));
     }
     if request.body.len() > MAX_BODY_BYTES {
         return Reply::Whole(error(413, "Body too large"));

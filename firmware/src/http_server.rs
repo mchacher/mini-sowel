@@ -7,6 +7,7 @@
 //! The core decides every answer; this file moves the bytes.
 
 use std::ffi::{CStr, CString};
+use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,12 +29,14 @@ use esp_idf_svc::sys::{
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
     MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
-    order_response, static_reply,
+    is_update_request, order_response, static_reply,
 };
 use solite_core::devices::lock;
 use solite_core::home::Home;
+use solite_core::update::MAX_UPLOAD_BYTES;
 
 use crate::live_ws;
+use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
 use crate::ui_files::UI_FILES;
 
@@ -335,7 +338,7 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
         },
         Some(Reply::StaticError(response)) => raw.answer(&response, &STATIC_HEADERS),
         Some(Reply::Whole(response)) => raw.answer(&response, &[]),
-        Some(Reply::List(_) | Reply::Order(_)) | None => {
+        Some(Reply::List(_) | Reply::Order(_) | Reply::Update) | None => {
             raw.answer(&error_body(404, "Not found"), &STATIC_HEADERS);
         }
     }
@@ -387,21 +390,75 @@ extern "C" fn api_entry(request: *mut httpd_req_t) -> esp_err_t {
     ESP_OK
 }
 
+/// The update's body as a `Read`: the bytes of the request, ending at its `Content-Length` (so that
+/// "one more byte than declared" never waits on the socket). A socket error or timeout is an
+/// error, the installation then aborts.
+struct BodyReader<'a> {
+    raw: &'a Raw,
+    remaining: usize,
+}
+
+impl Read for BodyReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let want = buffer.len().min(self.remaining);
+        if want == 0 {
+            return Ok(0);
+        }
+        let count = self.raw.receive(&mut buffer[..want]);
+        if count < 0 {
+            return Err(std::io::Error::other(format!("socket error {count}")));
+        }
+        let count = count as usize;
+        self.remaining -= count;
+        Ok(count)
+    }
+}
+
+/// `POST /api/v1/system/update`, once the core has let it through: the body goes into
+/// `Updates::install`, through the OTA thread. Answers; true when the update is installed and the
+/// ESP32 must restart (after `complete`, so the answer is out first).
+fn answer_update(raw: &Raw, length: usize) -> bool {
+    let (Some(updates), Some(mut adapter)) = (ota::updates(), ota::adapter()) else {
+        raw.answer(&error_body(503, "Updates are not available"), &[]);
+        raw.close_after();
+        return false;
+    };
+    let mut source = BodyReader {
+        raw,
+        remaining: length,
+    };
+    let response = updates.install(&mut source, &mut adapter);
+    let installed = response.status == 200;
+    raw.answer(&response, &[]);
+    if !installed {
+        raw.close_after();
+    }
+    installed
+}
+
 /// A worker's answer to one request, as the host's `answer` (`crates/host/src/serve.rs`).
 fn answer(job: Job, buffer: &mut [u8], api: &Api) {
     let Job { raw, head, _slot } = job;
+    // The update's body is a file of megabytes: it is not read here (spec 032 R6), the core answers
+    // the gate first, and the body streams into the installation.
+    let streaming = is_update_request(head.method, &head.uri);
     if head.chunked {
         raw.answer(&error_body(411, "Length required"), &[]);
         raw.close_after();
         return raw.complete();
     }
-    if head.length > MAX_BODY_BYTES {
+    if streaming && raw.header(c"Content-Length").is_none() {
+        raw.answer(&error_body(411, "Length required"), &[]);
+        raw.close_after();
+        return raw.complete();
+    }
+    if !streaming && head.length > MAX_BODY_BYTES {
         raw.answer(&error_body(413, "Body too large"), &[]);
         raw.close_after();
         return raw.complete();
     }
     let mut received = 0;
-    while received < head.length {
+    while !streaming && received < head.length {
         let count = raw.receive(&mut buffer[received..head.length]);
         if count <= 0 {
             if count == HTTPD_SOCK_ERR_TIMEOUT {
@@ -436,6 +493,19 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         Reply::Order(wait) => Reply::Whole(order_response(wait)),
         other => other,
     };
+    // The gate answered first; then a declared length above the maximum is refused (no body read).
+    let too_large = matches!(reply, Reply::Update) && head.length as u64 > MAX_UPLOAD_BYTES;
+    // Every refusal of the update route leaves body bytes unread: the connection closes after the
+    // answer.
+    let close_after_answer = streaming && (too_large || !matches!(reply, Reply::Update));
+    let mut restart = false;
+    if too_large {
+        raw.answer(&error_body(413, "Update too large"), &[]);
+        if close_after_answer {
+            raw.close_after();
+        }
+        return raw.complete();
+    }
     match reply {
         Reply::Whole(response) => raw.answer(&response, &[]),
         Reply::StaticError(response) => raw.answer(&response, &STATIC_HEADERS),
@@ -464,8 +534,15 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
             }
         }
         Reply::Order(_) | Reply::Static(_) => raw.answer(&error_body(500, "Internal error"), &[]),
+        Reply::Update => restart = answer_update(&raw, head.length),
+    }
+    if close_after_answer {
+        raw.close_after();
     }
     raw.complete();
+    if restart {
+        ota::restart_after_update();
+    }
 }
 
 /// A buffer of `BODY_BUFFER_BYTES` in PSRAM, kept for the server's life.
@@ -617,5 +694,6 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
     ] {
         register(handle, c"/*", method, api_entry)?;
     }
+    ota::API_LISTENING.store(true, Ordering::SeqCst);
     Ok(Server { _server: server })
 }

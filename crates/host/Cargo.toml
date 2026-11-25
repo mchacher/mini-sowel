@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 ctrlc = "3.5.2"
+# Signing of the update files (spec 032): the core only verifies.
+ed25519-dalek = "3.0"
 httparse = "1.10.1"
 log = "0.4"
 solite-core = { path = "../core" }

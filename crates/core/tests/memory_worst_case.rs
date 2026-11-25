@@ -75,6 +75,9 @@
 //!   keeps under 1 KB of stack and nothing on the heap that grows.
 //! - `auth/mod.rs::MAX_ITERATIONS`: the most iterations a stored hash may declare, a count of
 //!   rounds, no memory.
+//! - `update/mod.rs::MAX_UPLOAD_BYTES`: the longest update file an upload may declare; it is
+//!   streamed through one 4096-byte buffer, never held (`update_memory.rs` measures a 1 MB
+//!   installation under 32 KB), so the worst case does not drive it.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};

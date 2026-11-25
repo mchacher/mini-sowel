@@ -43,12 +43,12 @@ the box is a pending check).
 | The radio image's HTTP body buffers: one per worker, `MAX_BODY_BYTES` + 1 each, allocated once in PSRAM (spec 023) | 4 workers × 16 KB | 64 KB, **not added**: the engine's worst case already counts 4 bodies of 16 KB (above); beside the realistic home, which does not count them, they add 64 KB | PSRAM | E, from the bound |
 | The radio image's HTTP workers' stacks (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023) | 4 workers × 10 KB | 40 KB | PSRAM | E, from the setting |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
-| Update buffers: the download's chunk buffer and the flash write buffer | 1 update at a time | 32 KB | PSRAM | E |
+| Update: the one 4096-byte chunk buffer of the OTA thread, allocated once (spec 032); the image is streamed and never held whole, and ESP-IDF's flash write copies from PSRAM through its own internal bounce buffer | 1 update at a time (`update::CHUNK_BYTES`) | 4 KB | PSRAM | M for the core's part (1 MB through a counting fake peaks at under 5 KB of heap), E for the box |
 | Margin | | the rest | PSRAM | |
 
-Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 32 =
-1224 KB, margin 2048 − 1224 = **824 KB**. Realistic home: 300 + 64 + body buffers 64 + 40 + 64 + 32
-= 564 KB, margin 1484 KB. The totals
+Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 4 =
+1196 KB, margin 2048 − 1196 = **852 KB**. Realistic home: 300 + 64 + body buffers 64 + 40 + 64 + 4
+= 536 KB, margin 1512 KB. The totals
 fit with room. The engine's small allocations land in internal RAM first (next section), so the
 PSRAM really used is lower than this sum and the margin larger.
 
@@ -66,6 +66,7 @@ never taken by an allocation that may go to PSRAM.
 | Ethernet: EMAC DMA buffers (10 receive and 10 transmit buffers of about 1.6 KB) and driver | about 40 KB, **not added**: only one link is active, the budget takes the larger (Wi-Fi) | E, ESP-IDF defaults |
 | Task stacks: main (8 KB, `CONFIG_ESP_MAIN_TASK_STACK_SIZE`), 4 HTTP workers, the radio loop, the WebSocket writer | 64 KB | E, usual ESP-IDF stack sizes; the firmware sets only the main task's stack |
 | The radio image: the engine thread's stack (32 KB) and the UART's two rings (4 KB receive, 1 KB transmit), all internal RAM | 37 KB, inside the 64 KB of task stacks above for the stack; measured on the box: engine stack 27 KB unused of 32 KB, receive ring highest use 262 B of 4096 B | E (set in `firmware/src/radio_engine.rs` and `radio_uart.rs`), M for the use (2026-11-22) |
+| The radio image's OTA thread's stack (spec 032): every flash call of an update and the probation's tick, in internal RAM for the whole run because the flash cannot be written from a PSRAM stack | 6 KB, **not added**: one more thread inside the 64 KB of task stacks above, and the 153 KB left below absorbs it; the box run of spec 032 reads the internal RAM free after an update | E, from the setting in `firmware/src/ota.rs` |
 | mbedTLS, its small internal allocations | 8 KB | E |
 | Left for the engine's small allocations and the rest, before the reserve | 359 − 70 − 64 − 8 = 217 KB | |
 | Reserve kept for DMA and the network stack | 64 KB | settings |

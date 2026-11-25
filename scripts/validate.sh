@@ -57,6 +57,14 @@ if want rust; then
   step "Docs"
   sh scripts/check-docs.sh
 
+  # The firmware is outside the workspace, yet its ESP application descriptor must carry the
+  # version the core reports (spec 032 R7): the two `version` lines are the same.
+  step "Versions: firmware/Cargo.toml and the workspace"
+  workspace_version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
+  firmware_version=$(sed -n '/^\[package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' firmware/Cargo.toml | head -n 1)
+  [ -n "$workspace_version" ] && [ "$workspace_version" = "$firmware_version" ] \
+    || { echo "validate: firmware/Cargo.toml version is '$firmware_version', the workspace's Cargo.toml version is '$workspace_version': they must be equal" >&2; exit 1; }
+
   step "Rust: format"
   cargo fmt --all --check
   rustfmt --check --edition 2024 firmware/build.rs firmware/src/*.rs

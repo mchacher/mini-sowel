@@ -106,9 +106,10 @@ async function request<T>(
     headers["Content-Type"] = "application/json";
   }
 
+  // The caller's own headers (an upload's Content-Type) are added to the token's, not instead of it.
   const response = await send(url, {
-    headers,
     ...options,
+    headers: { ...headers, ...(options?.headers as Record<string, string> | undefined) },
   });
 
   // Rate limited (429) or busy (503): retry reads once after the advertised delay (1 s when none).

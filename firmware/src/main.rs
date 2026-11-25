@@ -5,6 +5,7 @@
 //! the Wi-Fi network of `/data/wifi.json`, sets its clock by SNTP, serves Sowel's API, `/ws` and
 //! the interface on port 80, and takes the Wi-Fi settings on its serial console (spec 023).
 
+mod app_desc;
 #[cfg(feature = "radio")]
 mod console;
 #[cfg(feature = "radio")]
@@ -14,6 +15,8 @@ mod live_ws;
 #[cfg(feature = "sim")]
 mod measure;
 mod memory;
+#[cfg(feature = "radio")]
+mod ota;
 #[cfg(feature = "radio")]
 mod radio_engine;
 #[cfg(feature = "radio")]
@@ -143,6 +146,10 @@ fn run_radio() {
     }
     log::info!("{}", ui_files::UI_MARKER);
     if let Err(e) = console::start() {
+        log::error!("{e}");
+    }
+    // The updates: the key line, the OTA thread; without it, the update route answers 503.
+    if let Err(e) = ota::start() {
         log::error!("{e}");
     }
     let settings = match choose(parse(text.as_deref()).0, false) {

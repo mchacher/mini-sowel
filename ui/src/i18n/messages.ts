@@ -229,6 +229,13 @@ export const en: Messages = {
   "settings.backup": "Backup",
   "settings.backupDescription":
     "Export the home's settings and rooms to a file, or import them back.",
+  "settings.update": "Firmware update",
+  "settings.updateDescription": "Install a signed update file (.sup) built for this box.",
+  "settings.updateVersion": "Running version:",
+  "settings.updateFile": "Update file",
+  "settings.updateInstall": "Install",
+  "settings.updateInstalling": "Installing…",
+  "settings.updateRestart": "The box restarts; reload the page in a minute.",
   "settings.export": "Export",
   "settings.import": "Import",
   "settings.fileTooLarge": "File too large (16 KB at most)",
@@ -559,6 +566,14 @@ export const fr: Messages = {
   "settings.backup": "Sauvegarde",
   "settings.backupDescription":
     "Exportez les réglages et les pièces de la maison dans un fichier, ou importez-les.",
+  "settings.update": "Mise à jour du firmware",
+  "settings.updateDescription":
+    "Installez un fichier de mise à jour signé (.sup) fait pour ce boîtier.",
+  "settings.updateVersion": "Version en cours :",
+  "settings.updateFile": "Fichier de mise à jour",
+  "settings.updateInstall": "Installer",
+  "settings.updateInstalling": "Installation…",
+  "settings.updateRestart": "Le boîtier redémarre ; rechargez la page dans une minute.",
   "settings.export": "Exporter",
   "settings.import": "Importer",
   "settings.fileTooLarge": "Fichier trop gros (16 Ko au plus)",
