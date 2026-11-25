@@ -2706,3 +2706,123 @@ fn a_budget_that_is_not_a_whole_number_is_a_usage_error() {
         assert_eq!(out.code, 2, "{budget}: {}", out.text);
     }
 }
+
+// ---- wifi --from-file ------------------------------------------------------------------------
+
+/// A Wi-Fi settings file outside the script's repository (the fake one is `env.root`), with `mode`.
+fn wifi_settings_file(contents: &str, mode: u32) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "solite-wifi-file-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("wifi.env");
+    fs::write(&file, contents).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(mode)).unwrap();
+    file
+}
+
+/// Runs `box.sh wifi --from-file <file>` with no terminal; returns (exit code, text).
+fn wifi_from_file(env: &Env, file: &Path) -> (i32, String) {
+    write_exec(&env.path("console.sh"), FAKE_CONSOLE);
+    fs::write(env.path("console-answer.txt"), CONNECTED).unwrap();
+    let mut cmd = Command::new("/usr/bin/python3");
+    cmd.arg("-I").arg("-c").arg(HELPER).arg("notty").arg("");
+    cmd.arg("/bin/sh")
+        .arg(SCRIPT)
+        .arg("wifi")
+        .arg("--from-file")
+        .arg(file);
+    let output = cmd
+        .current_dir(&env.root)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("TMPDIR", env.path("tmp"))
+        .env(
+            "SOLITE_PORT_PATTERNS",
+            format!("{}/ports/usbserial*", env.root.display()),
+        )
+        .env("SOLITE_SERIAL_CONSOLE", env.path("console.sh"))
+        .env("FAKE_CONSOLE_ARGS", env.path("console-args.txt"))
+        .env("FAKE_CONSOLE_ENV", env.path("console-env.txt"))
+        .env("FAKE_CONSOLE_LINES", env.path("console-lines.txt"))
+        .env("FAKE_CONSOLE_ANSWER", env.path("console-answer.txt"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stderr).to_string()
+        + &String::from_utf8_lossy(&output.stdout);
+    (output.status.code().unwrap_or(-1), text)
+}
+
+#[test]
+fn wifi_from_file_sends_the_settings_with_no_terminal_and_hides_them() {
+    let env = Env::new();
+    let file = wifi_settings_file(
+        &format!("SOLITE_WIFI_SSID={SSID}\nSOLITE_WIFI_PASSWORD={PASSWORD}\n"),
+        0o600,
+    );
+    let (code, text) = wifi_from_file(&env, &file);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("Wi-Fi connected"), "{text}");
+    assert!(!text.contains(PASSWORD) && !text.contains(SSID), "{text}");
+    let lines = env.console_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let value: serde_json::Value =
+        serde_json::from_str(lines[0].strip_prefix("wifi-set ").unwrap()).unwrap();
+    assert_eq!(value["ssid"], SSID);
+    assert_eq!(value["password"], PASSWORD);
+    for name in ["console-args.txt", "console-env.txt"] {
+        let seen = fs::read_to_string(env.path(name)).unwrap();
+        assert!(!seen.contains(PASSWORD) && !seen.contains(SSID), "{name}");
+    }
+}
+
+#[test]
+fn wifi_from_file_refuses_a_file_others_can_read_and_calls_nothing() {
+    let env = Env::new();
+    let file = wifi_settings_file(
+        &format!("SOLITE_WIFI_SSID={SSID}\nSOLITE_WIFI_PASSWORD={PASSWORD}\n"),
+        0o644,
+    );
+    let (code, text) = wifi_from_file(&env, &file);
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("readable by its owner only"), "{text}");
+    assert!(!env.path("console-args.txt").exists(), "console not called");
+}
+
+#[test]
+fn wifi_from_file_refuses_a_missing_file_and_a_missing_name() {
+    let env = Env::new();
+    let (code, text) = wifi_from_file(&env, Path::new("/nonexistent/solite-wifi.env"));
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("no Wi-Fi settings file"), "{text}");
+    let file = wifi_settings_file("SOLITE_WIFI_PASSWORD=only-a-password\n", 0o600);
+    let (code, text) = wifi_from_file(&env, &file);
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("no SOLITE_WIFI_SSID"), "{text}");
+    assert!(!env.path("console-args.txt").exists(), "console not called");
+}
+
+#[test]
+fn wifi_from_file_refuses_a_file_inside_the_repository() {
+    let env = Env::new();
+    // The script's repository is the real one (the folder of the script), whatever the fake root.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("solite-wifi-file-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("wifi.env");
+    fs::write(
+        &file,
+        format!("SOLITE_WIFI_SSID={SSID}\nSOLITE_WIFI_PASSWORD={PASSWORD}\n"),
+    )
+    .unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    let (code, text) = wifi_from_file(&env, &file);
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(code, 1, "{text}");
+    assert!(text.contains("inside the repository"), "{text}");
+    assert!(!env.path("console-args.txt").exists(), "console not called");
+}
