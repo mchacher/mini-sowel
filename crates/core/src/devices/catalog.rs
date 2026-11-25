@@ -65,6 +65,13 @@ const STATE: DataSpec = DataSpec {
     unit: None,
 };
 const BRIGHTNESS: DataSpec = number("brightness", "light_brightness", None);
+const COLOR_TEMP: DataSpec = number("color_temp", "light_color_temp", Some("mired"));
+const COLOR: DataSpec = DataSpec {
+    key: "color",
+    value_type: ValueType::Json,
+    category: "light_color",
+    unit: None,
+};
 const BATTERY: DataSpec = number("battery", "battery", Some("%"));
 const VOLTAGE: DataSpec = number("voltage", "voltage", Some("mV"));
 
@@ -86,6 +93,24 @@ const BRIGHTNESS_ORDER: OrderSpec = OrderSpec {
     value_on: None,
     value_off: None,
 };
+const COLOR_TEMP_ORDER: OrderSpec = OrderSpec {
+    key: "color_temp",
+    value_type: ValueType::Number,
+    category: "set_color_temp",
+    min: Some(150),
+    max: Some(500),
+    value_on: None,
+    value_off: None,
+};
+const COLOR_ORDER: OrderSpec = OrderSpec {
+    key: "color",
+    value_type: ValueType::Json,
+    category: "set_color",
+    min: None,
+    max: None,
+    value_on: None,
+    value_off: None,
+};
 
 /// The data of a cluster, in the order of the table; none for a cluster that gives none.
 pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
@@ -97,6 +122,7 @@ pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
         0x0406 => &[OCCUPANCY],
         0x0006 => &[STATE],
         0x0008 => &[BRIGHTNESS],
+        0x0300 => &[COLOR_TEMP, COLOR],
         0x0001 => &[BATTERY, VOLTAGE],
         _ => &[],
     }
@@ -153,6 +179,7 @@ pub fn orders_for_cluster(cluster: u16) -> &'static [OrderSpec] {
     match cluster {
         0x0006 => &[STATE_ORDER],
         0x0008 => &[BRIGHTNESS_ORDER],
+        0x0300 => &[COLOR_TEMP_ORDER, COLOR_ORDER],
         _ => &[],
     }
 }
@@ -169,6 +196,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
         "motion" => "occupancy",
         "light_state" => "state",
         "light_brightness" => "brightness",
+        "light_color_temp" => "color_temp",
         "battery" => "battery",
         "voltage" => "voltage",
         "tamper" => "tamper",
@@ -179,7 +207,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
 
 /// Where a data key comes in the table of spec 008 (R2): the order data are listed in.
 pub fn data_rank(key: &str) -> usize {
-    const ORDER: [&str; 14] = [
+    const ORDER: [&str; 16] = [
         "temperature",
         "humidity",
         "pressure",
@@ -190,6 +218,8 @@ pub fn data_rank(key: &str) -> usize {
         "smoke",
         "state",
         "brightness",
+        "color_temp",
+        "color",
         "battery",
         "voltage",
         "tamper",
@@ -198,11 +228,13 @@ pub fn data_rank(key: &str) -> usize {
     ORDER.iter().position(|k| *k == key).unwrap_or(ORDER.len())
 }
 
-/// Where an order key comes in the table: `state` then `brightness`.
+/// Where an order key comes in the table: `state`, `brightness`, `color_temp`, then `color`.
 pub fn order_rank(key: &str) -> usize {
     match key {
         "state" => 0,
         "brightness" => 1,
-        _ => 2,
+        "color_temp" => 2,
+        "color" => 3,
+        _ => 4,
     }
 }

@@ -1,6 +1,6 @@
-//! Commands to devices (spec 011): an On/Off or Level Control command sent to a device, its Default
-//! Response awaited without blocking the reception of other frames, one retry, and the state read
-//! back once the device took it. The routes (network address and endpoint) the messages tell are
+//! Commands to devices (spec 011): an On/Off, Level Control or Color Control command sent to a
+//! device, its Default Response awaited without blocking the reception of other frames, one retry,
+//! and the state read back once the device took it. The routes (network address and endpoint) the messages tell are
 //! kept for the host to hand to the devices registry.
 //!
 //! A command is sent by `Radio::send_command` and its outcome comes back with
@@ -90,7 +90,8 @@ impl fmt::Display for CommandFailure {
 pub struct RouteUpdate {
     pub eui64: [u8; 8],
     pub nwk: u16,
-    /// The endpoint its On/Off or Level Control frames come from, when the message was one.
+    /// The endpoint its On/Off, Level Control or Color Control frames come from, when the
+    /// message was one.
     pub endpoint: Option<u8>,
 }
 
@@ -116,14 +117,20 @@ struct InFlight {
     stage: Stage,
 }
 
-/// An attribute to read once a command succeeded.
+/// The attributes of one cluster to read once a command succeeded: up to four in one request
+/// (a fixed array, no allocation), so the colour comes back in one frame.
 #[derive(Debug, Clone, Copy)]
 struct StateRead {
     nwk: u16,
     endpoint: u8,
     cluster: u16,
-    attribute: u16,
+    attributes: [u16; MAX_READ_ATTRIBUTES],
+    /// How many of `attributes` are used.
+    count: usize,
 }
+
+/// The most attributes one state read asks for.
+const MAX_READ_ATTRIBUTES: usize = 4;
 
 /// What the radio keeps for commands and routes.
 #[derive(Debug, Default)]
@@ -219,11 +226,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
 
     /// A message from a device whose address is known: what it tells of its route.
     pub(super) fn note_route_of(&mut self, message: &IncomingMessage, eui64: [u8; 8]) {
-        let on_off_or_level = matches!(
+        let light_cluster = matches!(
             message.aps.cluster,
-            zcl::CLUSTER_ON_OFF | zcl::CLUSTER_LEVEL_CONTROL
+            zcl::CLUSTER_ON_OFF | zcl::CLUSTER_LEVEL_CONTROL | zcl::CLUSTER_COLOR_CONTROL
         );
-        let endpoint = on_off_or_level.then_some(message.aps.source_endpoint);
+        let endpoint = light_cluster.then_some(message.aps.source_endpoint);
         self.commands.note_route(eui64, message.sender, endpoint);
     }
 
@@ -253,18 +260,39 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         }
         self.commands.finish(index, Ok(()));
         // The state is read back once: the answer goes through the usual path of measures.
-        let read = |cluster, attribute| StateRead {
-            nwk: message.sender,
-            endpoint,
-            cluster,
-            attribute,
+        let read = |cluster, attributes: &[u16]| {
+            let mut array = [0; MAX_READ_ATTRIBUTES];
+            let count = attributes.len().min(MAX_READ_ATTRIBUTES);
+            array[..count].copy_from_slice(&attributes[..count]);
+            StateRead {
+                nwk: message.sender,
+                endpoint,
+                cluster,
+                attributes: array,
+                count,
+            }
         };
         self.commands
-            .push_read(read(zcl::CLUSTER_ON_OFF, zcl::ATTRIBUTE_ON_OFF));
+            .push_read(read(zcl::CLUSTER_ON_OFF, &[zcl::ATTRIBUTE_ON_OFF]));
+        let colour: &[u16] = match command {
+            zcl::Command::MoveToColorTemperature(_) => &[zcl::ATTRIBUTE_COLOR_TEMPERATURE],
+            zcl::Command::MoveToColor { .. } => {
+                &[zcl::ATTRIBUTE_CURRENT_X, zcl::ATTRIBUTE_CURRENT_Y]
+            }
+            zcl::Command::MoveToHueSaturation { .. } => &[
+                zcl::ATTRIBUTE_CURRENT_HUE,
+                zcl::ATTRIBUTE_CURRENT_SATURATION,
+            ],
+            _ => &[],
+        };
+        if !colour.is_empty() {
+            self.commands
+                .push_read(read(zcl::CLUSTER_COLOR_CONTROL, colour));
+        }
         if let zcl::Command::MoveToLevel(_) = command {
             self.commands.push_read(read(
                 zcl::CLUSTER_LEVEL_CONTROL,
-                zcl::ATTRIBUTE_CURRENT_LEVEL,
+                &[zcl::ATTRIBUTE_CURRENT_LEVEL],
             ));
         }
     }
@@ -383,7 +411,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 group_id: 0,
                 sequence: 0,
             };
-            let request = zcl::read_attributes_request(tsn, &[read.attribute]);
+            let request = zcl::read_attributes_request(tsn, &read.attributes[..read.count]);
             // Best effort: a read the radio refuses is dropped, the device reports on its own
             // or the next order reads again.
             self.send_to_device(wide, read.nwk, &aps, tsn, &request)?;

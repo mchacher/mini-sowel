@@ -149,7 +149,7 @@ fn id(counter: &mut u32) -> Id {
     Id::from_random(bytes)
 }
 
-/// A device with `MAX_DATA` data and `MAX_ORDERS` orders. Devices 0 to 31 have `voltage` first
+/// A device with `MAX_DATA` data (the last one of a light a four-field colour) and `MAX_ORDERS` orders. Devices 0 to 31 have `voltage` first
 /// (the button's data and the live events'), devices 0 to 15 `state` as first order (the
 /// lights'); the other keys are unique, so aliases never collide between the devices an
 /// equipment binds.
@@ -161,13 +161,27 @@ fn device(index: usize, counter: &mut u32) -> DeviceWithDetails {
             } else {
                 Cow::Owned(key("data", index, rank))
             };
+            // The last data of each light (devices 0 to 15, those with a `state` order) is a
+            // colour: Zigbee2MQTT's object with its four fields, the largest value the radio can
+            // give a data (spec 031). A colour object costs 632 bytes (one B-tree node); on all 64
+            // devices the worst case would read 1045 KB, over the ceiling, and only a light has a
+            // Color Control cluster.
+            let colour = rank == MAX_DATA - 1 && index < 16;
             DeviceData {
                 id: id(counter),
                 key: name,
-                value_type: ValueType::Number,
-                category: Cow::Borrowed("measure"),
-                value: json!(3000),
-                unit: Some(Cow::Borrowed("mV")),
+                value_type: if colour {
+                    ValueType::Json
+                } else {
+                    ValueType::Number
+                },
+                category: Cow::Borrowed(if colour { "light_color" } else { "measure" }),
+                value: if colour {
+                    json!({"x": 0.3127, "y": 0.329, "hue": 359, "saturation": 100})
+                } else {
+                    json!(3000)
+                },
+                unit: (!colour).then_some(Cow::Borrowed("mV")),
                 last_updated: Some(T0),
                 last_changed: Some(T0),
             }

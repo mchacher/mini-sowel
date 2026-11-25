@@ -111,6 +111,8 @@ struct RawEvent {
     battery: Option<Value>,
     motion: Option<Value>,
     light_state: Option<Value>,
+    color_temp: Option<Value>,
+    color: Option<Value>,
 }
 
 /// Reads the raw structure of one object; `prefix` is the path of the object plus a dot
@@ -282,7 +284,7 @@ fn devices_of(values: Vec<Value>) -> Result<Vec<DeviceSpec>, String> {
         let kind_text = required_text(spec.kind, &format!("{prefix}kind"))?;
         let kind = Kind::from_name(&kind_text).ok_or_else(|| {
             format!(
-                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion or relay)"
+                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer or color-light)"
             )
         })?;
         let eui_path = format!("{prefix}eui64");
@@ -310,6 +312,7 @@ fn allows(kind: Kind, field: &str) -> bool {
         Kind::TemperatureHumidity => matches!(field, "temperature" | "humidity" | "battery"),
         Kind::Motion => matches!(field, "motion" | "battery"),
         Kind::Relay | Kind::Dimmer => field == "light_state",
+        Kind::ColorLight => matches!(field, "light_state" | "color_temp" | "color"),
     }
 }
 
@@ -318,6 +321,28 @@ fn number_in(value: &Value, low: f64, high: f64, path: &str) -> Result<f64, Stri
         .as_f64()
         .filter(|n| (low..=high).contains(n))
         .ok_or_else(|| format!("{path}: must be a number from {low} to {high}"))
+}
+
+/// The `color` of a report: an object with `x` and `y`, each 0 to 1, and nothing else.
+fn color_of(value: &Value, path: &str) -> Result<(f64, f64), String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{path}: must be an object with x and y"))?;
+    if let Some(key) = object.keys().find(|k| *k != "x" && *k != "y") {
+        return Err(format!("{path}.{key}: unknown field"));
+    }
+    let coordinate = |name: &str| {
+        let field = format!("{path}.{name}");
+        number_in(
+            object
+                .get(name)
+                .ok_or_else(|| format!("{field}: required"))?,
+            0.0,
+            1.0,
+            &field,
+        )
+    };
+    Ok((coordinate("x")?, coordinate("y")?))
 }
 
 fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, String> {
@@ -338,6 +363,8 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
         ("battery", spec.battery),
         ("motion", spec.motion),
         ("light_state", spec.light_state),
+        ("color_temp", spec.color_temp),
+        ("color", spec.color),
     ];
     let action = match action_text.as_str() {
         "join" => {
@@ -379,6 +406,19 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
                                 .ok_or_else(|| format!("{path}: must be true or false"))?,
                         );
                     }
+                    "color_temp" => {
+                        // A whole number of mireds: 150 to 500 is inside a u16.
+                        report.color_temp = Some(
+                            value
+                                .as_u64()
+                                .filter(|n| (150..=500).contains(n))
+                                .and_then(|n| u16::try_from(n).ok())
+                                .ok_or_else(|| {
+                                    format!("{path}: must be a whole number from 150 to 500")
+                                })?,
+                        );
+                    }
+                    "color" => report.color = Some(color_of(&value, &path)?),
                     _ => {
                         report.light_state = Some(match value.as_str() {
                             Some("on") => true,

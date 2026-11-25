@@ -8,8 +8,8 @@ use solite_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
-    battery_report, humidity_report, level_report, on_off_report, temperature_report,
-    zone_notification,
+    battery_report, color_raw, color_temp_report, color_xy_report, humidity_report, level_report,
+    on_off_report, temperature_report, zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -148,8 +148,8 @@ const SL_FAIL: u32 = 1;
 const FIRST_NWK: u16 = 0x2000;
 
 /// The clusters the host sets up reporting for.
-const REPORTABLE: [u16; 8] = [
-    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0001,
+const REPORTABLE: [u16; 9] = [
+    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0300, 0x0001,
 ];
 
 /// An EZSP callback frame (extended format, asynchronous callback flag).
@@ -427,6 +427,23 @@ impl Ncp {
                 if device.reports_attribute(0x0006, 0x0000) {
                     let tsn = device.next_tsn();
                     frames.push((0x0006, on_off_report(tsn, on)));
+                }
+            }
+            if let Some(mireds) = report.color_temp {
+                device.color_temp = mireds;
+                if device.reports_attribute(0x0300, 0x0007) {
+                    let tsn = device.next_tsn();
+                    frames.push((0x0300, color_temp_report(tsn, mireds)));
+                }
+            }
+            if let Some((x, y)) = report.color {
+                device.color_x = color_raw(x);
+                device.color_y = color_raw(y);
+                if device.reports_attribute(0x0300, 0x0003)
+                    && device.reports_attribute(0x0300, 0x0004)
+                {
+                    let tsn = device.next_tsn();
+                    frames.push((0x0300, color_xy_report(tsn, device.color_x, device.color_y)));
                 }
             }
             if let Some(alarm) = report.motion
@@ -1056,14 +1073,18 @@ impl Ncp {
                 self.dirty = true;
             }
         } else if sent.profile == 0x0104
-            && matches!(device.kind, Kind::Relay | Kind::Dimmer)
+            && matches!(device.kind, Kind::Relay | Kind::Dimmer | Kind::ColorLight)
             && device.input_clusters.contains(&sent.cluster)
-            && matches!(sent.cluster, 0x0006 | 0x0008)
+            && matches!(sent.cluster, 0x0006 | 0x0008 | 0x0300)
             && match control & 0x03 {
-                // On/Off: Off (0), On (1), Toggle (2); Level Control: Move to Level with On/Off.
+                // On/Off: Off (0), On (1), Toggle (2); Level Control: Move to Level with On/Off;
+                // Color Control: Move to Hue and Saturation (6), Move to Color (7), Move to Color
+                // Temperature (0x0A).
                 0x01 => matches!(
                     (sent.cluster, message.get(2)),
-                    (0x0006, Some(0x00..=0x02)) | (0x0008, Some(0x04))
+                    (0x0006, Some(0x00..=0x02))
+                        | (0x0008, Some(0x04))
+                        | (0x0300, Some(0x06 | 0x07 | 0x0A))
                 ),
                 // Read Attributes.
                 0x00 => message.get(2) == Some(&0x00),
@@ -1089,6 +1110,24 @@ impl Ncp {
                             frame.extend_from_slice(&[0x00, 0x10, u8::from(device.relay_on)]);
                         }
                         (0x0008, 0x0000) => frame.extend_from_slice(&[0x00, 0x20, device.level]),
+                        (0x0300, 0x0007) => {
+                            frame.extend_from_slice(&[0x00, 0x21]);
+                            frame.extend_from_slice(&device.color_temp.to_le_bytes());
+                        }
+                        (0x0300, 0x0003) => {
+                            frame.extend_from_slice(&[0x00, 0x21]);
+                            frame.extend_from_slice(&device.color_x.to_le_bytes());
+                        }
+                        (0x0300, 0x0004) => {
+                            frame.extend_from_slice(&[0x00, 0x21]);
+                            frame.extend_from_slice(&device.color_y.to_le_bytes());
+                        }
+                        (0x0300, 0x0000) => {
+                            frame.extend_from_slice(&[0x00, 0x20, device.hue]);
+                        }
+                        (0x0300, 0x0001) => {
+                            frame.extend_from_slice(&[0x00, 0x20, device.saturation]);
+                        }
                         _ => frame.push(0x86),
                     }
                 }
@@ -1103,6 +1142,7 @@ impl Ncp {
                 ));
             } else {
                 let (on, level) = match (sent.cluster, command) {
+                    (0x0300, _) => (device.relay_on, device.level),
                     (0x0006, 0x00) => (false, device.level),
                     (0x0006, 0x01) => (true, device.level),
                     (0x0006, _) => (!device.relay_on, device.level),
@@ -1117,9 +1157,40 @@ impl Ncp {
                         d.level = level;
                         (
                             d.reports_attribute(0x0006, 0x0000),
-                            d.kind == Kind::Dimmer && d.reports_attribute(0x0008, 0x0000),
+                            matches!(d.kind, Kind::Dimmer | Kind::ColorLight)
+                                && d.reports_attribute(0x0008, 0x0000),
                         )
                     });
+                // The colour a colour command sets, applied whether the light is on or off.
+                let mut color_report = None;
+                if sent.cluster == 0x0300
+                    && let Some(d) = self.devices.get_mut(index)
+                {
+                    let byte = |at: usize| message.get(at).copied().unwrap_or(0);
+                    let word = |at: usize| u16::from_le_bytes([byte(at), byte(at + 1)]);
+                    match command {
+                        0x0A => {
+                            d.color_temp = word(3);
+                            if d.reports_attribute(0x0300, 0x0007) {
+                                color_report = Some(color_temp_report(d.next_tsn(), d.color_temp));
+                            }
+                        }
+                        0x07 => {
+                            d.color_x = word(3);
+                            d.color_y = word(5);
+                            if d.reports_attribute(0x0300, 0x0003)
+                                && d.reports_attribute(0x0300, 0x0004)
+                            {
+                                color_report =
+                                    Some(color_xy_report(d.next_tsn(), d.color_x, d.color_y));
+                            }
+                        }
+                        _ => {
+                            d.hue = byte(3);
+                            d.saturation = byte(4);
+                        }
+                    }
+                }
                 self.dirty = true;
                 // The command asks for a Default Response unless it says "disable default
                 // response".
@@ -1132,7 +1203,7 @@ impl Ncp {
                         &[0x18, tsn, 0x0B, command, 0x00],
                     ));
                 }
-                if reports_on_off {
+                if reports_on_off && sent.cluster != 0x0300 {
                     let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);
                     answers.push(self.incoming(
                         device.nwk,
@@ -1141,6 +1212,9 @@ impl Ncp {
                         1,
                         &on_off_report(report_tsn, on),
                     ));
+                }
+                if let Some(report) = color_report {
+                    answers.push(self.incoming(device.nwk, 0x0104, 0x0300, 1, &report));
                 }
                 if reports_level && sent.cluster == 0x0008 {
                     let report_tsn = self.devices.get_mut(index).map_or(0, SimDevice::next_tsn);

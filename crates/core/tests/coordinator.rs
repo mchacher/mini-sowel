@@ -2220,3 +2220,100 @@ fn devices_still_being_identified_count_against_the_limit_and_are_kept_by_forget
     h.radio.forget_finished();
     assert_eq!(h.radio.busy_devices().len(), before);
 }
+
+// ---- Spec 031: the colour cluster ----
+
+/// A mains colour bulb joining when pairing opens, at the relay's address.
+fn colour_bulb() -> SimDevice {
+    let mut device = SimDevice::of_kind(Kind::ColorLight, RELAY_WIRE, None, None);
+    device.nwk = RELAY_NWK;
+    device.auto_join = true;
+    device
+}
+
+/// The measures of the events with one of these kinds, one entry per event.
+fn colour_events(events: &[PairingEvent]) -> Vec<Vec<(&'static str, Value)>> {
+    measure_events(events)
+        .iter()
+        .map(|e| {
+            e.measures
+                .iter()
+                .filter(|m| m.kind.starts_with("color") || m.kind == "light_color_temp")
+                .map(|m| (m.kind, m.value))
+                .collect::<Vec<_>>()
+        })
+        .filter(|kinds| !kinds.is_empty())
+        .collect()
+}
+
+#[test]
+fn a_colour_cluster_message_tells_the_endpoint_of_the_device() {
+    // A bulb with the colour cluster alone: only its Color Control messages can tell the route.
+    let mut device = colour_bulb();
+    device.input_clusters = vec![0x0000, 0x0003, 0x0300];
+    let (mut h, _) = paired(device);
+    let routes = h.radio.take_routes();
+    let route = routes
+        .iter()
+        .find(|r| r.eui64 == RELAY_EUI)
+        .expect("a route");
+    assert_eq!(route.endpoint, Some(1));
+}
+
+#[test]
+fn a_move_to_color_acknowledged_is_read_back_in_one_request_and_gives_one_colour_frame() {
+    let (mut h, _) = paired(colour_bulb());
+    // A bulb that does not report: only the read tells its new colour.
+    h.ncp.borrow_mut().devices[0].configured_attributes.clear();
+    let command = Command::MoveToColor {
+        x: 0x3333,
+        y: 0x9999,
+    };
+    h.radio.send_command(target(None), command, 12_000).unwrap();
+    let (events, outcomes) = poll_commands(&mut h, 500);
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].1, Ok(()));
+    let reads: Vec<SentMessage> = sends_on(&h, 0x0104, 0x0300)
+        .into_iter()
+        .filter(|m| m.message[0] & 0x03 == 0 && m.message[2] == 0x00)
+        .collect();
+    assert_eq!(reads.len(), 1, "one read for X and Y");
+    assert_eq!(reads[0].message[3..], [0x03, 0x00, 0x04, 0x00]);
+    let colours = colour_events(&events);
+    assert_eq!(
+        colours.len(),
+        1,
+        "one frame carries the colour: {colours:?}"
+    );
+    let kinds: Vec<&str> = colours[0].iter().map(|(k, _)| *k).collect();
+    assert_eq!(kinds, vec!["color_x", "color_y"]);
+    // Hue and saturation, then a colour temperature: their own attributes are read.
+    h.radio
+        .send_command(
+            target(None),
+            Command::MoveToHueSaturation {
+                hue: 84,
+                saturation: 254,
+            },
+            12_000,
+        )
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 500);
+    let colours = colour_events(&events);
+    assert_eq!(colours.len(), 1, "{colours:?}");
+    assert_eq!(
+        colours[0],
+        vec![
+            ("color_hue", Value::Number(119.0)),
+            ("color_saturation", Value::Number(100.0)),
+        ]
+    );
+    h.radio
+        .send_command(target(None), Command::MoveToColorTemperature(250), 12_000)
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 500);
+    assert_eq!(
+        colour_events(&events),
+        vec![vec![("light_color_temp", Value::Number(250.0))]]
+    );
+}

@@ -1,0 +1,11 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE654321", "network": "none" },
+  "devices": [
+    { "id": "bulb", "kind": "color-light", "eui64": "00124B00C0102030" }
+  ],
+  "events": [
+    { "at": "2s", "device": "bulb", "do": "join" },
+    { "at": "20s", "device": "bulb", "do": "report", "light_state": "on", "color_temp": 370 },
+    { "at": "25s", "device": "bulb", "do": "report", "color": { "x": 0.3127, "y": 0.329 } }
+  ]
+}

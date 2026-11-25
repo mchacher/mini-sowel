@@ -33,6 +33,8 @@ The categories the device catalog gives a device's data (Sowel's `DataCategory`)
 | `smoke` | IAS fire zones |
 | `light_state` | On/off cluster (0x0006) |
 | `light_brightness` | Level cluster (0x0008) |
+| `light_color_temp` | Color Control cluster (0x0300), colour temperature in mireds |
+| `light_color` | Color Control cluster (0x0300), the `color` object (type `json`) |
 | `battery` | Power configuration cluster (0x0001), percentage |
 | `voltage` | Power configuration cluster (0x0001), battery voltage |
 | `generic` | IAS zone flags (`tamper`, `battery_low`) |
@@ -45,6 +47,8 @@ The categories of a device's orders (Sowel's `OrderCategory`).
 | -------- | --- |
 | `light_toggle` | On/off cluster: on, off, toggle |
 | `set_brightness` | Level cluster: move to level |
+| `set_color_temp` | Color Control cluster: move to color temperature |
+| `set_color` | Color Control cluster: move to color, move to hue and saturation |
 
 ## Events
 

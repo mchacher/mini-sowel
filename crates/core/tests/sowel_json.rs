@@ -566,3 +566,48 @@ fn an_account_serialises_as_sowels_user_and_auth_tokens() {
         json!({"language": "en"})
     );
 }
+
+#[test]
+fn the_colour_data_and_orders_serialise_as_sowels_json_data_and_colour_orders() {
+    let mut devices = Devices::new();
+    let mut random = counter();
+    devices
+        .identified(EUI, Some("TEST"), Some("CLR01"), T0, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[0x0006, 0x0008, 0x0300], T0, &mut random)
+        .unwrap();
+    let actual = serde_json::to_value(&devices.list()[0]).unwrap();
+    let find = |list: &str, key: &str| {
+        let mut item = actual[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["key"] == key)
+            .unwrap()
+            .clone();
+        let object = item.as_object_mut().unwrap();
+        object.remove("id");
+        object.remove("deviceId");
+        item
+    };
+    assert_eq!(
+        find("data", "color"),
+        json!({"key": "color", "type": "json", "category": "light_color", "value": null,
+               "lastUpdated": null})
+    );
+    assert_eq!(
+        find("data", "color_temp"),
+        json!({"key": "color_temp", "type": "number", "category": "light_color_temp",
+               "unit": "mired", "value": null, "lastUpdated": null})
+    );
+    assert_eq!(
+        find("orders", "color_temp"),
+        json!({"key": "color_temp", "type": "number", "category": "set_color_temp",
+               "min": 150, "max": 500})
+    );
+    assert_eq!(
+        find("orders", "color"),
+        json!({"key": "color", "type": "json", "category": "set_color"})
+    );
+}

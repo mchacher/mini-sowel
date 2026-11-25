@@ -540,3 +540,44 @@ fn move_to_level_with_on_off_200_is_01_tsn_04_c8_then_the_transition_and_the_opt
     assert_eq!(Command::MoveToLevel(0).cluster(), CLUSTER_LEVEL_CONTROL);
     assert_eq!(Command::MoveToLevel(0).id(), 0x04);
 }
+
+#[test]
+fn move_to_color_temperature_370_is_01_tsn_0a_then_the_mireds_and_zeros() {
+    let command = Command::MoveToColorTemperature(370);
+    assert_eq!(
+        command.frame(0x06),
+        vec![0x01, 0x06, 0x0A, 0x72, 0x01, 0x00, 0x00, 0x00, 0x00]
+    );
+    assert_eq!(command.cluster(), 0x0300);
+    assert_eq!(command.id(), 0x0A);
+}
+
+#[test]
+fn move_to_color_is_01_tsn_07_then_x_y_and_zeros() {
+    let command = Command::MoveToColor {
+        x: 0x5000,
+        y: 0x5500,
+    };
+    assert_eq!(
+        command.frame(0x07),
+        vec![
+            0x01, 0x07, 0x07, 0x00, 0x50, 0x00, 0x55, 0x00, 0x00, 0x00, 0x00
+        ]
+    );
+    assert_eq!(command.cluster(), 0x0300);
+    assert_eq!(command.id(), 0x07);
+}
+
+#[test]
+fn move_to_hue_and_saturation_is_01_tsn_06_then_hue_saturation_and_zeros() {
+    let command = Command::MoveToHueSaturation {
+        hue: 84,
+        saturation: 254,
+    };
+    assert_eq!(
+        command.frame(0x08),
+        vec![0x01, 0x08, 0x06, 0x54, 0xFE, 0x00, 0x00, 0x00, 0x00]
+    );
+    assert_eq!(command.cluster(), 0x0300);
+    assert_eq!(command.id(), 0x06);
+}

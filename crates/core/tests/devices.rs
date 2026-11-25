@@ -122,7 +122,7 @@ fn every_row_of_the_cluster_table_gives_its_data() {
         ]
     );
     assert!(data_for_cluster(0x0500).is_empty());
-    // The orders: on/off and level only.
+    // The orders: on/off, level and colour.
     assert_eq!(orders_for_cluster(0x0006)[0].category, "light_toggle");
     assert_eq!(orders_for_cluster(0x0008)[0].category, "set_brightness");
     assert!(orders_for_cluster(0x0402).is_empty());
@@ -1198,4 +1198,286 @@ fn an_api_request_after_the_clock_set_moves_the_dates_before_the_statuses() {
     let device = &home.devices.list()[0].device;
     assert_eq!(device.last_seen, Some(BOOT + T0 - 5_000));
     assert_eq!(device.status, DeviceStatus::Online);
+}
+
+// ---- Spec 031: the colour cluster ----
+
+fn colour_bulb() -> Devices {
+    let mut devices = Devices::new();
+    let mut random = counter();
+    devices
+        .identified(EUI, Some("TEST"), Some("CLR01"), T0, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[0x0006, 0x0008, 0x0300], T0, &mut random)
+        .unwrap();
+    devices
+}
+
+fn colour_measure(kind: &'static str, value: f64) -> Measure {
+    Measure {
+        kind,
+        value: Value::Number(value),
+        unit: "",
+        device_value: None,
+    }
+}
+
+/// One frame with these colour measures `(kind, value)`; returns the updates of `color`
+/// (previous value, new value) the registry told.
+fn colour_frame(
+    devices: &mut Devices,
+    parts: &[(&'static str, f64)],
+    at: u64,
+) -> Vec<(serde_json::Value, serde_json::Value)> {
+    let event = MeasureEvent {
+        sender: Sender::Eui64(EUI),
+        endpoint: 1,
+        measures: parts.iter().map(|(k, v)| colour_measure(k, *v)).collect(),
+    };
+    let mut updates = Vec::new();
+    devices
+        .measures_with(&event, at, &mut counter(), &mut |_, data, previous| {
+            if data.key == "color" {
+                updates.push((previous.clone(), data.value.clone()));
+            }
+        })
+        .unwrap();
+    updates
+}
+
+fn colour_of(devices: &Devices) -> serde_json::Value {
+    data_of(devices, "color").value.clone()
+}
+
+#[test]
+fn a_colour_device_gets_the_colour_data_and_orders_in_the_table_order() {
+    let devices = colour_bulb();
+    let item = &devices.list()[0];
+    let data: Vec<_> = item
+        .data
+        .iter()
+        .map(|d| (&*d.key, d.value_type, &*d.category, d.unit.as_deref()))
+        .collect();
+    assert_eq!(
+        data,
+        vec![
+            ("state", ValueType::Boolean, "light_state", None),
+            ("brightness", ValueType::Number, "light_brightness", None),
+            (
+                "color_temp",
+                ValueType::Number,
+                "light_color_temp",
+                Some("mired")
+            ),
+            ("color", ValueType::Json, "light_color", None),
+        ]
+    );
+    let orders: Vec<_> = item
+        .orders
+        .iter()
+        .map(|o| (&*o.key, o.value_type, o.category.as_deref(), o.min, o.max))
+        .collect();
+    assert_eq!(
+        orders,
+        vec![
+            (
+                "state",
+                ValueType::Boolean,
+                Some("light_toggle"),
+                None,
+                None
+            ),
+            (
+                "brightness",
+                ValueType::Number,
+                Some("set_brightness"),
+                Some(0),
+                Some(254)
+            ),
+            (
+                "color_temp",
+                ValueType::Number,
+                Some("set_color_temp"),
+                Some(150),
+                Some(500)
+            ),
+            ("color", ValueType::Json, Some("set_color"), None, None),
+        ]
+    );
+}
+
+#[test]
+fn a_colour_bulb_has_exactly_max_orders_and_no_cluster_could_add_one_that_does_not_fit() {
+    assert_eq!(colour_bulb().list()[0].orders.len(), MAX_ORDERS);
+    // The orders of every cluster of the catalog together stay within the bound.
+    let total: usize = (0..=u16::MAX).map(|c| orders_for_cluster(c).len()).sum();
+    assert!(total <= MAX_ORDERS, "{total} orders in the catalog");
+}
+
+#[test]
+fn x_and_y_in_one_frame_give_one_colour_update_from_null() {
+    let mut devices = colour_bulb();
+    let updates = colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 1000,
+    );
+    assert_eq!(
+        updates,
+        vec![(
+            serde_json::Value::Null,
+            serde_json::json!({"x": 0.2, "y": 0.6})
+        )]
+    );
+    assert_eq!(data_of(&devices, "color").last_changed, Some(T0 + 1000));
+}
+
+#[test]
+fn x_alone_replaces_x_keeps_y_and_moves_last_changed() {
+    let mut devices = colour_bulb();
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 1000,
+    );
+    colour_frame(&mut devices, &[("color_x", 0.3)], T0 + 2000);
+    assert_eq!(colour_of(&devices), serde_json::json!({"x": 0.3, "y": 0.6}));
+    assert_eq!(data_of(&devices, "color").last_changed, Some(T0 + 2000));
+}
+
+#[test]
+fn the_same_colour_again_moves_last_updated_not_last_changed() {
+    let mut devices = colour_bulb();
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 1000,
+    );
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 2000,
+    );
+    let data = data_of(&devices, "color");
+    assert_eq!(
+        (data.last_updated, data.last_changed),
+        (Some(T0 + 2000), Some(T0 + 1000))
+    );
+}
+
+#[test]
+fn hue_saturation_x_and_y_in_one_frame_give_four_fields() {
+    let mut devices = colour_bulb();
+    colour_frame(
+        &mut devices,
+        &[
+            ("color_hue", 120.0),
+            ("color_saturation", 100.0),
+            ("color_x", 0.2),
+            ("color_y", 0.6),
+        ],
+        T0 + 1000,
+    );
+    assert_eq!(
+        colour_of(&devices),
+        serde_json::json!({"x": 0.2, "y": 0.6, "hue": 120, "saturation": 100})
+    );
+}
+
+#[test]
+fn hue_and_saturation_after_x_and_y_drop_the_xy_group_and_back() {
+    let mut devices = colour_bulb();
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 1000,
+    );
+    colour_frame(
+        &mut devices,
+        &[("color_hue", 120.0), ("color_saturation", 100.0)],
+        T0 + 2000,
+    );
+    assert_eq!(
+        colour_of(&devices),
+        serde_json::json!({"hue": 120, "saturation": 100})
+    );
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.3), ("color_y", 0.3)],
+        T0 + 3000,
+    );
+    assert_eq!(colour_of(&devices), serde_json::json!({"x": 0.3, "y": 0.3}));
+}
+
+/// A device list whose `color` data holds this value, as read from storage.
+fn colour_stored(value: serde_json::Value) -> Devices {
+    let mut list = colour_bulb().snapshot();
+    for data in &mut list[0].data {
+        if data.key == "color" {
+            data.value = value.clone();
+        }
+    }
+    Devices::from_list(list)
+}
+
+#[test]
+fn a_colour_stored_as_a_number_is_replaced_by_the_next_fields_alone() {
+    let mut devices = colour_stored(serde_json::json!(5));
+    colour_frame(&mut devices, &[("color_y", 0.4)], T0 + 1000);
+    assert_eq!(colour_of(&devices), serde_json::json!({"y": 0.4}));
+}
+
+#[test]
+fn a_stored_colour_with_extra_or_non_numeric_fields_keeps_only_the_numeric_four() {
+    let mut devices = colour_stored(serde_json::json!({"x": 0.1, "y": 0.1, "z": 1, "hue": "a"}));
+    colour_frame(&mut devices, &[("color_y", 0.4)], T0 + 1000);
+    assert_eq!(colour_of(&devices), serde_json::json!({"x": 0.1, "y": 0.4}));
+}
+
+#[test]
+fn the_colour_object_is_kept_in_devices_json_with_type_json_and_read_back() {
+    let mut devices = colour_bulb();
+    colour_frame(
+        &mut devices,
+        &[("color_x", 0.2), ("color_y", 0.6)],
+        T0 + 1000,
+    );
+    let json = devices.to_json().unwrap();
+    let file: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let color = file[0]["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["key"] == "color")
+        .unwrap();
+    assert_eq!(color["type"], "json");
+    assert_eq!(color["value"], serde_json::json!({"x": 0.2, "y": 0.6}));
+    let later = Devices::from_list(parse_list(&json).unwrap());
+    assert_eq!(later.list(), devices.list());
+    assert_eq!(colour_of(&later), serde_json::json!({"x": 0.2, "y": 0.6}));
+}
+
+#[test]
+fn a_colour_temperature_measure_sets_the_color_temp_number() {
+    let mut devices = colour_bulb();
+    let event = MeasureEvent {
+        sender: Sender::Eui64(EUI),
+        endpoint: 1,
+        measures: vec![decode(0x0300, 0x0007, 0x21, &370u16.to_le_bytes()).unwrap()],
+    };
+    devices.measures(&event, T0 + 1000, &mut counter()).unwrap();
+    assert_eq!(
+        data_of(&devices, "color_temp").value,
+        serde_json::json!(370)
+    );
+}
+
+#[test]
+fn a_colour_measure_from_a_device_without_colour_data_is_ignored() {
+    let mut devices = Devices::new();
+    snzb02(&mut devices, &mut counter());
+    let updates = colour_frame(&mut devices, &[("color_x", 0.2)], T0 + 1000);
+    assert!(updates.is_empty());
+    assert!(!keys(&devices.list()[0]).contains(&"color"));
 }

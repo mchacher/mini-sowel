@@ -13,6 +13,9 @@ pub enum Kind {
     /// A mains-powered dimmable light: the relay's commands and Move to Level with On/Off. Only
     /// the tests of brightness orders use it (spec 011); no shipped scenario has one.
     Dimmer,
+    /// A mains-powered colour light: the dimmer's commands plus the Color Control cluster (Move to
+    /// Color Temperature, Move to Color, Move to Hue and Saturation, spec 031).
+    ColorLight,
 }
 
 impl Kind {
@@ -23,6 +26,7 @@ impl Kind {
             Kind::Motion => "motion",
             Kind::Relay => "relay",
             Kind::Dimmer => "dimmer",
+            Kind::ColorLight => "color-light",
         }
     }
 
@@ -33,6 +37,7 @@ impl Kind {
             Kind::Motion,
             Kind::Relay,
             Kind::Dimmer,
+            Kind::ColorLight,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -45,6 +50,7 @@ impl Kind {
             Kind::Motion => 0x0402,
             Kind::Relay => 0x0100,
             Kind::Dimmer => 0x0101,
+            Kind::ColorLight => 0x010D,
         }
     }
 }
@@ -58,6 +64,10 @@ pub struct DeviceReport {
     pub battery: Option<u8>,
     pub motion: Option<bool>,
     pub light_state: Option<bool>,
+    /// A colour temperature in mireds (150 to 500), `color-light` only.
+    pub color_temp: Option<u16>,
+    /// A colour as X and Y (each 0 to 1), `color-light` only: one frame with both attributes.
+    pub color: Option<(f64, f64)>,
 }
 
 /// A character attribute of the simulated device.
@@ -148,6 +158,27 @@ pub fn level_report(tsn: u8, level: u8) -> Vec<u8> {
     report_frame(tsn, &[(0x0000, 0x20, vec![level])])
 }
 
+/// A colour temperature report: the `ColorTemperatureMireds` attribute (uint16).
+pub fn color_temp_report(tsn: u8, mireds: u16) -> Vec<u8> {
+    report_frame(tsn, &[(0x0007, 0x21, mireds.to_le_bytes().to_vec())])
+}
+
+/// A colour report: `CurrentX` and `CurrentY` (uint16, raw units) in one frame.
+pub fn color_xy_report(tsn: u8, x: u16, y: u16) -> Vec<u8> {
+    report_frame(
+        tsn,
+        &[
+            (0x0003, 0x21, x.to_le_bytes().to_vec()),
+            (0x0004, 0x21, y.to_le_bytes().to_vec()),
+        ],
+    )
+}
+
+/// The raw CurrentX or CurrentY of a value from 0 to 1.
+pub fn color_raw(value: f64) -> u16 {
+    ((value * 65535.0).round() as u16).min(0xFEFF)
+}
+
 /// An IAS Zone Status Change Notification (cluster-specific, server to client): the alarm bit
 /// is set or cleared.
 pub fn zone_notification(tsn: u8, alarm: bool) -> Vec<u8> {
@@ -233,6 +264,13 @@ pub struct SimDevice {
     pub(crate) relay_on: bool,
     /// The level of a dimmer (0 to 254).
     pub(crate) level: u8,
+    /// The colour state of a colour light, in ZCL's raw units: mireds, CurrentX, CurrentY, hue and
+    /// saturation (0 to 254). A hue and saturation command leaves X and Y unchanged.
+    pub(crate) color_temp: u16,
+    pub(crate) color_x: u16,
+    pub(crate) color_y: u16,
+    pub(crate) hue: u8,
+    pub(crate) saturation: u8,
     /// The CIE address was written to the IAS zone (the first half of the enrollment).
     pub(crate) cie_written: bool,
     /// The Zone Enroll Response was received: the zone reports.
@@ -249,20 +287,27 @@ pub struct SimDevice {
     pub ignore_zone_reads: u32,
     /// Number of IAS zone reads it answers; the next ones get no answer.
     pub zone_reads_answered: u32,
-    /// The device answers no On/Off or Level Control command or read, and changes nothing (the
-    /// tests of orders; kept in the radio's memory file so a test can set it between two runs).
+    /// The device answers no On/Off, Level Control or Color Control command or read, and changes
+    /// nothing (the tests of orders; kept in the radio's memory file so a test can set it between
+    /// two runs).
     pub silent: bool,
     /// The radio's address table answers "unknown" to a lookup of this device's address (a test
     /// switch: the host then reaches it only at the address its own files keep; kept in the
     /// memory file like `silent`).
     pub lookup_unknown: bool,
-    /// The device answers every On/Off or Level Control command with a Default Response of this
-    /// status, and changes nothing.
+    /// The device answers every On/Off, Level Control or Color Control command with a Default
+    /// Response of this status, and changes nothing.
     pub refuse_commands: Option<u8>,
     // State of the run, not kept.
     pub(crate) awake_until: u64,
     pub(crate) tsn: u8,
 }
+
+/// The colour state of a colour light before any command: 370 mireds, X 0.3127 and Y 0.3290 (D65
+/// white).
+pub(crate) const DEFAULT_COLOR_TEMP: u16 = 370;
+pub(crate) const DEFAULT_COLOR_X: u16 = 20_493;
+pub(crate) const DEFAULT_COLOR_Y: u16 = 21_561;
 
 /// Announce capability of a battery device: allocate address only.
 const CAPABILITY_BATTERY: u8 = 0x80;
@@ -314,6 +359,11 @@ impl SimDevice {
             reports_sent: false,
             relay_on: false,
             level: 0,
+            color_temp: DEFAULT_COLOR_TEMP,
+            color_x: DEFAULT_COLOR_X,
+            color_y: DEFAULT_COLOR_Y,
+            hue: 0,
+            saturation: 0,
             cie_written: false,
             enrolled: false,
             cie: [0; 8],
@@ -364,6 +414,12 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008],
                 false,
             ),
+            Kind::ColorLight => (
+                "TEST",
+                "CLR01",
+                vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300],
+                false,
+            ),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
@@ -373,7 +429,7 @@ impl SimDevice {
             device.zone_type = Some(0x000D);
         }
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
-        if matches!(kind, Kind::Relay | Kind::Dimmer) {
+        if matches!(kind, Kind::Relay | Kind::Dimmer | Kind::ColorLight) {
             device.capability = CAPABILITY_MAINS;
         }
         device
