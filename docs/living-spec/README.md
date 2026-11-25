@@ -175,7 +175,8 @@ storage error logs and stops the loop without resetting the radio.
   its `reporting:` line); a failed or unconfirmed enrollment is tried once more when the device
   next speaks; enrollment requests are answered in every mode;
 - after identification, the host sets up the device's reporting: it binds each standard cluster
-  the device has (temperature, humidity, pressure, illuminance, occupancy, on/off, level, power)
+  the device has (temperature, humidity, pressure, illuminance, occupancy, on/off, level, colour,
+  power)
   to itself and asks for reports (`reporting: <address> temperature, humidity, battery`, or
   `reporting: <address> failed: <clusters>`, both parts when some succeed and some fail,
   `reporting: <address> none` when the device has none of them); a failed setup is tried once more when the device
@@ -241,11 +242,15 @@ listening
 
 Measures are read from the standard Zigbee clusters, without a device definition, and named as
 in Sowel: `temperature` (°C), `humidity` (%), `pressure` (hPa), `luminosity` (lx), `motion`,
-`light_state`, `light_brightness` (%), `battery` (%), `voltage` (V), and `alarm`, `tamper`
-(IAS zone notifications, sent by enrolled alarm devices); booleans are shown
-`motion true`, `light_state on`. The banner and the radio's lines come first, as with `--pair`.
+`light_state`, `light_brightness` (%), `light_color_temp` (mired), the parts of a colour
+`color_x`, `color_y` (0 to 1, four decimals), `color_hue` (°), `color_saturation` (%), `battery`
+(%), `voltage` (V), and `alarm`, `tamper` (IAS zone notifications, sent by enrolled alarm
+devices); booleans are shown `motion true`, `light_state on`. A colour bulb's reporting is set up
+for its colour temperature and X/Y (`light_color` in the `reporting:` line). The banner and the radio's lines come first, as with `--pair`.
 Invalid values and
-implausible ones (temperature outside −50 to 150 °C, humidity outside 0 to 100 %) are not shown.
+implausible ones (temperature outside −50 to 150 °C, humidity outside 0 to 100 %, a colour
+temperature of 0 or above 1000 mireds, X or Y above `0xFEFF`, a hue or saturation of 255) are not
+shown.
 A device is shown by its 64-bit address, or by its network address when the radio does not know
 it. The host answers each report as Zigbee requires (a default response). A sensor reports at most
 every 30 s and at least every hour; its battery every few hours.
@@ -266,9 +271,16 @@ equipment's data), so a device heard during the wait shows the real date and sta
 
 Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugin names them:
 `temperature` (°C), `humidity` (%), `pressure` (hPa), `illuminance` (luminosity, lx), `occupancy`
-(motion), `state` (light_state), `brightness` (0 to 254), `battery` (%), `voltage` (mV); each with
-its last `value` and `lastUpdated`. Its orders (`DeviceOrder`): `state` (light_toggle, `ON` /
-`OFF`) for an on/off device, `brightness` (set_brightness, 0 to 254) for a dimmable one. A device
+(motion), `state` (light_state), `brightness` (0 to 254), `color_temp` (light_color_temp, mired),
+`color` (light_color, type `json`), `battery` (%), `voltage` (mV); each with its last `value` and
+`lastUpdated`. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
+and `saturation` (0 to 100): the colour measures of one message replace their fields once (one
+`device.data.updated`), and a message carrying X/Y and no hue/saturation drops hue and saturation
+(and the reverse), so the object never mixes two colours. Its orders (`DeviceOrder`): `state`
+(light_toggle, `ON` / `OFF`) for an on/off device, `brightness` (set_brightness, 0 to 254) for a
+dimmable one, `color_temp` (set_color_temp, 150 to 500) and `color` (set_color, type `json`) for a
+colour one (every device with the colour cluster, a tunable white bulb included). A colour bulb
+paired before this was possible keeps only its on/off and level data until paired again. A device
 paired again keeps its id and name. Alarm devices (IAS zone: motion, contact, water leak, smoke sensors) also get the data of their
 zone: `occupancy` (motion), `contact` (contact_door, true when closed), `water_leak`, `smoke`, and
 `tamper` and `battery_low` (generic) once the device first reports them. Alarm devices paired
@@ -488,14 +500,20 @@ enabled and disabled (see "Shows the home in the browser").
   its bindings, with Sowel's binding rules (every data and order the type may bind; the
   interface's form instead binds one channel of a lighting relay or shutter, Sowel's candidates): `light_color` (an on/off order and a colour
   data or order), `light_dimmable` (with a brightness), `light_onoff` (on/off only, the
-  ZBMINIR2), `shutter`, `thermostat`, `button`, `sensor` (a measure of Sowel's sensor
+  ZBMINIR2), a colour bulb (cluster `0x0300`) being `light_color` with `state`, `brightness`,
+  `color_temp` and `color` bound both ways, `shutter`, `thermostat`, `button`, `sensor` (a measure of Sowel's sensor
   categories), or none (battery only); bindings under Sowel's aliases, `state_2` for a second
   `state`, at most 16 of each kind. Not exposed by the API (Sowel has no such route); nothing
   computes it per measure.
 - **Orders**: `POST /api/v1/equipments/:id/orders/:alias {"value": ...}` sends the order bound
   under that alias to its devices, as Sowel: `state` takes `true`/`false`, `"on"`/`"off"`,
   `"true"`/`"false"`, `1`/`0` (any case, spaces ignored; empty means on) or `"toggle"`;
-  `brightness` takes 0 to 254 (255 counts as 254). Answers: `{"success":true}` when a device
+  `brightness` takes 0 to 254 (255 counts as 254); `color_temp` takes a whole number of mireds
+  from 150 to 500 (a number or a numeric string); `color` takes `{"x": .., "y": ..}` (0 to 1) or
+  `{"hue": .., "saturation": ..}` (0 to 360, 0 to 100), `x`/`y` first when both are given,
+  anything else 400 `Invalid value for color`. The value is read back once the device
+  acknowledges. A colour order is sent with ZCL options 0, as Zigbee2MQTT: a bulb that is off may
+  ignore it while answering success. Answers: `{"success":true}` when a device
   acknowledged; 502 with the reason (`device did not answer`, `device refused the command
   (status 0x..)`, `radio busy`, `device address unknown`) otherwise; 404 `Equipment not found`,
   400 `Equipment is disabled`, 404 `Order alias not found: <alias>`, 400 `Invalid value for
@@ -815,11 +833,12 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `temperature-humidity` | eWeLink TH01 (Sonoff SNZB-02) | temperature, humidity, battery; asleep except 10 s after joining or reporting |
 | `motion` | eWeLink MS01 (Sonoff SNZB-03) | enrolled at pairing; then `alarm true` on motion, and `alarm false` 60 s of scenario time later |
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
+| `color-light` | TEST CLR01 (synthetic colour bulb, mains) | `light_state`, `light_brightness`, `light_color_temp`, `color_x`/`color_y` (and `color_hue`/`color_saturation` when read) after its commands (on/off, level, colour temperature, XY, hue and saturation, applied even when off); a report takes `light_state`, `color_temp` (150 to 500) and `color` (`{"x", "y"}`, 0 to 1, one message) |
 
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
-`scenarios/snzb02.json` (one sensor) and `scenarios/garage.json` (a sensor, a motion sensor, a
-relay).
+`scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
+relay) and `scenarios/color-light.json` (one colour bulb).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing
@@ -1033,3 +1052,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 027 | The Sowel contract checked (snapshot, subset and deviations); Sowel's 31 equipment types and optional equipment fields; `light_color`; a paired device's type and bindings proposed in the core; `GET /api/v1/system/timezone` |
 | 028 | Core fixes: the dates of a device taken before the clock is set move by its jump; a motion-light button without an `action` binding leaves the settings instead of disabling the recipe; a running motion-light follows its zone's motion sensors as they change |
 | 029 | A password at commissioning, confirmed at the box: one account, Sowel's `/auth` routes and bearer token on every route and on `/ws`, the box's pairing route behind the token, a factory reset |
+| 031 | The colour cluster: a colour bulb's colour temperature and colour read, its colour orders sent, proposed as `light_color`; a simulated colour bulb |

@@ -93,7 +93,7 @@ fn unknown_fields_kinds_devices_and_duplicates_name_the_field() {
     );
     assert_eq!(
         error(r#"{ "devices": [ { "id": "a", "kind": "lamp", "eui64": "00124B0000000001" } ] }"#),
-        "scenario: s.json: devices[0].kind: unknown kind \"lamp\" (temperature-humidity, motion or relay)"
+        "scenario: s.json: devices[0].kind: unknown kind \"lamp\" (temperature-humidity, motion, relay, dimmer or color-light)"
     );
     assert_eq!(
         error(&with_event(
@@ -393,4 +393,98 @@ fn a_scenario_is_finished_once_its_last_event_has_played() {
     )
     .unwrap();
     assert!(transport.finished());
+}
+
+/// A scenario with one colour bulb and the event given.
+fn with_bulb_event(event: &str) -> String {
+    format!(
+        r#"{{ "devices": [
+            {{ "id": "bulb", "kind": "color-light", "eui64": "00124B0000000003" }},
+            {{ "id": "relay", "kind": "relay", "eui64": "00124B0000000002" }}
+        ], "events": [ {event} ] }}"#
+    )
+}
+
+#[test]
+fn a_color_light_report_with_a_colour_temperature_and_a_colour_parses() {
+    let scenario = Scenario::parse(
+        &with_bulb_event(
+            r#"{ "at": "1s", "device": "bulb", "do": "report", "light_state": "on",
+                 "color_temp": 370, "color": { "x": 0.25, "y": 0.5 } }"#,
+        ),
+        "s.json",
+    )
+    .unwrap();
+    assert_eq!(scenario.devices[0].kind, Kind::ColorLight);
+    assert_eq!(
+        scenario.events[0].action,
+        Action::Report(DeviceReport {
+            light_state: Some(true),
+            color_temp: Some(370),
+            color: Some((0.25, 0.5)),
+            ..DeviceReport::default()
+        })
+    );
+}
+
+#[test]
+fn a_colour_field_that_is_not_allowed_or_out_of_range_names_the_event_and_the_field() {
+    let event = |fields: &str, device: &str| {
+        with_bulb_event(&format!(
+            r#"{{ "at": "1s", "device": "{device}", "do": "report", {fields} }}"#
+        ))
+    };
+    for (fields, device, message) in [
+        (
+            r#""color": {"x": 0.1, "y": 0.1}"#,
+            "relay",
+            "events[0].color: not allowed for kind relay",
+        ),
+        (
+            r#""color_temp": 370"#,
+            "relay",
+            "events[0].color_temp: not allowed for kind relay",
+        ),
+        (
+            r#""color_temp": 100"#,
+            "bulb",
+            "events[0].color_temp: must be a whole number from 150 to 500",
+        ),
+        (
+            r#""color_temp": 501"#,
+            "bulb",
+            "events[0].color_temp: must be a whole number from 150 to 500",
+        ),
+        (
+            r#""color": {"x": 2, "y": 0}"#,
+            "bulb",
+            "events[0].color.x: must be a number from 0 to 1",
+        ),
+        (
+            r#""color": {"x": 0.2}"#,
+            "bulb",
+            "events[0].color.y: required",
+        ),
+        (
+            r#""color": {"x": 0.2, "y": 0.2, "z": 1}"#,
+            "bulb",
+            "events[0].color.z: unknown field",
+        ),
+        (
+            r#""color": 5"#,
+            "bulb",
+            "events[0].color: must be an object with x and y",
+        ),
+        (
+            r#""temperature": 20"#,
+            "bulb",
+            "events[0].temperature: not allowed for kind color-light",
+        ),
+    ] {
+        assert_eq!(
+            error(&event(fields, device)),
+            format!("scenario: s.json: {message}"),
+            "{fields}"
+        );
+    }
 }

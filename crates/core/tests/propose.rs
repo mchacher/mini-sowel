@@ -257,3 +257,30 @@ fn an_alias_past_32_characters_is_left_out() {
     ));
     assert_eq!(aliases(&p.data), ["t"], "the long alias is left out");
 }
+
+#[test]
+fn a_paired_colour_bulb_is_a_light_color_with_its_four_data_and_four_orders() {
+    // The registry's own device for the clusters 0x0006, 0x0008 and 0x0300 (spec 031).
+    let mut rig = Rig::new();
+    let e = eui(0x7D);
+    rig.home.devices.announced(e, 0x8C, rig.now);
+    rig.home
+        .devices
+        .identified(e, Some("TEST"), Some("CLR01"), rig.now, &mut *rig.random)
+        .unwrap();
+    rig.home
+        .devices
+        .reporting_configured(e, &[0x0006, 0x0008, 0x0300], rig.now, &mut *rig.random)
+        .unwrap();
+    let device = held(&rig, &rig.device(0x7D));
+    let p = proposal(&device);
+    assert_eq!(p.kind, EquipmentType::LightColor);
+    assert_eq!(
+        aliases(&p.data),
+        ["state", "brightness", "color_temp", "color"]
+    );
+    assert_eq!(
+        aliases(&p.orders),
+        ["state", "brightness", "color_temp", "color"]
+    );
+}

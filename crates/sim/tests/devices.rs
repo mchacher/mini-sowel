@@ -197,3 +197,70 @@ fn a_second_pairing_finds_the_sensor_enrolled_with_our_address_and_writes_nothin
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+const BULB: &str = r#"{
+  "devices": [ { "id": "bulb", "kind": "color-light", "eui64": "00124B0000000004" } ],
+  "events": [
+    { "at": "2s", "device": "bulb", "do": "join" },
+    { "at": "20s", "device": "bulb", "do": "report", "color_temp": 370 },
+    { "at": "25s", "device": "bulb", "do": "report", "color": { "x": 0.3127, "y": 0.329 } }
+  ]
+}"#;
+
+#[test]
+fn a_color_light_is_a_test_clr01_mains_device_with_the_seven_clusters() {
+    let mut s = sim(BULB, None, 1);
+    s.start().unwrap();
+    {
+        let ncp = s.ncp.borrow();
+        assert_eq!(
+            ncp.devices[0].input_clusters,
+            vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300]
+        );
+        assert_eq!(ncp.devices[0].capability, 0x8C, "mains powered");
+        assert!(ncp.devices[0].sleepy_ms.is_none());
+    }
+    let events = s.pair(30);
+    assert_eq!(
+        identified(&events),
+        vec![(Some("TEST".to_string()), Some("CLR01".to_string()))]
+    );
+}
+
+#[test]
+fn a_color_light_scenario_plays_the_colour_temperature_and_the_colour_once_reporting_is_set_up() {
+    let mut s = sim(BULB, None, 1);
+    s.start().unwrap();
+    let events = s.pair(40);
+    assert_eq!(
+        measure_lines(&events),
+        vec![
+            "0x00124B0000000004 light_color_temp 370 mired".to_string(),
+            "0x00124B0000000004 color_x 0.3127".to_string(),
+            "0x00124B0000000004 color_y 0.329".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn the_shipped_color_light_scenario_shows_its_reporting_and_its_colour() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scenarios/color-light.json"
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut s = sim(&text, None, 1);
+    s.start().unwrap();
+    let events = s.pair(40);
+    let lines = measure_lines(&events);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.ends_with("light_color_temp 370 mired")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("color_x 0.3127")),
+        "{lines:?}"
+    );
+}

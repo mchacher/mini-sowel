@@ -636,6 +636,10 @@ impl Devices {
                 }
                 continue;
             }
+            if colour_field(measure.kind).is_some() {
+                // Merged into the `color` object once the frame is read, below.
+                continue;
+            }
             let Some(key) = catalog::key_for_measure(measure.kind) else {
                 continue;
             };
@@ -652,9 +656,64 @@ impl Devices {
             let previous = set_value(data, value, now);
             updated(device, data, &previous);
         }
+        self.merge_colour(index, event, now, updated);
         self.mark_seen(index, now);
         self.refresh_status(now);
         Ok(())
+    }
+
+    /// The colour measures of one frame, merged into the `color` object (Zigbee2MQTT's, spec 031)
+    /// with one update. The fields received replace theirs; a frame that carries a field of one
+    /// group (`x`, `y` or `hue`, `saturation`) and none of the other drops the other group, whose
+    /// values would contradict the new colour. Of the previous value only the numeric `x`, `y`,
+    /// `hue`, `saturation` are kept: the object never holds more than these four fields.
+    fn merge_colour(
+        &mut self,
+        index: usize,
+        event: &MeasureEvent,
+        now: u64,
+        updated: &mut dyn FnMut(&Device, &DeviceData, &Value),
+    ) {
+        let received: Vec<(&'static str, f64)> = event
+            .measures
+            .iter()
+            .filter_map(|m| match (colour_field(m.kind), m.value) {
+                (Some(field), MeasureValue::Number(n)) => Some((field, n)),
+                _ => None,
+            })
+            .take(COLOUR_FIELDS.len())
+            .collect();
+        if received.is_empty() {
+            return;
+        }
+        let DeviceWithDetails { device, data, .. } = &mut self.items[index];
+        let Some(data) = data
+            .iter_mut()
+            .find(|d| d.key == "color" && d.value_type == ValueType::Json)
+        else {
+            return;
+        };
+        let has_xy = received.iter().any(|(f, _)| *f == "x" || *f == "y");
+        let has_hs = received
+            .iter()
+            .any(|(f, _)| *f == "hue" || *f == "saturation");
+        let mut object = serde_json::Map::new();
+        if let Value::Object(previous) = &data.value {
+            for field in COLOUR_FIELDS {
+                let in_xy = field == "x" || field == "y";
+                if (in_xy && has_hs && !has_xy) || (!in_xy && has_xy && !has_hs) {
+                    continue;
+                }
+                if let Some(number @ Value::Number(_)) = previous.get(field) {
+                    object.insert(field.to_string(), number.clone());
+                }
+            }
+        }
+        for (field, value) in received {
+            object.insert(field.to_string(), json_number(value));
+        }
+        let previous = set_value(data, Value::Object(object), now);
+        updated(device, data, &previous);
     }
 
     /// Applies one event of the radio. Returns the lines to show.
@@ -775,6 +834,20 @@ impl Devices {
     fn was_deleted(&self, eui64: &[u8; 8]) -> bool {
         let text = eui_string(eui64);
         self.deleted.iter().any(|d| **d == *text)
+    }
+}
+
+/// The fields of the `color` object, the most it holds (R2 of spec 031).
+const COLOUR_FIELDS: [&str; 4] = ["x", "y", "hue", "saturation"];
+
+/// The field of the `color` object a colour measure gives.
+fn colour_field(kind: &str) -> Option<&'static str> {
+    match kind {
+        "color_x" => Some("x"),
+        "color_y" => Some("y"),
+        "color_hue" => Some("hue"),
+        "color_saturation" => Some("saturation"),
+        _ => None,
     }
 }
 

@@ -10,7 +10,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use solite_core::engine::recover_interrupted_save;
 
-use crate::devices::SimDevice;
+use crate::devices::{DEFAULT_COLOR_TEMP, DEFAULT_COLOR_X, DEFAULT_COLOR_Y, SimDevice};
 use crate::ncp::StoredNetwork;
 
 /// Network key then trust-centre key.
@@ -28,6 +28,18 @@ struct NetworkMemory {
     /// 32 hexadecimal digits each, when the radio received them.
     network_key: Option<String>,
     trust_center_key: Option<String>,
+}
+
+fn default_color_temp() -> u16 {
+    DEFAULT_COLOR_TEMP
+}
+
+fn default_color_x() -> u16 {
+    DEFAULT_COLOR_X
+}
+
+fn default_color_y() -> u16 {
+    DEFAULT_COLOR_Y
 }
 
 /// One joined device as the file keeps it.
@@ -52,7 +64,20 @@ pub struct DeviceMemory {
     /// The level of a dimmer; absent in a file written before spec 011.
     #[serde(default)]
     level: u8,
-    /// The device answers no On/Off or Level Control frame (a test switch, spec 011).
+    /// The colour state of a colour light (spec 031); absent in a file written before, which
+    /// reads the defaults.
+    #[serde(default = "default_color_temp")]
+    color_temp: u16,
+    #[serde(default = "default_color_x")]
+    color_x: u16,
+    #[serde(default = "default_color_y")]
+    color_y: u16,
+    #[serde(default)]
+    hue: u8,
+    #[serde(default)]
+    saturation: u8,
+    /// The device answers no On/Off, Level Control or Color Control frame (a test switch,
+    /// spec 011).
     #[serde(default)]
     silent: bool,
     /// The radio's address table does not know the device (a test switch).
@@ -100,6 +125,11 @@ impl DeviceMemory {
         device.enrolled = self.enrolled;
         device.cie = unhex(&self.cie).unwrap_or([0; 8]);
         device.level = self.level;
+        device.color_temp = self.color_temp;
+        device.color_x = self.color_x;
+        device.color_y = self.color_y;
+        device.hue = self.hue;
+        device.saturation = self.saturation;
         device.silent = self.silent;
         device.lookup_unknown = self.lookup_unknown;
     }
@@ -136,6 +166,11 @@ impl Memory {
                     enrolled: d.enrolled,
                     cie: hex(&d.cie),
                     level: d.level,
+                    color_temp: d.color_temp,
+                    color_x: d.color_x,
+                    color_y: d.color_y,
+                    hue: d.hue,
+                    saturation: d.saturation,
                     silent: d.silent,
                     lookup_unknown: d.lookup_unknown,
                 })
@@ -263,4 +298,65 @@ pub fn save(file: &Path, memory: &Memory) -> Result<(), String> {
     let _ = fs::remove_file(file);
     fs::rename(&complete, file).map_err(|e| cannot(&e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::Kind;
+
+    /// A file written before spec 031 has no colour fields: they read as the colour light's
+    /// defaults, and the file is readable.
+    #[test]
+    fn a_memory_file_without_colour_fields_reads_with_the_defaults() {
+        let text = r#"{ "network": null, "devices": [ { "eui64Wire": "00124B0000000003", "nwk": 8193,
+            "joined": true, "bound": true, "configured": [], "configuredAttributes": [],
+            "reportsSent": false, "relayOn": true, "cieWritten": false, "enrolled": false } ] }"#;
+        let memory: Memory = serde_json::from_str(text).unwrap();
+        let mut device =
+            SimDevice::of_kind(Kind::ColorLight, memory.devices[0].eui_wire(), None, None);
+        device.color_temp = 1;
+        device.color_x = 1;
+        device.color_y = 1;
+        device.hue = 1;
+        device.saturation = 1;
+        memory.devices[0].apply_to(&mut device);
+        assert_eq!(
+            (
+                device.color_temp,
+                device.color_x,
+                device.color_y,
+                device.hue,
+                device.saturation
+            ),
+            (DEFAULT_COLOR_TEMP, DEFAULT_COLOR_X, DEFAULT_COLOR_Y, 0, 0)
+        );
+        assert!(device.relay_on);
+    }
+
+    #[test]
+    fn the_colour_state_is_kept_and_read_back() {
+        let mut device = SimDevice::of_kind(Kind::ColorLight, [1; 8], None, None);
+        device.joined = true;
+        device.color_temp = 250;
+        device.color_x = 13107;
+        device.color_y = 39321;
+        device.hue = 85;
+        device.saturation = 254;
+        let memory = Memory::new(None, None, &[device]);
+        let text = serde_json::to_string(&memory).unwrap();
+        let back: Memory = serde_json::from_str(&text).unwrap();
+        let mut other = SimDevice::of_kind(Kind::ColorLight, [1; 8], None, None);
+        back.devices[0].apply_to(&mut other);
+        assert_eq!(
+            (
+                other.color_temp,
+                other.color_x,
+                other.color_y,
+                other.hue,
+                other.saturation
+            ),
+            (250, 13107, 39321, 85, 254)
+        );
+    }
 }

@@ -1,6 +1,6 @@
 //! Reading measures from the standard clusters: bytes in, measures out.
 
-use solite_core::radio::measures::{Measure, Value, decode};
+use solite_core::radio::measures::{Measure, REPORTING, Value, cluster_name, decode};
 
 const TEMPERATURE: u16 = 0x0402;
 const HUMIDITY: u16 = 0x0405;
@@ -150,4 +150,82 @@ fn an_unknown_cluster_or_attribute_is_none() {
     assert_eq!(decode(0x1234, 0x0000, 0x29, &[1, 0]), None);
     assert_eq!(decode(TEMPERATURE, 0x0001, 0x29, &[1, 0]), None);
     assert_eq!(decode(POWER, 0x0000, 0x20, &[1]), None);
+}
+
+const COLOR: u16 = 0x0300;
+
+#[test]
+fn color_temperature_370_is_370_mired_and_0_1001_or_a_wrong_type_give_none() {
+    assert_eq!(
+        number(uint16(COLOR, 0x0007, 370)),
+        ("light_color_temp", 370.0, "mired")
+    );
+    assert_eq!(uint16(COLOR, 0x0007, 0), None);
+    assert_eq!(uint16(COLOR, 0x0007, 1001), None);
+    assert_eq!(number(uint16(COLOR, 0x0007, 1000)).1, 1000.0);
+    // uint8 instead of uint16.
+    assert_eq!(decode(COLOR, 0x0007, 0x20, &[100]), None);
+}
+
+#[test]
+fn color_x_and_y_are_the_raw_value_over_65535_on_four_decimals() {
+    assert_eq!(
+        number(uint16(COLOR, 0x0003, 0x5000)),
+        ("color_x", 0.3125, "")
+    );
+    assert_eq!(
+        number(uint16(COLOR, 0x0004, 0x5500)),
+        ("color_y", 0.332, "")
+    );
+    assert_eq!(number(uint16(COLOR, 0x0003, 0xFEFF)).1, 0.9961);
+    assert_eq!(uint16(COLOR, 0x0003, 0xFF00), None);
+    assert_eq!(uint16(COLOR, 0x0004, 0xFFFF), None);
+    assert_eq!(decode(COLOR, 0x0003, 0x20, &[0x50]), None);
+}
+
+#[test]
+fn hue_127_and_saturation_254_are_180_degrees_and_100_percent_and_255_is_none() {
+    let hue = |raw| decode(COLOR, 0x0000, 0x20, &[raw]);
+    let saturation = |raw| decode(COLOR, 0x0001, 0x20, &[raw]);
+    assert_eq!(number(hue(127)), ("color_hue", 180.0, "°"));
+    assert_eq!(number(saturation(254)), ("color_saturation", 100.0, "%"));
+    assert_eq!(hue(255), None);
+    assert_eq!(saturation(255), None);
+    assert_eq!(decode(COLOR, 0x0000, 0x21, &[127, 0]), None);
+}
+
+#[test]
+fn the_colour_measures_are_shown_with_their_unit() {
+    assert_eq!(
+        uint16(COLOR, 0x0007, 370).unwrap().to_string(),
+        "light_color_temp 370 mired"
+    );
+    assert_eq!(
+        uint16(COLOR, 0x0003, 0x5000).unwrap().to_string(),
+        "color_x 0.3125"
+    );
+    assert_eq!(
+        decode(COLOR, 0x0000, 0x20, &[127]).unwrap().to_string(),
+        "color_hue 180 °"
+    );
+    assert_eq!(
+        decode(COLOR, 0x0001, 0x20, &[254]).unwrap().to_string(),
+        "color_saturation 100 %"
+    );
+}
+
+#[test]
+fn the_reporting_setup_has_nine_entries_with_colour_after_level_and_before_power() {
+    assert_eq!(REPORTING.len(), 9);
+    let clusters: Vec<u16> = REPORTING.iter().map(|r| r.cluster).collect();
+    let position = |cluster| clusters.iter().position(|c| *c == cluster).unwrap();
+    assert_eq!(position(COLOR), position(LEVEL) + 1);
+    assert_eq!(position(POWER), position(COLOR) + 1);
+    let attributes: Vec<u16> = REPORTING[position(COLOR)]
+        .attributes
+        .iter()
+        .map(|a| a.attribute)
+        .collect();
+    assert_eq!(attributes, vec![0x0007, 0x0003, 0x0004]);
+    assert_eq!(cluster_name(COLOR), "light_color");
 }

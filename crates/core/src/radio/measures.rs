@@ -4,7 +4,11 @@
 
 use std::fmt;
 
-use super::zcl::{ATTRIBUTE_ZONE_STATUS, AttributeRecord, CLUSTER_IAS_ZONE, ReportingRecord};
+use super::zcl::{
+    ATTRIBUTE_COLOR_TEMPERATURE, ATTRIBUTE_CURRENT_HUE, ATTRIBUTE_CURRENT_SATURATION,
+    ATTRIBUTE_CURRENT_X, ATTRIBUTE_CURRENT_Y, ATTRIBUTE_ZONE_STATUS, AttributeRecord,
+    CLUSTER_COLOR_CONTROL, CLUSTER_IAS_ZONE, ReportingRecord,
+};
 
 /// A frame gives at most this many measures: the rest is dropped.
 pub const MAX_MEASURES_PER_FRAME: usize = 16;
@@ -19,6 +23,7 @@ const TYPE_INT16: u8 = 0x29;
 const CLUSTER_POWER: u16 = 0x0001;
 const CLUSTER_ON_OFF: u16 = 0x0006;
 const CLUSTER_LEVEL: u16 = 0x0008;
+const CLUSTER_COLOR: u16 = CLUSTER_COLOR_CONTROL;
 const CLUSTER_ILLUMINANCE: u16 = 0x0400;
 const CLUSTER_PRESSURE: u16 = 0x0403;
 const CLUSTER_TEMPERATURE: u16 = 0x0402;
@@ -82,6 +87,18 @@ fn flag(kind: &'static str, value: bool) -> Option<Measure> {
     })
 }
 
+/// CurrentX or CurrentY: raw / 65535 on four decimals; above 0xFEFF is invalid (ZCL).
+fn colour_xy(kind: &'static str, raw: u16) -> Option<Measure> {
+    if raw > 0xFEFF {
+        return None;
+    }
+    number(
+        kind,
+        (f64::from(raw) / 65535.0 * 10_000.0).round() / 10_000.0,
+        "",
+    )
+}
+
 /// Reads one attribute as a measure, or `None` when the cluster or attribute is not one of the
 /// table, the type is not the table's, the bytes are not the right size, or the value is invalid
 /// or implausible (an automation never acts on it).
@@ -134,6 +151,29 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
             let mut measure = number("light_brightness", percent.min(100.0), "%")?;
             measure.device_value = Some(f64::from(u8_value()?));
             Some(measure)
+        }
+        (CLUSTER_COLOR, ATTRIBUTE_COLOR_TEMPERATURE, TYPE_UINT16) => {
+            let mireds = u16_value()?;
+            (1..=1000)
+                .contains(&mireds)
+                .then(|| number("light_color_temp", f64::from(mireds), "mired"))?
+        }
+        (CLUSTER_COLOR, ATTRIBUTE_CURRENT_X, TYPE_UINT16) => colour_xy("color_x", u16_value()?),
+        (CLUSTER_COLOR, ATTRIBUTE_CURRENT_Y, TYPE_UINT16) => colour_xy("color_y", u16_value()?),
+        (CLUSTER_COLOR, ATTRIBUTE_CURRENT_HUE, TYPE_UINT8) => {
+            let raw = u8_value()?;
+            (raw != u8::MAX)
+                .then(|| number("color_hue", (f64::from(raw) * 360.0 / 254.0).round(), "°"))?
+        }
+        (CLUSTER_COLOR, ATTRIBUTE_CURRENT_SATURATION, TYPE_UINT8) => {
+            let raw = u8_value()?;
+            (raw != u8::MAX).then(|| {
+                number(
+                    "color_saturation",
+                    (f64::from(raw) * 100.0 / 254.0).round(),
+                    "%",
+                )
+            })?
         }
         (CLUSTER_POWER, 0x0021, TYPE_UINT8) => {
             let raw = u8_value()?;
@@ -212,9 +252,9 @@ const fn record(
 }
 
 /// The clusters set up on pairing, in the order they are set up: a sleepy device is awake for a
-/// few seconds only, so the measures that matter most come first. Eight entries: the bound of
+/// few seconds only, so the measures that matter most come first. Nine entries: the bound of
 /// the setup's work per device.
-pub const REPORTING: [ReportingCluster; 8] = [
+pub const REPORTING: [ReportingCluster; 9] = [
     ReportingCluster {
         cluster: CLUSTER_TEMPERATURE,
         name: "temperature",
@@ -249,6 +289,15 @@ pub const REPORTING: [ReportingCluster; 8] = [
         cluster: CLUSTER_LEVEL,
         name: "light_brightness",
         attributes: &[record(0x0000, TYPE_UINT8, 1, 3600, Some(1))],
+    },
+    ReportingCluster {
+        cluster: CLUSTER_COLOR,
+        name: "light_color",
+        attributes: &[
+            record(ATTRIBUTE_COLOR_TEMPERATURE, TYPE_UINT16, 1, 3600, Some(1)),
+            record(ATTRIBUTE_CURRENT_X, TYPE_UINT16, 1, 3600, Some(16)),
+            record(ATTRIBUTE_CURRENT_Y, TYPE_UINT16, 1, 3600, Some(16)),
+        ],
     },
     ReportingCluster {
         cluster: CLUSTER_POWER,

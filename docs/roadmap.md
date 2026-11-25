@@ -36,7 +36,7 @@ this order (each through `/solite-feature` or `/solite-fix`):
 1. A batch of core fixes: done (spec 028).
 2. J4: the password at commissioning: built (spec 029); its box checks are in the list below.
 3. J2: equipments from the interface (detail page, bindings one by one, enable and disable): built (spec 030).
-4. The colour cluster `0x0300` with a simulated bulb, then J5 (signed updates, the core part).
+4. The colour cluster `0x0300` with a simulated bulb: built (spec 031); then J5 (signed updates, the core part).
 
 ### Tests to run with the box in hand
 
@@ -63,6 +63,12 @@ no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a 
   iterations, expected 0.5 to 1 s); `/ws` live in the browser with the token (4001 without it, no
   token in the serial log); Discovery's "Add a device" opens pairing from the interface; the 11th
   login in a minute answers 429; a software restart asks to log in again and keeps the account.
+- Spec 031 (needs a real Zigbee 3.0 colour bulb, which the user may not have; from the Mac over
+  the Dongle Max's radio, nothing flashed): pair it; `reporting: ... light_color`; `color_temp`
+  and `color` shown; `POST .../orders/color_temp {"value":250}` and
+  `.../orders/color {"value":{"x":0.2,"y":0.6}}` change the bulb and are read back; a hue and
+  saturation order; an order while the bulb is off (does it apply?); the proposal `light_color`.
+  Note the bulb's model and what was seen in spec 031.
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -81,7 +87,7 @@ in a real annex without intervention (the true north's test).
 | J2 | Rooms and equipments from the interface (Sowel's screens ported under Administration): the equipment is the entry point (type, name, room, 1 or N compatible devices, bound as Sowel's interface binds); "Create equipment" from a new device's row | The garage and its equipments made with the mouse, the light from the ZBMINIR2's row | built 2026-11-25 (spec 030): an equipment's page (its bindings added and removed one by one, the missing ones offered, its devices changed, enabled or disabled, deleted) and a device's page; an equipment can be created with no device; box check not needed (interface only) |
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | built 2026-11-25 (spec 029): Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, factory reset, first-start and login screens; the confirmation is the 10 minutes after a power-on until the button is wired; box check pending |
-| J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back | |
+| J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back; a rollback to a release older than spec 031 cannot read a `devices.json` holding a `json` data (D51): the rollback handles it | |
 | J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | built 2026-11-24 (spec 026): settings, sun times on the root zone, Settings page, export and import of the settings and zones; the box run is pending (inbox) |
 
 ## Built, waiting for the real hardware
@@ -187,7 +193,6 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-24 | Sowel alignment (the user's rule: a subset of Sowel, never a deviation): `GET/POST /api/v1/backup` carry Solite's own document (`{version, settings, zones}`, a JSON body), not Sowel's (`{version: 1, tables}`, a ZIP or a file upload), D42. Either take Sowel's shape for the part Solite has, or move Solite's document to a path Sowel does not use | Spec 026 |
 | 2026-11-24 | Sowel alignment, what is left of D41 (D44): `GET /api/v1/settings/timezones` has no Sowel counterpart; `GET /api/v1/system/timezone` answers `source: "env"` for the setting, `fallback` with a location, and the offset now | Spec 026, spec 027 |
 | 2026-11-24 | A "current time" pill in the header (Sowel's `CurrentTimePill`) and local time in the logs, from `home.timezone` | Spec 026 |
-| 2026-11-24 | Read the colour cluster (`0x0300`: colour temperature, colour) and send its commands, so a real colour bulb shows `color_temp` and `color` and is proposed as `light_color` (today `light_dimmable`) | Spec 027 |
 | 2026-11-24 | Run spec 027's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 1`, one `PUT /api/v1/settings` of the time zone, then `GET /api/v1/system/timezone`; the home lock per batch of measures timed on the box (a log line to add); note the figures in spec 027 and `docs/memory-budget.md` | Spec 027 |
 | 2026-11-24 | Behaviour for more of Sowel's types (door, gate, awning, water valve, heater, meters): their binding rules, Sowel's zone counts (`doorsTotal`, `waterValvesTotal`...), and the rules of the seven equipment fields refused on `PUT` (D43) | Spec 027 |
 | 2026-11-24 | Proposals exposed when milestone C starts (pair a sensor, pick the room): `equipments::propose` is internal until then, Sowel has no route for it | Spec 027 |
@@ -196,6 +201,9 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | A factory reset that also erases the Wi-Fi settings (`wifi.json`) and leaves the Zigbee network (forgets `zigbee.json`'s keys), so EN 18031-2's deletion is whole | Spec 029, D48 |
 | 2026-11-25 | The ESP32's SHA accelerator for the password hash, through an adapter, to raise PBKDF2's iterations | Spec 029, D47 |
 | 2026-11-25 | A rate limit per client address on the box (one counter today: a device of the home network can keep the owner from logging in while it tries) | Spec 029, D47 |
+| 2026-11-25 | Read `ColorCapabilities` (`0x400A`) at the pairing setup, so a tunable white bulb gets `color_temp` and no `color` data or order (today every `0x0300` device gets both, D51) | Spec 031 |
+| 2026-11-25 | Zigbee2MQTT's other forms of a `color` order: `{"hex": "#RRGGBB"}` and `{"r","g","b"}` (converted to XY), the form a colour picker gives | Spec 031 |
+| 2026-11-25 | A colour and colour-temperature control on the equipment page, once Sowel's `LightControl` has one to port (Sowel issue below) | Spec 031 |
 
 ## Sowel issues to open
 
@@ -209,6 +217,8 @@ Needs on the Sowel side, for the user to open as Sowel issues (never changed fro
 | 2026-11-21 | `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
 | 2026-11-24 | A `home.timezone` setting (an IANA name), read before `TZ` and `tz-lookup`, so a home without a `TZ` variable (Solite's box) shares the key with Sowel (D41) | Spec 026 |
 | 2026-11-25 | Dates other than the devices' taken during the box's clock wait stay in 1970: recipe log lines and state keys (`timerExpiresAt`, `failsafeExpiresAt`) at the boot's start, equipments and zones created through the API in the first seconds, a device's `createdAt`/`updatedAt` read in 1970 from storage moved to about the boot's date (D45 moves the devices' only) | Spec 028 |
+| 2026-11-25 | A colour and colour-temperature control in `LightControl` for `light_color` (today brightness only), which Solite would port | Spec 031 |
+| 2026-11-25 | Check the Zigbee2MQTT plugin's colour: `flattenExposes` seems to turn the composite `color` expose into data `x` and `y` (category `generic`), so a colour bulb would not get `color` / `light_color` as `constants.ts` and `binding-candidates.test.ts` expect | Spec 031 |
 
 ## Done
 
@@ -360,3 +370,9 @@ Every change to this roadmap: date, what changed, why.
   equipment created with no device (D50). Lines removed: the equipment detail page, bindings one by
   one, enable and disable; narrowed: the device detail page to the Devices page's search, sort and
   columns.
+- 2026-11-25: spec 031 built on the Mac (the user away): the colour cluster `0x0300` read and
+  driven (colour temperature, colour as Zigbee2MQTT's `json` object, XY and hue/saturation
+  orders), a colour bulb proposed as `light_color`, a simulated colour bulb and
+  `scenarios/color-light.json` (D51). Line removed: read the colour cluster. Added: the
+  capabilities, `hex` orders, a colour control (and its Sowel issue), the Zigbee2MQTT plugin's
+  colour (Sowel issue), the real-bulb check in the tests to run, J5's rollback note.

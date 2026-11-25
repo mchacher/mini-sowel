@@ -173,23 +173,25 @@ impl PowerSource {
     }
 }
 
-/// Sowel's `DataType`, the two values Solite uses.
+/// Sowel's `DataType`, the three values Solite uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValueType {
     Boolean,
     Number,
+    Json,
 }
 
 impl ValueType {
     /// Every value, with its JSON string (the contract check reads them).
-    pub const ALL: [ValueType; 2] = [ValueType::Boolean, ValueType::Number];
+    pub const ALL: [ValueType; 3] = [ValueType::Boolean, ValueType::Number, ValueType::Json];
 
     /// The value as Sowel writes it.
     pub fn as_str(self) -> &'static str {
         match self {
             ValueType::Boolean => "boolean",
             ValueType::Number => "number",
+            ValueType::Json => "json",
         }
     }
 }
@@ -387,8 +389,8 @@ impl Serialize for OrderList<'_> {
     }
 }
 
-/// How to reach a device on the network (spec 011): the node address and the endpoint its On/Off
-/// and Level Control frames come from, as the last messages told. Kept in `devices.json` beside
+/// How to reach a device on the network (spec 011): the node address and the endpoint its On/Off,
+/// Level Control and Color Control frames come from, as the last messages told. Kept in `devices.json` beside
 /// Sowel's fields, never in the device API.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Route {

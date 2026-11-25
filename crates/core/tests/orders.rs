@@ -1025,3 +1025,281 @@ fn an_order_dropped_at_its_deadline_is_a_failed_event_device_did_not_answer() {
         Err("device did not answer".to_string())
     );
 }
+
+// ---- Spec 031: the colour orders ----
+
+/// A colour bulb: the state, the brightness, the colour temperature and the colour (clusters
+/// 0x0006, 0x0008 and 0x0300).
+fn colour_light(rig: &mut Rig, last: u8) -> String {
+    let e = eui(last);
+    rig.home.devices.announced(e, 0x8C, rig.now);
+    rig.home
+        .devices
+        .identified(e, Some("TEST"), Some("CLR01"), rig.now, &mut *rig.random)
+        .unwrap();
+    rig.home
+        .devices
+        .reporting_configured(e, &[0x0006, 0x0008, 0x0300], rig.now, &mut *rig.random)
+        .unwrap();
+    rig.device(last)
+}
+
+fn colour_equipment() -> (Rig, String) {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Salon");
+    let device = colour_light(&mut rig, 0x7C);
+    let id = rig.equipment("Lamp", "light_color", &zone, &[&device]);
+    (rig, id)
+}
+
+fn invalid(alias: &str) -> Result<Vec<Command>, (u16, String)> {
+    Err((400, format!("Invalid value for {alias}")))
+}
+
+#[test]
+fn the_colour_temperature_takes_a_whole_number_of_mireds_from_150_to_500() {
+    let (mut rig, id) = colour_equipment();
+    for (body, mireds) in [
+        (r#"{"value":250}"#, 250),
+        (r#"{"value":"300"}"#, 300),
+        (r#"{"value":150}"#, 150),
+        (r#"{"value":500}"#, 500),
+        (r#"{"value":370.0}"#, 370),
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "color_temp", body),
+            Ok(vec![Command::MoveToColorTemperature(mireds)]),
+            "{body:?}"
+        );
+    }
+    for body in [
+        r#"{"value":149}"#,
+        r#"{"value":501}"#,
+        r#"{"value":300.5}"#,
+        r#"{"value":"abc"}"#,
+        r#"{"value":{}}"#,
+        r#"{"value":null}"#,
+        r#"{"value":true}"#,
+        r#"{}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "color_temp", body),
+            invalid("color_temp"),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_colour_with_x_and_y_is_a_move_to_color() {
+    let (mut rig, id) = colour_equipment();
+    assert_eq!(
+        commands(&mut rig, &id, "color", r#"{"value":{"x":0.2,"y":0.6}}"#),
+        Ok(vec![Command::MoveToColor { x: 13107, y: 39321 }])
+    );
+    // The largest valid value is 0xFEFF.
+    assert_eq!(
+        commands(&mut rig, &id, "color", r#"{"value":{"x":1,"y":0}}"#),
+        Ok(vec![Command::MoveToColor { x: 0xFEFF, y: 0 }])
+    );
+}
+
+#[test]
+fn a_colour_with_hue_and_saturation_is_a_move_to_hue_and_saturation() {
+    let (mut rig, id) = colour_equipment();
+    assert_eq!(
+        commands(
+            &mut rig,
+            &id,
+            "color",
+            r#"{"value":{"hue":120,"saturation":100}}"#
+        ),
+        Ok(vec![Command::MoveToHueSaturation {
+            hue: 85,
+            saturation: 254
+        }])
+    );
+    assert_eq!(
+        commands(
+            &mut rig,
+            &id,
+            "color",
+            r#"{"value":{"hue":360,"saturation":0}}"#
+        ),
+        Ok(vec![Command::MoveToHueSaturation {
+            hue: 254,
+            saturation: 0
+        }])
+    );
+}
+
+#[test]
+fn a_colour_with_both_forms_is_a_move_to_color_and_other_fields_are_ignored() {
+    let (mut rig, id) = colour_equipment();
+    assert_eq!(
+        commands(
+            &mut rig,
+            &id,
+            "color",
+            r#"{"value":{"x":0.2,"y":0.6,"hue":120,"saturation":100,"z":3}}"#
+        ),
+        Ok(vec![Command::MoveToColor { x: 13107, y: 39321 }])
+    );
+    // An incomplete or invalid XY pair beside a valid hue and saturation: the hue and saturation.
+    for body in [
+        r#"{"value":{"x":0.2,"hue":120,"saturation":100}}"#,
+        r#"{"value":{"x":1.5,"y":0,"hue":120,"saturation":100}}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "color", body),
+            Ok(vec![Command::MoveToHueSaturation {
+                hue: 85,
+                saturation: 254
+            }]),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_colour_that_is_incomplete_out_of_range_or_not_an_object_is_a_400() {
+    let (mut rig, id) = colour_equipment();
+    for body in [
+        r#"{"value":{"x":0.2}}"#,
+        r#"{"value":{"y":0.2}}"#,
+        r#"{"value":{"x":1.5,"y":0}}"#,
+        r#"{"value":{"x":-0.1,"y":0}}"#,
+        r#"{"value":{"x":"0.2","y":0.6}}"#,
+        r#"{"value":{"hue":10}}"#,
+        r#"{"value":{"hue":361,"saturation":10}}"#,
+        r#"{"value":{"hue":10,"saturation":101}}"#,
+        r#"{"value":{}}"#,
+        r#"{"value":null}"#,
+        r#"{"value":"red"}"#,
+        r#"{"value":5}"#,
+        r#"{}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "color", body),
+            invalid("color"),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn state_and_brightness_on_the_colour_bulb_are_unchanged() {
+    let (mut rig, id) = colour_equipment();
+    assert_eq!(
+        commands(&mut rig, &id, "state", r#"{"value":true}"#),
+        Ok(vec![Command::On])
+    );
+    assert_eq!(
+        commands(&mut rig, &id, "brightness", r#"{"value":200}"#),
+        Ok(vec![Command::MoveToLevel(200)])
+    );
+}
+
+fn colour_sim(last: u8, nwk: u16) -> SimDevice {
+    let mut wire = eui(last);
+    wire.reverse();
+    let mut device = SimDevice::of_kind(Kind::ColorLight, wire, None, None);
+    device.nwk = nwk;
+    device.auto_join = true;
+    device
+}
+
+/// The Color Control commands the host sent, in order.
+fn colour_sends(h: &Harness) -> Vec<SentMessage> {
+    h.ncp
+        .borrow()
+        .sent
+        .iter()
+        .filter(|m| m.profile == 0x0104 && m.cluster == 0x0300 && m.message[0] & 0x03 == 0x01)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_colour_order_is_sent_to_a_bulb_that_is_off_and_the_simulated_bulb_applies_it() {
+    let mut h = paired(vec![colour_sim(0x7C, 0x2002)]);
+    let home = Home::new(T0);
+    let queue = home.orders().clone();
+    let wait = queue
+        .push_waited(
+            request(vec![to(
+                0x7C,
+                None,
+                Command::MoveToColor { x: 13107, y: 39321 },
+            )]),
+            T0 + h.clock.get(),
+        )
+        .unwrap();
+    let mut runner = OrderRunner::new();
+    let mut events = Vec::new();
+    let end = h.clock.get() + 3_000;
+    while h.clock.get() < end {
+        events.extend(h.radio.poll_pairing().unwrap());
+        runner.step(&mut h.radio, &queue, T0 + h.clock.get());
+    }
+    assert_eq!(wait.wait(std::time::Duration::from_millis(1)), Ok(()));
+    let sent = colour_sends(&h);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].message[2..],
+        [0x07, 0x33, 0x33, 0x99, 0x99, 0x00, 0x00, 0x00, 0x00]
+    );
+    // The read-back tells the colour was applied and the bulb is still off.
+    let measures: Vec<(&str, solite_core::radio::measures::Value)> = events
+        .iter()
+        .filter_map(|e| match e {
+            solite_core::radio::PairingEvent::Measures(m) => Some(m.measures.clone()),
+            _ => None,
+        })
+        .flatten()
+        .map(|m| (m.kind, m.value))
+        .collect();
+    use solite_core::radio::measures::Value as Measured;
+    assert!(
+        measures.contains(&("color_x", Measured::Number(0.2))),
+        "{measures:?}"
+    );
+    assert!(
+        measures.contains(&("color_y", Measured::Number(0.6))),
+        "{measures:?}"
+    );
+    assert!(
+        measures.contains(&("light_state", Measured::Bool(false))),
+        "{measures:?}"
+    );
+}
+
+#[test]
+fn a_bulb_that_refuses_a_colour_command_is_a_502_with_the_status_and_a_silent_one_did_not_answer() {
+    let command = Command::MoveToColorTemperature(250);
+    let mut h = paired(vec![colour_sim(0x7C, 0x2002)]);
+    h.ncp.borrow_mut().devices[0].refuse_commands = Some(0x81);
+    let queue = Home::new(T0).orders().clone();
+    let wait = queue
+        .push_waited(request(vec![to(0x7C, None, command)]), T0 + h.clock.get())
+        .unwrap();
+    let mut runner = OrderRunner::new();
+    run_until(&mut h, &mut runner, &queue, 3_000, |_| false);
+    assert_eq!(
+        wait.wait(std::time::Duration::from_millis(1)),
+        Err("device refused the command (status 0x81)".to_string())
+    );
+
+    let mut h = paired(vec![colour_sim(0x7C, 0x2002)]);
+    h.ncp.borrow_mut().devices[0].silent = true;
+    let queue = Home::new(T0).orders().clone();
+    let wait = queue
+        .push_waited(request(vec![to(0x7C, None, command)]), T0 + h.clock.get())
+        .unwrap();
+    let mut runner = OrderRunner::new();
+    run_until(&mut h, &mut runner, &queue, 14_000, |_| false);
+    assert_eq!(
+        wait.wait(std::time::Duration::from_millis(1)),
+        Err("device did not answer".to_string())
+    );
+}

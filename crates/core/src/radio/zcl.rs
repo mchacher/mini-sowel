@@ -127,6 +127,18 @@ pub const CLUSTER_LEVEL_CONTROL: u16 = 0x0008;
 /// On/Off attribute: the state (boolean). Level Control attribute: the current level (uint8).
 pub const ATTRIBUTE_ON_OFF: u16 = 0x0000;
 pub const ATTRIBUTE_CURRENT_LEVEL: u16 = 0x0000;
+/// The Color Control cluster.
+pub const CLUSTER_COLOR_CONTROL: u16 = 0x0300;
+/// Color Control attribute: CurrentHue (uint8, 0..=254).
+pub const ATTRIBUTE_CURRENT_HUE: u16 = 0x0000;
+/// Color Control attribute: CurrentSaturation (uint8, 0..=254).
+pub const ATTRIBUTE_CURRENT_SATURATION: u16 = 0x0001;
+/// Color Control attribute: CurrentX (uint16, raw / 65535).
+pub const ATTRIBUTE_CURRENT_X: u16 = 0x0003;
+/// Color Control attribute: CurrentY (uint16, raw / 65535).
+pub const ATTRIBUTE_CURRENT_Y: u16 = 0x0004;
+/// Color Control attribute: ColorTemperatureMireds (uint16).
+pub const ATTRIBUTE_COLOR_TEMPERATURE: u16 = 0x0007;
 
 /// A cluster-specific command the coordinator sends to a device (spec 011).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +151,12 @@ pub enum Command {
     Toggle,
     /// Level Control cluster, Move to Level with On/Off (0x04): the level 0..=254, immediately.
     MoveToLevel(u8),
+    /// Color Control cluster, Move to Color Temperature (0x0A): the mireds, immediately.
+    MoveToColorTemperature(u16),
+    /// Color Control cluster, Move to Color (0x07): X and Y in raw units (value x 65535).
+    MoveToColor { x: u16, y: u16 },
+    /// Color Control cluster, Move to Hue and Saturation (0x06): hue and saturation 0..=254.
+    MoveToHueSaturation { hue: u8, saturation: u8 },
 }
 
 impl Command {
@@ -147,6 +165,9 @@ impl Command {
         match self {
             Command::On | Command::Off | Command::Toggle => CLUSTER_ON_OFF,
             Command::MoveToLevel(_) => CLUSTER_LEVEL_CONTROL,
+            Command::MoveToColorTemperature(_)
+            | Command::MoveToColor { .. }
+            | Command::MoveToHueSaturation { .. } => CLUSTER_COLOR_CONTROL,
         }
     }
 
@@ -157,17 +178,34 @@ impl Command {
             Command::On => 0x01,
             Command::Toggle => 0x02,
             Command::MoveToLevel(_) => 0x04,
+            Command::MoveToHueSaturation { .. } => 0x06,
+            Command::MoveToColor { .. } => 0x07,
+            Command::MoveToColorTemperature(_) => 0x0A,
         }
     }
 
     /// The ZCL frame: frame control 0x01 (cluster-specific, client to server, a Default Response
     /// asked for), the transaction number, the command id and its payload. Move to Level is
     /// `01 <tsn> 04 <level> 00 00 00 00` (level, transition time 0 on two bytes, options mask 0,
-    /// options override 0), as Zigbee2MQTT sends it.
+    /// options override 0), as Zigbee2MQTT sends it. The colour commands end the same way:
+    /// `<mireds LE16> 00 00 00 00`, `<X LE16> <Y LE16> 00 00 00 00`, `<hue> <sat> 00 00 00 00`.
     pub fn frame(self, tsn: u8) -> Vec<u8> {
         let mut frame = vec![FRAME_TYPE_CLUSTER, tsn, self.id()];
-        if let Command::MoveToLevel(level) = self {
-            frame.extend_from_slice(&[level, 0, 0, 0, 0]);
+        match self {
+            Command::MoveToLevel(level) => frame.extend_from_slice(&[level, 0, 0, 0, 0]),
+            Command::MoveToColorTemperature(mireds) => {
+                frame.extend_from_slice(&mireds.to_le_bytes());
+                frame.extend_from_slice(&[0, 0, 0, 0]);
+            }
+            Command::MoveToColor { x, y } => {
+                frame.extend_from_slice(&x.to_le_bytes());
+                frame.extend_from_slice(&y.to_le_bytes());
+                frame.extend_from_slice(&[0, 0, 0, 0]);
+            }
+            Command::MoveToHueSaturation { hue, saturation } => {
+                frame.extend_from_slice(&[hue, saturation, 0, 0, 0, 0]);
+            }
+            Command::On | Command::Off | Command::Toggle => {}
         }
         frame
     }

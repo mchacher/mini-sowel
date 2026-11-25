@@ -888,3 +888,28 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: J2: an equipment completed, trimmed or moved to another device from the mouse; Sowel's
   form allows an equipment without device; a refused removal skipped could leave a binding under
   an alias the new plan then fails to write.
+
+## D51: The colour of a bulb as Zigbee2MQTT's object, Sowel's `json` type
+
+- **Date**: 2026-11-25 (spec 031, decided in an autonomous run, for the user's review)
+- **Choice**: a device with the Color Control cluster (`0x0300`) gets the data `color_temp`
+  (number, `light_color_temp`, mired) and `color` (Sowel's `json` type, `light_color`), and the
+  orders `color_temp` (`set_color_temp`, 150 to 500 mireds, Zigbee2MQTT's default range, not read
+  from the bulb) and `color` (`json`, `set_color`). The `color` value is Zigbee2MQTT's object, at
+  most `x`, `y` (0 to 1), `hue` (0 to 360), `saturation` (0 to 100), in two groups: the colour
+  measures of one frame replace their fields, and a frame of one group drops the other group (no
+  `color_mode` is kept). A `color` order takes `{x, y}` (Move to Color) or `{hue, saturation}`
+  (Move to Hue and Saturation), options 0 as Zigbee2MQTT (a bulb that is off may ignore it).
+  Reporting is set up for the colour temperature and X/Y; hue and saturation are read back after a
+  hue and saturation order; a read-back carries up to four attributes in one request, so a colour
+  comes back in one update. Every `0x0300` device gets both colour data and orders:
+  `ColorCapabilities` is not read, so a tunable white bulb has a `color` that its bulb refuses.
+  The memory worst case puts the four-field object (632 bytes on the Mac) on its 16 lights, not on
+  its 64 devices: a colour bulb has 4 data where the test's devices have 16, and the 12 it lacks
+  weigh more than its object. A `devices.json` holding `"type":"json"` is not read by an older
+  release (the host stops, the file is kept): going back needs the device paired again or the file
+  removed.
+- **Why**: Sowel's model names the colour `color`, `light_color`, typed `json`
+  (`src/shared/constants.ts`, `binding-candidates.test.ts`), with Zigbee2MQTT's payload; one
+  update per colour keeps clients and recipes from seeing a half-changed colour; reading the
+  capabilities is a new step of the pairing setup, left for later (inbox).
