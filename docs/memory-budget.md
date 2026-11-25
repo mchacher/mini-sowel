@@ -31,13 +31,18 @@ The account (spec 029) is small and not driven by the worst case: at most 8 sess
 (`auth::MAX_SESSIONS`) and 10 attempt times of 8 bytes (`auth::MAX_ATTEMPTS`), in RAM only, about
 700 bytes beside the home, and one account of about 250 bytes. The password hash keeps under 1 KB
 on the stack of the HTTP worker that runs it (inside its 10 KB), nothing on the heap that grows; it
-takes about 0.5 to 1 s on the box (**E**, from software SHA-256 at 240 MHz, D47: one login timed on
-the box is a pending check).
+takes 1.1 to 1.4 s on the box (**M**, a login timed on the box on 2026-11-25, the request whole;
+the CPU runs at 160 MHz, `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ`).
 
-The backup's key derivation (spec 035) is ten times that (100,000 iterations, about 5 to 10 s on
-the box, **E**, from the same rate; under a second on the Mac), run in slices that pause 10 ms every
-5,000 iterations so the task watchdog is fed; its states stay on the HTTP worker's stack, inside
-its 10 KB (the box check reads no `task_wdt` line during an export).
+The backup's key derivation (spec 035) is ten times that (100,000 iterations; under a second on
+the Mac), run in slices that pause 10 ms every 5,000 iterations so the task watchdog is fed. On
+the box it is about 11 to 14 s (**E**, ten times the login's 1.1 to 1.4 s, the same algorithm,
+equal on the Mac). The one box export measured, on 2026-11-25 on an HTTP worker's stack, took 70 to
+88 s from the request to the panic at its first file read: a gap with the estimate whose cause is
+not known (the login runs on the same kind of PSRAM stack, so the stack's place alone does not
+explain it). Each derivation logs `backup: key derived in <n> ms (<iterations> iterations)`,
+which splits the derivation from the rest of the request: the box check reads it. Its states
+stay on the `backup` thread's stack, inside its 10 KB.
 
 ## PSRAM, 2048 KB
 
@@ -49,7 +54,7 @@ its 10 KB (the box check reads no `task_wdt` line during an export).
 | The radio image's HTTP workers' stacks (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023) | 4 workers × 10 KB | 40 KB | PSRAM | E, from the setting |
 | One TLS session at a time (mbedTLS, buffers in PSRAM by `CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`) | 1 session; default 16 KB input and 16 KB output records | 64 KB (about 40 to 50 KB steady, more during the handshake that parses a certificate) | PSRAM | E, ESP-IDF and mbedTLS documentation figures |
 | Update: the one 4096-byte chunk buffer of the OTA thread, allocated once (spec 032); the image is streamed and never held whole, and ESP-IDF's flash write copies from PSRAM through its own internal bounce buffer | 1 update at a time (`update::CHUNK_BYTES`) | 4 KB | PSRAM | M for the core's part (1 MB through a counting fake peaks at under 5 KB of heap), E for the box |
-| Backup (spec 035): one job at a time (export or restore), each with one 4096-byte chunk buffer on the heap (`backup::CHUNK_BYTES`; the box's export holds two, the archive reader's and the HTTP server's send buffer, `http_server.rs`) and the manifest (under 4 KB, `MAX_MANIFEST_BYTES`); the archive is streamed and never held whole; the hash, MAC and cipher states and the key derivation (under 1 KB in all) are on the stack of the HTTP worker that runs the job, inside its 10 KB | 1 job (`backup::MAX_FILES` 7 files, 2 MiB at most) | 10 KB | PSRAM | M for the core's part (a 1 MB archive through counting fakes peaks at about 5 KB of heap exported and about 10 KB restored, `full_backup_memory`, bound 32 KB), E for the box (the worker's stack, which the box check reads) |
+| Backup (spec 035): one job at a time (export or restore), each with one 4096-byte chunk buffer on the heap (`backup::CHUNK_BYTES`; the box's export holds two, the archive reader's and the HTTP server's send buffer, `http_server.rs`) and the manifest (under 4 KB, `MAX_MANIFEST_BYTES`); the archive is streamed and never held whole; the hash, MAC and cipher states and the key derivation (under 1 KB in all) are on the stack of the `backup` thread that runs the job (internal RAM, see the internal RAM table) | 1 job (`backup::MAX_FILES` 7 files, 2 MiB at most) | 10 KB | PSRAM | M for the core's part (a 1 MB archive through counting fakes peaks at about 5 KB of heap exported and about 10 KB restored, `full_backup_memory`, bound 32 KB), E for the box |
 | Margin | | the rest | PSRAM | |
 
 Arithmetic, worst case: engine 1024 + transport 64 + workers' stacks 40 + TLS 64 + update 4 + backup 10 =
@@ -73,6 +78,7 @@ never taken by an allocation that may go to PSRAM.
 | Task stacks: main (8 KB, `CONFIG_ESP_MAIN_TASK_STACK_SIZE`), 4 HTTP workers, the radio loop, the WebSocket writer | 64 KB | E, usual ESP-IDF stack sizes; the firmware sets only the main task's stack |
 | The radio image: the engine thread's stack (32 KB) and the UART's two rings (4 KB receive, 1 KB transmit), all internal RAM | 37 KB, inside the 64 KB of task stacks above for the stack; measured on the box: engine stack 27 KB unused of 32 KB, receive ring highest use 262 B of 4096 B | E (set in `firmware/src/radio_engine.rs` and `radio_uart.rs`), M for the use (2026-11-22) |
 | The radio image's OTA thread's stack (spec 032): every flash call of an update and the probation's tick, in internal RAM for the whole run because the flash cannot be written from a PSRAM stack | 6 KB, **not added**: one more thread inside the 64 KB of task stacks above, and the 153 KB left below absorbs it; the box run of spec 032 reads the internal RAM free after an update | E, from the setting in `firmware/src/ota.rs` |
+| The radio image's `backup` thread's stack (spec 035, D59): an export or a restore runs on it, because every flash access, a read too, turns the caches off, which ESP-IDF refuses from a PSRAM stack (the API workers'); started for the job and ended with it, one job at a time; it logs `backup: thread stack <n> of 10240 bytes never used` at its end | 10 KB during a job, **not added**: the 153 KB left below absorbs it; a job whose thread cannot get the block answers 503 | E, from the setting in `firmware/src/http_server.rs` |
 | The radio image's supervisor record (spec 036): 24 words of 32 bits, in the ESP32's RTC slow memory (`.rtc_noinit`), not in the internal RAM or the PSRAM; no heap, no flash; one `Mutex<Supervisor>` of a few hundred bytes; no new thread (the OTA thread's one-second tick runs the supervisor's tick) | 96 bytes of RTC memory | E, from the bound |
 | mbedTLS, its small internal allocations | 8 KB | E |
 | Left for the engine's small allocations and the rest, before the reserve | 359 − 70 − 64 − 8 = 217 KB | |

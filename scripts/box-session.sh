@@ -492,9 +492,10 @@ group_home() {
   HOME_SET=false
   [ -n "${SOLITE_HOME_LATITUDE:-}" ] && [ -n "${SOLITE_HOME_LONGITUDE:-}" ] && [ -n "${SOLITE_HOME_TIMEZONE:-}" ] && HOME_SET=true
 
-  # 1. The full backup (spec 035): the export (a key derivation of 5 to 10 s on the box, hence the
-  # long timeout), then its restore with a wrong password, which must change nothing.
-  HTTP_MAX=60
+  # 1. The full backup (spec 035): the export (a key derivation estimated at 11 to 14 s on the
+  # box, 70 to 88 s measured once before D59, hence a timeout above the export's own 120 s limit),
+  # then its restore with a wrong password, which must change nothing.
+  HTTP_MAX=130
   http GET /system/backup -H "@$AUTH_FILE" -H "X-Backup-Password: box-session-test"
   if [ "$CODE" != 200 ]; then
     check 1 backup KO "GET /system/backup answered $CODE: $(errtext)"

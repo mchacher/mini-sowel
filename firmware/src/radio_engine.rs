@@ -52,7 +52,7 @@ use solite_core::radio::{
 use solite_core::radio::{identity_lines, network_line};
 use solite_core::supervisor::Reason;
 
-use crate::backup_files::DataFiles;
+use crate::backup_files::data_files;
 use crate::http_server;
 use crate::memory;
 use crate::ota::ENGINE_RUNNING;
@@ -282,7 +282,7 @@ fn boot_pairing() -> BootPairing {
 fn start_network(radio: &mut Wired) -> Result<(Network, bool), String> {
     // The restored network (spec 035): the file's values when the radio has none, or, with the mark
     // a restore left, the radio is moved onto it.
-    let mut files = DataFiles::new();
+    let mut files = data_files();
     let restored = FatStorage::new()
         .read(BACKUP_FILE)
         .ok()

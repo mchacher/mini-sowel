@@ -85,7 +85,10 @@ stays a person's. The first run is expected to show route or timing mismatches (
 - Spec 035 (the full backup), the box check, the user present: a first run of the script checks
   B7.1 (the export, then a restore with a wrong password refused). The rest is a person's, on the
   radio image with devices paired: export a backup with a password from the Settings page (the
-  export takes 5 to 10 s: no `task_wdt` line in the serial log); restore it on the same box (the
+  export takes about 11 to 14 s: the serial log shows `backup: key derived in <n> ms`, then
+  `backup: thread stack <n> of 10240 bytes never used`, and no `task_wdt` or `assert failed`
+  line; before the fix of 2026-11-25 the box stopped on `assert failed: ...cache_utils.c:127`
+  after 70 to 88 s, D59); restore it on the same box (the
   box restarts, log in again, the devices, rooms, equipments and recipes are back); factory-reset
   the box, or flash a second one while the first is off, restore the file there; count the devices
   that report again without pairing, and those that need pairing (D57's best effort), and note the
@@ -431,3 +434,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-25: spec 034 built on the Mac (the user away, the box not run): the radio image's `heap:` line prints the largest free block of internal RAM and PSRAM; the devices read back share the catalog's texts and are read in one pass. The 50 devices hold 65 KB instead of 72 KB (Mac), QEMU 159 KB held and 311 KB peak instead of 176 and 327, internal RAM minimum 110 KB instead of 95; the JSON is unchanged.
 - 2026-11-25: spec 035 built on the Mac (the user away, the box not run): the full backup, one password-protected file (`GET/POST /api/v1/system/backup`, D56) holding the home, the Zigbee network and, on request, the Wi-Fi settings, streamed both ways through a 4 KB buffer, validated whole before a restore replaces the home at the next start; the radio forms the restored network and leaves the one it runs (D57); a Backup card on the Settings page. D42's document and `/api/v1/backup` are gone. Inbox lines of the full backup and of D42's alignment removed; new line: the radio's frame counter and child table on a restored network. The box check is in the list above.
 - 2026-11-25: spec 036 built on the Mac (the user away, the box not run): the radio image restarts the box when its engine ends on an error, with the reason kept in RTC memory (no flash write); a boot-loop guard (3 counted restarts in an hour or 6 in a day) and a safe mode that keeps the API and the update up, retried after 1 h, 4 h, then 24 h; the engine thread on the task watchdog (20 s, restarts the chip); `GET /api/v1/system/supervisor` (D58). The box check is in "Tests to run with the box in hand"; four inbox lines added (a notification, an interface card, Sowel's `/health`, presence across restarts).
+- 2026-11-25: fix of spec 035 on the Mac (seen on the box, not rerun there): the box's export stopped the chip (`assert failed: ...cache_utils.c:127`) at its first file read, 70 to 88 s after the request (the derivation's share unknown), because it ran on an API worker whose stack is in PSRAM; the export and the restore run on a `backup` thread with a 10 KB internal-RAM stack, the box's files behind the core's `Guarded`, and each derivation logs its time (D59).

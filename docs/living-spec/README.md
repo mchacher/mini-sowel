@@ -634,10 +634,18 @@ answers 404), behind the token:
   then each file as chunks of at most 4096 bytes; then a manifest (JSON: the version, Solite's
   version, each file's name, size and SHA-256) and a 32-byte HMAC-SHA256 over every byte before
   it. The key is PBKDF2-HMAC-SHA256 of the password (ten times the account's iterations, because
-  the file leaves the box and can be attacked offline: about 5 to 10 seconds on the box, once per
-  export or restore, a second on the Mac); the secrets are encrypted with ChaCha20 and the whole
+  the file leaves the box and can be attacked offline: estimated at 11 to 14 seconds on the box,
+  ten times the login, and logged `backup: key derived in <n> ms`, once per export or restore,
+  a second on the Mac); the secrets are encrypted with ChaCha20 and the whole
   file authenticated (decision D56). The password is used as the UTF-8 bytes received, with no
   Unicode normalisation. A file made by a newer format is refused.
+- **On the box, off the workers**: an export or a restore runs on a `backup` thread started for
+  the job, its 10 KB stack in internal RAM, while the API worker that took the request waits: a
+  flash access, a read too, is refused by ESP-IDF from a stack in PSRAM (the chip stops and
+  restarts). The box's files reach the core only behind a guard that turns a call from a PSRAM
+  stack into an error (the export's stream ends without its end, the restore answers 500), never
+  a flash access. When the thread cannot start, the answer is 503 `Busy, try again`. The thread
+  logs `backup: thread stack <n> of 10240 bytes never used` at its end (D59).
 - **Streamed, never held whole**: both ways use one 4 KB buffer on the Mac host; the box's export holds two (the archive reader's and the HTTP server's send buffer), so a 1 MB file peaks under 32 KB
   of heap (measured by a test). An export is read from the files as last saved (at most 2 seconds
   behind the home in memory) and makes the Saver write nothing while it runs; if the Saver is
@@ -1054,7 +1062,7 @@ application image of the slot, as `espflash save-image` writes it). Integers are
   idle read timeout), the installation counts as truncated and the next upload is accepted.
 - **The box** (radio image) serves the same route. One OTA thread, with a 6 KB stack in internal
   RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
-  write the flash), receives them through a channel one request at a time, and ticks the probation
+  touch the flash, a read neither), receives them through a channel one request at a time, and ticks the probation
   every second (and runs the supervisor's tick); a chunk crosses in one 4096-byte buffer in PSRAM. After a success the answer is sent, then the engine stops (its
   final save runs) and the box restarts, logged `restarting`. Its start lines are the host's. A restart the supervisor makes before the confirmation
   (a panic, a watchdog, the last rung of the ladder) rolls the image back like any other restart,

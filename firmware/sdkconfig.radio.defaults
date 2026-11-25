@@ -21,7 +21,7 @@ CONFIG_HTTPD_MAX_REQ_HDR_LEN=4096
 CONFIG_LWIP_MAX_SOCKETS=16
 # lwIP's task on core 0, with Wi-Fi and the server, off the engine's core 1.
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
-# The 4 API workers' stacks are in PSRAM (they never write the flash).
+# The 4 API workers' stacks are in PSRAM (they never touch the flash, a read neither: D59).
 CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
 # Wi-Fi's and lwIP's buffers in PSRAM when they can be: internal RAM is the tight resource.
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
