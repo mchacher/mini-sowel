@@ -277,6 +277,8 @@ impl Restarts {
 
 /// What a restart does, as closures the firmware gives.
 pub struct RestartSteps<'a> {
+    /// Feeds the engine's watchdog; called before each of the steps below.
+    pub feed: &'a mut dyn FnMut(),
     /// Saves what is due; an error is logged and does not stop the restart.
     pub save: &'a mut dyn FnMut() -> Result<(), String>,
     /// Ends an open pairing phase (the home's `finished`).
@@ -294,9 +296,11 @@ pub struct RestartSteps<'a> {
 pub enum Restarted {
     /// The radio answers and its network is resumed.
     Resumed(Network),
-    /// The restart was refused or the radio answers at no speed: the caller stops the engine and
-    /// keeps the ESP32 up. The line was logged.
+    /// The 4th restart in the window was refused: the caller restarts the box (`radio-stopped`).
+    /// The line was logged.
     Stopped,
+    /// The radio answers at no speed: the caller restarts the box (`radio-silent`).
+    Silent,
 }
 
 /// Restarts a wedged radio: save what is due, end an open pairing phase, reset, probe, resume
@@ -314,14 +318,19 @@ pub fn restart(
         return Ok(Restarted::Stopped);
     }
     sink(&format!("radio: restarting after: {last_error}"));
+    (steps.feed)();
     if let Err(error) = (steps.save)() {
         sink(&error);
     }
+    (steps.feed)();
     (steps.finish_pairing)();
+    (steps.feed)();
     (steps.reset)();
+    (steps.feed)();
     if (steps.probe)()?.is_none() {
-        return Ok(Restarted::Stopped);
+        return Ok(Restarted::Silent);
     }
+    (steps.feed)();
     let network = (steps.listen)()?;
     sink(&network_line(&network, false));
     Ok(Restarted::Resumed(network))

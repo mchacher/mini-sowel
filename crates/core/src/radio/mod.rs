@@ -28,7 +28,7 @@ use ezsp::{Callback, Ezsp, EzspError, NetworkState, Parsed};
 pub use transport::{RadioTransport, TransportError};
 
 /// How long one read waits, in milliseconds.
-const READ_SLICE_MS: u64 = 50;
+pub const READ_SLICE_MS: u64 = 50;
 /// Milliseconds to wait for the answer to an EZSP command once it is acknowledged.
 const RESPONSE_TIMEOUT_MS: u64 = 5000;
 /// Callbacks kept while a command waits for its response: the oldest is dropped past this.

@@ -267,6 +267,8 @@ fn the_marker_timer_waits_what_is_left_of_ten_minutes_and_never_underflows() {
 struct Recorded {
     calls: Rc<RefCell<Vec<&'static str>>>,
     listened: Rc<Cell<usize>>,
+    /// For each feed, how many steps had run before it.
+    feeds: Rc<RefCell<Vec<usize>>>,
 }
 
 fn network() -> Network {
@@ -289,6 +291,7 @@ fn run_restart(
     let recorded = Recorded {
         calls: Rc::new(RefCell::new(Vec::new())),
         listened: Rc::new(Cell::new(0)),
+        feeds: Rc::new(RefCell::new(Vec::new())),
     };
     let (c1, c2, c3, c4, c5) = (
         Rc::clone(&recorded.calls),
@@ -297,6 +300,7 @@ fn run_restart(
         Rc::clone(&recorded.calls),
         Rc::clone(&recorded.calls),
     );
+    let (steps_run, feeds) = (Rc::clone(&recorded.calls), Rc::clone(&recorded.feeds));
     let listened = Rc::clone(&recorded.listened);
     let mut save = move || {
         c1.borrow_mut().push("save");
@@ -313,7 +317,9 @@ fn run_restart(
         listened.set(listened.get() + 1);
         listen_answer.clone()
     };
+    let mut feed = move || feeds.borrow_mut().push(steps_run.borrow().len());
     let mut steps = RestartSteps {
+        feed: &mut feed,
         save: &mut save,
         finish_pairing: &mut finish,
         reset: &mut reset,
@@ -375,8 +381,31 @@ fn a_restart_asks_for_no_pairing_window() {
 fn a_restart_where_the_probe_finds_nothing_stops_without_listening() {
     let mut restarts = Restarts::new();
     let (result, recorded, _) = run_restart(&mut restarts, 0, Ok(None), Ok(network()));
-    assert!(matches!(result.unwrap(), Restarted::Stopped));
+    assert!(matches!(result.unwrap(), Restarted::Silent));
     assert_eq!(recorded.listened.get(), 0);
+}
+
+#[test]
+fn a_restart_feeds_the_watchdog_before_each_step() {
+    let mut restarts = Restarts::new();
+    let (_, recorded, _) = run_restart(&mut restarts, 0, Ok(Some(115_200)), Ok(network()));
+    // Before the save (0 steps run), the pairing's end (1), the reset (2), the probe (3), the
+    // listen (4).
+    assert_eq!(*recorded.feeds.borrow(), [0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn a_refused_restart_is_stopped_and_one_with_no_speed_is_silent() {
+    let mut restarts = Restarts::new();
+    for at in 0..3 {
+        run_restart(&mut restarts, at, Ok(Some(115_200)), Ok(network()))
+            .0
+            .unwrap();
+    }
+    let (refused, _, _) = run_restart(&mut restarts, 10, Ok(None), Ok(network()));
+    assert!(matches!(refused.unwrap(), Restarted::Stopped));
+    let (silent, _, _) = run_restart(&mut Restarts::new(), 0, Ok(None), Ok(network()));
+    assert!(matches!(silent.unwrap(), Restarted::Silent));
 }
 
 #[test]

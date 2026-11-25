@@ -4,7 +4,7 @@
 //! (`Reply::Update`, spec 032, D53), and so is `/system/backup` (spec 035): only their other
 //! methods are answered here. Sowel's other
 //! `/system` routes (mode...) are not Solite's. `POST /system/factory-reset` is Solite's (spec 029,
-//! D48).
+//! D48). `GET /system/supervisor` is Solite's too (spec 036, D58): the supervisor's status.
 
 use serde::Serialize;
 use serde_json::{Number, Value};
@@ -23,9 +23,14 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["system", "version"], "GET") => version(),
         // `GET` and `POST /system/backup` are the streaming handler's (`Reply::BackupExport` and
         // `BackupRestore`, spec 035, D56): only its other methods are answered here.
-        (["system", "version"] | ["system", "update"] | ["system", "backup"], _) => {
-            method_not_allowed()
-        }
+        (["system", "supervisor"], "GET") => json(200, home.supervision()),
+        (
+            ["system", "version"]
+            | ["system", "update"]
+            | ["system", "supervisor"]
+            | ["system", "backup"],
+            _,
+        ) => method_not_allowed(),
         _ => error(404, "Not found"),
     }
 }

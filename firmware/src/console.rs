@@ -19,6 +19,7 @@ use solite_core::network::{ConsoleCommand, MAX_CONSOLE_LINE, parse_console_line}
 
 use crate::radio_engine::{PAIR_ASKED, SAVES, STOP, STOPPED};
 use crate::storage;
+use crate::supervisor;
 
 /// The console thread's stack, in internal RAM: it writes the flash.
 const CONSOLE_STACK_BYTES: usize = 4 * 1024;
@@ -88,6 +89,8 @@ fn restart() -> ! {
         "console: restarting (stack {} B unused of {CONSOLE_STACK_BYTES} B)",
         unused
     );
+    // The reason is written first, so the next boot is `asked`, not a crash (spec 036).
+    supervisor::asked_restart();
     // SAFETY: takes no argument; restarts the chip, never returns.
     unsafe { esp_restart() }
 }
@@ -124,6 +127,10 @@ fn act(line: &[u8]) {
         ConsoleCommand::SavesFlush => {
             SAVES.ask_flush();
             log::info!("{FLUSH_ASKED_LINE}");
+        }
+        ConsoleCommand::Panic => {
+            log::warn!("console: panic asked");
+            panic!("console: panic asked");
         }
         ConsoleCommand::WifiForget => match storage::remove(WIFI_FILE) {
             Ok(()) => {

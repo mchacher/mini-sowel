@@ -26,6 +26,8 @@ mod radio_uart;
 mod simulated;
 mod storage;
 #[cfg(feature = "radio")]
+mod supervisor;
+#[cfg(feature = "radio")]
 mod wifi;
 
 /// The interface packed by `build.rs` (spec 022's `crates/ui-embed`): gzip files in the flash.
@@ -96,6 +98,8 @@ fn run_engine() {
         .stack_size(simulated::STACK_BYTES)
         .spawn(move || simulated::run(before));
     let result = match spawned {
+        // The target's panic strategy is abort (spec 036 R7): a panic restarts the chip, so `join`
+        // never returns the error of a panicked thread; the branch is kept for the type.
         Ok(handle) => handle
             .join()
             .map_err(|_| "engine: the thread panicked".to_string()),
@@ -142,8 +146,11 @@ fn wifi_settings() -> Option<solite_core::network::WifiSettings> {
 #[cfg(feature = "radio")]
 fn run_radio() {
     use solite_core::network::{Link, boot_lines_radio, choose, parse};
+    use solite_core::supervisor::Mode;
     use std::sync::atomic::Ordering;
 
+    // The supervisor first (spec 036): why the box restarted, and whether the engine runs at all.
+    let mode = supervisor::boot();
     let text = network_setting();
     // No cable detection in this image: `auto` means Wi-Fi (Ethernet is E3e).
     for line in boot_lines_radio(text.as_deref(), false) {
@@ -182,10 +189,34 @@ fn run_radio() {
         // Nothing to wait for: the saves are never held without Wi-Fi.
         wifi::CLOCK_SET.store(true, Ordering::SeqCst);
     }
+    if mode != Mode::Normal {
+        // Safe mode: no engine thread, no radio. The API serves the saved home, refuses the
+        // changes (the core's gate) and shows the supervisor's status.
+        radio_engine::STOPPED.store(true, Ordering::SeqCst);
+        let home = safe_home(mode == Mode::SafeBare);
+        let hub = solite_core::devices::lock(&home).live();
+        let _ = sender.send(wifi::Event::Home(radio_engine::Shared { home, hub }));
+        drop(sender);
+        // Neither arm returns: `wifi::run` serves for good, the idle loop waits for the restart.
+        match station {
+            Some(station) => wifi::run(station, &events),
+            // Without Wi-Fi there is nothing to serve: the box idles until its retry restart.
+            None => loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            },
+        }
+    }
     let handle = match radio_engine::spawn(station.is_some().then(|| sender.clone())) {
         Ok(handle) => handle,
         Err(e) => {
-            log::error!("engine: cannot start its thread: {e}");
+            // Never idle (spec 036 R2): no engine thread is an engine error, the box restarts.
+            let detail = format!("engine: cannot start its thread: {e}");
+            log::error!("{detail}");
+            supervisor::last_rung_restart(
+                solite_core::supervisor::Reason::EngineError,
+                &detail,
+                &mut || Ok(()),
+            );
             return;
         }
     };
@@ -193,9 +224,47 @@ fn run_radio() {
     if let Some(station) = station {
         wifi::run(station, &events);
     }
+    // The target's panic strategy is abort (spec 036 R7): a panic restarts the chip, `join` never
+    // returns the error of a panicked thread; the branch is kept for the type.
     if handle.join().is_err() {
         log::error!("engine: the thread panicked");
     }
+}
+
+/// The home the safe mode serves: the saved one (safe), or an empty one (bare safe mode, or a
+/// home that cannot be read: the error is logged). Presence is set as the engine does; no recipe
+/// starts and no radio is driven.
+#[cfg(feature = "radio")]
+fn safe_home(bare: bool) -> std::sync::Arc<std::sync::Mutex<solite_core::home::Home>> {
+    use solite_core::auth::BootPresence;
+    use solite_core::engine::load_home;
+    use solite_core::home::Home;
+    use solite_core::radio::serial::ResetReason;
+    use std::sync::{Arc, Mutex};
+
+    let started = std::time::Instant::now();
+    let mono = move || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let wall = radio_engine::wall_ms();
+    let mut home = if bare {
+        Home::new(wall)
+    } else {
+        match load_home(&storage::FatStorage::new(), wall) {
+            Ok(home) => home,
+            Err(e) => {
+                log::error!("safe mode: the home cannot be read ({e}), serving an empty one");
+                Home::new(wall)
+            }
+        }
+    };
+    home.orders().set_clock(Arc::new(mono));
+    home.set_presence(BootPresence::new(
+        radio_engine::reset_reason() == ResetReason::PowerOn,
+        Arc::new(mono),
+    ));
+    supervisor::set_supervision(&mut home);
+    let home = Arc::new(Mutex::new(home));
+    supervisor::watch_home(&home);
+    home
 }
 
 #[cfg(not(any(feature = "sim", feature = "radio")))]

@@ -144,6 +144,7 @@ interface's files).
 | `POST /api/v1/system/backup` | Restores the full backup archive (deviation, D56) |
 | `GET /api/v1/system/version` | The running version (Sowel's `VersionInfo`, a subset, D53) |
 | `POST /api/v1/system/update` | Installs the signed update file in its body (Sowel's route takes none, D53) |
+| `GET /api/v1/system/supervisor` | The supervisor's status: mode, boot cause, last incident, restarts (deviation, D58) |
 
 ## Equipment types with behaviour
 
@@ -165,7 +166,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53, D56).
+D44, D47 to D49, D53, D56, D58).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -175,6 +176,7 @@ D44, D47 to D49, D53, D56).
 | route | `POST /api/v1/system/factory-reset` | D48 |
 | route | `GET /api/v1/system/backup` | D56 |
 | route | `POST /api/v1/system/backup` | D56 |
+| route | `GET /api/v1/system/supervisor` | D58 |
 
 Differences of value in the authentication (D47 to D49), none a new name: one account, always
 `admin` (no other user, no `/me`, no `/users`, no API token, no MFA: `trustedDeviceToken` is
@@ -191,3 +193,8 @@ the release itself) and answers Sowel's `{success, message}`, its `{error}` shap
 `Update already in progress`; `GET /api/v1/system/version` answers `current`, `latest` (always
 `null`), `updateAvailable` (always `false`) and `releaseUrl` (`null`), without Sowel's two Docker
 fields (`dockerAvailable`, `composeManaged`).
+
+Differences of value in the safe mode (D58), none a new name: while the supervisor holds the engine
+stopped, every request that is not a `GET` answers 503 `{"error": "Safe mode: the engine is
+stopped"}`, except the account's routes (`/auth/*`) and `POST /api/v1/system/update`. Sowel has no
+such mode.

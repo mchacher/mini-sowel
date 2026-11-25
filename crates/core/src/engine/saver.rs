@@ -107,6 +107,9 @@ pub struct Saver<S: Storage> {
     /// The gate was closed at the last tick: at its opening the values' interval starts again,
     /// so a clock set from 1970 does not make the values due at once (one write saved per boot).
     gate_was_closed: bool,
+    /// Feeds the engine's watchdog; called before each file is written (spec 036 R8); `None`: no
+    /// feed.
+    feed: Option<Box<dyn FnMut()>>,
 }
 
 impl<S: Storage> Saver<S> {
@@ -122,6 +125,7 @@ impl<S: Storage> Saver<S> {
             delay_ms: 0,
             pending_since: None,
             gate_was_closed: false,
+            feed: None,
         }
     }
 
@@ -147,6 +151,21 @@ impl<S: Storage> Saver<S> {
     pub fn with_gate(mut self, gate: impl Fn() -> bool + 'static) -> Self {
         self.gate = Some(Box::new(gate));
         self
+    }
+
+    /// Calls `feed` before each file is written, so the engine's watchdog never waits for more
+    /// than one file's write (spec 036 R8).
+    #[must_use]
+    pub fn with_feed(mut self, feed: impl FnMut() + 'static) -> Self {
+        self.feed = Some(Box::new(feed));
+        self
+    }
+
+    /// Feeds the watchdog now (the engine's loop calls it at each turn); nothing without a feed.
+    pub fn feed(&mut self) {
+        if let Some(feed) = self.feed.as_mut() {
+            feed();
+        }
     }
 
     /// Follows the console's hold and flush (spec 025 R1).
@@ -314,7 +333,13 @@ impl<S: Storage> Saver<S> {
         Ok((written, failed, skipped))
     }
 
-    fn write(&self, home: &Mutex<Home>, mut cursor: ListCursor, name: &str) -> Result<(), String> {
+    fn write(
+        &mut self,
+        home: &Mutex<Home>,
+        mut cursor: ListCursor,
+        name: &str,
+    ) -> Result<(), String> {
+        self.feed();
         self.store
             .write(name, &mut || cursor.next_chunk(&lock(home)))
     }

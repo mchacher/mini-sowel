@@ -90,6 +90,14 @@ stays a person's. The first run is expected to show route or timing mismatches (
   the box, or flash a second one while the first is off, restore the file there; count the devices
   that report again without pairing, and those that need pairing (D57's best effort), and note the
   numbers in spec 035; read the flash write count of the restore (`box.sh log`).
+- Spec 036 (the supervised engine), the box check, the user present, one pass, no loop (D39), on
+  the radio image of the spec, flashed with the user's yes: `GET /api/v1/system/supervisor` after
+  the flash shows `bootCause` `power-on` and `mode` `normal`; one `panic` line typed by the person
+  on the serial console (`box.sh` sends no raw line) restarts the box once, and the route then
+  shows `bootCause` `panic` and one restart in the hour; the flash writes of that incident are at
+  most one save of the files due plus the boot marker written at the next boot (`box.sh log`). The
+  safe mode and the watchdog itself are not forced on the box: they are the Mac's tests. The route
+  check stays a person's (the box session does not read it).
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -232,6 +240,11 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | Decide what the QEMU ceiling measures: the engine without the simulator (the box's image has none) or the bench with it; if without, take the simulator's allocations out of the phase figures (`firmware/src/simulated.rs:228-259`, `measure.rs:73-86`) and set a new ceiling from the measured figure | Fix of the 363 KB peak |
 | 2026-11-25 | Stream the home's loading for real: `Storage` returns a reader and `devices.json` and `equipments.json` are parsed with `from_reader` (the texts of 94 KB and 71 KB are read whole today, `engine/storage.rs:145-195`) | Fix of the 363 KB peak |
 | 2026-11-25 | An internal-RAM floor measured on the box with Wi-Fi up and the realistic home, read in the `heap:` line (the largest block is now in it), written in `docs/memory-budget.md` | Fix of the 363 KB peak |
+| 2026-11-25 | A notification of a restart or of the safe mode (Telegram, web push, Sowel), once a notification channel exists | Spec 036, D58 |
+| 2026-11-25 | A supervisor card or a banner in the interface that shows `GET /api/v1/system/supervisor` (mode, last incident, restarts) | Spec 036, D58 |
+| 2026-11-25 | Sowel's `GET /api/v1/health` (its anonymous liveness shape, for an uptime monitor) | Spec 036, D58 |
+| 2026-11-25 | Presence counted from the last power-on across restarts, so a restore or a factory reset is a way out of the safe mode (today only the update, a power-on or a USB flash is) | Spec 036, D58 |
+| 2026-11-25 | Supervise the boot before the storage: a crash while the data partition mounts or a pending restore is applied (`firmware/src/main.rs`, `mount_storage`) happens before the supervisor boots, so it is neither counted nor stopped by the safe mode | Spec 036 review |
 
 ## Sowel issues to open
 
@@ -417,3 +430,4 @@ Every change to this roadmap: date, what changed, why.
   prints the firmware images' share of the slot. New inbox line: a raw console line in `box.sh`.
 - 2026-11-25: spec 034 built on the Mac (the user away, the box not run): the radio image's `heap:` line prints the largest free block of internal RAM and PSRAM; the devices read back share the catalog's texts and are read in one pass. The 50 devices hold 65 KB instead of 72 KB (Mac), QEMU 159 KB held and 311 KB peak instead of 176 and 327, internal RAM minimum 110 KB instead of 95; the JSON is unchanged.
 - 2026-11-25: spec 035 built on the Mac (the user away, the box not run): the full backup, one password-protected file (`GET/POST /api/v1/system/backup`, D56) holding the home, the Zigbee network and, on request, the Wi-Fi settings, streamed both ways through a 4 KB buffer, validated whole before a restore replaces the home at the next start; the radio forms the restored network and leaves the one it runs (D57); a Backup card on the Settings page. D42's document and `/api/v1/backup` are gone. Inbox lines of the full backup and of D42's alignment removed; new line: the radio's frame counter and child table on a restored network. The box check is in the list above.
+- 2026-11-25: spec 036 built on the Mac (the user away, the box not run): the radio image restarts the box when its engine ends on an error, with the reason kept in RTC memory (no flash write); a boot-loop guard (3 counted restarts in an hour or 6 in a day) and a safe mode that keeps the API and the update up, retried after 1 h, 4 h, then 24 h; the engine thread on the task watchdog (20 s, restarts the chip); `GET /api/v1/system/supervisor` (D58). The box check is in "Tests to run with the box in hand"; four inbox lines added (a notification, an interface card, Sowel's `/health`, presence across restarts).

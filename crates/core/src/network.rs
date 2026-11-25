@@ -391,6 +391,8 @@ pub enum ConsoleCommand {
     SavesHold,
     /// `saves flush`: each file with unsaved changes written once, then the hold ended.
     SavesFlush,
+    /// `panic`: panics on purpose, the box check's fault (spec 036 R12).
+    Panic,
     Empty,
     Unknown,
     /// More than `MAX_CONSOLE_LINE` bytes.
@@ -424,6 +426,7 @@ pub fn parse_console_line(line: &[u8]) -> ConsoleCommand {
         ("pair", None) => ConsoleCommand::Pair,
         ("saves", Some("hold")) => ConsoleCommand::SavesHold,
         ("saves", Some("flush")) => ConsoleCommand::SavesFlush,
+        ("panic", None) => ConsoleCommand::Panic,
         _ => ConsoleCommand::Unknown,
     }
 }

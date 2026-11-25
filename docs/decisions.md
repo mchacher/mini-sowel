@@ -1066,3 +1066,58 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   than discarding them keeps the rule that a network's keys are never lost. The
   EUI64 is left alone because writing it cannot be undone; the counter and the child table need
   EZSP values Solite does not read today, so the measure on the box decides what is worth adding.
+
+## D58: The radio image supervises its engine: a last rung that restarts the box, a boot-loop guard, a safe mode, a watchdog
+
+- **Date**: 2026-11-25 (spec 036, decided in an autonomous run, for the user's review)
+- **Choice**: everything below is decided in the spec; the user reviews it.
+  - **The last rung**: when the engine thread ends on an error (the radio's ladder refused a 4th
+    restart, no speed answers, the start failed, a storage or data error), the box restarts, one
+    second after its log line, with the reason kept across the restart. A stop asked by the
+    console or an update is not an error and wins over it.
+  - **The reason lives in RTC slow memory, not in the flash**: 24 words in `.rtc_noinit`, with a
+    checksum; it survives a software restart, a panic and a watchdog reset, and a power-on makes
+    it garbage, which is the intended reset (a power cut is itself the reason). No NVS write, so
+    a restart loop wears no flash (D39's spirit). Plain loads and stores only on the RTC words
+    (the atomic read-modify-write instructions work on internal SRAM only).
+  - **The budgets**: 3 counted restarts in an hour or 6 in a day (the supervisor clock, which
+    counts the milliseconds run since the last power-on across restarts, because the wall clock is
+    not set at boot) enter the safe mode. A **brown-out is shown and not counted** (a restart does
+    not mend a power supply, and the safe mode would only stop the automations), nor are the
+    restarts asked on purpose and the safe mode's own retry.
+  - **The safe mode** keeps the way in (Wi-Fi, API, update) with the engine stopped, and is retried
+    after **1 h, then 4 h, then 24 h** (24 h for every later one) by one restart with the cause
+    `safe-mode-retry`. 3 counted restarts since it began make it the **bare safe mode**: the
+    home's files are not even read (a home whose load crashes cannot loop); an empty home is
+    served in RAM and the files are never touched.
+  - **The 503 gate**: in safe mode every request that is not a `GET` answers 503 `{"error": "Safe
+    mode: the engine is stopped"}`, except the account's routes and `/system/update`: nothing is
+    accepted that would never run or never be saved. A restore and a factory reset need a
+    person's presence, which only a power-on gives, so they are not ways out of it. Presence
+    counted from the last power-on across restarts is an inbox line.
+  - **Solite's own route**: `GET /api/v1/system/supervisor` (`mode`, `bootCause`, `lastIncident`,
+    `restartsLastHour`, `restartsLastDay`), a deviation from Sowel, which has no supervisor, listed in
+    `docs/sowel-subset.md`. The interface shows nothing of it in this spec.
+  - **The watchdog**: the engine thread is subscribed to ESP-IDF's task watchdog with a **20 s**
+    timeout that restarts the chip (`CONFIG_ESP_TASK_WDT_TIMEOUT_S=20`,
+    `CONFIG_ESP_TASK_WDT_PANIC=y`, in the radio image's defaults only). It is fed at every radio read
+    (every 50 ms), each turn of the loop, before each file the saver writes and before each step
+    of the radio's ladder. The longest stall that cannot be fed is one file's flash write, the
+    3.8 s save of a 98 KB `devices.json`: 20 s is over five times it, checked by a test. The idle
+    tasks stay watched with the same timeout and now restart the chip.
+  - **Panics**: the policy kept is the target's: `xtensa-esp32-espidf` aborts on a panic and
+    ESP-IDF's panic handler prints and restarts the chip; the next boot reads the reset reason
+    `panic` and counts it. No `catch_unwind` (it cannot catch under `abort`), no profile change.
+    The console's `panic` line panics on purpose, to check this on the box: it is **the one
+    exception** to the rule of no `panic!` outside tests and start-up code.
+- **Why**: the true north asks a month in an annex without intervention. An engine that ended and
+  left the ESP32 up doing nothing, or one stuck in a loop, is a box that looks alive and does
+  nothing, and nobody is there to unplug it. A restart mends most such faults; a boot-loop guard
+  keeps a persistent fault from restarting the box for ever and wearing the radio and the flash,
+  and the safe mode keeps the one way to replace a bad image over the network (the update), which
+  a restart loop would make unreachable.
+- **Alternatives**: the reason in NVS or a file (a flash write per incident, for a reason a power
+  cut erases anyway); a watchdog around each radio call only (the saver's flash writes are what
+  blocks); a shorter timeout (the 3.8 s save leaves little margin under 5 s); restarting without a
+  budget (a loop on a persistent fault); a safe mode with no retry (a transient fault would need a
+  person).
