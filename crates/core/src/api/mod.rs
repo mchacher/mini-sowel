@@ -335,6 +335,9 @@ fn dispatch(
         return Reply::Whole(error(404, "Not found"));
     };
     let segments: Vec<&str> = rest.split('/').collect();
+    // The clock may have been set since the radio loop's last turn: the devices' dates move
+    // first (D45), so a device heard during the wait is not seen offline.
+    home.observe_wall(now);
     // Silence alone can turn a device offline: the aggregation follows.
     if home.devices.refresh_status(now) {
         home.recompute(now);

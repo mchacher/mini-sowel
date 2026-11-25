@@ -1142,3 +1142,27 @@ fn only_a_bearer_subprotocol_is_echoed() {
     assert_eq!(close_reason(1009), "Message too big");
     assert_eq!(close_reason(4003), "");
 }
+
+#[test]
+fn a_devices_zone_change_emits_no_live_event_and_answers_with_the_device() {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Garage");
+    let sensor = rig.sensor(0x10);
+    let (hub, c) = listening(&rig);
+    // What the zone and sensor creation queued is not what is checked.
+    batch(&hub, c);
+    let (status, body) = rig.put(
+        &format!("/api/v1/devices/{sensor}"),
+        json!({"zoneId": zone}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(body["id"], sensor.as_str());
+    assert_eq!(body["zoneId"], zone.as_str());
+    assert_eq!(batch(&hub, c), Vec::<Value>::new(), "no event of any topic");
+    // A rename emits none either, as Sowel's update.
+    rig.put(
+        &format!("/api/v1/devices/{sensor}"),
+        json!({"name": "Shed"}),
+    );
+    assert_eq!(batch(&hub, c), Vec::<Value>::new());
+}

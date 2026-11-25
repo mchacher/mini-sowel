@@ -1,5 +1,5 @@
-//! The motion sensors of a zone, found once when an instance starts, and what counts as motion
-//! in a raw value (`resolveMotionSources`, `isMotionActive` of the recipe).
+//! The motion sensors of a zone, found when an instance starts and again at each settle, and
+//! what counts as motion in a raw value (`resolveMotionSources`, `isMotionActive` of the recipe).
 
 use crate::devices::Id;
 use crate::home::{Home, events::EventValue};

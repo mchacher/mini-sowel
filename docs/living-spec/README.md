@@ -258,7 +258,11 @@ A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (U
 digits), `source` and `integrationId` `solite`, `zoneId` (`null`; an API client may set it, nothing reads it), `powerSource` (`mains`,
 `battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
 minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
-`lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds).
+`lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds). A date taken before the box's
+clock is set (the box starts in 1970) is moved forward by the clock's jump when the clock is set
+(`lastSeen`, `createdAt`, `updatedAt`, the data's `lastUpdated` and the `lastChanged` of the
+equipment's data), so a device heard during the wait shows the real date and stays `online`. A
+`lastSeen`, `lastUpdated` or `lastChanged` read in 1970 from storage (a former boot) is `null`.
 
 Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugin names them:
 `temperature` (°C), `humidity` (%), `pressure` (hPa), `illuminance` (luminosity, lx), `occupancy`
@@ -288,7 +292,7 @@ from another site is refused by a `Host` check, and by an `Origin` check on `/ws
 | ----- | ------ |
 | `GET /api/v1/devices` | the devices with their data and orders, in pairing order |
 | `GET /api/v1/devices/:id` | one device; 404 `{"error":"Device not found"}` |
-| `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters); `zoneId` (an id, or `null`; 404 `Zone not found`) is kept as in Sowel's format, read by nothing: a device is in a room only through its equipments |
+| `PUT /api/v1/devices/:id` `{"name"?, "zoneId"?}` | renames it (1 to 64 characters); `zoneId` (an id, or `null`; 404 `Zone not found`) is kept as in Sowel's format, read by nothing: a device is in a room only through its equipments; a name or zone change emits no live event, as Sowel's (the client reads the answer) |
 | `DELETE /api/v1/devices/:id` | 204; the host forgets it (it stays in the Zigbee network) |
 | `GET /api/v1/integrations/solite/permit-join` | 200 `{"permitJoin": <bool>, "remaining": <seconds>}`, plus `"error"` when the radio refused the last opening |
 | `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
@@ -531,21 +535,28 @@ Sowel's 1.1.2), through Sowel's routes:
   within 2 seconds of a change; each enabled one is started again (one that no longer validates logs `Failed to restore:
   <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
   read stops the host; an entry beyond 16, or with an id already seen, is dropped.
-- **When what it uses changes** (decision D38; Sowel keeps the stale ids): right after an
-  equipment is deleted or changed, a binding removed, a device removed or a zone deleted, the
-  instances settle. A deleted equipment leaves the settings of every instance that names it (its
+- **When what it uses changes** (decisions D38 and D46; Sowel keeps the stale ids): right after an
+  equipment is created, changed or deleted, a data binding added or removed, an order binding
+  removed, a device removed, or a zone updated (through its route or a backup import) or deleted, the instances settle. A deleted equipment leaves the settings of every instance that names it (its
   id taken out of the lights, the buttons, or the legacy `light`, which becomes empty), with the
   warning `Equipment removed from settings: <name>` in its log, and the change is written. Every
   enabled instance is then checked as a creation is: one that no longer validates is stopped,
   disabled and written, with the error `Disabled: <reason>` (`At least one light is required`, a
   light no longer in the zone or without its `state` order binding...) and the events
   `recipe.instance.stopped` (when it ran) and `recipe.instance.error`; it sends no order after
-  that. A running one whose settings lost an id and still validates starts again with them (its
-  start line, its state reset). An instance whose zone is deleted is deleted with its log
+  that. A running one whose lights lost an id and still validates starts again with them (its
+  start line, its state reset). A button that no longer has an `action` data binding (its
+  device removed, its binding deleted) or no longer exists leaves the settings of every
+  motion-light instance, enabled or not, with the warning `Button removed from settings: <name>`,
+  instead of disabling it; a change of the buttons alone is taken in place, without a restart.
+  `POST` and `PUT /recipe-instances` still refuse a button without an `action` binding. A running
+  instance that is not restarted resolves its motion sources again at each settle (the enabled
+  equipments of its zone and the zones below it), keeping its timers and state: a sensor deleted,
+  unbound, disabled or moved out stops resetting the safety auto-off, one added or moved in
+  starts to. An instance whose zone is deleted is deleted with its log
   (`recipe.instance.removed`). A renamed equipment, or a change nothing uses, leaves the instances
   untouched; a disabled instance is only pruned. `POST .../enable` on an instance whose settings
-  no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled. A motion sensor
-  deleted under a running instance is not settled: its motion simply stops.
+  no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled.
 - **From the interface**: the instances are made, changed, enabled, disabled and deleted, and
   their log read, from a room's page (see "Shows the home in the browser").
 - **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
@@ -869,3 +880,4 @@ live events and the interface over Wi-Fi, without the pairing route.
 | 025 | Saves held and flushed from the serial console and `box.sh saves`, every flash write counted and checked against a budget, a burst of definition changes written once |
 | 026 | The home's settings (location, time zone, sun offsets) and the sun times on the root zone, so "Inactive during day" works; a Settings page; export and import of the settings and zones |
 | 027 | The Sowel contract checked (snapshot, subset and deviations); Sowel's 31 equipment types and optional equipment fields; `light_color`; a paired device's type and bindings proposed in the core; `GET /api/v1/system/timezone` |
+| 028 | Core fixes: the dates of a device taken before the clock is set move by its jump; a motion-light button without an `action` binding leaves the settings instead of disabling the recipe; a running motion-light follows its zone's motion sensors as they change |

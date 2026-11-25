@@ -8,5 +8,5 @@ mod sources;
 
 pub use info::{ID, NAME, info};
 pub use machine::MotionLight;
-pub use params::{MAX_BUTTONS, MAX_LIGHTS, Params, validate};
+pub use params::{MAX_BUTTONS, MAX_LIGHTS, Params, prune_stale_buttons, validate};
 pub use sources::{MotionSource, is_motion_active, resolve_motion_sources};

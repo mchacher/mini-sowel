@@ -9,6 +9,7 @@ use super::{Home, ListCursor};
 use crate::devices::Id;
 use crate::failure::{Failure, Outcome};
 use crate::live::{EngineEvent, Topic};
+use crate::recipes::Settle;
 use crate::settings::Settings;
 use crate::settings::backup::{self, Backup, BackupZone, invalid};
 use crate::settings::sun::{self, Sunlight};
@@ -230,6 +231,7 @@ impl Home {
         }
         // Everything was checked: the copy replaces the zones, the settings are replaced.
         let changed = self.settings.differences(&document.settings);
+        let zones_moved = !updated.is_empty();
         if !created.is_empty() || !updated.is_empty() {
             self.zones = zones;
             self.zones_changed = true;
@@ -257,6 +259,10 @@ impl Home {
         for zone in updated {
             self.live
                 .emit(Topic::Zones, || EngineEvent::ZoneUpdated { zone });
+        }
+        // A zone moved by the import changes the motion sources of the recipes, as a `PUT`.
+        if zones_moved {
+            self.settle_recipes(Settle::default(), now);
         }
         Ok(summary)
     }

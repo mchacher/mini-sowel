@@ -76,6 +76,39 @@ fn strings(list: &[Value]) -> Vec<&str> {
     list.iter().filter_map(Value::as_str).collect()
 }
 
+/// The params text without the buttons that are gone or have no `action` data binding any more,
+/// and the name of each (the id for an equipment that does not exist), once per id. `None` when
+/// every button is fine (or the text is not a JSON object with a `buttons` list).
+pub fn prune_stale_buttons(text: &str, home: &Home) -> Option<(Box<str>, Vec<String>)> {
+    let mut value = serde_json::from_str::<Value>(text).ok()?;
+    let Some(Value::Array(list)) = value.as_object_mut()?.get_mut("buttons") else {
+        return None;
+    };
+    let mut stale: Vec<(String, String)> = Vec::new();
+    let before = list.len();
+    list.retain(|entry| {
+        let Some(id) = entry.as_str() else {
+            return true;
+        };
+        let item = Id::parse(id).and_then(|id| home.equipments().get_by_id(&id));
+        let name = match item {
+            Some(item) if item.data_bindings.iter().any(|b| b.alias == "action") => return true,
+            Some(item) => item.equipment.name.to_string(),
+            None => id.to_string(),
+        };
+        if !stale.iter().any(|(seen, _)| seen == id) {
+            stale.push((id.to_string(), name));
+        }
+        false
+    });
+    if list.len() == before {
+        return None;
+    }
+    // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
+    let text = serde_json::to_string(&value).ok()?.into_boxed_str();
+    Some((text, stale.into_iter().map(|(_, name)| name).collect()))
+}
+
 /// Sowel's `validate`, against the home as it is.
 pub fn validate(params: &Value, home: &Home) -> Result<Params, String> {
     let get = |key: &str| params.get(key);

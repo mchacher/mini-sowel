@@ -765,3 +765,33 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Why**: Sowel's interface reads that route (its current-time pill, the rain summary); the
   list route has no Sowel counterpart, and moving the list into the interface would duplicate the
   core's table of POSIX rules.
+
+## D45: Device dates taken before the clock is set are moved by its jump
+
+- **Date**: 2026-11-25 (spec 028, decided in an autonomous run, for the user's review)
+- **Choice**: the home keeps the last wall time it was given (by each turn of the radio loop and
+  each tick of the saver). When it was before 2020 and the time given is after, every device date
+  before 2020 (`lastSeen`, `createdAt`, `updatedAt`, the data's `lastUpdated` and `lastChanged`)
+  is moved forward by the difference. A `lastSeen`, `lastUpdated` or `lastChanged` read in 1970
+  from storage is `null`. The shift marks the values as changed, never the definitions.
+- **Why**: the box starts in 1970 and gets the time 20 s later; a device heard in between showed
+  1970, turned `offline` at the jump and wrote 1970 to the flash. Shifted, its date is right
+  within one turn of the loop and it stays `online`; `null` would lose the last message. The last
+  wall time lives in the home, not in the loop, so a radio restart (which calls the loop again)
+  does not lose the crossing. Marking only the values adds no flash write at boot. Other dates
+  taken during the wait (recipe logs and state keys, equipments and zones) are not moved.
+
+## D46: A motion-light keeps running when a button goes stale, and follows its zone's sensors (narrows D38)
+
+- **Date**: 2026-11-25 (spec 028, decided in an autonomous run, for the user's review)
+- **Choice**: when the recipes settle, a motion-light button whose equipment no longer has an
+  `action` data binding leaves the settings (`Button removed from settings: <name>`), instead of
+  the instance being disabled. A running instance restarts only when its lights lost an id; a
+  change of its buttons alone, and the motion sources of its zone, are taken in place
+  (`Runner::refresh`), its timers and state kept. The settle also runs after an equipment is
+  created, a data binding added and a zone updated. Diverges from Sowel's motion-light, which
+  resolves its sources once at its start.
+- **Why**: a box that runs a month alone must not stop lighting the garage because a button's
+  device was removed, nor switch a lit garage off (a restart's start sync) for it; and a motion
+  sensor replaced, unbound or moved must count, or stop counting, for the safety auto-off without
+  anyone restarting the recipe. Creation and the form still refuse a button without `action`.

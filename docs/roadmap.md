@@ -28,6 +28,40 @@ Flashing needs the user's explicit yes, once the original firmware is saved (dec
 | E3d | With no cable and no Wi-Fi settings the box opens its own access point `Solite-XXXX` with a page to pick the network (settings also written through the serial console, `box.sh wifi`, specs 022 and 023); a Wi-Fi that stays unreachable is retried, then the access point reopens after a few minutes; the pairing route (D28) stays disabled in the box (404) until J4's password exists | The garage runs in the box for a day, Mac off | |
 | E3e | Ethernet (the IP101, RMII, pins of `docs/hardware.md`): a cable at boot under `auto` means Ethernet, the same server; the Ethernet memory figure measured | The box's interface opened over a cable, Wi-Fi settings absent | |
 
+### Order of work while the box is away (from 2026-11-25)
+
+E3d and E3e need the box, so the work goes on in the core and the interface, tested on the Mac, in
+this order (each through `/solite-feature` or `/solite-fix`):
+
+1. A batch of core fixes: done (spec 028).
+2. J4: the password at commissioning, mirroring Sowel's authentication (the button's confirmation
+   is written in the core and checked later on the box).
+3. J2: equipments from the interface (detail page, bindings one by one, enable and disable).
+4. The colour cluster `0x0300` with a simulated bulb, then J5 (signed updates, the core part).
+
+### Tests to run with the box in hand
+
+One session, the user present, after their yes to flash (D6), saves held and flushed once (D39:
+no loop on the box, `--keep-storage`). Each item is a line of the inbox or of a row above.
+
+- Spec 025: flash the radio image; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'`
+  (33 requests, one flush); `box.sh log --image radio --seconds 60 --budget 1`.
+- Spec 026: inside `box.sh saves --budget 2`, `PUT /api/v1/settings` (location, time zone) and
+  `POST /api/v1/backup`; local sun times in `GET /api/v1/zones/aggregation`; by day, motion does
+  not switch the ZBMINIR2 on with "Inactive during day".
+- Spec 027: inside `box.sh saves --budget 1`, `PUT` of the time zone then
+  `GET /api/v1/system/timezone`; the home lock per batch of measures timed (a log line to add).
+- Spec 023, not run yet: the lost link, a 1970 date after a boot with the access point off, a
+  wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered
+  relay, the console's long and unknown lines, a client that stops reading.
+- Spec 021, not run yet: a second boot, the power-cut case, a forming of the network, the ZBMINIR2.
+- The 33 requests over 10 s and the lost request: where the time goes (E3d's day-long run waits
+  for it).
+- Spec 028: a device heard before the clock is set (a boot with the ZBMINIR2 powered) shows a
+  real `lastSeen` in `GET /api/v1/devices` after the clock, and stays `online`.
+- Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and, once J4 is built, the
+  button's confirmation.
+
 ## Next milestone
 
 **J. The autonomous box**. The user can then: set Solite up from the browser only, on the box:
@@ -139,18 +173,13 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-22 | The device detail page (Sowel's `DeviceDetailPage`: data, orders); the Devices page's search, sort and battery, LQI, last-seen columns | Spec 019 |
 | 2026-11-22 | Sowel's `GET /api/v1/integrations`, so Discovery's tabs come from the core rather than a list in the interface | Spec 019 |
 | 2026-11-22 | Replace the pairing windows of the box (180 s at a power-on boot, and the serial console's `pair` over the cable, D36) by the button or the authenticated route (J4) | Spec 021, D36 |
-| 2026-11-22 | A device removal in the API: an unwanted device that joined during a window stays in the store | Spec 021 |
 | 2026-11-22 | Flash encryption (or another protection) for the keys of `/data/zigbee.json`, written in plain text on a flash that is not encrypted | Spec 021 |
 | 2026-11-22 | The original firmware's network (one channel and PAN, not recorded here) was resumed by the box, so the box and the Mac host may share one radio network, with a question of who owns it: the box's `zigbee.json` only exists once the box forms or resumes, check what it saved (not checked: no serial port used) | Spec 021 |
 | 2026-11-22 | A channel choice for a multi-channel device (Sowel's candidate picker in `DeviceSelector`) | Spec 019 |
 | 2026-11-22 | Spec 023 review: move the /ws welcome text into the core's live::session (the host and the firmware each write it today) | Spec 023 |
 | 2026-11-22 | Run the pending box checks of spec 023: the lost link (access point off), no 1970 date on the flash after a boot with the access point off, a wrong password and `wifi --forget`, the 4 requests in progress and the 5th `Busy`, the unpowered relay, the console's long and unknown lines, a client that stops reading, the power-on cases with the access point or its Internet off | Spec 023 |
-| 2026-11-22 | A device that speaks during the clock wait keeps a `lastSeen` of 1970 until it speaks again (seen on the box: the ZBMINIR2 at 4.6 s, the clock set at 19.5 s), so the interface shows it from 1970 and a save after the clock writes that date to the flash: R3.2's "a normal boot writes no 1970 date" holds only for what is stamped after the clock. Shift the dates taken before the clock by the jump, or treat them as unknown, as `motionSince` now is | Spec 023 run |
 | 2026-11-22 | One broadcast point in the core, `Home::publish(Fact)`, to fixed subscribers held as fields of `Home` (no dynamic allocation, synchronous under the home lock, tested on the Mac; about 250 to 350 lines, mostly moved). Today about twenty direct hub calls and three recipe-queue calls sit in `measures`, `aggregate`, `check_statuses` and `report`, and the data-to-bindings walk is written twice (`home/mod.rs:411-423`, `:437-449`). Do it with the first new consumer (history, notifications, MQTT), not before | Architecture review 2026-11-22 |
-| 2026-11-22 | `set_device_zone` emits nothing (Sowel's `EngineEvent` has no `device.updated`: check what Sowel's interface reads instead). The `remove_device` half is done (spec 024) | Architecture review 2026-11-22 |
 | 2026-11-22 | A plain GET can recompute zones and emit events (`api/mod.rs:278-280`): kept in J3 (spec 024, R6: it is when a silent device is seen offline); looked at again in J6 (spec 026): kept, and the aggregation, GET included, also emits `sunlight.changed` when the sun data changed | Architecture review 2026-11-22 |
-| 2026-11-23 | A motion sensor (or its binding) deleted under a running motion-light is not settled: the instance keeps its resolved sources until its next start; resolve them again on an equipment change, if Sowel does | Spec 024 |
-| 2026-11-23 | A motion-light whose button loses its device or its `action` binding is disabled whole (D38's validation), so the garage stops lighting on motion until the button is taken out: prune such a button instead, for a box that runs a month alone | Spec 024 review |
 | 2026-11-24 | Run spec 025's checks on the box, once, the user present (D39): the radio image flashed with `--keep-storage`; `box.sh saves --budget 5 -- sh -c 'sh scripts/measure-api.sh "$SOLITE_BOX_ADDRESS"'` (33 requests, one flush, at most 5 writes); then one `box.sh log --image radio --seconds 60 --budget 1` (the files read back, only the marker written); note the counts in spec 025 | Spec 025 |
 | 2026-11-24 | Run spec 026's check on the box, once, the user present, after their yes to flash (D6, D39): radio image flashed `--keep-storage`; inside `box.sh saves --budget 2`, one `PUT /api/v1/settings` (the annex's location and time zone) and one `POST /api/v1/backup` of a document exported from the Mac; then `GET /api/v1/zones/aggregation` shows the local sun times; by day, motion does not switch the ZBMINIR2 on with "Inactive during day"; note the counts in spec 026 | Spec 026 |
 | 2026-11-24 | A full backup: equipments, recipe instances, devices and the radio network's keys (encrypted), streamed beyond the 16 KB body, for a box replaced or a data partition lost (D42) | Spec 026 |
@@ -174,6 +203,7 @@ Needs on the Sowel side, for the user to open as Sowel issues (never changed fro
 | 2026-11-21 | motion-light validates an order aliased `state` but sends by category first; the `disableWhenDaylight` slot speaks of offsets the code does not read; timers beyond 24.8 days fire at once | Spec 012 |
 | 2026-11-21 | `POST /recipe-instances/:id/actions` on an unknown id answers 400 `Instance not running` instead of 404 | Spec 012 |
 | 2026-11-24 | A `home.timezone` setting (an IANA name), read before `TZ` and `tz-lookup`, so a home without a `TZ` variable (Solite's box) shares the key with Sowel (D41) | Spec 026 |
+| 2026-11-25 | Dates other than the devices' taken during the box's clock wait stay in 1970: recipe log lines and state keys (`timerExpiresAt`, `failsafeExpiresAt`) at the boot's start, equipments and zones created through the API in the first seconds, a device's `createdAt`/`updatedAt` read in 1970 from storage moved to about the boot's date (D45 moves the devices' only) | Spec 028 |
 
 ## Done
 
@@ -306,3 +336,12 @@ Every change to this roadmap: date, what changed, why.
   core, `GET /api/v1/system/timezone` (D44); the home lock per batch measured on the Mac (70 µs).
   Lines removed: the binding plan in the core, the home lock measure; the D41 line narrowed. New
   lines: the colour cluster, the box run, more types with behaviour, proposals exposed.
+- 2026-11-25: order of work while the box is away written (core fixes, J4, J2, colour cluster, J5
+  core part; E3d and E3e wait for the box); the tests to run with the box in hand gathered in one
+  list (specs 021, 023, 025, 026, 027, the 33 requests, E3d, E3e, J4's button).
+- 2026-11-25: spec 028 (core fixes) built: device dates taken before the clock moved by its jump
+  (D45); a motion-light button without `action` pruned instead of disabling the recipe, a running
+  motion-light follows its zone's motion sensors (D46); device removal (done by spec 024) and a
+  device's zone change (no event, as Sowel) closed. Lines removed: the clock wait's `lastSeen`,
+  the device removal, `set_device_zone`, the deleted motion sensor, the button's device. New line:
+  the other dates of the clock wait.

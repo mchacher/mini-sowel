@@ -1005,3 +1005,213 @@ fn a_stop_writes_the_files_due_whatever_the_gate() {
     assert!(storage.text(ZONES_FILE).unwrap().contains("Attic"));
     assert!(storage.text(DEVICES_FILE).is_some());
 }
+
+// ---- Spec 028, R1: the dates of a device heard before the clock is set ----
+
+/// A SNZB-02 (EUI ending 0x20) paired at `at` on the box's clock.
+fn paired_at(at: u64) -> solite_core::devices::Devices {
+    let mut devices = solite_core::devices::Devices::new();
+    let mut random = scripted();
+    devices.announced(eui(0x20), 0x80, at);
+    devices
+        .identified(eui(0x20), Some("eWeLink"), Some("TH01"), at, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(eui(0x20), &[0x0001, 0x0402, 0x0405], at, &mut random)
+        .unwrap();
+    devices
+}
+
+fn status_events(
+    hub: &solite_core::live::LiveHandle,
+    id: solite_core::live::ClientId,
+) -> Vec<String> {
+    let mut statuses = Vec::new();
+    while let Some(text) = hub.take_batch(id) {
+        for event in serde_json::from_str::<serde_json::Value>(&text)
+            .unwrap()
+            .as_array()
+            .unwrap()
+        {
+            if event["type"] == "device.status_changed" {
+                statuses.push(event["status"].as_str().unwrap().to_string());
+            }
+        }
+    }
+    statuses
+}
+
+fn listen_to_devices(
+    home: &Mutex<Home>,
+) -> (solite_core::live::LiveHandle, solite_core::live::ClientId) {
+    let hub = lock(home).live();
+    let id = hub.connect().expect("a free slot");
+    let message = json!({"type": "subscribe", "topics": ["devices"]}).to_string();
+    assert!(hub.subscribe(id, &message));
+    (hub, id)
+}
+
+/// A wall clock that reads `base + elapsed`; the test moves `base` (the box's SNTP).
+fn settable_clocks(base: &Arc<AtomicU64>) -> Clocks {
+    let start = Instant::now();
+    let monotonic = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let base = Arc::clone(base);
+    Clocks {
+        now: Arc::new(move || base.load(Ordering::SeqCst) + monotonic()),
+        monotonic: Arc::new(monotonic),
+    }
+}
+
+fn report_temperature(ncp: &Rc<RefCell<Ncp>>, value: f64) {
+    ncp.borrow_mut().device_report(
+        0,
+        &DeviceReport {
+            temperature: Some(value),
+            ..DeviceReport::default()
+        },
+    );
+}
+
+#[test]
+fn a_device_heard_before_the_clock_is_set_gets_the_real_date_and_stays_online() {
+    let home = Mutex::new(Home::from_devices(paired_at(0), 0));
+    let (hub, client) = listen_to_devices(&home);
+    let mut bench = bench(vec![device(Kind::TemperatureHumidity, 0x20, 0x2000)]);
+    let base = Arc::new(AtomicU64::new(0));
+    let clocks = settable_clocks(&base);
+    let (ncp, flag, seen) = (
+        Rc::clone(&bench.ncp),
+        Arc::clone(&base),
+        Rc::new(Cell::new(0)),
+    );
+    // The events are taken after every read: a status event waiting is replaced by the next one.
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let collected = Rc::clone(&statuses);
+    *bench.done.borrow_mut() = Box::new(move || {
+        seen.set(seen.get() + 1);
+        collected.borrow_mut().extend(status_events(&hub, client));
+        match seen.get() {
+            5 => report_temperature(&ncp, 21.5),
+            10 => flag.store(T0, Ordering::SeqCst),
+            _ => {}
+        }
+        seen.get() > 30
+    });
+    let storage = MemStorage::default();
+    let mut saver = Saver::new(&storage, 0);
+    let stopped = engine::run(
+        &mut bench.radio,
+        &home,
+        &mut saver,
+        &clocks,
+        &bench.stop,
+        &mut scripted(),
+        false,
+        &mut |_| {},
+    )
+    .unwrap();
+    assert!(stopped);
+    let end = (clocks.now)();
+    let mut guard = lock(&home);
+    let seen_at = guard.devices.list()[0].device.last_seen.expect("heard");
+    assert!(
+        (T0..=end).contains(&seen_at),
+        "lastSeen {seen_at} is the real date (clock {T0}..{end})"
+    );
+    let devices = json_of(&mut guard, "/api/v1/devices");
+    assert_eq!(devices[0]["status"], "online");
+    assert!(
+        devices[0]["lastSeen"]
+            .as_str()
+            .unwrap()
+            .starts_with("2026-")
+    );
+    drop(guard);
+    assert!(
+        !statuses.borrow().contains(&"offline".to_string()),
+        "the jump does not turn the device offline"
+    );
+}
+
+#[test]
+fn the_clock_set_between_two_runs_of_the_loop_shifts_the_dates_and_keeps_the_device_online() {
+    let home = Mutex::new(Home::from_devices(paired_at(0), 0));
+    let (hub, client) = listen_to_devices(&home);
+    let mut bench = bench(vec![device(Kind::TemperatureHumidity, 0x20, 0x2000)]);
+    let base = Arc::new(AtomicU64::new(0));
+    let clocks = settable_clocks(&base);
+    let (ncp, seen) = (Rc::clone(&bench.ncp), Rc::new(Cell::new(0)));
+    let statuses = Rc::new(RefCell::new(Vec::new()));
+    let collected = Rc::clone(&statuses);
+    let watching = hub.clone();
+    *bench.done.borrow_mut() = Box::new(move || {
+        seen.set(seen.get() + 1);
+        collected
+            .borrow_mut()
+            .extend(status_events(&watching, client));
+        if seen.get() == 5 {
+            report_temperature(&ncp, 21.5);
+        }
+        seen.get() > 12
+    });
+    let storage = MemStorage::default();
+    let mut saver = Saver::new(&storage, 0);
+    let run = |bench: &mut Bench, saver: &mut Saver<&MemStorage>| {
+        engine::run(
+            &mut bench.radio,
+            &home,
+            saver,
+            &clocks,
+            &bench.stop,
+            &mut scripted(),
+            false,
+            &mut |_| {},
+        )
+        .unwrap()
+    };
+    assert!(run(&mut bench, &mut saver));
+    assert!(lock(&home).devices.list()[0].device.last_seen.unwrap() < 1_000);
+    // The clock is set while no run is going: the saver's tick sees it first.
+    base.store(T0, Ordering::SeqCst);
+    saver.tick(&home, (clocks.now)(), false).unwrap();
+    let seen_at = lock(&home).devices.list()[0].device.last_seen.unwrap();
+    assert!(seen_at >= T0, "lastSeen {seen_at} moved by the jump");
+    // The radio restarts: the loop runs again on the real clock.
+    bench.stop.store(false, Ordering::SeqCst);
+    let again = Rc::new(Cell::new(0));
+    let collected = Rc::clone(&statuses);
+    let watching = hub.clone();
+    *bench.done.borrow_mut() = Box::new(move || {
+        again.set(again.get() + 1);
+        collected
+            .borrow_mut()
+            .extend(status_events(&watching, client));
+        again.get() > 5
+    });
+    assert!(run(&mut bench, &mut saver));
+    let mut guard = lock(&home);
+    assert_eq!(
+        json_of(&mut guard, "/api/v1/devices")[0]["status"],
+        "online"
+    );
+    drop(guard);
+    assert!(!statuses.borrow().contains(&"offline".to_string()));
+}
+
+#[test]
+fn a_last_seen_stored_in_1970_loads_as_null_and_unknown_and_a_crossing_keeps_it_so() {
+    let devices = paired_at(4_600);
+    let storage = MemStorage::with(&[(DEVICES_FILE, &devices.to_json().unwrap())]);
+    let mut home = load_home(&&storage, T0).unwrap();
+    assert_eq!(home.devices.list()[0].device.last_seen, None);
+    // The first turn of the loop computes the statuses.
+    home.devices.refresh_status(T0);
+    home.observe_wall(T0);
+    let listed = json_of(&mut home, "/api/v1/devices");
+    assert_eq!(listed[0]["lastSeen"], serde_json::Value::Null);
+    assert_eq!(listed[0]["status"], "unknown");
+    // A clock that crosses later does not invent a date for it.
+    home.observe_wall(5_000);
+    home.observe_wall(T0 + 1_000);
+    assert_eq!(home.devices.list()[0].device.last_seen, None);
+}

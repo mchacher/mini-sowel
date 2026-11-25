@@ -123,6 +123,9 @@ pub trait Runner: Send {
     fn state(&self) -> StateKeys;
     /// Adds what the instance listens to.
     fn listen(&self, interest: &mut Interest);
+    /// The home changed and the instance is kept: takes again what it resolved from the home
+    /// (its sources, its buttons) without touching its timers or state. No order, no log.
+    fn refresh(&mut self, _home: &Home, _params: &Value) {}
 }
 
 /// An instance, running or not, with its log.
@@ -665,14 +668,26 @@ impl RecipeEngine {
                 changed |= self.delete(&id.to_string()).is_ok();
             }
         }
-        // 1: a deleted equipment leaves the settings.
-        let mut pruned = vec![false; self.slots.len()];
+        // 1: a deleted equipment leaves the settings. Only a lost light restarts a running
+        // instance (a lost button is taken in place).
+        let mut restart = vec![false; self.slots.len()];
         if let Some((gone, name)) = &change.equipment {
             let gone = gone.to_string();
             for (index, slot) in self.slots.iter_mut().enumerate() {
                 let keys = equipment_keys(&slot.instance.recipe_id);
-                if let Some(text) = prune_equipment(&slot.instance.params, &keys, &gone) {
+                let (button_keys, light_keys): (Vec<String>, Vec<String>) =
+                    keys.into_iter().partition(|k| k == "buttons");
+                let mut pruned = false;
+                if let Some(text) = prune_equipment(&slot.instance.params, &light_keys, &gone) {
                     slot.instance.params = text;
+                    restart[index] = true;
+                    pruned = true;
+                }
+                if let Some(text) = prune_equipment(&slot.instance.params, &button_keys, &gone) {
+                    slot.instance.params = text;
+                    pruned = true;
+                }
+                if pruned {
                     let message = format!("Equipment removed from settings: {name}");
                     RecipeEngine::push_log(
                         slot,
@@ -681,13 +696,30 @@ impl RecipeEngine {
                         Level::Warn,
                         &message,
                     );
-                    pruned[index] = true;
                     changed = true;
                 }
             }
         }
-        // 2, 3: every enabled instance checked again.
-        for (index, pruned) in pruned.into_iter().enumerate() {
+        // 1b: a button that is gone, or has no `action` binding any more, leaves the settings
+        // of every motion-light instance, enabled or not (spec 028, R2).
+        for slot in &mut self.slots {
+            if slot.instance.recipe_id != motion_light::ID {
+                continue;
+            }
+            let Some((text, stale)) =
+                motion_light::prune_stale_buttons(&slot.instance.params, home)
+            else {
+                continue;
+            };
+            slot.instance.params = text;
+            for name in stale {
+                let message = format!("Button removed from settings: {name}");
+                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Warn, &message);
+            }
+            changed = true;
+        }
+        // 2, 3: every enabled instance checked again; a running one that is kept is refreshed.
+        for (index, restart) in restart.into_iter().enumerate() {
             let slot = &self.slots[index];
             if !slot.instance.enabled {
                 continue;
@@ -697,7 +729,7 @@ impl RecipeEngine {
                     self.disable_for(index, wall, &reason);
                     changed = true;
                 }
-                Ok(()) if pruned && slot.runner.is_some() => {
+                Ok(()) if restart && slot.runner.is_some() => {
                     let slot = &mut self.slots[index];
                     slot.runner = None;
                     RecipeEngine::announce_stopped(&self.live, slot);
@@ -707,7 +739,16 @@ impl RecipeEngine {
                         self.disable_for(index, wall, &reason);
                     }
                 }
-                Ok(()) => {}
+                Ok(()) => {
+                    // 4: kept running, it follows the home as it is now.
+                    let slot = &mut self.slots[index];
+                    if let (Some(runner), Ok(params)) = (
+                        slot.runner.as_mut(),
+                        serde_json::from_str::<Value>(&slot.instance.params),
+                    ) {
+                        runner.refresh(home, &params);
+                    }
+                }
             }
         }
         changed

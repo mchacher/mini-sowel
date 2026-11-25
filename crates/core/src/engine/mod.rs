@@ -107,6 +107,8 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
         let busy = radio.busy_devices();
         {
             let mut guard = lock(home);
+            // The clock first: a date taken while it was not set moves before anything reads it.
+            guard.observe_wall(now);
             // The announces first: a device's power source is known when it is added.
             for item in &activity {
                 guard.devices.apply_activity(item, now);

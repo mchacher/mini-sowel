@@ -1002,3 +1002,199 @@ fn a_deleted_device_does_not_come_back_from_a_late_setup_but_a_new_identificatio
     assert_eq!(devices.list().len(), 1);
     assert_ne!(devices.list()[0].device.id.to_string(), id);
 }
+
+// ---- Spec 028, R1: the dates taken before the clock is set ----
+
+/// The home's first wall time seen is in 1970.
+const BOOT: u64 = 4_600;
+
+/// A device paired and heard at `at` (a measure of `last_updated` too), in a home.
+fn heard_at(last: u8, at: u64) -> Devices {
+    let mut devices = Devices::new();
+    hear(&mut devices, last, at);
+    devices
+}
+
+fn hear(devices: &mut Devices, last: u8, at: u64) {
+    let e = eui(last);
+    let mut random = counter();
+    devices.announced(e, 0x80, at);
+    devices
+        .identified(e, Some("eWeLink"), Some("TH01"), at, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(e, &[0x0001, 0x0402, 0x0405], at, &mut random)
+        .unwrap();
+    let event = MeasureEvent {
+        sender: Sender::Eui64(e),
+        endpoint: 1,
+        measures: vec![Measure {
+            kind: "temperature",
+            value: Value::Number(20.0),
+            unit: "°C",
+            device_value: None,
+        }],
+    };
+    devices.measures(&event, at, &mut random).unwrap();
+}
+
+fn dates(devices: &Devices, index: usize) -> Vec<Option<u64>> {
+    let item = &devices.list()[index];
+    let mut all = vec![
+        item.device.last_seen,
+        Some(item.device.created_at),
+        Some(item.device.updated_at),
+    ];
+    for data in &item.data {
+        all.push(data.last_updated);
+        all.push(data.last_changed);
+    }
+    all
+}
+
+#[test]
+fn the_clock_set_moves_every_date_taken_before_it_by_the_jump_and_flags_values_only() {
+    use solite_core::home::Home;
+    let mut home = Home::from_devices(heard_at(1, BOOT), BOOT);
+    home.observe_wall(5_000);
+    home.devices.clear_changes();
+    let temperature = home.devices.list()[0]
+        .data
+        .iter()
+        .position(|d| &*d.key == "temperature")
+        .unwrap();
+    // A data that never had a value stays `None`.
+    assert!(
+        home.devices.list()[0]
+            .data
+            .iter()
+            .any(|d| d.last_updated.is_none())
+    );
+    home.observe_wall(T0);
+    let jump = T0 - 5_000;
+    let item = &home.devices.list()[0];
+    assert_eq!(item.device.last_seen, Some(BOOT + jump));
+    assert_eq!(item.device.created_at, BOOT + jump);
+    assert_eq!(item.device.updated_at, BOOT + jump);
+    assert_eq!(item.data[temperature].last_updated, Some(BOOT + jump));
+    assert_eq!(item.data[temperature].last_changed, Some(BOOT + jump));
+    assert!(
+        item.data
+            .iter()
+            .any(|d| d.last_updated.is_none() && d.last_changed.is_none())
+    );
+    assert_eq!(home.devices.changes(), (false, true));
+}
+
+#[test]
+fn a_date_already_after_2020_is_not_moved_and_a_1970_one_is() {
+    use solite_core::home::Home;
+    let mut devices = heard_at(1, BOOT);
+    // A second device, heard after the clock was set.
+    hear(&mut devices, 2, T0 - 1_000);
+    let mut home = Home::from_devices(devices, BOOT);
+    let late_before = dates(&home.devices, 1);
+    home.observe_wall(5_000);
+    home.observe_wall(T0);
+    assert_eq!(dates(&home.devices, 1), late_before);
+    assert_eq!(
+        home.devices.list()[0].device.last_seen,
+        Some(BOOT + T0 - 5_000)
+    );
+}
+
+#[test]
+fn a_clock_that_crosses_with_no_device_changes_nothing_and_flags_nothing() {
+    use solite_core::home::Home;
+    let mut home = Home::new(BOOT);
+    home.observe_wall(5_000);
+    home.observe_wall(T0);
+    assert_eq!(home.devices.changes(), (false, false));
+}
+
+#[test]
+fn the_first_wall_time_only_records_it() {
+    use solite_core::home::Home;
+    let mut home = Home::from_devices(heard_at(1, BOOT), BOOT);
+    let before = dates(&home.devices, 0);
+    home.devices.clear_changes();
+    home.observe_wall(T0);
+    assert_eq!(dates(&home.devices, 0), before);
+    assert_eq!(home.devices.changes(), (false, false));
+}
+
+#[test]
+fn a_clock_back_below_2020_then_set_again_shifts_the_dates_taken_since_with_its_own_jump() {
+    use solite_core::home::Home;
+    let mut home = Home::from_devices(heard_at(1, BOOT), BOOT);
+    home.observe_wall(5_000);
+    home.observe_wall(T0);
+    let first = home.devices.list()[0].device.last_seen.unwrap();
+    assert_eq!(first, BOOT + T0 - 5_000);
+    // The clock falls back to 1970; a device is heard then.
+    home.observe_wall(8_000);
+    home.devices.seen(Sender::Eui64(eui(1)), 9_000);
+    assert_eq!(home.devices.list()[0].device.last_seen, Some(9_000));
+    home.observe_wall(T0 + 100_000);
+    let device = &home.devices.list()[0].device;
+    assert_eq!(device.last_seen, Some(9_000 + T0 + 100_000 - 8_000));
+    assert_eq!(
+        device.created_at, first,
+        "the dates already after 2020 stay"
+    );
+}
+
+#[test]
+fn dates_read_in_1970_are_forgotten_at_load_and_the_values_are_flagged() {
+    let mut list = heard_at(1, BOOT).snapshot();
+    assert!(list[0].data.iter().any(|d| d.last_updated.is_some()));
+    let created = list[0].device.created_at;
+    let devices = Devices::from_list(list.clone());
+    let item = &devices.list()[0];
+    assert_eq!(item.device.last_seen, None);
+    assert!(
+        item.data
+            .iter()
+            .all(|d| d.last_updated.is_none() && d.last_changed.is_none())
+    );
+    assert_eq!(item.device.created_at, created);
+    assert_eq!(devices.changes(), (false, true));
+    // Nothing in 1970: no flag.
+    list = heard_at(1, T0).snapshot();
+    let devices = Devices::from_list(list);
+    assert_eq!(devices.list()[0].device.last_seen, Some(T0));
+    assert_eq!(devices.changes(), (false, false));
+}
+
+/// A request that reaches the API after the clock is set, before the radio loop's next turn,
+/// moves the dates first: the device heard during the wait is not seen offline.
+#[test]
+fn an_api_request_after_the_clock_set_moves_the_dates_before_the_statuses() {
+    use solite_core::api::{Reach, Request, handle};
+    use solite_core::home::Home;
+    let mut home = Home::from_devices(heard_at(1, BOOT), BOOT);
+    home.observe_wall(5_000);
+    home.devices.refresh_status(5_000);
+    assert_eq!(home.devices.list()[0].device.status, DeviceStatus::Online);
+    let id = home.devices.list()[0].device.id.to_string();
+    let path = format!("/api/v1/devices/{id}");
+    let mut random = counter();
+    let response = handle(
+        &mut home,
+        &Request {
+            method: "GET",
+            path: &path,
+            host: Some("127.0.0.1:8080"),
+            port: 8080,
+            reach: Reach::Loopback,
+            content_type: None,
+            body: b"",
+        },
+        T0,
+        &mut random,
+    );
+    assert_eq!(response.status, 200, "{response:?}");
+    let device = &home.devices.list()[0].device;
+    assert_eq!(device.last_seen, Some(BOOT + T0 - 5_000));
+    assert_eq!(device.status, DeviceStatus::Online);
+}
