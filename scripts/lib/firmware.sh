@@ -95,7 +95,7 @@ fw_size_line() {
 # a second time) or `box` (one after the first banner `solite <version>`: the resets before it,
 # from the port opening or the script's own reset, are not counted).
 fw_broken() {
-  grep -aqE 'Guru Meditation Error|abort\(\) was called|panicked at' "$1" && return 0
+  grep -aqE 'Guru Meditation Error|abort\(\) was called|panicked at|stack overflow in task' "$1" && return 0
   if [ "$2" = box ]; then
     banner=$(grep -anF -m 1 "solite $(fw_version)" "$1" | cut -d: -f1)
     [ -n "$banner" ] || return 1
@@ -175,6 +175,23 @@ fw_check_radio() {
   min=$(echo "$heap" | sed -n 's/.*heap: internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
   [ -n "$min" ] || { echo "cannot read the internal minimum from the heap line: $heap"; return 1; }
   [ "$min" -ge "$INTERNAL_MIN_KB" ] || { echo "the internal RAM minimum free is $min KB, below the $INTERNAL_MIN_KB KB reserve of decision D23."; return 1; }
+  return 0
+}
+
+# The update's stack check of the sim image (D60, `firmware/src/update_check.rs`), $1 the log: the
+# `update check:` line shows the three installations' statuses (200, 400, 400), and the `update`
+# thread left at least UPDATE_STACK_MARGIN bytes of its stack unused, for the frames the box adds
+# (the request's body reader and answer). Prints the reason and returns 1 otherwise.
+UPDATE_STACK_MARGIN=2048
+fw_check_update_stack() {
+  check=$(grep -a 'update check: ' "$1" | tail -n 1)
+  [ -n "$check" ] || { echo "the update check's line (update check: ...) is missing."; return 1; }
+  echo "$check" | grep -qF 'valid 200, image changed 400, signature changed 400' \
+    || { echo "the update check went wrong: ${check#*update check: }"; return 1; }
+  unused=$(grep -aoE 'update: thread stack [0-9]+ of [0-9]+ bytes never used' "$1" | tail -n 1 \
+    | sed -E 's/update: thread stack ([0-9]+) .*/\1/')
+  [ -n "$unused" ] || { echo "the update thread's stack line (update: thread stack ...) is missing."; return 1; }
+  [ "$unused" -ge "$UPDATE_STACK_MARGIN" ] || { echo "the update thread left $unused bytes of its stack unused, below the $UPDATE_STACK_MARGIN bytes kept for the box's request frames (D60)."; return 1; }
   return 0
 }
 

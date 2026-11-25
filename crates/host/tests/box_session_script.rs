@@ -2009,3 +2009,55 @@ fn an_image_above_75_percent_of_the_slot_gets_a_warning_and_a_small_one_does_not
         "box: 1024 KB, 25 % of the 4096 KB ota_0 slot"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The update's stack check of the QEMU image (D60)
+// ---------------------------------------------------------------------------------------------
+
+/// `fw_check_update_stack` on a log made of `lines`: its exit status and what it printed.
+fn update_stack_check(lines: &str) -> (bool, String) {
+    let dir = TempDir::new("update-stack");
+    let log = dir.path().join("serial.log");
+    fs::write(&log, lines).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(r#". "$1"; fw_check_update_stack "$2""#)
+        .arg("sh")
+        .arg(FIRMWARE_LIB)
+        .arg(&log)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    )
+}
+
+const STATUSES: &str = "I (5527) solite_firmware::update_check: update check: valid 200, image changed 400, signature changed 400\n";
+
+#[test]
+fn the_update_check_passes_with_2_kb_unused_and_fails_below_or_on_a_wrong_status() {
+    let stack = |unused: u32| {
+        format!(
+            "I (5527) solite_firmware::job_thread: update: thread stack {unused} of 16384 bytes never used\n"
+        )
+    };
+    assert_eq!(
+        update_stack_check(&(stack(5940) + STATUSES)),
+        (true, String::new())
+    );
+    assert!(update_stack_check(&(stack(2048) + STATUSES)).0);
+    let (ok, reason) = update_stack_check(&(stack(464) + STATUSES));
+    assert!(!ok);
+    assert!(reason.contains("left 464 bytes"), "{reason}");
+    let (ok, reason) = update_stack_check(STATUSES);
+    assert!(!ok);
+    assert!(reason.contains("stack line"), "{reason}");
+    let wrong = STATUSES.replace("image changed 400", "image changed 200");
+    let (ok, reason) = update_stack_check(&(stack(5940) + &wrong));
+    assert!(!ok);
+    assert!(reason.contains("went wrong"), "{reason}");
+    let (ok, reason) = update_stack_check(&stack(5940));
+    assert!(!ok);
+    assert!(reason.contains("update check's line"), "{reason}");
+}

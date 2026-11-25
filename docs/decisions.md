@@ -1146,3 +1146,33 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   derivation of seconds); copying the files to RAM on a flash thread before the stream (up to
   2 MiB, against the streaming of D56); the workers' stacks in internal RAM (40 KB for every
   request, against D33's budget).
+
+## D60: The box's update installation runs on a thread of 16 KB in internal RAM, checked in QEMU (refines D54, follows D59)
+
+- **Date**: 2026-11-25 (fix of spec 032, decided in an autonomous run, for the user's review)
+- **Choice**: on the radio image, `POST /api/v1/system/update` runs its whole answer (the body
+  read, `Updates::install` with the header's signature check and the image's hash, the answer) on
+  an `update` thread started for the request, its 16 KB stack in internal RAM, pinned to core 0
+  with the API workers; the worker that took the request lends it and waits (`job_thread.rs`,
+  shared with D59's `backup` thread). The flash calls still go to the OTA thread. The thread logs
+  `update: thread stack <n> of 16384 bytes never used` after every attempt. The image QEMU runs
+  installs three update files (valid, one image byte changed, one signature byte changed) on the
+  same thread at boot, and `scripts/qemu.sh` fails when a status differs or fewer than 2048 bytes
+  of its stack stay unused.
+- **Why**: the box restarted on `A stack overflow in task http-worker` at an upload. The
+  installation ran on an API worker, 10 KB of stack with the request's own frames. Without
+  `precomputed-tables` (the core takes `ed25519-dalek` without default features), the Ed25519
+  check builds two lookup tables of 1280 bytes and two 256-byte digit arrays on the stack: on the
+  ESP32 (measured in QEMU, release build) the check alone uses 9.2 KB of a stack and the whole
+  installation 9.8 KB, against 0.76 KB for a bare thread; on a thread of 10 KB the installation
+  uses all of it and the chip stops. Every upload with a well-formed header ran the check, so
+  every upload overflowed, a valid one too. 16 KB leaves about 6 KB for the request's frames (the
+  body reader and the answer never nest under the check) and for the compiler's drift; the QEMU
+  check catches a drift below 2 KB on every validate run. Internal RAM, as for D59: the job is
+  short, and a stack in PSRAM is slower for the hash of a 2 MB image.
+- **Alternatives**: larger worker stacks in PSRAM (4 × 6 KB more for every request, for a job of a
+  few seconds a release; a worker's own frames vary by route); the check on the OTA thread (6 KB,
+  its probation tick would wait, and it would need 16 KB for the whole run); `precomputed-tables`
+  (saves one table, about 1.3 KB of stack, and adds a static table to the image: not enough
+  alone); a Mac test of the stack (a Mac thread has at least 16 KB and other frame sizes: it
+  proves nothing about the ESP32).
