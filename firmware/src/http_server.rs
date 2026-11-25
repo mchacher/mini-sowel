@@ -4,7 +4,9 @@
 //! handed, as an ESP-IDF asynchronous request, to one of 4 worker threads (stacks and body buffers
 //! in PSRAM), which asks the core's `handle_guarded` exactly as the Mac host does
 //! (`crates/host/src/serve.rs`), so an order waiting for the radio never holds the server's task.
-//! The core decides every answer; this file moves the bytes.
+//! The core decides every answer; this file moves the bytes. The full backup's two routes read or
+//! write the flash, which a stack in PSRAM forbids: their answer runs on a `backup` thread whose
+//! stack is in internal RAM, started for the job, while the worker waits for it.
 
 use std::ffi::{CStr, CString};
 use std::io::Read;
@@ -36,14 +38,18 @@ use solite_core::devices::lock;
 use solite_core::home::Home;
 use solite_core::update::MAX_UPLOAD_BYTES;
 
-use crate::backup_files::{BoxPacing, DataFiles};
+use crate::backup_files::{BoxPacing, data_files};
 use crate::live_ws;
 use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
 use crate::ui_files::UI_FILES;
 
-/// Each worker's stack, in PSRAM (R9.4): the workers never write the flash.
+/// Each worker's stack, in PSRAM (R9.4): the workers never touch the flash (a read neither: it
+/// turns the caches off, which ESP-IDF refuses from a stack in PSRAM).
 pub const WORKER_STACK_BYTES: usize = 10 * 1024;
+/// The stack of the thread a backup's export or restore runs on, in internal RAM, taken for the
+/// job only (spec 035): the worker's size, for the same code.
+pub const BACKUP_STACK_BYTES: usize = 10 * 1024;
 /// Each worker's body buffer, in PSRAM (R4.4): one byte more than a body may hold.
 const BODY_BUFFER_BYTES: usize = MAX_BODY_BYTES + 1;
 /// The server's task stack, in internal RAM.
@@ -445,15 +451,89 @@ fn answer_update(raw: &Raw, length: usize) -> bool {
     installed
 }
 
+/// A request lent to the `backup` thread for one job.
+struct Lent<'a>(&'a Raw);
+
+// SAFETY: the worker that owns the request lends it to the `backup` thread and waits for that
+// thread to end before it uses the request again (`on_internal_stack` joins it): one task at a
+// time uses it, as ESP-IDF allows for an asynchronous request.
+#[allow(unsafe_code)]
+unsafe impl Send for Lent<'_> {}
+
+impl<'a> Lent<'a> {
+    /// The request (a method, so that a closure moves the whole `Lent`, not its field).
+    fn get(self) -> &'a Raw {
+        self.0
+    }
+}
+
+/// Runs `job` on a `backup` thread whose stack (`BACKUP_STACK_BYTES`) is in internal RAM, on core
+/// 0 with the workers, and waits for it. `Err` when the thread cannot start (no internal RAM block
+/// of that size): `job` did not run. `Ok(None)` when `job` panicked.
+fn on_internal_stack<T: Send>(job: impl FnOnce() -> T + Send) -> Result<Option<T>, String> {
+    let configured = ThreadSpawnConfiguration {
+        name: Some(c"backup"),
+        stack_size: BACKUP_STACK_BYTES,
+        pin_to_core: Some(Core::Core0),
+        stack_alloc_caps: MallocCap::Internal | MallocCap::Cap8bit,
+        ..Default::default()
+    }
+    .set();
+    if let Err(e) = configured {
+        return Err(format!("backup: cannot configure its thread: {e}"));
+    }
+    let result = std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .name("backup".into())
+            .stack_size(BACKUP_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                let result = job();
+                log::info!(
+                    "backup: thread stack {} of {BACKUP_STACK_BYTES} bytes never used",
+                    stack_unused()
+                );
+                result
+            });
+        match spawned {
+            Ok(handle) => Ok(handle.join().ok()),
+            Err(e) => Err(format!("backup: cannot start its thread: {e}")),
+        }
+    });
+    // Threads this worker starts later get the default configuration again.
+    let _ = ThreadSpawnConfiguration::default().set();
+    result
+}
+
+/// What the worker does once the `backup` thread is over: nothing after a job that ran; after a
+/// thread that did not start (the job and its ticket dropped), a 503; after a panic, the
+/// connection closes (the answer may be half sent).
+fn after_backup_thread<T>(raw: &Raw, ran: Result<Option<T>, String>) -> Option<T> {
+    match ran {
+        Ok(Some(value)) => Some(value),
+        Ok(None) => {
+            log::error!("backup: its thread panicked");
+            raw.close_after();
+            None
+        }
+        Err(e) => {
+            log::error!("{e}");
+            raw.answer(&error_body(503, "Busy, try again"), &[]);
+            raw.close_after();
+            None
+        }
+    }
+}
+
 /// `GET /api/v1/system/backup`, once the core has let it through: the archive streams out in chunks
-/// of 4 KB, from a buffer allocated for this request. The key derivation (5 to 10 s) runs inside
-/// `export`, before the status line, so that every refusal is a whole answer. A read error ends the
-/// answer without its end: the client holds a truncated file, which its MAC refuses.
+/// of 4 KB, from a buffer allocated for this request. The key derivation runs inside `export`,
+/// before the status line, so that every refusal is a whole answer. A read error ends the answer
+/// without its end: the client holds a truncated file, which its MAC refuses. Runs on the `backup`
+/// thread (`on_internal_stack`): it reads the flash.
 fn answer_export(raw: &Raw, ticket: BackupTicket, password: Option<&str>) {
     let mut random = |bytes: &mut [u8]| fill(bytes);
     let mut reader = match ticket.export(
         password,
-        Box::new(DataFiles::new()),
+        Box::new(data_files()),
         Box::new(BoxPacing),
         &mut random,
     ) {
@@ -493,7 +573,7 @@ fn answer_export(raw: &Raw, ticket: BackupTicket, password: Option<&str>) {
 /// `POST /api/v1/system/backup`, once the core has let it through: the body goes into
 /// `BackupTicket::restore`. Answers; true when the restore is staged and the ESP32 must restart
 /// (after `complete`, so the answer is out first). A refusal leaves body bytes unread: the
-/// connection closes.
+/// connection closes. Runs on the `backup` thread (`on_internal_stack`): it writes the flash.
 fn answer_restore(
     raw: &Raw,
     ticket: BackupTicket,
@@ -510,7 +590,7 @@ fn answer_restore(
         Some(length as u64),
         password,
         &mut source,
-        &mut DataFiles::new(),
+        &mut data_files(),
         &mut BoxPacing,
     );
     raw.answer(&response, &[]);
@@ -621,11 +701,21 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
             }
         }
         Reply::BackupExport(ticket) => {
-            answer_export(&raw, ticket, raw.header(c"X-Backup-Password").as_deref());
+            let password = raw.header(c"X-Backup-Password");
+            let lent = Lent(&raw);
+            let ran = on_internal_stack(move || {
+                answer_export(lent.get(), ticket, password.as_deref());
+            });
+            after_backup_thread(&raw, ran);
         }
         Reply::BackupRestore { ticket, wifi } => {
             let password = raw.header(c"X-Backup-Password");
-            restart = answer_restore(&raw, ticket, wifi, head.length, password.as_deref());
+            let length = head.length;
+            let lent = Lent(&raw);
+            let ran = on_internal_stack(move || {
+                answer_restore(lent.get(), ticket, wifi, length, password.as_deref())
+            });
+            restart = after_backup_thread(&raw, ran).unwrap_or(false);
         }
         Reply::Order(_) | Reply::Static(_) => {
             raw.answer(&error_body(500, "Internal error"), &[]);

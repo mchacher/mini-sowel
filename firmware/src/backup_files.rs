@@ -2,6 +2,12 @@
 //! the core's `Pacing` (a monotonic clock and a 10 ms sleep). The archive's names are the files'
 //! names. FAT refuses a rename onto an existing file, so the destination goes first; every write
 //! is counted in the flash write counter like the engine's.
+//!
+//! Every access to the flash, a read included, turns the caches off, which ESP-IDF refuses (an
+//! assert, then a restart) from a thread whose stack is in PSRAM, as the API workers' are: the
+//! files are handed out only behind the core's `Guarded` (`data_files`), which refuses a call
+//! from such a thread, and the server runs the backup's jobs on a thread of its own whose stack
+//! is in internal RAM (`http_server.rs`).
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -11,9 +17,10 @@ use std::sync::OnceLock;
 #[cfg(feature = "radio")]
 use std::time::{Duration, Instant};
 
+use esp_idf_svc::sys::{SOC_EXTRAM_DATA_HIGH, SOC_EXTRAM_DATA_LOW};
 #[cfg(feature = "radio")]
 use solite_core::backup::Pacing;
-use solite_core::backup::{ARCHIVE_FILES, BackupFiles, StagedFile};
+use solite_core::backup::{ARCHIVE_FILES, BackupFiles, Guarded, StagedFile};
 use solite_core::engine::{Storage, complete_name, temporary_name};
 
 use crate::storage::{BASE, FatStorage, counted};
@@ -24,13 +31,26 @@ const RESTORE_MARK: &str = "zigbee.restore";
 const SET_ASIDE_TRIES: usize = 100;
 const STAGED: &str = "restore";
 
+/// True when the calling thread's stack is in internal RAM (not in PSRAM's address range): the
+/// rule of ESP-IDF's `esp_task_stack_is_sane_cache_disabled` for a flash access.
+pub fn stack_is_internal() -> bool {
+    let probe = 0u8;
+    let address = std::hint::black_box(std::ptr::addr_of!(probe)) as usize;
+    !(SOC_EXTRAM_DATA_LOW as usize..SOC_EXTRAM_DATA_HIGH as usize).contains(&address)
+}
+
+/// The data partition's files, behind the guard: the only way the program reaches them.
+pub fn data_files() -> Guarded<DataFiles> {
+    Guarded::new(DataFiles::new(), stack_is_internal)
+}
+
 /// The data partition seen as the archive's files.
 pub struct DataFiles {
     dir: PathBuf,
 }
 
 impl DataFiles {
-    pub fn new() -> Self {
+    fn new() -> Self {
         DataFiles {
             dir: PathBuf::from(BASE),
         }
@@ -206,7 +226,7 @@ impl Pacing for BoxPacing {
 /// Finishes a restore the last run left (R6), right after the partition is mounted and before
 /// anything reads it. A failure is logged and the start goes on: the marker stays.
 pub fn apply_pending() {
-    if let Err(e) = solite_core::backup::apply_pending(&mut DataFiles::new()) {
+    if let Err(e) = solite_core::backup::apply_pending(&mut data_files()) {
         log::error!("backup: cannot finish the restore: {e}");
     }
 }

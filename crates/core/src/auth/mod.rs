@@ -22,7 +22,7 @@ pub use presence::{
 };
 pub use sessions::{Attempts, Session, Sessions, token_hex};
 
-/// PBKDF2 iterations of a new hash (D47): about 0.5 to 1 s on the ESP32's software SHA-256.
+/// PBKDF2 iterations of a new hash (D47): a login takes 1.1 to 1.4 s on the box (timed 2026-11-25).
 pub const PBKDF2_ITERATIONS: u32 = 10_000;
 /// The fewest and the most iterations a stored hash may declare.
 pub const MIN_ITERATIONS: u32 = 1_000;

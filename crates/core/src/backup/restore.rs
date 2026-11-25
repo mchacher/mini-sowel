@@ -9,6 +9,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::crypto::{HmacSha256, Keys, apply, derive_master, hmac};
+use super::export::log_derivation;
 use super::format::{
     FLAG_ENCRYPTED, FORMAT, HEADER_BYTES, Header, KIND_END, KIND_FILE, MAC_BYTES, MAGIC, Manifest,
     ManifestFile, PREFIX_BYTES,
@@ -209,11 +210,16 @@ fn run(
     if !(MIN_ITERATIONS..=MAX_BACKUP_ITERATIONS).contains(&parsed.iterations) {
         return Err(Refusal::invalid("iterations out of range"));
     }
+    let derive_from = pacing.now_ms();
     let master = derive_master(
         password.as_bytes(),
         &parsed.salt,
         parsed.iterations,
         &mut || pacing.pause(),
+    );
+    log_derivation(
+        pacing.now_ms().saturating_sub(derive_from),
+        parsed.iterations,
     );
     let keys = Keys::new(&master);
     if !ct_eq(&keys.key_check(), &parsed.key_check) {

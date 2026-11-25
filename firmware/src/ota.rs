@@ -1,6 +1,6 @@
 //! The radio image's updates (spec 032 R8): `UpdateAdapter` on ESP-IDF's OTA, and the probation
 //! tick. Every call that touches the flash runs on ONE thread, `ota`, whose 6 KB stack is in
-//! internal RAM: the API workers' stacks are in PSRAM and must never write the flash. A worker
+//! internal RAM: the API workers' stacks are in PSRAM and must never touch the flash. A worker
 //! sends each call through a channel of one request at a time and waits for the answer; the same
 //! thread ticks `Updates::watch` every second (health: the engine's loop is running and the API
 //! server is listening). A chunk crosses in one 4096-byte buffer in PSRAM, allocated once by that

@@ -6,7 +6,8 @@
 //! - `crypto`: the key derivation in slices, ChaCha20, HMAC;
 //! - `export`: `ArchiveReader`, the archive as a `Read` (R4);
 //! - `restore`: `restore` and `apply_pending` (R5, R6);
-//! - `state`: the home's backup state and its ticket (R1, R4).
+//! - `state`: the home's backup state and its ticket (R1, R4);
+//! - `guard`: `Guarded`, the box's files reachable only from a stack in internal RAM.
 //!
 //! The core holds no file, no clock and no sleep of its own: the files come through
 //! `BackupFiles`, the clock and the pause through `Pacing`, the random bytes from the caller.
@@ -14,12 +15,14 @@
 mod crypto;
 mod export;
 mod format;
+mod guard;
 mod restore;
 mod state;
 
 use std::io::{Read, Write};
 
 pub use export::ArchiveReader;
+pub use guard::{Guarded, WRONG_STACK};
 pub use restore::apply_pending;
 pub use state::{BackupState, BackupTicket, Phase, WriteMark};
 
@@ -32,8 +35,9 @@ pub const MAX_EXPORT_MS: u64 = 120_000;
 /// PBKDF2 iterations of a new archive: ten times the account's (D47), for a file that leaves the
 /// box and can be attacked offline.
 pub const BACKUP_ITERATIONS: u32 = 100_000;
-/// The most iterations a restore accepts: four times the export's, which already holds an HTTP
-/// worker for 5 to 10 s on the box; more would hold it for minutes.
+/// The most iterations a restore accepts: four times the export's, whose derivation already takes
+/// about 11 to 14 s on the box (estimated: ten times the login's measured 1.1 to 1.4 s); more
+/// would hold a backup job for minutes.
 pub const MAX_BACKUP_ITERATIONS: u32 = 400_000;
 /// The longest archive a restore reads, in bytes: the worst-case home's files (every `MAX_*` of
 /// the core reached) fit with room, measured by `tests/full_backup.rs`.

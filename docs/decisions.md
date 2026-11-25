@@ -1121,3 +1121,28 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   blocks); a shorter timeout (the 3.8 s save leaves little margin under 5 s); restarting without a
   budget (a loop on a persistent fault); a safe mode with no retry (a transient fault would need a
   person).
+
+## D59: The box's backup jobs run on a thread whose stack is in internal RAM, and its files sit behind a guard (refines D56)
+
+- **Date**: 2026-11-25 (fix of spec 035, decided in an autonomous run, for the user's review)
+- **Choice**: on the radio image, `GET` and `POST /api/v1/system/backup` run their whole answer
+  (the key derivation, the files read or staged, the marker) on a `backup` thread started for the
+  job, its 10 KB stack in internal RAM, pinned to core 0 with the API workers; the worker that took
+  the request lends it and waits. The box's `BackupFiles` reach the core only behind the core's
+  `backup::Guarded`, which asks before every call, and every read or write of a file it opened,
+  whether the calling stack is in internal RAM, and turns a "no" into an error, never a flash
+  access. Each derivation logs `backup: key derived in <n> ms`.
+- **Why**: the export of spec 035 ran on an API worker, whose stack is in PSRAM
+  (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`, spec 023). Every flash access, a read too, turns
+  the caches off, and ESP-IDF stops the chip when the calling stack is in PSRAM (`assert failed:
+  spi_flash_disable_interrupts_caches_and_other_cpu cache_utils.c:127`): the box answered 200,
+  then restarted at its first file read; a restore would have done the same at its first staged
+  write. The rule spec 032 kept for writes (the OTA thread) holds for reads too. The request
+  also took 70 to 88 s before the panic against 11 to 14 s expected from the login's rate (same
+  algorithm, equal on the Mac, the login on the same kind of PSRAM stack): the cause of that gap
+  is not known, and the logged line measures the derivation alone on the box.
+- **Alternatives**: a permanent thread (10 KB of internal RAM for the whole run, for a job of a
+  few seconds a month); the OTA thread (6 KB, and its one-second probation tick would wait for a
+  derivation of seconds); copying the files to RAM on a flash thread before the stream (up to
+  2 MiB, against the streaming of D56); the workers' stacks in internal RAM (40 KB for every
+  request, against D33's budget).

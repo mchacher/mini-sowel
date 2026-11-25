@@ -59,8 +59,9 @@ pub struct ArchiveReader {
 
 impl BackupTicket {
     /// Starts the export (R1, R4): the password of the header `X-Backup-Password` checked (400),
-    /// the key derived (5 to 10 s on the box, the lock released, `pacing.pause` every 5,000
-    /// iterations), the Saver's write waited for (503 after 5 s), then the stream. The errors are
+    /// the key derived (estimated at 11 to 14 s on the box, logged `backup: key derived`, the lock
+    /// released, `pacing.pause` every 5,000 iterations), the Saver's write waited for (503 after
+    /// 5 s), then the stream. The errors are
     /// whole answers, to send before the status line of the stream. The ticket ends with the
     /// stream (or with the error).
     pub fn export(
@@ -100,9 +101,11 @@ impl BackupTicket {
             log::error!("backup: no random bytes: {e}");
             return Err(Refusal::new(500, "Internal error").response());
         }
+        let derive_from = pacing.now_ms();
         let master = derive_master(password.as_bytes(), &salt, iterations, &mut || {
             pacing.pause()
         });
+        log_derivation(pacing.now_ms().saturating_sub(derive_from), iterations);
         let keys = Keys::new(&master);
         // The Saver may be writing a file: wait for it to end, then switch to `exporting` in the
         // same critical section as the check.
@@ -140,6 +143,11 @@ impl BackupTicket {
             started: None,
         })
     }
+}
+
+/// The `backup: key derived` line, the measure of the derivation on the box (export and restore).
+pub(crate) fn log_derivation(ms: u64, iterations: u32) {
+    log::info!("backup: key derived in {ms} ms ({iterations} iterations)");
 }
 
 fn other(message: impl Into<String>) -> io::Error {
