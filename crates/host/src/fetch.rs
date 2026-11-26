@@ -942,6 +942,9 @@ mod tests {
         rig.untouched();
 
         let mut rig = Rig::new();
+        // The file is signed by this rig's own key: the signature of its header checks out, and
+        // only the total time limit can stop the trickle.
+        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
         rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
         let mut slow = http("200 OK", &[&format!("Content-Length: {}", sup.len())], b"");
         slow.extend_from_slice(&sup);
