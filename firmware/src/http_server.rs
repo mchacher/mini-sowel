@@ -7,13 +7,16 @@
 //! The core decides every answer; this file moves the bytes. The full backup's two routes read or
 //! write the flash, which a stack in PSRAM forbids, and the update's signature check needs more
 //! stack than a worker has: their answer runs on a thread started for the job (`job_thread.rs`),
-//! its stack in internal RAM, while the worker waits for it.
+//! its stack in internal RAM, while the worker waits for it. The handler of every request that is not a
+//! `GET` (it can start or call a script recipe, spec 041) runs on the `script` thread, made once at
+//! boot (its 32 KB of internal RAM are taken while the memory is whole, not per request), one request
+//! at a time: a worker's 10 KB cannot hold the script's 16 KB stack.
 
 use std::ffi::{CStr, CString};
 use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
@@ -47,6 +50,7 @@ use crate::job_thread::{
 use crate::live_ws;
 use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
+use crate::scripts::SCRIPT_THREAD_STACK_BYTES;
 use crate::ui_files::UI_FILES;
 
 /// Each worker's stack, in PSRAM (R9.4): the workers never touch the flash (a read neither: it
@@ -75,6 +79,84 @@ struct Api {
 }
 
 static API: OnceLock<Api> = OnceLock::new();
+
+/// Held by the worker whose request runs on the `script` thread: one request at a time.
+static SCRIPT_THREAD: Mutex<()> = Mutex::new(());
+
+/// A request handed to the `script` thread: owned copies of what `Request` borrows (the worker's
+/// body buffer stays with the worker), and where the thread sends the reply.
+struct ScriptJob {
+    method: String,
+    path: String,
+    host: Option<String>,
+    content_type: Option<String>,
+    authorization: Option<String>,
+    content_length: Option<u64>,
+    body: Vec<u8>,
+    reply: SyncSender<Reply>,
+}
+
+/// The way to the `script` thread, set once it runs.
+static SCRIPT_JOBS: OnceLock<SyncSender<ScriptJob>> = OnceLock::new();
+
+/// The `script` thread's loop: one request at a time, as the router would answer it on a worker.
+/// The firmware is built with `panic = "abort"`: a panic reboots the chip (the supervisor reads
+/// it) instead of ending this thread, so the loop needs no `catch_unwind` and no restart; the
+/// thread ends only if its channel closes, which nothing does (`run_on_script_thread` then
+/// answers 503).
+fn script_loop(jobs: Receiver<ScriptJob>) {
+    let Some(api) = API.get() else {
+        return;
+    };
+    while let Ok(job) = jobs.recv() {
+        let request = Request {
+            method: &job.method,
+            path: &job.path,
+            host: job.host.as_deref(),
+            port: api.port,
+            reach: Reach::Lan { name: api.name },
+            content_type: job.content_type.as_deref(),
+            authorization: job.authorization.as_deref(),
+            content_length: job.content_length,
+            body: &job.body,
+        };
+        let mut random = |bytes: &mut [u8]| fill(bytes);
+        let reply = handle_guarded(&api.home, &request, wall_ms(), &mut random);
+        // A worker that gave up waiting has dropped its end: nothing to tell.
+        let _ = job.reply.send(reply);
+    }
+}
+
+/// Starts the `script` thread, its stack in internal RAM (`job_thread::spawn`), for the whole run.
+fn start_script_thread() -> Result<(), String> {
+    let (jobs, wait) = sync_channel::<ScriptJob>(0);
+    job_thread::spawn(c"script", SCRIPT_THREAD_STACK_BYTES, move || {
+        script_loop(wait)
+    })?;
+    SCRIPT_JOBS
+        .set(jobs)
+        .map_err(|_| "the script thread is already started".to_string())
+}
+
+/// Runs the request on the `script` thread and waits for its reply (one at a time). `None` when
+/// the thread is not there (it could not start, or it ended).
+fn run_on_script_thread(request: &Request<'_>) -> Option<Reply> {
+    let jobs = SCRIPT_JOBS.get()?;
+    let _one = SCRIPT_THREAD.lock().unwrap_or_else(PoisonError::into_inner);
+    let (reply, wait) = sync_channel(1);
+    let job = ScriptJob {
+        method: request.method.to_string(),
+        path: request.path.to_string(),
+        host: request.host.map(str::to_string),
+        content_type: request.content_type.map(str::to_string),
+        authorization: request.authorization.map(str::to_string),
+        content_length: request.content_length,
+        body: request.body.to_vec(),
+        reply,
+    };
+    jobs.send(job).ok()?;
+    wait.recv().ok()
+}
 
 /// The smallest unused stack of each worker since it started, in bytes (`heap:` line, R9.2).
 static WORKER_STACK_UNUSED: [AtomicUsize; MAX_WORKERS] =
@@ -645,25 +727,41 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         received += count as usize;
     }
     // The core takes and lets go of the home itself: a password hash runs without it.
-    let reply = {
+    let request = Request {
+        method: head.method,
+        path: &head.uri,
+        host: head.host.as_deref(),
+        port: api.port,
+        reach: Reach::Lan { name: api.name },
+        content_type: head.content_type.as_deref(),
+        authorization: head.authorization.as_deref(),
+        // The declared length: 0 when absent and not chunked, none when chunked.
+        content_length: (!head.chunked).then_some(head.length as u64),
+        body: &buffer[..received],
+    };
+    let answer_it = || {
         let mut random = |bytes: &mut [u8]| fill(bytes);
-        handle_guarded(
-            &api.home,
-            &Request {
-                method: head.method,
-                path: &head.uri,
-                host: head.host.as_deref(),
-                port: api.port,
-                reach: Reach::Lan { name: api.name },
-                content_type: head.content_type.as_deref(),
-                authorization: head.authorization.as_deref(),
-                // The declared length: 0 when absent and not chunked, none when chunked.
-                content_length: (!head.chunked).then_some(head.length as u64),
-                body: &buffer[..received],
-            },
-            wall_ms(),
-            &mut random,
-        )
+        handle_guarded(&api.home, &request, wall_ms(), &mut random)
+    };
+    // A request that changes something can start a script (an instance's start, a settle, a
+    // validation): its handler runs on the `script` thread, made at boot, its stack in internal
+    // RAM and sized for the script's own, never on this worker's 10 KB in PSRAM (spec 041 R3.4).
+    // One at a time: the home's lock serialises them anyway. A `GET` never reaches a script, nor
+    // do the account's routes (`/api/v1/auth/*`: the login's password hash must not hold every
+    // other write behind it); they stay on this worker, as they were before scripts.
+    let on_script_thread = head.method != "GET"
+        && head.uri.starts_with("/api/v1")
+        && !head.uri.starts_with("/api/v1/auth/");
+    let reply = if on_script_thread {
+        match run_on_script_thread(&request) {
+            Some(reply) => reply,
+            None => {
+                log::warn!("script: the script thread is not running");
+                Reply::Whole(error_body(503, "Busy"))
+            }
+        }
+    } else {
+        answer_it()
     };
     // An order waits for the radio loop's answer, without the lock.
     let reply = match reply {
@@ -872,6 +970,7 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
     };
     API.set(api)
         .map_err(|_| "the server is already started".to_string())?;
+    start_script_thread()?;
     start_workers(jobs)?;
     let configuration = Configuration {
         http_port: port,

@@ -26,6 +26,10 @@ mod ota;
 mod radio_engine;
 #[cfg(feature = "radio")]
 mod radio_uart;
+#[cfg(feature = "scripts")]
+mod script_alloc;
+#[cfg(feature = "scripts")]
+mod scripts;
 #[cfg(feature = "sim")]
 mod simulated;
 mod storage;
@@ -44,6 +48,10 @@ mod ui_files {
 
 #[cfg(all(feature = "radio", feature = "sim"))]
 compile_error!("radio and sim are two images");
+
+// The measuring image carries no QuickJS (spec 041 R6.2): its numbers are the engine's alone.
+#[cfg(all(feature = "flash-saves", feature = "scripts"))]
+compile_error!("the measuring image (flash-saves) is built without scripts");
 
 use solite_core::engine::Storage;
 
@@ -113,7 +121,8 @@ fn run_engine() {
         Err(e) => Err(format!("engine: cannot start its thread: {e}")),
     };
     match result {
-        Ok(Ok(stats)) => log::info!("{}", solite_core::engine_line(&stats)),
+        // The engine's line is logged by the run itself, before the script phase's (spec 041 R6.2).
+        Ok(Ok(())) => {}
         Ok(Err(e)) | Err(e) => log::error!("{e}"),
     }
     measure::stop_local_minimum();

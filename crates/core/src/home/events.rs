@@ -93,8 +93,10 @@ impl Event {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Interest {
     zones: Vec<Id>,
-    equipments: Vec<(Id, &'static str)>,
-    devices: Vec<(Id, Box<str>)>,
+    equipments: Vec<(Id, Alias)>,
+    /// The keys are shared like aliases: the same few words (`occupancy`, `state`...) come back
+    /// in every device.
+    devices: Vec<(Id, Alias)>,
 }
 
 impl Interest {
@@ -108,8 +110,12 @@ impl Interest {
         }
     }
 
-    pub fn add_equipment(&mut self, equipment: Id, alias: &'static str) {
-        if !self.equipments.contains(&(equipment, alias)) {
+    pub fn add_equipment(&mut self, equipment: Id, alias: Alias) {
+        if !self
+            .equipments
+            .iter()
+            .any(|(e, a)| *e == equipment && *a == alias)
+        {
             self.equipments.push((equipment, alias));
         }
     }
@@ -120,7 +126,7 @@ impl Interest {
             .iter()
             .any(|(d, k)| *d == device && &**k == key)
         {
-            self.devices.push((device, key.into()));
+            self.devices.push((device, Alias::new(key)));
         }
     }
 
@@ -135,7 +141,7 @@ impl Interest {
     pub fn wants_equipment(&self, equipment: &Id, alias: &str) -> bool {
         self.equipments
             .iter()
-            .any(|(e, a)| e == equipment && *a == alias)
+            .any(|(e, a)| e == equipment && **a == *alias)
     }
 
     pub fn wants_device(&self, device: &Id, key: &str) -> bool {

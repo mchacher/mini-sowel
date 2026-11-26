@@ -1,0 +1,433 @@
+// motion-light-script: the script version of the built-in `motion-light` (spec 041, R5), a port of
+// Sowel's `sowel-recipe-motion-light` 1.1.2 to the script API: same slots, behaviour, log texts and
+// state keys. The top level is shared by the instances, so it holds functions only: each takes the
+// instance's data `c` (made in `start`), which keeps an instance down to a few small closures.
+var GRACE_MS = 2000;
+var HYSTERESIS = 0.1;
+
+// ---- What the home says ----
+function isOn(value) {
+  return value === true || (typeof value === "string" && value.toUpperCase() === "ON");
+}
+function anyLightOn(c) {
+  var values = c.api.get("lights", "state");
+  for (var i = 0; i < values.length; i++) if (isOn(values[i])) return true;
+  return false;
+}
+function isTooBright(c, l) {
+  return c.lux_ !== null && l !== null && l > c.lux_;
+}
+function isBrightEnoughToTurnOff(c, l) {
+  return c.lux_ !== null && l !== null && l > c.lux_ * (1 + HYSTERESIS);
+}
+function isDaytime(c) {
+  return c.day && c.api.now().isDaylight === true;
+}
+function isMotionActive(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    var t = value.trim().toLowerCase();
+    return t === "true" || t === "on" || t === "1" || t === "occupied" || t === "detected";
+  }
+  return false;
+}
+function formatDuration(ms) {
+  if (ms >= 3600000) return Math.round(ms / 3600000) + "h";
+  if (ms >= 60000) return Math.round(ms / 60000) + "min";
+  return Math.round(ms / 1000) + "s";
+}
+function iso(ms) {
+  return new Date(ms).toISOString();
+}
+
+// ---- State keys, rebuilt in the built-in recipe's order at each change ----
+function syncState(c) {
+  var st = c.api.state;
+  st.delete("overrideMode");
+  st.delete("timerExpiresAt");
+  st.delete("failsafeExpiresAt");
+  if (c.override) st.set("overrideMode", true);
+  if (c.timerAt !== null) st.set("timerExpiresAt", c.timerAt);
+  if (c.failsafeAt !== null) st.set("failsafeExpiresAt", c.failsafeAt);
+}
+// A handler of the instance, then the state.
+function bind(c, fn) {
+  return function (a) {
+    fn(c, a);
+    syncState(c);
+  };
+}
+
+// ---- Timers ----
+function deleteTimerKey(c) {
+  c.timerAt = null;
+}
+function cancelOffTimer(c) {
+  if (c.offId !== null) c.api.cancel(c.offId);
+  c.offId = null;
+}
+function cancelFailsafe(c) {
+  if (c.failsafeId !== null) c.api.cancel(c.failsafeId);
+  c.failsafeId = null;
+  c.failsafeAt = null;
+}
+function startOffTimer(c) {
+  cancelOffTimer(c);
+  c.offId = c.api.after(c.timeout, bind(c, fireOff));
+  c.timerAt = iso(Date.now() + c.timeout);
+}
+function startOffTimerForOverrideClear(c) {
+  cancelOffTimer(c);
+  c.offId = c.api.after(c.timeout, bind(c, fireOverrideClear));
+  c.timerAt = iso(Date.now() + c.timeout);
+}
+function armFailsafe(c) {
+  c.failsafeId = c.api.after(c.maxOn, bind(c, fireFailsafe));
+  c.failsafeAt = iso(Date.now() + c.maxOn);
+}
+// Armed once; an armed failsafe is left as it is.
+function startFailsafeTimer(c) {
+  if (c.maxOn === null || c.failsafeId !== null) return;
+  armFailsafe(c);
+}
+// Restarts an armed failsafe with its full duration; it never arms one.
+function resetFailsafeTimer(c) {
+  if (c.maxOn === null || c.failsafeId === null) return;
+  c.api.cancel(c.failsafeId);
+  armFailsafe(c);
+}
+
+// ---- Primitive actions ----
+function send(c, on) {
+  var refused = c.api.order("lights", "state", on ? "ON" : "OFF");
+  var errors = [];
+  for (var i = 0; i < refused.length; i++) errors.push(refused[i].id + ": " + refused[i].reason);
+  return errors;
+}
+function sent(c, on, what) {
+  var errors = send(c, on);
+  if (errors.length > 0) c.api.log.error("Error turning " + what + " some lights: " + errors.join("; "));
+}
+function startGrace(c) {
+  c.graceUntil = Date.now() + GRACE_MS;
+}
+function inGrace(c) {
+  return Date.now() < c.graceUntil;
+}
+function turnOn(c) {
+  c.byRecipe = true;
+  c.lastOn = true;
+  sent(c, true, "on");
+  c.api.log("Motion detected — " + c.count + " light(s) turned on");
+  startFailsafeTimer(c);
+}
+function turnOff(c, reason) {
+  c.byRecipe = false;
+  c.lastOn = false;
+  startGrace(c);
+  sent(c, false, "off");
+  c.api.log(reason);
+  cancelFailsafe(c);
+  c.override = false;
+}
+
+// ---- Timers firing ----
+function fireOff(c) {
+  c.offId = null;
+  deleteTimerKey(c);
+  turnOff(c, "No motion for " + formatDuration(c.timeout) + " — lights turned off");
+}
+function fireOverrideClear(c) {
+  c.offId = null;
+  deleteTimerKey(c);
+  if (anyLightOn(c)) {
+    c.byRecipe = false;
+    c.lastOn = false;
+    startGrace(c);
+    send(c, false); // the refusals are ignored on this path
+  }
+  c.override = false;
+  cancelFailsafe(c);
+  c.api.log("No motion for " + formatDuration(c.timeout) + " — override cleared, lights off");
+}
+function fireFailsafe(c) {
+  c.failsafeId = null;
+  cancelFailsafe(c);
+  cancelOffTimer(c);
+  deleteTimerKey(c);
+  // Like turning off, but the override mode is left as it is.
+  c.byRecipe = false;
+  c.lastOn = false;
+  startGrace(c);
+  sent(c, false, "off");
+  c.api.log.warn("Failsafe: lights forced off after " + formatDuration(c.maxOn) + " max on duration");
+}
+
+// ---- Handlers ----
+function onZoneChanged(c, motion) {
+  var api = c.api, l = c.zoneLux;
+  if (c.override) {
+    if (motion) {
+      cancelOffTimer(c);
+      deleteTimerKey(c);
+      resetFailsafeTimer(c);
+      api.log("Motion detected but override mode active — ignoring");
+    } else if (c.offId === null) {
+      startOffTimerForOverrideClear(c);
+    }
+    return;
+  }
+  var lightsOn = anyLightOn(c);
+  if (lightsOn && isBrightEnoughToTurnOff(c, l)) {
+    if (!c.byRecipe) {
+      if (inGrace(c)) return;
+      c.override = true;
+      startFailsafeTimer(c);
+      api.log("Light turned on manually above lux threshold — entering override mode");
+    } else {
+      cancelOffTimer(c);
+      deleteTimerKey(c);
+      turnOff(c, "Luminosity above threshold — lights turned off");
+    }
+    return;
+  }
+  if (motion && !lightsOn) {
+    if (inGrace(c)) return;
+    if (c.byRecipe) {
+      c.byRecipe = false;
+      c.override = true;
+      startOffTimerForOverrideClear(c);
+      api.log("Light turned off manually while motion active — entering override mode");
+      return;
+    }
+    if (isTooBright(c, l)) {
+      api.log("Motion detected but luminosity " + l + " exceeds threshold " + c.lux_ + " — not turning on");
+      return;
+    }
+    if (isDaytime(c)) {
+      api.log("Motion detected but daytime — not turning on");
+      return;
+    }
+    turnOn(c);
+  } else if (motion && lightsOn) {
+    cancelOffTimer(c);
+    deleteTimerKey(c);
+    resetFailsafeTimer(c);
+  } else if (!motion && lightsOn && c.offId === null) {
+    startOffTimer(c);
+  }
+}
+
+function onLightChanged(c, value) {
+  var api = c.api, lightOn = isOn(value);
+  if (lightOn === c.lastOn) return;
+  c.lastOn = lightOn;
+  if (c.override) return;
+  var motion = api.get("zone", "motion");
+  if (lightOn && !motion) {
+    startOffTimer(c);
+    startFailsafeTimer(c);
+    api.log("Light turned on externally — turning off in " + formatDuration(c.timeout));
+  } else if (lightOn) {
+    cancelOffTimer(c);
+    deleteTimerKey(c);
+  } else {
+    if (inGrace(c)) return;
+    if (c.byRecipe && motion) {
+      c.byRecipe = false;
+      c.override = true;
+      cancelOffTimer(c);
+      cancelFailsafe(c);
+      deleteTimerKey(c);
+      startOffTimerForOverrideClear(c);
+      api.log("Light turned off manually while motion active — entering override mode");
+      return;
+    }
+    c.byRecipe = false;
+    if (c.offId !== null || c.failsafeId !== null) {
+      cancelOffTimer(c);
+      cancelFailsafe(c);
+      deleteTimerKey(c);
+      api.log("Light turned off externally — timers cancelled");
+    }
+  }
+}
+
+function onButtonAction(c) {
+  if (anyLightOn(c)) {
+    c.byRecipe = false;
+    c.lastOn = false;
+    startGrace(c);
+    sent(c, false, "off");
+    cancelOffTimer(c);
+    cancelFailsafe(c);
+    deleteTimerKey(c);
+    c.override = true;
+    c.api.log("Button pressed — lights off, entering override mode");
+    startOffTimerForOverrideClear(c);
+  } else {
+    c.override = false;
+    turnOn(c);
+  }
+}
+
+// ---- The start sync: the lights set to what the zone calls for ----
+function syncLightsOnStart(c, motion, l) {
+  if (motion && !isTooBright(c, l) && !isDaytime(c)) {
+    turnOn(c);
+  } else if (isDaytime(c)) {
+    turnOff(c, "Recipe activated — daytime, lights off");
+  } else if (motion) {
+    turnOff(c, "Recipe activated — luminosity above threshold, lights off");
+  } else {
+    turnOff(c, "Recipe activated — no motion, lights off");
+  }
+}
+
+recipe({
+  api: 1,
+  id: "motion-light-script",
+  version: "1.0.0",
+  name: "Motion Light (script)",
+  description:
+    "Turns on lights when motion is detected, turns off after a timeout with no motion (script version). Differs from the built-in recipe: validation texts are the host's for the settings and its own for the lights' state order and the buttons' action data; a deleted equipment leaves the settings by the generic settle, and a button that loses its action data invalidates the settings (instance disabled) instead of being pruned; the legacy light setting is not read; a refused order logs the host's reason; the 2 s echo window is counted on the wall clock.",
+  icon: "Lightbulb",
+  i18n: {
+    fr: {
+      name: "Lumière sur mouvement (script)",
+      description:
+        "Allume les lumières quand un mouvement est détecté, éteint après un délai sans mouvement. Version script de Lumière sur mouvement.",
+      slots: {
+        zone: { name: "Zone", description: "Zone à surveiller" },
+        lights: { name: "Lumières", description: "Lumières à contrôler (doivent appartenir à la zone)" },
+        timeout: { name: "Délai", description: "Délai sans mouvement avant extinction" },
+        luxThreshold: { name: "Seuil lux (max)", description: "Au-dessus de ce seuil, les lumières ne s'allument pas" },
+        maxOnDuration: {
+          name: "Extinction auto (sécurité)",
+          description:
+            "Anti-oubli pour capteur bloqué : coupe les lumières après cette durée sans nouveau mouvement. Une présence active la réarme en continu, donc elle ne coupe pas tant que tu es dans la pièce.",
+        },
+        buttons: { name: "Interrupteurs", description: "Interrupteurs physiques pour allumer/éteindre manuellement" },
+        disableWhenDaylight: {
+          name: "Inactif le jour",
+          description: "Ne pas allumer pendant la journée (basé sur lever/coucher du soleil)",
+        },
+      },
+    },
+  },
+  slots: {
+    zone: { type: "zone", name: "Zone", description: "Zone to monitor", required: true },
+    lights: {
+      type: "equipment",
+      name: "Lights",
+      description: "Lights to control (must belong to the selected zone)",
+      required: true,
+      list: true,
+      constraints: { equipmentType: "light_onoff" },
+    },
+    timeout: {
+      type: "duration",
+      name: "Timeout",
+      description: "Delay with no motion before turning off",
+      required: true,
+      defaultValue: "10m",
+    },
+    luxThreshold: {
+      type: "number",
+      name: "Lux Threshold",
+      description:
+        "Lights won't turn on when ambient brightness exceeds this value; turns off if it rises above threshold + 10% hysteresis",
+      required: false,
+      constraints: { min: 0 },
+    },
+    maxOnDuration: {
+      type: "duration",
+      name: "Safety Auto-off",
+      description:
+        "Failsafe for a stuck sensor: force lights off after this duration with no fresh motion. Active presence keeps resetting it, so it won't cut the light while you're in the room.",
+      required: false,
+    },
+    buttons: {
+      type: "equipment",
+      name: "Manual Switches",
+      description: "Physical switches for manual on/off toggle",
+      required: false,
+      list: true,
+      constraints: { equipmentType: "button" },
+    },
+    disableWhenDaylight: {
+      type: "boolean",
+      name: "Inactive During Day",
+      description: "Do not turn on lights during daytime (based on sunrise/sunset and offsets from settings)",
+      required: false,
+    },
+  },
+
+  // What the slots cannot say: lights have a `state` order, buttons an `action` data.
+  validate: function (params, home) {
+    var i, item, ids;
+    ids = params.lights || [];
+    for (i = 0; i < ids.length; i++) {
+      item = home.equipment(ids[i]);
+      if (item && item.orders.indexOf("state") < 0) {
+        return 'Light "' + item.name + '" has no "state" order binding';
+      }
+    }
+    ids = params.buttons || [];
+    for (i = 0; i < ids.length; i++) {
+      item = home.equipment(ids[i]);
+      if (item && item.data.indexOf("action") < 0) {
+        return 'Button "' + item.name + '" has no "action" data binding';
+      }
+    }
+    return "";
+  },
+
+  start: function (api) {
+    var p = api.params;
+    var maxOn = typeof p.maxOnDuration === "number" && p.maxOnDuration > 0 ? Math.max(100, p.maxOnDuration) : null;
+    // The instance's data: what the functions above read and write.
+    var c = {
+      api: api,
+      timeout: Math.max(100, p.timeout || 600000),
+      lux_: typeof p.luxThreshold === "number" ? p.luxThreshold : null,
+      maxOn: maxOn,
+      day: p.disableWhenDaylight === true,
+      count: (p.lights || []).length,
+      offId: null,
+      failsafeId: null,
+      override: false,
+      byRecipe: false,
+      lastOn: false,
+      graceUntil: 0, // wall clock
+      timerAt: null, // the state keys, as ISO texts
+      failsafeAt: null,
+      zoneLux: null // the zone's luminosity, as the last zone event said
+    };
+    if (api.get("zone", "motionSensors") === 0) {
+      api.log.warn("Zone has no motion sensors — recipe will never trigger");
+    }
+    c.zoneLux = api.get("zone", "luminosity");
+    c.byRecipe = c.lastOn = anyLightOn(c);
+    syncLightsOnStart(c, api.get("zone", "motion") === true, c.zoneLux);
+    c.graceUntil = 0;
+    syncState(c);
+
+    // The luminosity handler comes first: both get the same event, in this order.
+    api.onZone("luminosity", function (value) {
+      c.zoneLux = value;
+    });
+    api.onZone("motion", bind(c, onZoneChanged));
+    api.on("lights", "state", bind(c, onLightChanged));
+    if ((p.buttons || []).length > 0) api.on("buttons", "action", bind(c, onButtonAction));
+    if (maxOn !== null) {
+      api.onMotionReport(function (value) {
+        if (isMotionActive(value)) {
+          resetFailsafeTimer(c);
+          syncState(c);
+        }
+      });
+    }
+  },
+});

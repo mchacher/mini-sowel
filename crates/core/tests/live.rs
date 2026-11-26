@@ -70,8 +70,8 @@ fn device_data(device: &str, key: &str, value: i64) -> EngineEvent {
 fn simple_events() -> Vec<(EngineEvent, Value)> {
     let source = OrderSource::Recipe {
         instance_id: id(5),
-        recipe_name: "Motion Light",
-        recipe_id: "motion-light",
+        recipe_name: "Motion Light".into(),
+        recipe_id: "motion-light".into(),
     };
     vec![
         (

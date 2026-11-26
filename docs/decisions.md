@@ -1420,3 +1420,91 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: no resume (spec 039); a resume kept across pulls in flash (flash wear and a
   state to invalidate); an unbounded retry (holds the thread and the memory); a restart from byte 0
   in the request (above).
+
+## D73: Recipes outside the firmware are JavaScript scripts run by QuickJS (spec 041, replaces D1's `wasmi`)
+
+- **Date**: 2026-11-26 (decided with the user)
+- **Choice**: a recipe that is not built in is one JavaScript text in Sowel's script-recipe format
+  (Sowel's `roadmap/ai-script-recipes/spec.md`: `recipe({ api: 1, slots, start({ on, get, order,
+  after, now, state, log }) })`), run by QuickJS-ng through the crate `rquickjs` (0.14.0, its C
+  compiled by the build), behind the core's feature `script-recipes`. Solite adds `id`, `version`,
+  `onMotionReport`, `cancel`, `console.log` and an optional `validate` to the draft; the differences
+  are in `docs/sowel-subset.md` and proposed to Sowel. D1's "recipes run in `wasmi`" no longer holds.
+- **Why**: measured (spec 041's `research.md`), a WebAssembly recipe costs about 1.1 MB in `wasmi`
+  as built and 376 KB after a week of shrinking (its interpreter triples the code), 150 to 215 KB
+  in WAMR (a C runtime of its own); a QuickJS recipe costs about 60 KB of PSRAM and 0.5 KB of internal
+  RAM on the 32-bit target, its limits (memory, time, stack) work there, and Sowel runs its own
+  script recipes in QuickJS, so one recipe can run in both (the true north's "extension of Sowel").
+  JavaScript is the author's language and the one AI writes best.
+- **Alternatives**: `wasmi` (too much memory); WAMR (half the memory of `wasmi`, still three times
+  QuickJS's per recipe, a C runtime, modules to shrink by hand); Berry (10 KB per recipe, but a niche
+  language Sowel does not run); Rhai (pure Rust, about 120 KB per recipe); a declarative JSON format
+  (cannot hold motion-light's state machine; rejected by Sowel's own draft); native recipes delivered
+  by firmware updates only (no recipe without a release).
+
+## D74: One QuickJS runtime per script recipe, its bounds and where it lives on the box (spec 041)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: one runtime and one context per script recipe, shared by its instances (Sowel's draft:
+  one per instance). Bounds: 2 script recipes (at most 8 instances of each, a ninth is refused with 400), 16 KB of
+  source, a memory limit of 224 KB per runtime on the box (448 KB on the Mac, whose 64-bit pointers
+  make everything larger; QuickJS's own limit, counting with the allocator's usable size; 448 KB for
+  the two, under a 512 KB ceiling), 1000 ms to load a script, 100 ms per call (the interrupt handler
+  on a monotonic clock the engine is given), 300 ms of script calls per turn of the engine's loop, 16 KB of
+  JavaScript stack; QuickJS's small-object arena is off (`rquickjs-sys` vendored under
+  `vendor/rquickjs-sys` with a two-line `#ifndef` patch: about 85 KB per runtime saved); the garbage
+  collector's threshold kept under ¾ of the limit, and a collection after a call that leaves more than
+  85 % of the limit held or 32 KB more than the last collection left (the heap is walked once per
+  call); QuickJS is built with `JS_NO_FUNCTION_SOURCE`, a patch of the same vendored
+  crate: a script's functions do not keep their source text (`Function.prototype.toString` answers
+  `function f() { [native code] }`), which saves the source of every function of every runtime and
+  of the shim. On the box the firmware's allocator puts the
+  runtime in PSRAM (`heap_caps_*`, its `unsafe` under D11), holds each runtime to its limit itself and
+  tells a refusal in a flag of that runtime (QuickJS has no limit of its own on the box); every call
+  into a script runs on a stack in internal RAM: the engine thread's, and a `script` thread for the
+  API's non-`GET` requests (but the account's `/api/v1/auth/*`, which reach no script and stay on the worker, so that a login's password hash holds no other write), made once at boot (D59, D60's lesson; a thread per request needed a
+  free 32 KB block each time, which fragmentation could refuse for every write). A call over its time, an allocation refused (caught or not), a stack overflow
+  or a forged handle fails the whole recipe: its instances stop, and it restarts after 1 minute, at
+  most 3 times in 24 hours, then on a person's action. The core reaches the call's home from QuickJS's
+  callbacks through the crate `scoped-tls-hkt` (no `unsafe` in the core: D11 kept).
+- **Why**: a runtime per instance costs about 60 KB each where a shared one costs about 5 KB per
+  extra instance; the price is that one instance's runaway stops the recipe's other instances, which
+  the restart brings back. PSRAM keeps the internal RAM (the tight resource) free; the measures of
+  spec 041 set the figures: measured in QEMU, `motion-light-script` loaded holds 107 KB and each
+  instance 8-10 KB, so 8 instances need about 190 KB; the first limit, 128 KB, ran out of memory at
+  load, and the load takes 212 ms in QEMU (a clock slowed 50 times) whence its own limit. Limits are
+  not raised again without the user.
+- **Alternatives**: a runtime per instance (memory); the default allocator on the box (every QuickJS
+  block is under 4 KB and lands in internal RAM: three runtimes exhaust it); a counting allocator in
+  the core (needs `unsafe`, against D11).
+
+## D75: A script reaches only the equipments of its own settings (spec 041)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: `on`, `get` and `order` take a slot name, never an id; the engine maps the name to the
+  ids of that instance's validated settings; the engine's functions are captured by the shim and not
+  reachable from the script's globals; a handle that is not one of the recipe's instances fails the
+  recipe; the ids a script's `validate` may read the facts of are the ones the params under check
+  name, kept in Rust (any other text a `validate` looks up, a zone id, a time or an option, gives nothing and fails nothing); the end of each call (state, listen set, timers, log lines) is checked in Rust
+  whatever the script did to the objects the shim builds it from. Instances of one script recipe
+  share its runtime and its handles, so they can reach each other: the isolation is between recipes
+  and from the equipments outside an instance's settings. The settings are checked by the engine
+  from the slots before the script runs, with Solite's own texts (Sowel has no generic check).
+- **Why**: Sowel's draft rule ("a script cannot reach an equipment the user did not put in a slot"),
+  enforced by the host, not by trust; it holds before scripts are downloaded (F2), so a script from
+  outside meets it from the first day.
+- **Alternatives**: ids in the API (no isolation); isolation left to F2 (a script written now would
+  break then).
+
+## D76: Where scripts come from before they are downloaded (spec 041)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: on the Mac, `--recipe-script <file.js>` (a developer's flag, unsigned); on the box,
+  the scripts of `recipes/scripts/` built into the radio image, so every release carries QuickJS
+  (about 752 KB of flash, measured) and `motion-light-script`. Downloading, signing (with a key of its own,
+  not the firmware's) and removing a script are F2.
+- **Why**: the box test needs the scripts on the box, and the radio image is the one the box and the
+  releases run; a second image only for the test would be a variant to keep. The flash fits (the
+  4 MB slot stays under the 75 % warning: the radio image takes 69 % of it).
+- **Alternatives**: scripts out of releases until F2 (a box image of its own for the test); a route
+  to upload a script now (it is F2's, with its signature).

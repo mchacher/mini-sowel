@@ -14,7 +14,9 @@ pub use queue::{
 pub use resolve::{commands_for, prepare};
 pub use runner::OrderRunner;
 
-use serde::Serialize;
+use std::sync::Arc;
+
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 
 use crate::devices::Id;
@@ -32,10 +34,17 @@ use crate::radio::zcl;
 pub enum OrderSource {
     Recipe {
         instance_id: Id,
-        /// The recipe's `RecipeInfo.name`.
-        recipe_name: &'static str,
-        recipe_id: &'static str,
+        /// The recipe's `RecipeInfo.name`, a text shared with the recipe's entry in the engine.
+        #[serde(serialize_with = "shared_text")]
+        recipe_name: Arc<str>,
+        #[serde(serialize_with = "shared_text")]
+        recipe_id: Arc<str>,
     },
+}
+
+/// A shared text as the JSON string it is.
+fn shared_text<S: Serializer>(text: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(text)
 }
 
 /// One command for one device of an order.

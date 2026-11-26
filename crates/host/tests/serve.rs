@@ -1557,6 +1557,75 @@ fn a_motion_light_instance_switches_the_garage_light_and_runs_again_after_a_rest
     assert_eq!(serving.interrupt(), Some(130));
 }
 
+const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light-script.js";
+
+#[test]
+fn a_script_recipe_switches_the_garage_light_through_the_api_and_is_loaded_again_after_a_restart() {
+    let dir = data_dir();
+    pair(&dir);
+    let script = ["--recipe-script", MOTION_LIGHT_SCRIPT];
+    // Speed 60, as the built-in recipe's test: the light goes on with the scenario's motion and
+    // off 3 s after it.
+    let serving = serve(&dir, "60", &script);
+    let line = serving
+        .shown
+        .iter()
+        .find(|l| l.starts_with("recipes: script "))
+        .expect("the start line of the script");
+    assert!(
+        line.starts_with(&format!(
+            "recipes: script motion-light-script 1.0.0 from {MOTION_LIGHT_SCRIPT} ("
+        )) && line.ends_with(" KB in its runtime)"),
+        "{line}"
+    );
+    let zone = set_up_the_garage(&serving);
+    let light = garage_light(&serving);
+    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(recipes[0]["id"], "motion-light");
+    assert_eq!(recipes[1]["id"], "motion-light-script");
+    let (status, created) = serving.send(
+        "POST",
+        "/api/v1/recipe-instances",
+        &serde_json::json!({
+            "recipeId": "motion-light-script",
+            "params": {"zone": zone, "lights": [light], "timeout": "3s"}
+        }),
+    );
+    assert_eq!(status, 201, "{created}");
+    let instance = created["id"].as_str().unwrap().to_string();
+    let file = dir.join("recipes.json");
+    wait_until("recipes.json written", || file.exists());
+    wait_until("the light on", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    wait_until("the light off", || {
+        binding_value(&serving, &light, "state") == false
+    });
+    wait_until("four lines", || messages(&serving, &instance).len() >= 4);
+    assert_eq!(
+        messages(&serving, &instance),
+        [
+            "No motion for 3s — lights turned off",
+            "Motion detected — 1 light(s) turned on",
+            "Recipe activated — no motion, lights off",
+            "Instance created"
+        ]
+    );
+    assert_eq!(serving.interrupt(), Some(130));
+
+    // The host again, with the script: the saved instance starts with the others.
+    let serving = serve(&dir, "60", &script);
+    let (status, list) = serving.send("GET", "/api/v1/recipe-instances", &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(list[0]["id"], instance.as_str());
+    assert_eq!(list[0]["enabled"], true);
+    wait_until("the light on again", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
 // ---- Pairing while serving (spec 017) ----
 
 const PERMIT_JOIN: &str = "/api/v1/integrations/solite/permit-join";

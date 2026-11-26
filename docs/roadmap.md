@@ -138,6 +138,13 @@ stays a person's. The first run is expected to show route or timing mismatches (
   setting that seemed to delete `home.name` and the location, was not reproduced on the Mac
   (`crates/host/tests/settings_merge.rs`, across a restart); the interface sends the whole map
   anyway, and the storage-loss line of the inbox (2026-11-25) stays open.
+- Spec 041 (script recipes), the user present, one pass, no loop (D39), on the radio image of the
+  spec flashed with the user's `--yes-flash` (D6, D55), with `--with-gestures`: the session's
+  script step (spec 041 R7) disables the garage's `motion-light`, creates a `motion-light-script`
+  instance with its settings and a 1-minute timeout, asks the person to wave at the motion sensor,
+  checks the ZBMINIR2 goes on then off, reads the `scripts:` and `heap:` lines, then puts
+  `motion-light` back. The figures (time of a call on the real chip, internal RAM minimum, the
+  script's PSRAM) go into spec 041 and `docs/memory-budget.md`.
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -217,7 +224,7 @@ skipped: decisions are D1, D2...
 
 | Rank | Milestone | Content | Note |
 | ---- | --------- | ------- | ---- |
-| 1 | **F. WebAssembly recipes** | Signed `.wasm` recipes run in `wasmi`, downloaded and updated without restart; a recipe's memory bounded first (about 78 KB each in `wasmi` against 7 KB native) | Raised to first place by the user: recipes outside the firmware are what lets Sowel's recipes be reused |
+| 1 | **F. Script recipes** | F1: recipes as JavaScript scripts in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots, `motion-light-script`, measured (spec 041, D73 to D76; WebAssembly measured and dropped). F2: a script downloaded, signed with a key of its own, installed, updated and removed without a new firmware. F3: Sowel's recipes brought as scripts (`switch-light`, `schedule-on-off`, `motion-light-dimmable`...) | Raised to first place by the user. F1 in progress (spec 041) |
 | 2 | **I1. Targeted recognition** | Data and order categories for common devices, with their clusters: `action` (buttons: On/Off, Level and Scenes commands), `contact_window` (IAS contact on a window; today every IAS contact is `contact_door`), `power`, `energy`, `current` (Electrical Measurement `0x0B04`, Metering `0x0702`), `shutter_position` with `shutter_move` and `set_shutter_position` (Window Covering `0x0102`), `setpoint` with `set_setpoint` (Thermostat `0x0201`) | Solite knows 15 of Sowel's about 75 categories; the types `button`, `shutter` and `thermostat` exist but nothing feeds them |
 | 3 | **I2. Equipment types without rules** | Binding rules and zone counts of Sowel for `water_heater`, `heater`, `water_valve`, `vmc`, then the others (23 types accepted without rules) | As a real device needs one, not before |
 | 4 | **C1. Minimal modes** | Sowel's modes (day, night, away), their routes and events; no calendar and no triggers at first | Added to the roadmap; a prerequisite of proposals (the rest of C) and of G |
@@ -242,6 +249,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 
 | Date | Need | Came from |
 | ---- | ---- | --------- |
+| 2026-11-26 | F2: admit a script recipe or instance at install time by the RAM really free (PSRAM minimum since boot minus the recipe's limit kept above a reserve), refuse with a plain message, and show the user the box's state (a Resources card: RAM used and free, each recipe's share, flash, a warning near the reserve); the fixed bounds (2 scripts, 8 instances each) stay the guarantee | The user, spec 041 |
 | 2026-11-25 | `box.sh` sends one raw line to the radio image's console, so the session checks spec 023's long and unknown console lines | spec 033 |
 | 2026-11-25 | The box's `storage` lost its files once (wifi.json, auth.json, the home: 28 KB used afterwards) between two flashes with `--keep-storage`, after two panics during the backup export; the mount printed no `storage: formatted` line. Not reproduced (a normal reboot keeps everything). Find out whether a reset in the middle of a FAT write can empty the partition, and whether the firmware must log or refuse a silent loss: a month alone with power cuts depends on it | Box run 2026-11-25 |
 | 2026-11-25 | A refused update with a bad signature in the header closes the connection before its 400 is read (curl status 000 after 0.2 s, the box log shows the refusal): the unread body makes the close a reset. The client (interface) sees a network error instead of the message | Box run 2026-11-25 |
@@ -312,6 +320,7 @@ Needs on the Sowel side, for the user to open as Sowel issues (never changed fro
 | 2026-11-25 | Dates other than the devices' taken during the box's clock wait stay in 1970: recipe log lines and state keys (`timerExpiresAt`, `failsafeExpiresAt`) at the boot's start, equipments and zones created through the API in the first seconds, a device's `createdAt`/`updatedAt` read in 1970 from storage moved to about the boot's date (D45 moves the devices' only) | Spec 028 |
 | 2026-11-25 | A colour and colour-temperature control in `LightControl` for `light_color` (today brightness only), which Solite would port | Spec 031 |
 | 2026-11-25 | Check the Zigbee2MQTT plugin's colour: `flattenExposes` seems to turn the composite `color` expose into data `x` and `y` (category `generic`), so a colour bulb would not get `color` / `light_color` as `constants.ts` and `binding-candidates.test.ts` expect | Spec 031 |
+| 2026-11-26 | Script recipes' draft (`roadmap/ai-script-recipes/spec.md`): a recipe `id` (Solite's scripts have one), the zone slot rule, `onMotionReport` (a safety auto-off reset by fresh motion) and `validate(params, home)` (checking bindings), which Solite's `motion-light-script` needs | Spec 041 |
 
 ## Done
 

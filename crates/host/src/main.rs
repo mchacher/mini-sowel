@@ -24,6 +24,7 @@ use std::sync::Mutex;
 
 use solite_core::engine::CLOSE_GRACE_MS;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
+use solite_core::recipes::MAX_SCRIPT_RECIPES;
 use solite_sim::{RealClock, Scenario, SimTransport};
 
 use radio_tcp::TcpTransport;
@@ -32,8 +33,8 @@ use solite_core::engine::Saver;
 use store::{FileStore, show_on_stderr};
 
 const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
---sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>]] \
-[--data <dir>] | \
+--sim <scenario> [--speed <1-100>]] [--pair [seconds] | --listen | --serve [port] [--verbose] [--ui <dir>] \
+[--recipe-script <file.js>]...] [--data <dir>] | \
 --update-keygen <file> | \
 --update-sign <image> --version <x.y.z> --key <file> --out <file> | \
 --update-verify <file> --public-key <64 hex>";
@@ -79,6 +80,8 @@ struct Args {
     verbose: bool,
     /// The folder of the interface's files (`--serve` only).
     ui: Option<PathBuf>,
+    /// The script recipes to load before the instances start (`--serve` only), spec 041.
+    recipe_scripts: Vec<PathBuf>,
     data: PathBuf,
     /// `--update-keygen`, `--update-sign` or `--update-verify`: a task of its own, without a radio.
     update: Option<update_cli::Command>,
@@ -95,6 +98,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         serve: None,
         verbose: false,
         ui: None,
+        recipe_scripts: Vec::new(),
         data: PathBuf::new(),
         update: None,
     };
@@ -160,6 +164,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--verbose" => parsed.verbose = true,
             "--ui" => parsed.ui = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--recipe-script" => parsed
+                .recipe_scripts
+                .push(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--data" => data = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--update-keygen" => {
                 let file = PathBuf::from(rest.next().ok_or_else(usage)?);
@@ -221,6 +228,7 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             || parsed.serve.is_some()
             || parsed.verbose
             || parsed.ui.is_some()
+            || !parsed.recipe_scripts.is_empty()
             || speed_given
             || data.is_some())
     {
@@ -240,6 +248,15 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     }
     if speed_given && !matches!(parsed.source, Some(Source::Sim(_))) {
         return Err(usage());
+    }
+    // The script recipes are served by the home: `--serve` only (spec 041, R4.1).
+    if !parsed.recipe_scripts.is_empty() && parsed.serve.is_none() {
+        return Err(format!("--recipe-script needs --serve\n{USAGE}"));
+    }
+    if parsed.recipe_scripts.len() > MAX_SCRIPT_RECIPES {
+        return Err(format!(
+            "--recipe-script: at most {MAX_SCRIPT_RECIPES} script recipes can be loaded\n{USAGE}"
+        ));
     }
     parsed.data = data.unwrap_or_else(|| {
         PathBuf::from(match parsed.source {
@@ -396,6 +413,7 @@ enum Task {
         port: u16,
         verbose: bool,
         ui: PathBuf,
+        scripts: Vec<PathBuf>,
     },
 }
 
@@ -427,9 +445,12 @@ fn run<T: RadioTransport>(
         }
         Task::Pair(seconds) => pair(transport, label, *seconds, data, stop),
         Task::Listen => listen(transport, label, data, stop),
-        Task::Serve { port, verbose, ui } => {
-            serve::serve(transport, label, *port, *verbose, data, ui, stop)
-        }
+        Task::Serve {
+            port,
+            verbose,
+            ui,
+            scripts,
+        } => serve::serve(transport, label, *port, *verbose, data, ui, scripts, stop),
     }
 }
 
@@ -456,6 +477,12 @@ fn main() -> ExitCode {
     let Some(source) = args.source else {
         return ExitCode::SUCCESS;
     };
+    // The script recipes are read and checked before the radio is touched (spec 041, R4.1): a
+    // missing, unreadable or refused file stops the host with the reason and exit status 2.
+    if let Err(message) = serve::check_scripts(&args.recipe_scripts) {
+        eprintln!("{message}");
+        return ExitCode::from(2);
+    }
     let task = match (args.pair, args.listen, args.serve) {
         (Some(seconds), _, _) => Task::Pair(seconds),
         (None, true, _) => Task::Listen,
@@ -466,6 +493,7 @@ fn main() -> ExitCode {
                 .ui
                 .clone()
                 .unwrap_or_else(|| PathBuf::from(static_files::DEFAULT_UI_DIR)),
+            scripts: args.recipe_scripts.clone(),
         },
         (None, false, None) => Task::Identify,
     };

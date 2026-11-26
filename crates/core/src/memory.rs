@@ -129,3 +129,58 @@ pub fn heap_line(stats: &HeapStats) -> String {
         kib(stats.stack_total),
     )
 }
+
+/// One line per loaded script recipe, printed with each `heap:` line of the radio image (spec 041
+/// R6.3): `scripts: <id> <n> instances, <n> calls, average <µs> µs, max <µs> µs, heap <KB> KB (peak
+/// <KB> KB)`. `heap` is what its runtime holds now, `peak` the most it held at the end of a call.
+pub fn scripts_lines(stats: &[(String, solite_recipe_sdk::RunStats)]) -> Vec<String> {
+    stats
+        .iter()
+        .map(|(id, s)| {
+            let average = s.total_us.checked_div(s.calls).unwrap_or(0);
+            format!(
+                "scripts: {id} {} instances, {} calls, average {average} µs, max {} µs, heap {} KB (peak {} KB)",
+                s.instances,
+                s.calls,
+                s.max_us,
+                kib(s.held),
+                kib(s.peak),
+            )
+        })
+        .collect()
+}
+
+/// What the QEMU image's script phase measured (spec 041 R6.2). Sizes in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScriptPhase {
+    /// The script's source.
+    pub source: usize,
+    /// PSRAM taken by the phase at its end, and at the most (below the level before it).
+    pub psram_used: usize,
+    pub psram_peak: usize,
+    /// Internal RAM taken by the phase at its end (a negative change reads 0), and its lowest free.
+    pub internal_used: usize,
+    pub internal_min: usize,
+    /// The engine thread's stack: `(unused, total)`, the lowest after the deep recursion.
+    pub engine_stack: (usize, usize),
+    /// The `script` job thread's stack: `(unused, total)`, after the deep recursion.
+    pub script_stack: (usize, usize),
+}
+
+/// The line the QEMU image logs after its script phase: `recipes: script motion-light-script <KB> KB
+/// source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB free); engine stack <n>
+/// of <n> unused; script thread stack <n> of <n> unused` (stacks in bytes).
+pub fn script_phase_line(id: &str, phase: &ScriptPhase) -> String {
+    format!(
+        "recipes: script {id} {} KB source; psram +{} KB (peak +{} KB); internal +{} KB (min {} KB free); engine stack {} of {} unused; script thread stack {} of {} unused",
+        kib(phase.source),
+        kib(phase.psram_used),
+        kib(phase.psram_peak),
+        kib(phase.internal_used),
+        kib(phase.internal_min),
+        phase.engine_stack.0,
+        phase.engine_stack.1,
+        phase.script_stack.0,
+        phase.script_stack.1,
+    )
+}

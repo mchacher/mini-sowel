@@ -2134,3 +2134,456 @@ fn the_pull_check_needs_status_200_one_resume_and_1_kb_of_its_stack_unused() {
         "{reason}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The script phase of the QEMU image and the QuickJS search (spec 041)
+// ---------------------------------------------------------------------------------------------
+
+const ROOT_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+
+/// The script memory limit of the core, in bytes: the figure the check reads from `limits.rs`.
+fn script_limit_bytes() -> u64 {
+    let text = fs::read_to_string(format!(
+        "{ROOT_DIR}/crates/core/src/recipes/script/limits.rs"
+    ))
+    .unwrap();
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("pub const SCRIPT_MEMORY_LIMIT: usize = "))
+        .unwrap();
+    let kb: u64 = line
+        .split('=')
+        .nth(1)
+        .unwrap()
+        .trim()
+        .trim_end_matches(';')
+        .trim_end_matches("* 1024")
+        .trim()
+        .parse()
+        .unwrap();
+    kb * 1024
+}
+
+/// `fw_check_script_phase` on a log made of `lines`: its exit status and what it printed.
+fn script_phase_check(lines: &str) -> (bool, String) {
+    let dir = TempDir::new("script-phase");
+    let log = dir.path().join("serial.log");
+    fs::write(&log, lines).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(r#"ROOT=$(cd "$3" && pwd); . "$1"; fw_check_script_phase "$2""#)
+        .arg("sh")
+        .arg(FIRMWARE_LIB)
+        .arg(&log)
+        .arg(ROOT_DIR)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    )
+}
+
+/// The phase's line, and the two lines of the depth script before it (the engine thread's, and the
+/// router's create on the `script` thread), with the depth the engine was called at.
+fn phase_with_depth(
+    internal_min: u32,
+    engine: u32,
+    script: u32,
+    called: (u32, u32),
+    post: u32,
+) -> String {
+    format!(
+        "I (8000) solite_firmware::simulated::script_phase: script phase: engine thread, depth 600, engine called at {}\nI (8500) solite_firmware::simulated::script_phase: script phase: script thread, POST status {post}, depth 600, engine called at {}\nI (9000) solite_firmware::simulated::script_phase: recipes: script motion-light-script 14 KB source; psram +250 KB (peak +300 KB); internal +50 KB (min {internal_min} KB free); engine stack {engine} of 32768 unused; script thread stack {script} of 32768 unused\n",
+        called.0, called.1
+    )
+}
+
+fn phase_line(internal_min: u32, engine: u32, script: u32) -> String {
+    phase_with_depth(internal_min, engine, script, (592, 592), 201)
+}
+
+fn sizes_line(peak3: u64) -> String {
+    format!(
+        "I (9500) solite_firmware::simulated::script_phase: script sizes: motion-light-script loaded 100000 B, 3 instances 130000 B (peak {peak3} B), 8 instances 190000 B (peak 200000 B)\n"
+    )
+}
+
+#[test]
+fn the_script_phase_needs_its_line_the_internal_ram_and_both_stacks() {
+    let limit = script_limit_bytes();
+    let fine = phase_line(76, 5824, 8032) + &sizes_line(limit * 70 / 100);
+    assert!(
+        script_phase_check(&fine).0,
+        "{}",
+        script_phase_check(&fine).1
+    );
+    // The line missing.
+    let (ok, reason) = script_phase_check(&sizes_line(limit * 70 / 100));
+    assert!(!ok);
+    assert!(reason.contains("script phase's line"), "{reason}");
+    // Internal RAM under 64 KB.
+    let (ok, reason) = script_phase_check(&(phase_line(63, 5824, 8032) + &sizes_line(1)));
+    assert!(!ok);
+    assert!(
+        reason.contains("internal RAM minimum free is 63 KB"),
+        "{reason}"
+    );
+    // Each stack at its margin, one byte below.
+    assert!(script_phase_check(&(phase_line(64, 2048, 2048) + &sizes_line(1))).0);
+    let (ok, reason) = script_phase_check(&(phase_line(76, 2047, 8032) + &sizes_line(1)));
+    assert!(!ok);
+    assert!(reason.contains("engine thread keeps 2047"), "{reason}");
+    let (ok, reason) = script_phase_check(&(phase_line(76, 5824, 2047) + &sizes_line(1)));
+    assert!(!ok);
+    assert!(reason.contains("script thread keeps 2047"), "{reason}");
+}
+
+#[test]
+fn the_script_phase_needs_the_depth_script_to_reach_the_engine_on_both_threads_and_a_201() {
+    let sizes = sizes_line(1);
+    // A stack that is unused because the recursion never got to call the engine proves nothing.
+    let (ok, reason) =
+        script_phase_check(&(phase_with_depth(76, 5824, 8032, (0, 592), 201) + &sizes));
+    assert!(!ok);
+    assert!(
+        reason.contains("engine called at 0") && reason.contains("engine thread"),
+        "{reason}"
+    );
+    let (ok, reason) =
+        script_phase_check(&(phase_with_depth(76, 5824, 8032, (592, 0), 201) + &sizes));
+    assert!(!ok);
+    assert!(
+        reason.contains("engine called at 0") && reason.contains("script thread"),
+        "{reason}"
+    );
+    // The router's create on the script thread did not answer 201.
+    let (ok, reason) =
+        script_phase_check(&(phase_with_depth(76, 5824, 8032, (592, 592), 500) + &sizes));
+    assert!(!ok);
+    assert!(reason.contains("answered 500, not 201"), "{reason}");
+    // The lines missing.
+    let line_only = phase_line(76, 5824, 8032)
+        .lines()
+        .filter(|l| l.contains("recipes: script"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
+        + &sizes;
+    let (ok, reason) = script_phase_check(&line_only);
+    assert!(!ok);
+    assert!(
+        reason.contains("cannot read where the depth script called"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn the_three_instances_peak_passes_at_75_percent_of_the_limit_and_fails_above() {
+    let limit = script_limit_bytes();
+    let at = limit * 75 / 100;
+    assert!(script_phase_check(&(phase_line(76, 5824, 8032) + &sizes_line(at))).0);
+    let (ok, reason) = script_phase_check(&(phase_line(76, 5824, 8032) + &sizes_line(at + 1)));
+    assert!(!ok);
+    assert!(reason.contains("above 75 %"), "{reason}");
+    let (ok, reason) = script_phase_check(&phase_line(76, 5824, 8032));
+    assert!(!ok);
+    assert!(reason.contains("sizes line"), "{reason}");
+}
+
+/// `fw_check_quickjs` on an ELF made of `bytes`, with no `nm` in the (fake) ESP-IDF tree, so the
+/// search reads the file.
+fn quickjs_check(bytes: &[u8], want: &str) -> (bool, String) {
+    let dir = TempDir::new("quickjs");
+    let elf = dir.path().join("solite-firmware");
+    fs::write(&elf, bytes).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(r#"ROOT=/nonexistent; ESPRESSIF="$4"; . "$1"; fw_check_quickjs "$2" box "$3""#)
+        .arg("sh")
+        .arg(FIRMWARE_LIB)
+        .arg(&elf)
+        .arg(want)
+        .arg(dir.path())
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    )
+}
+
+#[test]
+fn an_image_with_quickjs_is_refused_where_there_must_be_none_and_the_other_way_round() {
+    let with = b"\x7fELF....JS_NewRuntime....";
+    let without = b"\x7fELF....nothing of the kind....";
+    assert!(quickjs_check(without, "without").0);
+    assert!(quickjs_check(with, "with").0);
+    let (ok, reason) = quickjs_check(with, "without");
+    assert!(!ok);
+    assert!(reason.contains("box image is with QuickJS"), "{reason}");
+    let (ok, reason) = quickjs_check(without, "with");
+    assert!(!ok);
+    assert!(reason.contains("without QuickJS"), "{reason}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The script group (spec 041 R7): the garage's motion-light swapped for a motion-light-script
+// ---------------------------------------------------------------------------------------------
+
+/// How the fake box's light behaves once the script instance exists.
+#[derive(Clone, Copy, PartialEq)]
+enum Light {
+    /// On at the first look, off from the third.
+    Follows,
+    /// Never on.
+    NeverOn,
+    /// On, and never off.
+    NeverOff,
+}
+
+/// What the fake box saw and holds: the calls, the garage instance's `enabled`, the script
+/// instance (the body it was created with).
+#[derive(Default)]
+struct ScriptBox {
+    calls: Vec<String>,
+    garage_enabled: bool,
+    script: Option<String>,
+    looks: u32,
+}
+
+fn script_fake(
+    light: Light,
+    has_garage: bool,
+    has_recipe: bool,
+    state: Arc<Mutex<ScriptBox>>,
+) -> Handler {
+    state.lock().unwrap().garage_enabled = true;
+    Arc::new(move |r: &Req| {
+        let mut st = state.lock().unwrap();
+        st.calls.push(format!("{} {}", r.method, r.path));
+        match (r.method.as_str(), r.path.as_str()) {
+            ("POST", "/api/v1/auth/login") => (200, tokens(1)),
+            ("GET", "/api/v1/auth/status") => (200, r#"{"setupRequired":false}"#.into()),
+            ("POST", "/api/v1/integrations/solite/permit-join") => {
+                (202, r#"{"permitJoin":false,"remaining":0}"#.into())
+            }
+            ("GET", "/api/v1/recipes") => {
+                let script = if has_recipe {
+                    r#",{"id":"motion-light-script","name":"Motion light (script)"}"#
+                } else {
+                    ""
+                };
+                (
+                    200,
+                    format!(r#"[{{"id":"motion-light","name":"Motion light"}}{script}]"#),
+                )
+            }
+            ("GET", "/api/v1/recipe-instances") => {
+                let garage = if has_garage {
+                    format!(
+                        r#"{{"id":"g1","recipeId":"motion-light","enabled":{},"params":{{"zone":"z1","lights":["L1","L2"],"buttons":["B1"],"luxThreshold":50,"timeout":"10m","maxOnDuration":"1h"}}}}"#,
+                        st.garage_enabled
+                    )
+                } else {
+                    String::new()
+                };
+                (200, format!("[{garage}]"))
+            }
+            ("POST", "/api/v1/recipe-instances/g1/disable") => {
+                st.garage_enabled = false;
+                (200, r#"{"success":true}"#.into())
+            }
+            ("POST", "/api/v1/recipe-instances/g1/enable") => {
+                st.garage_enabled = true;
+                (200, r#"{"success":true}"#.into())
+            }
+            ("POST", "/api/v1/recipe-instances") => {
+                st.script = Some(String::from_utf8_lossy(&r.body).into_owned());
+                (
+                    201,
+                    r#"{"id":"s1","recipeId":"motion-light-script"}"#.into(),
+                )
+            }
+            ("DELETE", "/api/v1/recipe-instances/s1") => {
+                st.script = None;
+                (204, String::new())
+            }
+            ("GET", "/api/v1/equipments/L1") => {
+                st.looks += 1;
+                let on = match light {
+                    Light::Follows => st.looks <= 2,
+                    Light::NeverOn => false,
+                    Light::NeverOff => true,
+                };
+                let value = if on { r#""ON""# } else { r#""OFF""# };
+                (
+                    200,
+                    format!(
+                        r#"{{"id":"L1","dataBindings":[{{"alias":"state","category":"light_state","value":{value}}}]}}"#
+                    ),
+                )
+            }
+            _ => (404, r#"{"error":"Not found"}"#.into()),
+        }
+    })
+}
+
+fn script_group(handler: Handler, extra: &[(&str, &str)]) -> (Out, TempDir) {
+    let port = fake_server(handler);
+    let mut envs = vec![
+        ("SOLITE_PASSWORD", PASSWORD),
+        ("SOLITE_SESSION_WAVE", "auto"),
+        ("SOLITE_SESSION_ON_WAIT", "2"),
+        ("SOLITE_SESSION_OFF_WAIT", "2"),
+        ("SOLITE_SESSION_SCRIPT_WAIT", "0"),
+    ];
+    envs.extend_from_slice(extra);
+    group("script", &format!("127.0.0.1:{port}"), &envs)
+}
+
+#[test]
+fn the_script_group_swaps_the_garage_checks_the_light_and_puts_the_garage_back() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(script_fake(Light::Follows, true, true, state.clone()), &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    out.ok("B11.1");
+    out.ok("B11.2");
+    out.ok("B11.3");
+    out.ok("B11.4");
+    out.ok("B11.5");
+    out.ok("B11.7");
+    let st = state.lock().unwrap();
+    // The script instance has the garage's zone, lights, buttons and lux setting, a timeout of
+    // 1 minute, and nothing else (no maxOnDuration).
+    assert!(st.script.is_none(), "deleted at the end");
+    assert!(st.garage_enabled, "motion-light enabled again");
+    let calls = st.calls.join("\n");
+    assert!(
+        calls.contains("POST /api/v1/recipe-instances/g1/disable"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("DELETE /api/v1/recipe-instances/s1"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("POST /api/v1/recipe-instances/g1/enable"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn the_script_instance_is_created_with_the_garages_settings_and_a_timeout_of_a_minute() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let seen = Arc::new(Mutex::new(String::new()));
+    let (inner, seen_in) = (script_fake(Light::Follows, true, true, state), seen.clone());
+    // Wrap: keep the body of the creation before the fake deletes the instance.
+    let handler: Handler = Arc::new(move |r: &Req| {
+        if r.method == "POST" && r.path == "/api/v1/recipe-instances" {
+            *seen_in.lock().unwrap() = String::from_utf8_lossy(&r.body).into_owned();
+        }
+        inner(r)
+    });
+    let (out, _dir) = script_group(handler, &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    let body = seen.lock().unwrap().clone();
+    assert_eq!(
+        body,
+        r#"{"recipeId": "motion-light-script", "params": {"zone": "z1", "lights": ["L1", "L2"], "buttons": ["B1"], "luxThreshold": 50, "timeout": "1m"}}"#
+    );
+}
+
+#[test]
+fn a_light_that_never_comes_on_is_ko_and_the_garage_is_put_back_all_the_same() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(script_fake(Light::NeverOn, true, true, state.clone()), &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.ko("B11.3").contains("was not on 2 s after the wave"),
+        "{}",
+        out.text
+    );
+    out.ok("B11.7");
+    let st = state.lock().unwrap();
+    assert!(st.script.is_none());
+    assert!(st.garage_enabled);
+}
+
+#[test]
+fn a_light_that_never_goes_off_is_ko_and_the_garage_is_put_back_all_the_same() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(script_fake(Light::NeverOff, true, true, state.clone()), &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    out.ok("B11.3");
+    assert!(
+        out.ko("B11.4")
+            .contains("still on 2 s after it was seen on"),
+        "{}",
+        out.text
+    );
+    out.ok("B11.7");
+    let st = state.lock().unwrap();
+    assert!(st.script.is_none());
+    assert!(st.garage_enabled);
+}
+
+#[test]
+fn a_script_instance_the_box_refuses_leaves_motion_light_enabled() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let inner = script_fake(Light::Follows, true, true, state.clone());
+    let handler: Handler = Arc::new(move |r: &Req| {
+        if r.method == "POST" && r.path == "/api/v1/recipe-instances" {
+            return (
+                400,
+                r#"{"error":"Invalid params: lights is required"}"#.into(),
+            );
+        }
+        inner(r)
+    });
+    let (out, _dir) = script_group(handler, &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.ko("B11.2")
+            .contains("Invalid params: lights is required"),
+        "{}",
+        out.text
+    );
+    out.ok("B11.7");
+    assert!(state.lock().unwrap().garage_enabled);
+}
+
+#[test]
+fn no_script_recipe_or_no_garage_instance_changes_nothing() {
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(script_fake(Light::Follows, true, false, state.clone()), &[]);
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.ko("B11.1")
+            .contains("motion-light-script is not in the list"),
+        "{}",
+        out.text
+    );
+    assert!(state.lock().unwrap().garage_enabled);
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(script_fake(Light::Follows, false, true, state.clone()), &[]);
+    assert_eq!(out.code, 0, "{}", out.text);
+    out.skipped(
+        "B11.1",
+        "the box has no enabled motion-light instance to copy the settings from",
+    );
+    let calls = state.lock().unwrap().calls.join("\n");
+    assert!(
+        !calls.contains("disable") && !calls.contains("DELETE"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn the_step_is_skipped_without_the_gestures_or_a_terminal() {
+    let session = Session::new();
+    let out = session.run(&[], Tty::None);
+    out.skipped("B11", "needs a person: --with-gestures");
+    let out = session.run(&["--with-gestures"], Tty::None);
+    out.skipped("B11", "no terminal");
+}

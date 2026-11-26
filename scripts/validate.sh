@@ -1,6 +1,8 @@
 #!/bin/sh
 # The verdict, one command: docs, format, lint, types, the Sowel contract, tests, UI budget, the four ESP32 firmware
 # images (the box's, the one QEMU runs, the measuring one, the radio one) and the engine's run in QEMU.
+# QuickJS (script recipes, spec 041) is in the radio image and the QEMU image's script build only: a
+# symbol search of each ELF proves the box's, the plain sim and the measuring images carry none.
 #
 #   sh scripts/validate.sh          everything (before a commit, in the nightly CI)
 #   sh scripts/validate.sh --fast   the quick checks only (the pre-commit hook): docs, format, lint
@@ -113,7 +115,7 @@ if want firmware; then
   script=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' ui/dist/index.html | head -n 1)
   [ -n "$script" ] || { echo "validate: ui/dist/index.html names no assets/index-*.js script" >&2; exit 1; }
 
-  step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim, the measuring image with feature flash-saves, the radio image with feature radio)"
+  step "Firmware: ESP32 builds and lint (the box's image, the QEMU image with feature sim (and sim,scripts), the measuring image with feature flash-saves, the radio image with feature radio)"
   if [ -f "$HOME/export-esp.sh" ]; then
     . "$HOME/export-esp.sh"
   else
@@ -128,8 +130,11 @@ if want firmware; then
   sizes_dir=$(mktemp -d "${TMPDIR:-/tmp}/solite-sizes.XXXXXX")
   trap 'rm -rf "$sizes_dir"' EXIT
   : >"$sizes_dir/lines"
-  # $1 the image's name, $2 its ELF. The tools exist once the first build has downloaded ESP-IDF.
+  # $1 the image's name, $2 its ELF, $3 `with` or `without` QuickJS (spec 041: a symbol search; the
+  # ELF is read before the next build overwrites it). The tools exist once the first build has
+  # downloaded ESP-IDF.
   measure_image() {
+    _why=$(fw_check_quickjs "$2" "$1" "$3") || { echo "validate: $_why" >&2; exit 1; }
     if [ ! -f "$sizes_dir/table.bin" ]; then
       fw_find_tools
       fw_build_table partitions.csv "$sizes_dir/table.bin"
@@ -140,16 +145,20 @@ if want firmware; then
   (
     cd firmware
     cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings
-    measure_image box target/xtensa-esp32-espidf/release/solite-firmware
+    measure_image box target/xtensa-esp32-espidf/release/solite-firmware without
     cargo build --release --features sim --quiet && cargo clippy --release --features sim --quiet -- -D warnings
-    measure_image sim target/xtensa-esp32-espidf/release/solite-firmware
+    measure_image sim target/xtensa-esp32-espidf/release/solite-firmware without
+    # The image QEMU runs: the sim image with the scripts (spec 041); the difference with `sim` is
+    # what QuickJS and the scripts cost in flash.
+    cargo build --release --features sim,scripts --quiet && cargo clippy --release --features sim,scripts --quiet -- -D warnings
+    measure_image sim+scripts target/xtensa-esp32-espidf/release/solite-firmware with
     cargo build --release --features flash-saves --quiet && cargo clippy --release --features flash-saves --quiet -- -D warnings
-    measure_image flash-saves target/xtensa-esp32-espidf/release/solite-firmware
+    measure_image flash-saves target/xtensa-esp32-espidf/release/solite-firmware without
     # The radio image has its own target folder and its own ESP-IDF settings (spec 021 R1.1): the
     # other images keep theirs.
     export CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults"
     cargo build --release --features radio --quiet && cargo clippy --release --features radio --quiet -- -D warnings
-    measure_image radio target/radio/xtensa-esp32-espidf/release/solite-firmware
+    measure_image radio target/radio/xtensa-esp32-espidf/release/solite-firmware with
     # The settings file was read: the UART interrupt is in internal RAM in the radio build, and
     # in none of the others.
     grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \

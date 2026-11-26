@@ -216,7 +216,7 @@ pub fn seed() -> Result<(), String> {
 
 /// Runs the scenario and measures it. `before` is the free heap just before the engine thread
 /// started; its monitor of the local minimum is on.
-pub fn run(before: usize) -> Result<EngineStats, String> {
+pub fn run(before: usize) -> Result<(), String> {
     let storage = FatStorage::new();
     let start = Instant::now();
     let monotonic = move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -331,18 +331,30 @@ pub fn run(before: usize) -> Result<EngineStats, String> {
     let after = measure::free_total();
     lows.mark();
     let now = memory::read();
-    let guard = lock(&home);
-    Ok(EngineStats {
-        devices: guard.devices.list().len(),
-        reported: reporters.len(),
-        zones: guard.zones().list().len().saturating_sub(1),
-        equipments: guard.equipments().list().len(),
-        recipes: guard.recipes().len(),
-        heap_used: before.saturating_sub(after),
-        heap_peak: before.saturating_sub(lows.total),
-        internal_free: now.internal_free,
-        internal_min: lows.internal,
-        psram_free: now.psram.map_or(0, |p| p.free),
-        psram_min: lows.psram,
-    })
+    let stats = {
+        let guard = lock(&home);
+        EngineStats {
+            devices: guard.devices.list().len(),
+            reported: reporters.len(),
+            zones: guard.zones().list().len().saturating_sub(1),
+            equipments: guard.equipments().list().len(),
+            recipes: guard.recipes().len(),
+            heap_used: before.saturating_sub(after),
+            heap_peak: before.saturating_sub(lows.total),
+            internal_free: now.internal_free,
+            internal_min: lows.internal,
+            psram_free: now.psram.map_or(0, |p| p.free),
+            psram_min: lows.psram,
+        }
+    };
+    log::info!("{}", solite_core::engine_line(&stats));
+    // After the engine's line, which the scripts never touch (decision D27): the script phase.
+    #[cfg(feature = "scripts")]
+    script_phase::run(&home, &clocks, start)?;
+    Ok(())
 }
+
+/// The script phase of the image QEMU runs (feature `scripts`, spec 041 R6.2).
+#[cfg(feature = "scripts")]
+#[path = "script_phase.rs"]
+mod script_phase;

@@ -1,24 +1,42 @@
 //! Recipes (spec 012): Sowel's `RecipeInstance`, `RecipeLogEntry` and recipe routes, with the
 //! recipe engine that holds the instances, gives them the events and the time, and keeps their
-//! logs. The recipes are written in Rust and built in (`motion-light` only); loading recipes at
-//! run time comes later. No I/O and no thread: the host's radio loop gives the events and the
-//! time (`handle`, `tick`), a recipe's orders go to the home's queue, its timers are deadlines
-//! checked on each turn.
+//! logs. A recipe is written once against the recipe SDK (`solite-recipe-sdk`): the engine asks the
+//! registry for the provider of a recipe id (the built-in recipes, `motion-light`, then the script
+//! recipes loaded, spec 041), calls it through the SDK's `Recipe` trait with a `NativeHost` over
+//! the home, and keeps the state text and listen set each call returns, so that readers never call
+//! a recipe. A script recipe can fail as a whole (its runtime is dropped, its instances stop) and
+//! comes back by itself within a bound. No I/O and no thread: the host's radio loop gives the
+//! events and the time (`turn`, or `handle` and `tick`), a recipe's orders go to the home's queue,
+//! its timers are deadlines checked on each turn.
 
-pub mod duration;
-pub mod motion_light;
+pub mod native;
+#[cfg(feature = "script-recipes")]
+pub mod script;
+
+/// A log line's level (Sowel's `RecipeLogEntry.level`).
+pub use solite_recipe_sdk::Level;
+/// Durations as Sowel writes and reads them (moved to the SDK, which recipes share).
+pub use solite_recipe_sdk::duration;
 
 use std::collections::VecDeque;
 use std::io::{self, Write};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use solite_recipe_sdk::bounds::MAX_PARAMS_DEPTH;
+use solite_recipe_sdk::{
+    Change, ChangedEquipment, Clock, ErrorKind, Event as SdkEvent, EventValue as SdkValue,
+    ListenEntry, Recipe, RecipeError, Update,
+};
 
-use crate::devices::{Id, iso, iso_option};
+use crate::devices::{Id, iso};
+use crate::equipments::Alias;
 use crate::failure::{Failure, Outcome};
 use crate::home::Home;
-use crate::home::events::{Event, Interest, cut};
+use crate::home::events::{Event, EventValue, Interest, MAX_EVENTS, cut};
 use crate::live::{EngineEvent, LiveHandle, Topic};
+use native::{NativeHost, RecipeName};
 
 /// Instances kept; one more is refused (400).
 pub const MAX_INSTANCES: usize = 16;
@@ -34,14 +52,26 @@ pub const MAX_PARAMS_BYTES: usize = 2048;
 // measures the params of 16 adversarial instances at about 2.5 KB each. It fits the box's PSRAM
 // (2 MB); a home of a few instances holds a few KB.
 
-/// A log line's level (Sowel's `RecipeLogEntry.level`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Level {
-    Info,
-    Warn,
-    Error,
-}
+/// Script recipes loaded at once (spec 041, R3.3). Worst case: 2 runtimes of at most
+/// `SCRIPT_MEMORY_LIMIT` (224 KB) each, 448 KB, counted on their own line of the memory budget.
+pub const MAX_SCRIPT_RECIPES: usize = 2;
+/// Instances of one script recipe, at most (they share its runtime, which is bounded: about 10 KB
+/// each on the box). A ninth is refused (400); `MAX_INSTANCES` still bounds all recipes together.
+pub const MAX_INSTANCES_PER_SCRIPT: usize = 8;
+/// A failed script recipe comes back by itself this long after the failure (R3.6).
+pub const SCRIPT_RESTART_DELAY_MS: u64 = 60_000;
+/// ... at most this many times in a sliding window of `SCRIPT_RESTART_WINDOW_MS` (24 hours); after
+/// that, only a person's action brings it back. Worst case: 3 timestamps (24 bytes) per script
+/// recipe.
+pub const SCRIPT_MAX_AUTO_RESTARTS: usize = 3;
+pub const SCRIPT_RESTART_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
+/// Script calls of one turn of the engine's loop take at most this long (R3.3): the events and
+/// timers left are carried to the next turn, so scripts never hold the radio loop longer.
+pub const SCRIPT_TURN_LIMIT_MS: u64 = 300;
+/// Events carried from one turn to the next when scripts ran out of time, at most. Worst case: 128
+/// events (the home's own queue bound) of about 100 bytes, 13 KB, and only while scripts are slow;
+/// past it the oldest is dropped (with a warning).
+pub const MAX_CARRIED_EVENTS: usize = MAX_EVENTS;
 
 /// Sowel's `RecipeInstance` (`src/shared/types.ts` T:834).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,60 +119,260 @@ pub struct RecipeLogEntry {
     pub level: Level,
 }
 
-/// The state keys of an instance (`state` of `GET /recipe-instances`): only the keys that are set.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StateKeys {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub override_mode: Option<bool>,
-    #[serde(with = "iso_option", skip_serializing_if = "Option::is_none")]
-    pub timer_expires_at: Option<u64>,
-    #[serde(with = "iso_option", skip_serializing_if = "Option::is_none")]
-    pub failsafe_expires_at: Option<u64>,
+/// The params text served as `state` when an instance has no state: no key.
+const NO_STATE: &str = "{}";
+
+/// Makes a script recipe's runtime again from its source: a new recipe, or the reason it cannot.
+pub type Rebuild = Box<dyn FnMut() -> Result<Box<dyn Recipe + Send>, String> + Send>;
+
+/// What a script recipe has that a built-in one has not: its definition (kept while its runtime is
+/// dropped), how to make the runtime again, and whether it runs.
+struct ScriptMeta {
+    info: Value,
+    rebuild: Rebuild,
+    /// `Some` while the recipe failed and its runtime is dropped.
+    failed: Option<Failed>,
+    /// The monotonic times of the automatic restarts in the last 24 hours, at most
+    /// `SCRIPT_MAX_AUTO_RESTARTS`.
+    restarts: Vec<u64>,
+    /// The instances a restart has not started yet (the turn's budget was spent), in creation
+    /// order, at most `MAX_INSTANCES`; the next turns start them.
+    to_start: Vec<Id>,
 }
 
-/// What a running instance gets with each event and each tick: the home to read, the time on the
-/// engine's monotonic clock (`now`, for timers) and on the wall clock (`wall`, for the dates
-/// written), and the lines to log.
-pub struct Cx<'a> {
-    pub home: &'a Home,
-    /// The instance the call is for.
-    pub instance: Id,
-    pub now: u64,
-    pub wall: u64,
-    pub lines: Vec<(Level, String)>,
+struct Failed {
+    since: u64,
+    reason: String,
 }
 
-/// A running instance of a recipe.
-pub trait Runner: Send {
-    /// An event the instance listens to (see `listen`). A failure is logged and never stops the
-    /// others.
-    fn on_event(&mut self, event: &Event, cx: &mut Cx<'_>) -> Result<(), String>;
-    /// The time passed: timers that are due fire.
-    fn tick(&mut self, cx: &mut Cx<'_>) -> Result<(), String>;
-    fn state(&self) -> StateKeys;
-    /// Adds what the instance listens to.
-    fn listen(&self, interest: &mut Interest);
-    /// The home changed and the instance is kept: takes again what it resolved from the home
-    /// (its sources, its buttons) without touching its timers or state. No order, no log.
-    fn refresh(&mut self, _home: &Home, _params: &Value) {}
+/// A recipe the engine provides: linked into the core (a built-in recipe) or a script recipe, both
+/// called through the SDK's `Recipe` trait. Its id and name are read once from its definition and
+/// shared with the orders it sends.
+struct Native {
+    names: RecipeName,
+    /// `None` while a script recipe is failed.
+    recipe: Option<Box<dyn Recipe + Send>>,
+    script: Option<ScriptMeta>,
+}
+
+impl Native {
+    fn new(recipe: Box<dyn Recipe + Send>) -> Native {
+        let names = Native::names_of(&recipe.info());
+        Native {
+            names,
+            recipe: Some(recipe),
+            script: None,
+        }
+    }
+
+    fn names_of(info: &Value) -> RecipeName {
+        let text = |key: &str| {
+            info.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        RecipeName {
+            id: Arc::from(text("id")),
+            name: Arc::from(text("name")),
+        }
+    }
+
+    fn info(&self) -> Value {
+        match (&self.script, &self.recipe) {
+            (Some(script), _) => script.info.clone(),
+            (None, Some(recipe)) => recipe.info(),
+            (None, None) => Value::Null,
+        }
+    }
+
+    fn is_script(&self) -> bool {
+        self.script.is_some()
+    }
+
+    /// The reason a failed script recipe failed.
+    fn failure(&self) -> Option<&str> {
+        self.script
+            .as_ref()
+            .and_then(|s| s.failed.as_ref())
+            .map(|f| f.reason.as_str())
+    }
+}
+
+/// Who provides a recipe id: its index in the engine's list (built-in recipes first, then the
+/// script recipes in the order they were loaded).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Provider {
+    Native(usize),
+}
+
+fn provider_of(natives: &[Native], recipe_id: &str) -> Option<Provider> {
+    natives
+        .iter()
+        .position(|native| &*native.names.id == recipe_id)
+        .map(Provider::Native)
+}
+
+/// One thing a running instance listens to, in the compact form the home filters with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Wanted {
+    Zone(Id),
+    Equipment(Id, Alias),
+    Device(Id, Alias),
+}
+
+/// The listen sets of the running instances, kept once: instances of one recipe in one zone
+/// listen to the same lights, buttons and sensors, so each distinct entry is stored once here and
+/// an instance holds the (2-byte) indexes of its entries. At most 1 + 32 + 64 entries per
+/// instance, 16 instances, so at most 1552 entries live (about 62 KB when no two instances listen
+/// to the same thing, a few KB in a home); entries nobody listens to any more are dropped when the
+/// table holds twice what is live (`RecipeEngine::compact_listens`).
+#[derive(Debug, Default)]
+struct Listens {
+    entries: Vec<Wanted>,
+}
+
+impl Listens {
+    /// The index of an entry, added when it is new.
+    fn intern(&mut self, wanted: Wanted) -> Option<u16> {
+        let index = match self.entries.iter().position(|e| *e == wanted) {
+            Some(index) => index,
+            None => {
+                self.entries.push(wanted);
+                self.entries.len() - 1
+            }
+        };
+        u16::try_from(index).ok()
+    }
+
+    /// The indexes of a listen set: an id that is not an id is dropped, each entry once.
+    fn indexes(&mut self, listen: &[ListenEntry]) -> Vec<u16> {
+        let mut indexes: Vec<u16> = Vec::new();
+        for entry in listen {
+            let wanted = match entry {
+                ListenEntry::Zone { zone } => Id::parse(zone).map(Wanted::Zone),
+                ListenEntry::Equipment { equipment, alias } => {
+                    Id::parse(equipment).map(|e| Wanted::Equipment(e, Alias::new(alias)))
+                }
+                ListenEntry::Device { device, key } => {
+                    Id::parse(device).map(|d| Wanted::Device(d, Alias::new(key)))
+                }
+            };
+            if let Some(index) = wanted.and_then(|w| self.intern(w))
+                && !indexes.contains(&index)
+            {
+                indexes.push(index);
+            }
+        }
+        indexes.shrink_to_fit();
+        indexes
+    }
+}
+
+/// What the engine keeps of a running instance: which recipe and handle it is, and the last state
+/// text and listen set a call returned.
+struct Running {
+    provider: usize,
+    handle: u32,
+    /// A JSON object, served as the recipe wrote it.
+    state: Box<str>,
+    /// The entries of the last listen set, indexes into the engine's `Listens`.
+    listen: Vec<u16>,
 }
 
 /// An instance, running or not, with its log.
 struct Slot {
     instance: RecipeInstance,
-    runner: Option<Box<dyn Runner>>,
+    running: Option<Running>,
     /// At most `MAX_LOG_ENTRIES`, the oldest first.
     log: VecDeque<RecipeLogEntry>,
 }
 
+/// Stops the running instance of a slot, if any: the recipe forgets it. True when it ran.
+fn stop_running(natives: &mut [Native], slot: &mut Slot) -> bool {
+    let Some(running) = slot.running.take() else {
+        return false;
+    };
+    if let Some(recipe) = natives
+        .get_mut(running.provider)
+        .and_then(|native| native.recipe.as_mut())
+    {
+        recipe.stop(running.handle);
+    }
+    true
+}
+
+/// The monotonic clock the script runtimes' time limits and the turn's bound read, in
+/// milliseconds (the host's and the firmware's real one; a fake in tests).
+pub type ScriptClock = Arc<dyn Fn() -> u64 + Send + Sync>;
+
+/// An event that scripts have not all had yet: the instances from `resume` on (all of them while
+/// `None`) still have to get it. The built-in recipes got it at once, in the turn it came.
+struct Carried {
+    event: Event,
+    /// The instance to go on with and its place in the list when it was left: the list is
+    /// in creation order, so when the instance was deleted meanwhile, the place it held is where
+    /// the instances after it now are.
+    resume: Option<(Id, usize)>,
+}
+
+/// How much script time is left in a turn.
+struct Budget {
+    clock: Option<ScriptClock>,
+    started: u64,
+}
+
+impl Budget {
+    fn none() -> Budget {
+        Budget {
+            clock: None,
+            started: 0,
+        }
+    }
+
+    fn of(clock: &Option<ScriptClock>) -> Budget {
+        match clock {
+            Some(clock) => Budget {
+                started: clock(),
+                clock: Some(clock.clone()),
+            },
+            None => Budget::none(),
+        }
+    }
+
+    fn spent(&self) -> bool {
+        self.clock
+            .as_ref()
+            .is_some_and(|clock| clock().saturating_sub(self.started) >= SCRIPT_TURN_LIMIT_MS)
+    }
+}
+
 /// The instances, at most `MAX_INSTANCES`, in the order they were created.
-#[derive(Default)]
 pub struct RecipeEngine {
     slots: Vec<Slot>,
     next_log_id: u64,
     /// Where `recipe.instance.*` events go (spec 013), when the host listens.
     live: Option<LiveHandle>,
+    /// The recipes: the built-in ones (a handful, fixed at build time), then the script recipes
+    /// loaded (at most `MAX_SCRIPT_RECIPES`), in the order they were loaded.
+    natives: Vec<Native>,
+    /// Events the scripts have not all had (see `Carried`), at most `MAX_CARRIED_EVENTS`.
+    carry: VecDeque<Carried>,
+    /// The clock of the scripts' time limits, given with the first script loaded.
+    script_clock: Option<ScriptClock>,
+    /// What the running instances listen to, each distinct entry once.
+    listens: Listens,
+    /// The handle the next started instance gets (handles are never reused until they wrap).
+    next_handle: u32,
+    /// True when what the running instances listen to may have changed since `take_interest_stale`
+    /// (an instance started, failed or left a new listen set): the home recomputes its interest.
+    interest_stale: bool,
+}
+
+impl Default for RecipeEngine {
+    fn default() -> Self {
+        RecipeEngine::new()
+    }
 }
 
 /// Builds and sends a `recipes` event, only if a client listens to that topic.
@@ -186,18 +416,36 @@ fn params_text(params: &Value) -> Option<Box<str>> {
         .map(String::into_boxed_str)
 }
 
+/// How deep `value` nests: a scalar is 0, an object or a list is 1 plus its deepest member (the
+/// params object itself is the first level). It stops looking `limit` levels down: the answer is
+/// at most `limit + 1`, so that nothing deeper is ever walked.
+fn depth(value: &Value, limit: usize) -> usize {
+    let members: Box<dyn Iterator<Item = &Value> + '_> = match value {
+        Value::Array(list) => Box::new(list.iter()),
+        Value::Object(fields) => Box::new(fields.values()),
+        _ => return 0,
+    };
+    if limit == 0 {
+        return 1;
+    }
+    1 + members.map(|v| depth(v, limit - 1)).max().unwrap_or(0)
+}
+
+/// 400 `Invalid params: params nested too deeply` for params nested over `MAX_PARAMS_DEPTH`
+/// levels: checked by the engine before any recipe sees them, so that no recipe (built in or
+/// script) ever parses params deeper than that.
+fn check_depth(params: &Value) -> Result<(), Failure> {
+    if depth(params, MAX_PARAMS_DEPTH) > MAX_PARAMS_DEPTH {
+        return Err(Failure::new(
+            400,
+            "Invalid params: params nested too deeply",
+        ));
+    }
+    Ok(())
+}
+
 fn not_found() -> Failure {
     Failure::new(404, "Instance not found")
-}
-
-/// The recipes there are.
-pub fn recipe_infos() -> Vec<Value> {
-    vec![motion_light::info()]
-}
-
-/// One recipe's definition, `None` for a recipe that does not exist.
-pub fn recipe_info(id: &str) -> Option<Value> {
-    (id == motion_light::ID).then(motion_light::info)
 }
 
 /// A change of the home that a settle looks at (spec 024, R4): the equipment deleted (its id and
@@ -209,75 +457,191 @@ pub struct Settle {
     pub zone: Option<Id>,
 }
 
-/// The keys of a recipe's params that hold equipment ids: its `equipment` slots, and
-/// motion-light's legacy `light`.
-fn equipment_keys(recipe: &str) -> Vec<String> {
-    let mut keys: Vec<String> = recipe_info(recipe)
-        .and_then(|info| info.get("slots").and_then(Value::as_array).cloned())
+/// The keys of a recipe's params that hold equipment ids: its `equipment` slots.
+fn equipment_keys(info: &Value) -> Vec<String> {
+    info.get("slots")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
         .unwrap_or_default()
         .iter()
         .filter(|slot| slot.get("type").and_then(Value::as_str) == Some("equipment"))
         .filter_map(|slot| slot.get("id").and_then(Value::as_str).map(str::to_string))
-        .collect();
-    if recipe == motion_light::ID {
-        keys.push("light".into());
-    }
-    keys
+        .collect()
 }
 
-/// The params text without the id `gone` in the given keys (removed from a list, a single id
-/// becomes `""`); `None` when nothing named it (or the text is not a JSON object).
-fn prune_equipment(text: &str, keys: &[String], gone: &str) -> Option<Box<str>> {
-    let mut value = serde_json::from_str::<Value>(text).ok()?;
-    let fields = value.as_object_mut()?;
-    let mut changed = false;
+/// Takes the id `gone` out of the given keys of `params` (removed from a list, a single id
+/// becomes `""`), and says which keys named it; none when nothing did (or `params` is not an
+/// object).
+fn prune_equipment(params: &mut Value, keys: &[String], gone: &str) -> Vec<String> {
+    let Some(fields) = params.as_object_mut() else {
+        return Vec::new();
+    };
+    let mut pruned = Vec::new();
     for key in keys {
         match fields.get_mut(key.as_str()) {
             Some(Value::Array(list)) => {
                 let before = list.len();
                 list.retain(|v| v.as_str() != Some(gone));
-                changed |= list.len() != before;
+                if list.len() != before {
+                    pruned.push(key.clone());
+                }
             }
             Some(slot @ Value::String(_)) if slot.as_str() == Some(gone) => {
                 *slot = Value::String(String::new());
-                changed = true;
+                pruned.push(key.clone());
             }
             _ => {}
         }
     }
-    // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
-    changed
-        .then(|| {
-            serde_json::to_string(&value)
-                .ok()
-                .map(String::into_boxed_str)
-        })
-        .flatten()
+    pruned
 }
 
-/// Validates an instance's params text for its recipe.
-fn validate_text(recipe: &str, text: &str, home: &Home) -> Result<(), String> {
-    let value =
-        serde_json::from_str::<Value>(text).map_err(|e| format!("params are not JSON: {e}"))?;
-    validate(recipe, &value, home)
-}
-
-/// Checks the parameters of a recipe against the home, with the recipe's messages.
-fn validate(recipe: &str, params: &Value, home: &Home) -> Result<(), String> {
-    match recipe {
-        motion_light::ID => motion_light::validate(params, home).map(|_| ()),
-        other => Err(format!("Recipe not found: {other}")),
+/// A core event as a recipe gets it: ids as canonical texts.
+fn sdk_event(event: &Event) -> SdkEvent {
+    let value = |value: &EventValue| match value {
+        EventValue::Null => SdkValue::Null,
+        EventValue::Bool(b) => SdkValue::Bool(*b),
+        EventValue::Number(n) => SdkValue::Number(*n),
+        EventValue::Text(text) => SdkValue::Text(text.to_string()),
+    };
+    match event {
+        Event::Zone {
+            zone,
+            motion,
+            luminosity,
+        } => SdkEvent::Zone {
+            zone: zone.to_string(),
+            motion: *motion,
+            luminosity: *luminosity,
+        },
+        Event::Equipment {
+            equipment,
+            alias,
+            value: v,
+        } => SdkEvent::Equipment {
+            equipment: equipment.to_string(),
+            alias: alias.to_string(),
+            value: value(v),
+        },
+        Event::Device {
+            device,
+            key,
+            value: v,
+        } => SdkEvent::Device {
+            device: device.to_string(),
+            key: key.to_string(),
+            value: value(v),
+        },
     }
 }
 
 impl RecipeEngine {
     pub fn new() -> Self {
-        RecipeEngine::default()
+        RecipeEngine {
+            natives: vec![Native::new(Box::new(
+                solite_recipe_motion_light::MotionLightRecipe::new(),
+            ))],
+            ..RecipeEngine::placeholder()
+        }
+    }
+
+    /// An engine with no instance and no recipe: what the home leaves in its place while the
+    /// real one is taken out to read the home (`Home::engine_reads_home`).
+    pub(crate) fn placeholder() -> Self {
+        RecipeEngine {
+            slots: Vec::new(),
+            next_log_id: 0,
+            live: None,
+            natives: Vec::new(),
+            carry: VecDeque::new(),
+            script_clock: None,
+            listens: Listens::default(),
+            next_handle: 0,
+            interest_stale: false,
+        }
+    }
+
+    /// True once when the running instances or their listen sets changed since last asked.
+    pub(crate) fn take_interest_stale(&mut self) -> bool {
+        std::mem::take(&mut self.interest_stale)
     }
 
     /// Where the engine sends its `recipe.instance.*` events.
     pub fn set_live(&mut self, live: LiveHandle) {
         self.live = Some(live);
+    }
+
+    // ---- The registry ----
+
+    /// Who provides a recipe id; `None` for a recipe nobody provides.
+    fn provider(&self, recipe_id: &str) -> Option<Provider> {
+        provider_of(&self.natives, recipe_id)
+    }
+
+    /// The recipes there are, as `GET /recipes` lists them.
+    /// The counters of each loaded script recipe that runs, in load order (spec 041 R6.3): its
+    /// id and `solite_recipe_sdk::RunStats`. A script recipe that is failed has none.
+    pub fn script_stats(&self) -> Vec<(String, solite_recipe_sdk::RunStats)> {
+        self.natives
+            .iter()
+            .filter(|native| native.is_script())
+            .filter_map(|native| {
+                let stats = native.recipe.as_ref()?.run_stats()?;
+                Some((native.names.id.to_string(), stats))
+            })
+            .collect()
+    }
+
+    pub fn recipe_infos(&self) -> Vec<Value> {
+        self.natives.iter().map(Native::info).collect()
+    }
+
+    /// One recipe's definition, `None` for a recipe that does not exist.
+    pub fn recipe_info(&self, id: &str) -> Option<Value> {
+        match self.provider(id)? {
+            Provider::Native(index) => Some(self.natives[index].info()),
+        }
+    }
+
+    /// Checks the parameters of an instance's recipe against the home, with the recipe's
+    /// messages.
+    fn validate(
+        &self,
+        home: &Home,
+        recipe_id: &str,
+        instance: Id,
+        params: &Value,
+        clock: Clock,
+    ) -> Result<(), RecipeError> {
+        match self.provider(recipe_id) {
+            Some(Provider::Native(index)) => {
+                let native = &self.natives[index];
+                let Some(recipe) = &native.recipe else {
+                    return Err(RecipeError::recipe(
+                        native.failure().unwrap_or("failed").to_string(),
+                    ));
+                };
+                let host = NativeHost::new(home, instance, &native.names, clock.mono, clock.wall);
+                recipe.validate(&host, params)
+            }
+            None => Err(RecipeError::instance(format!(
+                "Recipe not found: {recipe_id}"
+            ))),
+        }
+    }
+
+    /// Validates an instance's params text for its recipe.
+    fn validate_text(
+        &self,
+        home: &Home,
+        recipe_id: &str,
+        instance: Id,
+        text: &str,
+        clock: Clock,
+    ) -> Result<(), RecipeError> {
+        let value = serde_json::from_str::<Value>(text)
+            .map_err(|e| RecipeError::instance(format!("params are not JSON: {e}")))?;
+        self.validate(home, recipe_id, instance, &value, clock)
     }
 
     // ---- Reading ----
@@ -306,15 +670,17 @@ impl RecipeEngine {
     pub fn is_running(&self, id: &Id) -> bool {
         self.slots
             .iter()
-            .any(|s| s.instance.id == *id && s.runner.is_some())
+            .any(|s| s.instance.id == *id && s.running.is_some())
     }
 
-    /// The state keys of an instance: none when it does not run.
-    pub fn state_of(&self, id: &Id) -> Option<StateKeys> {
+    /// The state of an instance, the JSON object its recipe wrote (`{}` when it has no key or
+    /// does not run); `None` for an unknown id. It is the copy the last call left: no recipe is
+    /// called.
+    pub fn state_of(&self, id: &Id) -> Option<&str> {
         self.slots.iter().find(|s| s.instance.id == *id).map(|s| {
-            s.runner
+            s.running
                 .as_ref()
-                .map_or_else(StateKeys::default, |r| r.state())
+                .map_or(NO_STATE, |running| &*running.state)
         })
     }
 
@@ -330,11 +696,23 @@ impl RecipeEngine {
             .unwrap_or_default()
     }
 
-    /// What the running instances listen to.
+    /// What the running instances listen to, from the listen sets their last calls returned.
     pub fn interest(&self) -> Interest {
         let mut interest = Interest::new();
-        for runner in self.slots.iter().filter_map(|s| s.runner.as_ref()) {
-            runner.listen(&mut interest);
+        for running in self.slots.iter().filter_map(|s| s.running.as_ref()) {
+            for wanted in running
+                .listen
+                .iter()
+                .filter_map(|i| self.listens.entries.get(usize::from(*i)))
+            {
+                match wanted {
+                    Wanted::Zone(zone) => interest.add_zone(*zone),
+                    Wanted::Equipment(equipment, alias) => {
+                        interest.add_equipment(*equipment, alias.clone());
+                    }
+                    Wanted::Device(device, key) => interest.add_device(*device, key),
+                }
+            }
         }
         interest
     }
@@ -342,6 +720,31 @@ impl RecipeEngine {
     fn index_of(&self, id: &str) -> Option<usize> {
         let id = Id::parse(id)?;
         self.slots.iter().position(|s| s.instance.id == id)
+    }
+
+    /// Drops the listen entries nobody listens to any more, once the table holds twice what is
+    /// live: an instance that stops or changes its listen set leaves its entries behind until
+    /// then.
+    fn compact_listens(&mut self) {
+        let live: usize = self
+            .slots
+            .iter()
+            .filter_map(|s| s.running.as_ref())
+            .map(|r| r.listen.len())
+            .sum();
+        if self.listens.entries.len() <= 2 * live + 64 {
+            return;
+        }
+        let old = std::mem::take(&mut self.listens.entries);
+        for running in self.slots.iter_mut().filter_map(|s| s.running.as_mut()) {
+            running.listen = running
+                .listen
+                .iter()
+                .filter_map(|i| old.get(usize::from(*i)))
+                .filter_map(|wanted| self.listens.intern(wanted.clone()))
+                .collect();
+        }
+        self.listens.entries.shrink_to_fit();
     }
 
     // ---- The log ----
@@ -368,10 +771,11 @@ impl RecipeEngine {
 
     // ---- Starting and stopping ----
 
-    /// Starts the instance at `index` (it is stopped): validates, builds the runner, runs its
-    /// start. A failure is the instance's log line `<failed>: <error>`, and the instance stays
-    /// stopped; with `tell_error` it is also a `recipe.instance.error` event (only the start right
-    /// after a create does, as Sowel's `createInstance`).
+    /// Starts the instance at `index` (it is stopped): the recipe validates and starts it. A
+    /// failure is the instance's log line `<failed>: <error>`, and the instance stays stopped;
+    /// with `tell_error` it is also a `recipe.instance.error` event (only the start right after
+    /// a create does, as Sowel's `createInstance`). A failure of the recipe as a whole (a script
+    /// that overran its bounds) stops every instance of it (`fail_script`) and is the error's kind.
     fn start_slot(
         &mut self,
         index: usize,
@@ -380,55 +784,83 @@ impl RecipeEngine {
         wall: u64,
         failed: &str,
         tell_error: bool,
-    ) -> Result<(), String> {
-        let Some(slot) = self.slots.get_mut(index) else {
+    ) -> Result<(), RecipeError> {
+        if index >= self.slots.len() {
             return Ok(());
-        };
-        let mut cx = Cx {
-            home,
-            instance: slot.instance.id,
-            now: mono,
-            wall,
-            lines: Vec::new(),
-        };
-        let result: Result<Box<dyn Runner>, String> = match slot.instance.recipe_id.as_str() {
-            motion_light::ID => {
-                // The parsed value lives for this validation only.
+        }
+        let handle = self.next_handle;
+        let provider = provider_of(&self.natives, &self.slots[index].instance.recipe_id)
+            .map(|Provider::Native(provider)| provider);
+        // Every start goes through here: a script recipe runs at most `MAX_INSTANCES_PER_SCRIPT`
+        // instances, whether they were created, restored, restarted after a failure or updated.
+        let full = provider.is_some_and(|p| {
+            self.natives[p].is_script()
+                && self
+                    .slots
+                    .iter()
+                    .filter(|s| s.running.as_ref().is_some_and(|r| r.provider == p))
+                    .count()
+                    >= MAX_INSTANCES_PER_SCRIPT
+        });
+        let (result, lines) = match provider {
+            None => (
+                Err(RecipeError::instance(format!(
+                    "Recipe not found: {}",
+                    self.slots[index].instance.recipe_id
+                ))),
+                Vec::new(),
+            ),
+            Some(_) if full => (
+                Err(RecipeError::instance(format!(
+                    "Too many instances of {} (max {MAX_INSTANCES_PER_SCRIPT})",
+                    self.slots[index].instance.recipe_id
+                ))),
+                Vec::new(),
+            ),
+            Some(provider) => {
+                let slot = &self.slots[index];
+                let native = &mut self.natives[provider];
+                let failure = native.failure().map(str::to_string);
+                // The parsed value lives for this start only.
                 let parsed = serde_json::from_str::<Value>(&slot.instance.params)
                     .map_err(|e| format!("params are not JSON: {e}"));
-                parsed
-                    .and_then(|value| motion_light::validate(&value, home))
-                    .map(|params| {
-                        // The check of every start: a zone with no motion sensor never triggers.
-                        let sensors = home
-                            .zone_aggregate(&params.zone, wall)
-                            .map_or(0, |data| data.motion_sensors);
-                        if sensors == 0 {
-                            cx.lines.push((
-                                Level::Warn,
-                                "Zone has no motion sensors — recipe will never trigger"
-                                    .to_string(),
-                            ));
-                        }
-                        Box::new(motion_light::MotionLight::start(params, &mut cx))
-                            as Box<dyn Runner>
-                    })
+                match (parsed, native.recipe.as_mut(), failure) {
+                    (_, None, failure) => (
+                        Err(RecipeError::recipe(
+                            failure.unwrap_or_else(|| "failed".to_string()),
+                        )),
+                        Vec::new(),
+                    ),
+                    (Err(error), _, _) => (Err(RecipeError::instance(error)), Vec::new()),
+                    (Ok(value), Some(recipe), _) => {
+                        let host =
+                            NativeHost::new(home, slot.instance.id, &native.names, mono, wall);
+                        let result = recipe.start(&host, handle, &value, Clock { mono, wall });
+                        (result, host.take_lines())
+                    }
+                }
             }
-            other => Err(format!("Recipe not found: {other}")),
         };
-        let lines = std::mem::take(&mut cx.lines);
+        let slot = &mut self.slots[index];
         RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
-        match result {
-            Ok(runner) => {
-                let state = runner.state();
-                slot.runner = Some(runner);
+        match (result, provider) {
+            (Ok(update), Some(provider)) => {
+                self.interest_stale = true;
+                self.next_handle = self.next_handle.wrapping_add(1);
+                let started = update.state.as_str() != NO_STATE;
+                slot.running = Some(Running {
+                    provider,
+                    handle,
+                    state: update.state.into(),
+                    listen: self.listens.indexes(&update.listen),
+                });
                 let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
                 announce(&self.live, || EngineEvent::RecipeInstanceStarted {
                     instance_id: id,
                     recipe_id: recipe.clone(),
                 });
                 // A start that wrote state keys is a write of them.
-                if state != StateKeys::default() {
+                if started {
                     announce(&self.live, || EngineEvent::RecipeInstanceStateChanged {
                         instance_id: id,
                         recipe_id: recipe.clone(),
@@ -436,21 +868,289 @@ impl RecipeEngine {
                 }
                 Ok(())
             }
-            Err(error) => {
-                slot.runner = None;
-                let message = format!("{failed}: {error}");
-                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
-                if tell_error {
-                    let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+            (Ok(_), None) => Ok(()),
+            (Err(error), provider) => {
+                slot.running = None;
+                let (id, recipe) = (slot.instance.id, slot.instance.recipe_id.clone());
+                if error.kind == ErrorKind::Recipe {
+                    let message = format!("Script recipe failed: {}", error.message);
+                    RecipeEngine::push_log(
+                        slot,
+                        &mut self.next_log_id,
+                        wall,
+                        Level::Error,
+                        &message,
+                    );
                     announce(&self.live, || EngineEvent::RecipeInstanceError {
                         instance_id: id,
                         recipe_id: recipe.clone(),
-                        error: error.clone(),
+                        error: message.clone(),
+                    });
+                    if let Some(provider) = provider {
+                        self.fail_script(provider, error.message.clone(), wall, mono);
+                    }
+                    return Err(error);
+                }
+                let message = format!("{failed}: {}", error.message);
+                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+                if tell_error {
+                    announce(&self.live, || EngineEvent::RecipeInstanceError {
+                        instance_id: id,
+                        recipe_id: recipe.clone(),
+                        error: error.message.clone(),
                     });
                 }
                 Err(error)
             }
         }
+    }
+
+    // ---- Script recipes: failure and return (spec 041, R3.5, R3.6) ----
+
+    /// A script recipe failed as a whole: its runtime is dropped, each running instance of it
+    /// stops with `Script recipe failed: <reason>` and the events `recipe.instance.stopped` and
+    /// `recipe.instance.error`. The instances stay enabled and nothing is written. The engine and
+    /// the other recipes run on.
+    fn fail_script(&mut self, provider: usize, reason: String, wall: u64, mono: u64) {
+        self.interest_stale = true;
+        let Some(native) = self.natives.get_mut(provider) else {
+            return;
+        };
+        let Some(meta) = native.script.as_mut() else {
+            return;
+        };
+        if meta.failed.is_some() {
+            return;
+        }
+        // The runtime goes with the recipe.
+        native.recipe = None;
+        meta.restarts
+            .retain(|at| mono.saturating_sub(*at) < SCRIPT_RESTART_WINDOW_MS);
+        meta.failed = Some(Failed {
+            since: mono,
+            reason: reason.clone(),
+        });
+        log::error!("script recipe {} failed: {reason}", native.names.id);
+        let message = format!("Script recipe failed: {reason}");
+        for slot in &mut self.slots {
+            if slot.running.as_ref().map(|r| r.provider) != Some(provider) {
+                continue;
+            }
+            // The recipe is gone: there is nothing to tell it.
+            slot.running = None;
+            RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+            RecipeEngine::announce_stopped(&self.live, slot);
+            let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+            announce(&self.live, || EngineEvent::RecipeInstanceError {
+                instance_id: id,
+                recipe_id: recipe.clone(),
+                error: message.clone(),
+            });
+        }
+        self.compact_listens();
+    }
+
+    /// Makes a failed script recipe's runtime again and starts its enabled instances. `auto` is
+    /// the return by itself (counted in the 3 of 24 hours); otherwise a person's action. The
+    /// reason when the runtime cannot be made.
+    fn restart_script(
+        &mut self,
+        provider: usize,
+        home: &Home,
+        wall: u64,
+        mono: u64,
+        auto: bool,
+        budget: &Budget,
+    ) -> Result<(), String> {
+        let Some(native) = self.natives.get_mut(provider) else {
+            return Ok(());
+        };
+        let Some(meta) = native.script.as_mut() else {
+            return Ok(());
+        };
+        if meta.failed.is_none() {
+            return Ok(());
+        }
+        meta.restarts
+            .retain(|at| mono.saturating_sub(*at) < SCRIPT_RESTART_WINDOW_MS);
+        if auto {
+            meta.restarts.push(mono);
+        }
+        let restarts = meta.restarts.len();
+        let recipe = match (meta.rebuild)() {
+            Ok(recipe) => recipe,
+            Err(reason) => {
+                meta.failed = Some(Failed {
+                    since: mono,
+                    reason: reason.clone(),
+                });
+                let message = format!("Script recipe failed: {reason}");
+                for slot in &mut self.slots {
+                    if slot.instance.enabled && slot.instance.recipe_id == *native.names.id {
+                        RecipeEngine::push_log(
+                            slot,
+                            &mut self.next_log_id,
+                            wall,
+                            Level::Error,
+                            &message,
+                        );
+                    }
+                }
+                return Err(reason);
+            }
+        };
+        meta.failed = None;
+        native.recipe = Some(recipe);
+        let message = if auto {
+            format!("Script recipe restarted ({restarts} of {SCRIPT_MAX_AUTO_RESTARTS} in 24 h)")
+        } else {
+            "Script recipe restarted".to_string()
+        };
+        // The enabled instances, in order: the log says so now, the starts follow while the turn's
+        // budget lasts (a person's action has none) and on the next turns.
+        let mut waiting = Vec::new();
+        for slot in &mut self.slots {
+            let mine = provider_of(&self.natives, &slot.instance.recipe_id)
+                == Some(Provider::Native(provider));
+            if !mine || !slot.instance.enabled || slot.running.is_some() {
+                continue;
+            }
+            RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Info, &message);
+            waiting.push(slot.instance.id);
+        }
+        if let Some(meta) = self.natives[provider].script.as_mut() {
+            meta.to_start = waiting;
+        }
+        self.start_waiting(provider, home, wall, mono, budget);
+        self.compact_listens();
+        Ok(())
+    }
+
+    /// Starts the instances a restart left waiting, in order, while the turn's budget lasts.
+    fn start_waiting(
+        &mut self,
+        provider: usize,
+        home: &Home,
+        wall: u64,
+        mono: u64,
+        budget: &Budget,
+    ) {
+        loop {
+            let native = &mut self.natives[provider];
+            let Some(meta) = native.script.as_mut() else {
+                return;
+            };
+            if native.recipe.is_none() {
+                meta.to_start.clear();
+            }
+            if meta.to_start.is_empty() || budget.spent() {
+                return;
+            }
+            let id = meta.to_start.remove(0);
+            let Some(index) = self.slots.iter().position(|s| s.instance.id == id) else {
+                continue;
+            };
+            if !self.slots[index].instance.enabled || self.slots[index].running.is_some() {
+                continue;
+            }
+            let _ = self.start_slot(index, home, mono, wall, "Failed to restart", false);
+            self.interest_stale = true;
+        }
+    }
+
+    /// A script that failed and may come back by itself: a minute after the failure, at most
+    /// `SCRIPT_MAX_AUTO_RESTARTS` times in 24 hours. One per turn (its load takes up to
+    /// `SCRIPT_LOAD_LIMIT_MS`, and its instances start after it, within the turn's budget).
+    fn restart_due_scripts(&mut self, home: &Home, wall: u64, mono: u64, budget: &Budget) {
+        for provider in 0..self.natives.len() {
+            let due = self.natives[provider].script.as_ref().is_some_and(|meta| {
+                meta.failed.as_ref().is_some_and(|failed| {
+                    let recent = meta
+                        .restarts
+                        .iter()
+                        .filter(|at| mono.saturating_sub(**at) < SCRIPT_RESTART_WINDOW_MS)
+                        .count();
+                    recent < SCRIPT_MAX_AUTO_RESTARTS
+                        && mono.saturating_sub(failed.since) >= SCRIPT_RESTART_DELAY_MS
+                })
+            });
+            if due {
+                // A runtime that cannot be made is logged; the next try is a minute later.
+                let _ = self.restart_script(provider, home, wall, mono, true, budget);
+                self.interest_stale = true;
+                return;
+            }
+        }
+    }
+
+    /// A person's action on a recipe whose script failed: its runtime is made again at once and
+    /// its enabled instances start; 500 `Script recipe failed: <reason>` when it fails again.
+    fn revive(&mut self, provider: usize, home: &Home, wall: u64, mono: u64) -> Outcome<()> {
+        if self.natives[provider].failure().is_none() {
+            return Ok(());
+        }
+        self.restart_script(provider, home, wall, mono, false, &Budget::none())
+            .map_err(|reason| Failure::new(500, format!("Script recipe failed: {reason}")))?;
+        match self.natives[provider].failure() {
+            None => Ok(()),
+            Some(reason) => Err(Failure::new(500, format!("Script recipe failed: {reason}"))),
+        }
+    }
+
+    /// The failure a validation that went wrong is: 400 for the params, and 500 (with the recipe
+    /// failed) when the script as a whole failed while checking them.
+    fn validation_failure(
+        &mut self,
+        recipe_id: &str,
+        error: RecipeError,
+        wall: u64,
+        mono: u64,
+    ) -> Failure {
+        if error.kind == ErrorKind::Recipe {
+            if let Some(Provider::Native(provider)) = self.provider(recipe_id) {
+                self.fail_script(provider, error.message.clone(), wall, mono);
+            }
+            return Failure::new(500, format!("Script recipe failed: {}", error.message));
+        }
+        Failure::new(400, format!("Invalid params: {}", error.message))
+    }
+
+    /// Adds a script recipe the loader made (spec 041, R3.8): refused when its id is a built-in
+    /// recipe's or a script's already loaded, or when `MAX_SCRIPT_RECIPES` are loaded.
+    #[cfg(feature = "script-recipes")]
+    pub(crate) fn add_script(
+        &mut self,
+        recipe: Box<dyn Recipe + Send>,
+        rebuild: Rebuild,
+        clock: ScriptClock,
+    ) -> Result<(), String> {
+        let info = recipe.info();
+        let names = Native::names_of(&info);
+        match provider_of(&self.natives, &names.id) {
+            Some(Provider::Native(index)) if self.natives[index].is_script() => {
+                return Err(format!("id {} is already loaded", names.id));
+            }
+            Some(_) => return Err(format!("id {} is a built-in recipe", names.id)),
+            None => {}
+        }
+        if self.natives.iter().filter(|n| n.is_script()).count() >= MAX_SCRIPT_RECIPES {
+            return Err(format!(
+                "too many script recipes (at most {MAX_SCRIPT_RECIPES})"
+            ));
+        }
+        self.script_clock = Some(clock);
+        self.natives.push(Native {
+            names,
+            recipe: Some(recipe),
+            script: Some(ScriptMeta {
+                info,
+                rebuild,
+                failed: None,
+                restarts: Vec::new(),
+                to_start: Vec::new(),
+            }),
+        });
+        Ok(())
     }
 
     /// Tells a client that the instance at `index` stopped (it was running).
@@ -473,7 +1173,8 @@ impl RecipeEngine {
     // ---- Changes ----
 
     /// Creates an instance (enabled) and starts it: 404 `Recipe not found: <id>`, 400 for too
-    /// many instances, params too large or invalid. A failure to start is only logged.
+    /// many instances, params too large, too deeply nested or invalid. A failure to start is only
+    /// logged.
     pub fn create(
         &mut self,
         home: &Home,
@@ -483,8 +1184,23 @@ impl RecipeEngine {
         wall: u64,
         mono: u64,
     ) -> Outcome<RecipeInstance> {
-        if recipe_info(recipe_id).is_none() {
+        let Some(Provider::Native(provider)) = self.provider(recipe_id) else {
             return Err(Failure::new(404, format!("Recipe not found: {recipe_id}")));
+        };
+        // A person's action brings a failed script recipe back, with its other instances.
+        self.revive(provider, home, wall, mono)?;
+        if self.natives[provider].is_script()
+            && self
+                .slots
+                .iter()
+                .filter(|s| s.instance.recipe_id == recipe_id)
+                .count()
+                >= MAX_INSTANCES_PER_SCRIPT
+        {
+            return Err(Failure::new(
+                400,
+                format!("Too many instances of {recipe_id} (max {MAX_INSTANCES_PER_SCRIPT})"),
+            ));
         }
         if self.slots.len() >= MAX_INSTANCES {
             return Err(Failure::new(
@@ -494,8 +1210,10 @@ impl RecipeEngine {
         }
         let text = params_text(&params)
             .ok_or_else(|| Failure::new(400, "Invalid params: params too large"))?;
-        validate(recipe_id, &params, home)
-            .map_err(|e| Failure::new(400, format!("Invalid params: {e}")))?;
+        check_depth(&params)?;
+        if let Err(error) = self.validate(home, recipe_id, id, &params, Clock { mono, wall }) {
+            return Err(self.validation_failure(recipe_id, error, wall, mono));
+        }
         drop(params);
         let instance = RecipeInstance {
             id,
@@ -506,7 +1224,7 @@ impl RecipeEngine {
         };
         let mut slot = Slot {
             instance: instance.clone(),
-            runner: None,
+            running: None,
             log: VecDeque::new(),
         };
         RecipeEngine::push_log(
@@ -522,8 +1240,24 @@ impl RecipeEngine {
             instance_id: id,
             recipe_id: recipe_id.to_string(),
         });
-        // A failure to start is only logged and told: the instance is created.
-        let _ = self.start_slot(index, home, mono, wall, "Failed to start", true);
+        // A failure to start is only logged and told: the instance is created. A script recipe
+        // that fails at once is 500, and the instance is not kept.
+        let started = self.start_slot(index, home, mono, wall, "Failed to start", true);
+        if let Err(error) = started
+            && error.kind == ErrorKind::Recipe
+        {
+            self.slots.pop();
+            announce(&self.live, || EngineEvent::RecipeInstanceRemoved {
+                instance_id: id,
+                recipe_id: recipe_id.to_string(),
+            });
+            self.compact_listens();
+            return Err(Failure::new(
+                500,
+                format!("Script recipe failed: {}", error.message),
+            ));
+        }
+        self.compact_listens();
         Ok(instance)
     }
 
@@ -539,33 +1273,50 @@ impl RecipeEngine {
     ) -> Outcome<RecipeInstance> {
         let index = self.index_of(id).ok_or_else(not_found)?;
         let recipe_id = self.slots[index].instance.recipe_id.clone();
-        if recipe_info(&recipe_id).is_none() {
+        let Some(Provider::Native(provider)) = self.provider(&recipe_id) else {
             return Err(Failure::new(404, format!("Recipe not found: {recipe_id}")));
-        }
+        };
+        self.revive(provider, home, wall, mono)?;
         let text = params_text(&params)
             .ok_or_else(|| Failure::new(400, "Invalid params: params too large"))?;
-        validate(&recipe_id, &params, home)
-            .map_err(|e| Failure::new(400, format!("Invalid params: {e}")))?;
+        check_depth(&params)?;
+        let instance_id = self.slots[index].instance.id;
+        if let Err(error) =
+            self.validate(home, &recipe_id, instance_id, &params, Clock { mono, wall })
+        {
+            return Err(self.validation_failure(&recipe_id, error, wall, mono));
+        }
         drop(params);
         let slot = &mut self.slots[index];
-        if slot.runner.take().is_some() {
+        if stop_running(&mut self.natives, slot) {
             RecipeEngine::announce_stopped(&self.live, slot);
         }
         slot.instance.params = text;
         let enabled = slot.instance.enabled;
         let instance = slot.instance.clone();
         if enabled {
-            // A restart that fails is only logged (Sowel emits no error event here).
-            let _ = self.start_slot(index, home, mono, wall, "Failed to restart", false);
+            // A restart that fails is only logged (Sowel emits no error event here); a script
+            // recipe that fails at once is 500, the new settings kept.
+            let restarted = self.start_slot(index, home, mono, wall, "Failed to restart", false);
+            if let Err(error) = restarted
+                && error.kind == ErrorKind::Recipe
+            {
+                self.compact_listens();
+                return Err(Failure::new(
+                    500,
+                    format!("Script recipe failed: {}", error.message),
+                ));
+            }
         }
+        self.compact_listens();
         Ok(instance)
     }
 
     /// Stops an instance, forgets it and its log.
     pub fn delete(&mut self, id: &str) -> Outcome<()> {
         let index = self.index_of(id).ok_or_else(not_found)?;
-        let slot = self.slots.remove(index);
-        if slot.runner.is_some() {
+        let mut slot = self.slots.remove(index);
+        if stop_running(&mut self.natives, &mut slot) {
             RecipeEngine::announce_stopped(&self.live, &slot);
         }
         let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
@@ -573,6 +1324,7 @@ impl RecipeEngine {
             instance_id: id,
             recipe_id: recipe.clone(),
         });
+        self.compact_listens();
         Ok(())
     }
 
@@ -588,28 +1340,58 @@ impl RecipeEngine {
         mono: u64,
     ) -> Outcome<bool> {
         let index = self.index_of(id).ok_or_else(not_found)?;
-        let slot = &mut self.slots[index];
-        if slot.instance.enabled == enabled {
+        let provider = provider_of(&self.natives, &self.slots[index].instance.recipe_id);
+        if self.slots[index].instance.enabled == enabled {
+            // A person's action on an enabled instance whose script recipe failed brings the
+            // recipe back and starts its instances.
+            if enabled
+                && let Some(Provider::Native(provider)) = provider
+                && self.natives[provider].failure().is_some()
+            {
+                self.revive(provider, home, wall, mono)?;
+                return Ok(true);
+            }
             return Ok(false);
+        }
+        if enabled && let Some(Provider::Native(provider)) = provider {
+            self.revive(provider, home, wall, mono)?;
         }
         // An instance that cannot run is not enabled (spec 024, R4.7; Sowel enables it).
         if enabled {
-            validate_text(&slot.instance.recipe_id, &slot.instance.params, home)
-                .map_err(|e| Failure::new(400, format!("Invalid params: {e}")))?;
-        }
-        slot.instance.enabled = enabled;
-        if enabled {
-            // `started` came with the start; one that failed is told as a state change.
-            if self
-                .start_slot(index, home, mono, wall, "Failed to start", false)
-                .is_err()
+            let slot = &self.slots[index];
+            let (recipe_id, instance, params) = (
+                slot.instance.recipe_id.clone(),
+                slot.instance.id,
+                slot.instance.params.clone(),
+            );
+            if let Err(error) =
+                self.validate_text(home, &recipe_id, instance, &params, Clock { mono, wall })
             {
-                RecipeEngine::announce_state_changed(&self.live, &self.slots[index]);
+                return Err(self.validation_failure(&recipe_id, error, wall, mono));
             }
-        } else if slot.runner.take().is_some() {
-            RecipeEngine::announce_stopped(&self.live, slot);
+        }
+        self.slots[index].instance.enabled = enabled;
+        if enabled {
+            // `started` came with the start; one that failed is told as a state change. A script
+            // recipe that fails at once is 500, the instance enabled.
+            match self.start_slot(index, home, mono, wall, "Failed to start", false) {
+                Ok(()) => {}
+                Err(error) if error.kind == ErrorKind::Recipe => {
+                    return Err(Failure::new(
+                        500,
+                        format!("Script recipe failed: {}", error.message),
+                    ));
+                }
+                Err(_) => RecipeEngine::announce_state_changed(&self.live, &self.slots[index]),
+            }
         } else {
-            RecipeEngine::announce_state_changed(&self.live, slot);
+            let slot = &mut self.slots[index];
+            if stop_running(&mut self.natives, slot) {
+                RecipeEngine::announce_stopped(&self.live, slot);
+            } else {
+                RecipeEngine::announce_state_changed(&self.live, slot);
+            }
+            self.compact_listens();
         }
         Ok(true)
     }
@@ -631,7 +1413,7 @@ impl RecipeEngine {
     /// the `error` event.
     fn disable_for(&mut self, index: usize, wall: u64, reason: &str) {
         let slot = &mut self.slots[index];
-        if slot.runner.take().is_some() {
+        if stop_running(&mut self.natives, slot) {
             RecipeEngine::announce_stopped(&self.live, slot);
         }
         slot.instance.enabled = false;
@@ -646,11 +1428,13 @@ impl RecipeEngine {
     }
 
     /// Settles the instances after a change of the home: the instances of a deleted zone are
-    /// deleted, a deleted equipment leaves every instance's settings, an enabled instance that no
-    /// longer validates is disabled, a running one whose settings changed restarts. True when
-    /// something is to be written.
+    /// deleted, a deleted equipment leaves every instance's settings (the engine takes it out of
+    /// the `equipment` slots, then the recipe prunes what is its own and says whether a running
+    /// instance restarts), an enabled instance that no longer validates is disabled, a running
+    /// one whose settings changed restarts. True when something is to be written.
     pub fn settle(&mut self, home: &Home, change: &Settle, wall: u64, mono: u64) -> bool {
         let mut changed = false;
+        let clock = Clock { mono, wall };
         // 4: the instances of a deleted zone go with it.
         if let Some(zone) = change.zone {
             let zone = zone.to_string();
@@ -668,54 +1452,75 @@ impl RecipeEngine {
                 changed |= self.delete(&id.to_string()).is_ok();
             }
         }
-        // 1: a deleted equipment leaves the settings. Only a lost light restarts a running
-        // instance (a lost button is taken in place).
-        let mut restart = vec![false; self.slots.len()];
+        // 1: a deleted equipment leaves the settings, out of every `equipment` slot.
+        let mut pruned_slots: Vec<Vec<String>> = vec![Vec::new(); self.slots.len()];
         if let Some((gone, name)) = &change.equipment {
             let gone = gone.to_string();
             for (index, slot) in self.slots.iter_mut().enumerate() {
-                let keys = equipment_keys(&slot.instance.recipe_id);
-                let (button_keys, light_keys): (Vec<String>, Vec<String>) =
-                    keys.into_iter().partition(|k| k == "buttons");
-                let mut pruned = false;
-                if let Some(text) = prune_equipment(&slot.instance.params, &light_keys, &gone) {
-                    slot.instance.params = text;
-                    restart[index] = true;
-                    pruned = true;
+                let keys = match provider_of(&self.natives, &slot.instance.recipe_id) {
+                    Some(Provider::Native(p)) => equipment_keys(&self.natives[p].info()),
+                    None => Vec::new(),
+                };
+                let Ok(mut params) = serde_json::from_str::<Value>(&slot.instance.params) else {
+                    continue;
+                };
+                let pruned = prune_equipment(&mut params, &keys, &gone);
+                if pruned.is_empty() {
+                    continue;
                 }
-                if let Some(text) = prune_equipment(&slot.instance.params, &button_keys, &gone) {
-                    slot.instance.params = text;
-                    pruned = true;
+                // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
+                if let Ok(text) = serde_json::to_string(&params) {
+                    slot.instance.params = text.into_boxed_str();
                 }
-                if pruned {
-                    let message = format!("Equipment removed from settings: {name}");
-                    RecipeEngine::push_log(
-                        slot,
-                        &mut self.next_log_id,
-                        wall,
-                        Level::Warn,
-                        &message,
-                    );
-                    changed = true;
-                }
+                pruned_slots[index] = pruned;
+                let message = format!("Equipment removed from settings: {name}");
+                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Warn, &message);
+                changed = true;
             }
         }
-        // 1b: a button that is gone, or has no `action` binding any more, leaves the settings
-        // of every motion-light instance, enabled or not (spec 028, R2).
-        for slot in &mut self.slots {
-            if slot.instance.recipe_id != motion_light::ID {
-                continue;
-            }
-            let Some((text, stale)) =
-                motion_light::prune_stale_buttons(&slot.instance.params, home)
+        // 1b: the recipe's own pruning, for every instance, enabled or not (spec 028, R2); it
+        // says whether the instance restarts. Only a lost light restarts a running instance (a
+        // lost button is taken in place).
+        let mut restart = vec![false; self.slots.len()];
+        for (index, slot) in self.slots.iter_mut().enumerate() {
+            let Some(Provider::Native(provider)) =
+                provider_of(&self.natives, &slot.instance.recipe_id)
             else {
                 continue;
             };
-            slot.instance.params = text;
-            for name in stale {
-                let message = format!("Button removed from settings: {name}");
-                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Warn, &message);
+            let Ok(params) = serde_json::from_str::<Value>(&slot.instance.params) else {
+                continue;
+            };
+            let native = &self.natives[provider];
+            // A script recipe that failed is left alone.
+            let Some(recipe) = native.recipe.as_ref() else {
+                continue;
+            };
+            let host = NativeHost::new(home, slot.instance.id, &native.names, mono, wall);
+            let what = Change {
+                equipment: change
+                    .equipment
+                    .as_ref()
+                    .map(|(id, name)| ChangedEquipment {
+                        id: id.to_string(),
+                        name: name.clone(),
+                    }),
+                pruned: pruned_slots[index].clone(),
+            };
+            let Some(pruned) = recipe.prune(&host, &params, &what) else {
+                continue;
+            };
+            // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
+            if let Ok(text) = serde_json::to_string(&pruned.params) {
+                slot.instance.params = text.into_boxed_str();
             }
+            restart[index] = pruned.restart;
+            let lines = pruned
+                .lines
+                .into_iter()
+                .map(|line| (line.level, line.message))
+                .collect();
+            RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
             changed = true;
         }
         // 2, 3: every enabled instance checked again; a running one that is kept is refreshed.
@@ -724,34 +1529,86 @@ impl RecipeEngine {
             if !slot.instance.enabled {
                 continue;
             }
-            match validate_text(&slot.instance.recipe_id, &slot.instance.params, home) {
-                Err(reason) => {
-                    self.disable_for(index, wall, &reason);
+            // The instances of a script recipe that failed are left alone.
+            if let Some(Provider::Native(provider)) =
+                provider_of(&self.natives, &slot.instance.recipe_id)
+                && self.natives[provider].failure().is_some()
+            {
+                continue;
+            }
+            let checked = self.validate_text(
+                home,
+                &slot.instance.recipe_id,
+                slot.instance.id,
+                &slot.instance.params,
+                clock,
+            );
+            match checked {
+                Err(error) if error.kind == ErrorKind::Recipe => {
+                    if let Some(Provider::Native(provider)) =
+                        provider_of(&self.natives, &self.slots[index].instance.recipe_id)
+                    {
+                        self.fail_script(provider, error.message, wall, mono);
+                    }
+                }
+                Err(error) => {
+                    self.disable_for(index, wall, &error.message);
                     changed = true;
                 }
-                Ok(()) if restart && slot.runner.is_some() => {
+                Ok(()) if restart && self.slots[index].running.is_some() => {
                     let slot = &mut self.slots[index];
-                    slot.runner = None;
+                    stop_running(&mut self.natives, slot);
                     RecipeEngine::announce_stopped(&self.live, slot);
-                    if let Err(reason) =
+                    if let Err(error) =
                         self.start_slot(index, home, mono, wall, "Failed to restart", false)
+                        && error.kind == ErrorKind::Instance
                     {
-                        self.disable_for(index, wall, &reason);
+                        self.disable_for(index, wall, &error.message);
                     }
                 }
-                Ok(()) => {
-                    // 4: kept running, it follows the home as it is now.
-                    let slot = &mut self.slots[index];
-                    if let (Some(runner), Ok(params)) = (
-                        slot.runner.as_mut(),
-                        serde_json::from_str::<Value>(&slot.instance.params),
-                    ) {
-                        runner.refresh(home, &params);
-                    }
-                }
+                Ok(()) => self.refresh_slot(index, home, wall, mono),
             }
         }
+        self.compact_listens();
         changed
+    }
+
+    /// 4: a running instance that is kept follows the home as it is now: its recipe takes again
+    /// what it resolved from the home. A failure leaves the instance as it was; one of the recipe
+    /// as a whole fails the recipe.
+    fn refresh_slot(&mut self, index: usize, home: &Home, wall: u64, mono: u64) {
+        let slot = &mut self.slots[index];
+        let Some(running) = slot.running.as_mut() else {
+            return;
+        };
+        let Ok(params) = serde_json::from_str::<Value>(&slot.instance.params) else {
+            return;
+        };
+        let provider = running.provider;
+        let native = &mut self.natives[provider];
+        let Some(recipe) = native.recipe.as_mut() else {
+            return;
+        };
+        let host = NativeHost::new(home, slot.instance.id, &native.names, mono, wall);
+        let result = recipe.refresh(&host, running.handle, &params);
+        let lines = host.take_lines();
+        RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
+        match result {
+            Ok(update) => {
+                if let Some(running) = slot.running.as_mut() {
+                    running.state = update.state.into();
+                    running.listen = self.listens.indexes(&update.listen);
+                }
+            }
+            Err(error) if error.kind == ErrorKind::Recipe => {
+                self.fail_script(provider, error.message, wall, mono);
+            }
+            Err(error) => log::warn!(
+                "recipe instance {}: refresh failed: {}",
+                slot.instance.id,
+                error.message
+            ),
+        }
     }
 
     // ---- Loading ----
@@ -773,7 +1630,7 @@ impl RecipeEngine {
             }
             self.slots.push(Slot {
                 instance,
-                runner: None,
+                running: None,
                 log: VecDeque::new(),
             });
         }
@@ -783,11 +1640,18 @@ impl RecipeEngine {
     /// loaded. An unknown recipe or oversized parameters are kept and stay stopped.
     pub fn start_all(&mut self, home: &Home, wall: u64, mono: u64) {
         for index in 0..self.slots.len() {
+            let provider = match self.provider(&self.slots[index].instance.recipe_id) {
+                Some(Provider::Native(i)) => Some(i),
+                _ => None,
+            };
+            let known = self
+                .provider(&self.slots[index].instance.recipe_id)
+                .is_some();
             let slot = &mut self.slots[index];
-            if !slot.instance.enabled || slot.runner.is_some() {
+            if !slot.instance.enabled || slot.running.is_some() {
                 continue;
             }
-            if recipe_info(&slot.instance.recipe_id).is_none() {
+            if !known {
                 let message = format!(
                     "Failed to restore: Recipe not found: {}",
                     slot.instance.recipe_id
@@ -805,6 +1669,29 @@ impl RecipeEngine {
                 );
                 continue;
             }
+            if let Some(provider) = provider
+                && self.natives[provider].is_script()
+            {
+                let recipe_id = &self.slots[index].instance.recipe_id;
+                let before = self.slots[..index]
+                    .iter()
+                    .filter(|s| &s.instance.recipe_id == recipe_id)
+                    .count();
+                if before >= MAX_INSTANCES_PER_SCRIPT {
+                    let message = format!(
+                        "Failed to restore: Too many instances of {recipe_id} (max {MAX_INSTANCES_PER_SCRIPT})"
+                    );
+                    let slot = &mut self.slots[index];
+                    RecipeEngine::push_log(
+                        slot,
+                        &mut self.next_log_id,
+                        wall,
+                        Level::Error,
+                        &message,
+                    );
+                    continue;
+                }
+            }
             // A restore that fails is only logged: no `error` event (Sowel's `init`).
             let _ = self.start_slot(index, home, mono, wall, "Failed to restore", false);
         }
@@ -812,114 +1699,573 @@ impl RecipeEngine {
 
     // ---- Events and time ----
 
-    fn run(
+    /// One call into the running instance at `index`. A call that returns a new state replaces
+    /// the cached state and listen set (and is a `recipe.instance.state.changed`); the lines it
+    /// logged go to the instance's log; a failure is logged and never stops the others; a failure
+    /// of the recipe as a whole fails it (`fail_script`).
+    fn call_slot(
         &mut self,
+        index: usize,
         home: &Home,
         wall: u64,
         mono: u64,
-        mut call: impl FnMut(&mut dyn Runner, &mut Cx<'_>) -> Result<(), String>,
+        call: impl FnOnce(
+            &mut dyn Recipe,
+            &NativeHost<'_>,
+            u32,
+            Clock,
+        ) -> Result<Option<Update>, RecipeError>,
     ) {
-        for slot in &mut self.slots {
-            let Some(runner) = slot.runner.as_mut() else {
-                continue;
-            };
-            let mut cx = Cx {
-                home,
-                instance: slot.instance.id,
-                now: mono,
-                wall,
-                lines: Vec::new(),
-            };
-            let before = runner.state();
-            let result = call(runner.as_mut(), &mut cx);
-            // A write of a state key is `recipe.instance.state.changed`.
-            if runner.state() != before {
-                let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
-                announce(&self.live, || EngineEvent::RecipeInstanceStateChanged {
-                    instance_id: id,
-                    recipe_id: recipe.clone(),
-                });
+        let slot = &mut self.slots[index];
+        let Some(running) = slot.running.as_mut() else {
+            return;
+        };
+        let provider = running.provider;
+        let native = &mut self.natives[provider];
+        let Some(recipe) = native.recipe.as_mut() else {
+            return;
+        };
+        let host = NativeHost::new(home, slot.instance.id, &native.names, mono, wall);
+        let result = call(recipe.as_mut(), &host, running.handle, Clock { mono, wall });
+        let lines = host.take_lines();
+        let mut failure = None;
+        let error = match result {
+            Ok(Some(update)) => {
+                // A write of a state key is `recipe.instance.state.changed`.
+                if *update.state != *running.state {
+                    let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
+                    announce(&self.live, || EngineEvent::RecipeInstanceStateChanged {
+                        instance_id: id,
+                        recipe_id: recipe.clone(),
+                    });
+                }
+                running.state = update.state.into();
+                running.listen = self.listens.indexes(&update.listen);
+                self.interest_stale = true;
+                None
             }
-            let lines = std::mem::take(&mut cx.lines);
-            RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
-            // A handler that fails never stops the others, nor the loop.
-            if let Err(error) = result {
-                log::error!("recipe instance {}: {error}", slot.instance.id);
-                let message = format!("Error: {error}");
-                RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+            Ok(None) => None,
+            Err(error) if error.kind == ErrorKind::Recipe => {
+                failure = Some(error.message);
+                None
             }
+            Err(error) => Some(error.message),
+        };
+        RecipeEngine::push_lines(slot, &mut self.next_log_id, wall, lines);
+        if let Some(error) = error {
+            log::error!("recipe instance {}: {error}", slot.instance.id);
+            let message = format!("Error: {error}");
+            RecipeEngine::push_log(slot, &mut self.next_log_id, wall, Level::Error, &message);
+        }
+        if let Some(reason) = failure {
+            self.fail_script(provider, reason, wall, mono);
         }
     }
 
-    /// Gives an event to every running instance.
+    /// True when the running instance listens to the event (what its last call said).
+    fn listens_to(&self, running: &Running, event: &Event) -> bool {
+        running
+            .listen
+            .iter()
+            .filter_map(|i| self.listens.entries.get(usize::from(*i)))
+            .any(|wanted| match (wanted, event) {
+                (Wanted::Zone(zone), Event::Zone { zone: z, .. }) => zone == z,
+                (
+                    Wanted::Equipment(equipment, alias),
+                    Event::Equipment {
+                        equipment: e,
+                        alias: a,
+                        ..
+                    },
+                ) => equipment == e && alias == a,
+                (
+                    Wanted::Device(device, key),
+                    Event::Device {
+                        device: d, key: k, ..
+                    },
+                ) => device == d && **key == **k,
+                _ => false,
+            })
+    }
+
+    /// Gives an event to the instances that still have to get it: the built-in recipes first, all
+    /// of them, at once, whatever the budget (`natives`, only the first time the event is given);
+    /// then the script instances that listen to it, while the budget lasts. False when scripts ran
+    /// out of time first (`entry` says where to go on).
+    fn dispatch(
+        &mut self,
+        home: &Home,
+        entry: &mut Carried,
+        natives: bool,
+        wall: u64,
+        mono: u64,
+        budget: &Budget,
+    ) -> bool {
+        let event = sdk_event(&entry.event);
+        if natives {
+            for index in 0..self.slots.len() {
+                let Some(running) = &self.slots[index].running else {
+                    continue;
+                };
+                if self.natives[running.provider].is_script() {
+                    continue;
+                }
+                self.call_slot(index, home, wall, mono, |recipe, host, handle, clock| {
+                    recipe.on_event(host, handle, &event, clock)
+                });
+            }
+        }
+        let from = match &entry.resume {
+            None => 0,
+            Some((id, place)) => {
+                let place = (*place).min(self.slots.len());
+                if self.slots.get(place).is_some_and(|s| s.instance.id == *id) {
+                    place
+                } else {
+                    self.slots
+                        .iter()
+                        .position(|s| s.instance.id == *id)
+                        .unwrap_or(place)
+                }
+            }
+        };
+        for index in from..self.slots.len() {
+            let slot = &self.slots[index];
+            let Some(running) = &slot.running else {
+                continue;
+            };
+            if !self.natives[running.provider].is_script()
+                || !self.listens_to(running, &entry.event)
+            {
+                continue;
+            }
+            if budget.spent() {
+                entry.resume = Some((slot.instance.id, index));
+                return false;
+            }
+            self.call_slot(index, home, wall, mono, |recipe, host, handle, clock| {
+                recipe.on_event(host, handle, &event, clock)
+            });
+        }
+        true
+    }
+
+    /// The timers that are due fire: the built-in recipes check theirs on every turn, a script
+    /// instance is called only when its deadline is due, and while the budget lasts (a due one
+    /// that waits is called on the next turn).
+    fn tick_with(&mut self, home: &Home, wall: u64, mono: u64, budget: &Budget) {
+        for index in 0..self.slots.len() {
+            let Some(running) = &self.slots[index].running else {
+                continue;
+            };
+            let native = &self.natives[running.provider];
+            if let Some(recipe) = &native.recipe {
+                let host = NativeHost::new(
+                    home,
+                    self.slots[index].instance.id,
+                    &native.names,
+                    mono,
+                    wall,
+                );
+                let deadline = recipe.next_deadline(&host, running.handle);
+                if !deadline.is_due(Clock { mono, wall }) {
+                    continue;
+                }
+                if native.is_script() && budget.spent() {
+                    continue;
+                }
+            }
+            self.call_slot(index, home, wall, mono, |recipe, host, handle, clock| {
+                recipe.tick(host, handle, clock)
+            });
+        }
+    }
+
+    /// Gives an event to every running instance, now (no time bound).
     pub fn handle(&mut self, home: &Home, event: &Event, wall: u64, mono: u64) {
-        self.run(home, wall, mono, |runner, cx| runner.on_event(event, cx));
+        if self.slots.iter().all(|s| s.running.is_none()) {
+            return;
+        }
+        let mut entry = Carried {
+            event: event.clone(),
+            resume: None,
+        };
+        self.dispatch(home, &mut entry, true, wall, mono, &Budget::none());
     }
 
     /// The time passed: the timers that are due fire.
     pub fn tick(&mut self, home: &Home, wall: u64, mono: u64) {
-        self.run(home, wall, mono, |runner, cx| runner.tick(cx));
+        self.tick_with(home, wall, mono, &Budget::none());
+    }
+
+    /// One turn of the radio loop: a failed script that may come back does (one per turn), the
+    /// events (those carried from the last turn first) go to the instances, then the timers that
+    /// are due fire. Scripts get `SCRIPT_TURN_LIMIT_MS` of the turn, a restart's load and starts
+    /// included; the script deliveries left wait for the next turn, while the built-in recipes
+    /// always get each event at once (nothing is copied while every event is handled in the turn,
+    /// as it is without scripts).
+    pub fn turn(&mut self, home: &Home, events: Vec<Event>, wall: u64, mono: u64) {
+        let budget = Budget::of(&self.script_clock);
+        self.restart_due_scripts(home, wall, mono, &budget);
+        for provider in 0..self.natives.len() {
+            self.start_waiting(provider, home, wall, mono, &budget);
+        }
+        while let Some(mut entry) = self.carry.pop_front() {
+            if self.slots.iter().all(|s| s.running.is_none()) {
+                continue;
+            }
+            if !self.dispatch(home, &mut entry, false, wall, mono, &budget) {
+                self.carry.push_front(entry);
+                break;
+            }
+        }
+        for event in events {
+            if self.slots.iter().all(|s| s.running.is_none()) {
+                continue;
+            }
+            let mut entry = Carried {
+                event,
+                resume: None,
+            };
+            // With the budget spent the built-in recipes still get the event (`dispatch` serves
+            // them first); only the scripts' part is carried, behind the ones carried before.
+            if self.dispatch(home, &mut entry, true, wall, mono, &budget) {
+                continue;
+            }
+            if self.carry.len() >= MAX_CARRIED_EVENTS {
+                self.carry.pop_front();
+                log::warn!("recipes: carried events over {MAX_CARRIED_EVENTS}, the oldest dropped");
+            }
+            self.carry.push_back(entry);
+        }
+        self.tick_with(home, wall, mono, &budget);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use solite_recipe_sdk::{Host, Pruned};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A recipe that fails on every event, and one that counts the events it gets.
     struct Failing;
-    impl Runner for Failing {
-        fn on_event(&mut self, _: &Event, _: &mut Cx<'_>) -> Result<(), String> {
-            Err("boom".into())
+    impl Recipe for Failing {
+        fn info(&self) -> Value {
+            json!({"id": "failing", "name": "Failing", "slots": []})
         }
-        fn tick(&mut self, _: &mut Cx<'_>) -> Result<(), String> {
-            Err("boom".into())
-        }
-        fn state(&self) -> StateKeys {
-            StateKeys::default()
-        }
-        fn listen(&self, _: &mut Interest) {}
-    }
-
-    struct Counting(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-    impl Runner for Counting {
-        fn on_event(&mut self, _: &Event, _: &mut Cx<'_>) -> Result<(), String> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        fn validate(&self, _: &dyn Host, _: &Value) -> Result<(), RecipeError> {
             Ok(())
         }
-        fn tick(&mut self, _: &mut Cx<'_>) -> Result<(), String> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+        fn start(
+            &mut self,
+            _: &dyn Host,
+            _: u32,
+            _: &Value,
+            _: Clock,
+        ) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
         }
-        fn state(&self) -> StateKeys {
-            StateKeys::default()
+        fn stop(&mut self, _: u32) {}
+        fn on_event(
+            &mut self,
+            _: &dyn Host,
+            _: u32,
+            _: &SdkEvent,
+            _: Clock,
+        ) -> Result<Option<Update>, RecipeError> {
+            Err("boom".into())
         }
-        fn listen(&self, _: &mut Interest) {}
+        fn tick(&mut self, _: &dyn Host, _: u32, _: Clock) -> Result<Option<Update>, RecipeError> {
+            Err("boom".into())
+        }
+        fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
+        }
+        fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {
+            None
+        }
     }
 
-    fn slot(n: u8, runner: Box<dyn Runner>) -> Slot {
+    struct Counting(Arc<AtomicUsize>);
+    impl Recipe for Counting {
+        fn info(&self) -> Value {
+            json!({"id": "counting", "name": "Counting", "slots": []})
+        }
+        fn validate(&self, _: &dyn Host, _: &Value) -> Result<(), RecipeError> {
+            Ok(())
+        }
+        fn start(
+            &mut self,
+            _: &dyn Host,
+            _: u32,
+            _: &Value,
+            _: Clock,
+        ) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
+        }
+        fn stop(&mut self, _: u32) {}
+        fn on_event(
+            &mut self,
+            _: &dyn Host,
+            _: u32,
+            _: &SdkEvent,
+            _: Clock,
+        ) -> Result<Option<Update>, RecipeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn tick(&mut self, _: &dyn Host, _: u32, _: Clock) -> Result<Option<Update>, RecipeError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
+        }
+        fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {
+            None
+        }
+    }
+
+    /// An engine with the test recipes after the built-in one (indexes 1 and 2).
+    fn engine_with(recipes: Vec<Box<dyn Recipe + Send>>) -> RecipeEngine {
+        let mut engine = RecipeEngine::new();
+        engine.natives.extend(recipes.into_iter().map(Native::new));
+        engine
+    }
+
+    fn slot(n: u8, recipe_id: &str, provider: Option<usize>) -> Slot {
         Slot {
             instance: RecipeInstance {
                 id: Id::from_random([n; 16]),
-                recipe_id: "motion-light".into(),
+                recipe_id: recipe_id.into(),
                 params: "null".into(),
                 enabled: true,
                 created_at: 0,
             },
-            runner: Some(runner),
+            running: provider.map(|provider| Running {
+                provider,
+                handle: u32::from(n),
+                state: NO_STATE.into(),
+                listen: Vec::new(),
+            }),
             log: VecDeque::new(),
         }
+    }
+
+    #[cfg(feature = "script-recipes")]
+    /// A recipe that takes `ms` of the script clock for each event and says who it was called for.
+    struct Slow {
+        id: &'static str,
+        clock: Arc<std::sync::atomic::AtomicU64>,
+        ms: u64,
+        calls: Arc<std::sync::Mutex<Vec<u32>>>,
+    }
+    impl Recipe for Slow {
+        fn info(&self) -> Value {
+            json!({"id": self.id, "name": "Slow", "slots": []})
+        }
+        fn validate(&self, _: &dyn Host, _: &Value) -> Result<(), RecipeError> {
+            Ok(())
+        }
+        fn start(
+            &mut self,
+            _: &dyn Host,
+            _: u32,
+            _: &Value,
+            _: Clock,
+        ) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
+        }
+        fn stop(&mut self, _: u32) {}
+        fn on_event(
+            &mut self,
+            _: &dyn Host,
+            handle: u32,
+            _: &SdkEvent,
+            _: Clock,
+        ) -> Result<Option<Update>, RecipeError> {
+            self.clock.fetch_add(self.ms, Ordering::SeqCst);
+            self.calls.lock().unwrap().push(handle);
+            Ok(None)
+        }
+        fn tick(&mut self, _: &dyn Host, _: u32, _: Clock) -> Result<Option<Update>, RecipeError> {
+            Ok(None)
+        }
+        fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
+            Ok(Update {
+                state: "{}".into(),
+                listen: Vec::new(),
+            })
+        }
+        fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {
+            None
+        }
+    }
+
+    #[cfg(feature = "script-recipes")]
+    type Calls = Arc<std::sync::Mutex<Vec<u32>>>;
+
+    #[cfg(feature = "script-recipes")]
+    /// An engine with a counting built-in recipe (provider 1) and a slow script recipe (provider
+    /// 2, 400 ms per event, over the 300 ms of a turn), `scripts` instances of the script, all
+    /// listening to the root zone, and one of the counting recipe.
+    fn slow_world(scripts: u8) -> (RecipeEngine, Arc<AtomicUsize>, Calls) {
+        let clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let calls: Calls = Arc::default();
+        let count = Arc::new(AtomicUsize::new(0));
+        let mut engine = engine_with(vec![Box::new(Counting(count.clone()))]);
+        let read = clock.clone();
+        let script_clock: ScriptClock = Arc::new(move || read.load(Ordering::SeqCst));
+        let recipe = Slow {
+            id: "slow",
+            clock,
+            ms: 400,
+            calls: calls.clone(),
+        };
+        engine
+            .add_script(
+                Box::new(recipe),
+                Box::new(|| Err("no".to_string())),
+                script_clock,
+            )
+            .unwrap();
+        engine.slots.push(slot(1, "counting", Some(1)));
+        for n in 0..scripts {
+            engine.slots.push(slot(10 + n, "slow", Some(2)));
+        }
+        let listen = engine.listens.indexes(&[ListenEntry::Zone {
+            zone: Id::ROOT_ZONE.to_string(),
+        }]);
+        for slot in &mut engine.slots {
+            slot.running.as_mut().unwrap().listen = listen.clone();
+        }
+        (engine, count, calls)
+    }
+
+    #[cfg(feature = "script-recipes")]
+    fn root_motion(motion: bool) -> Event {
+        Event::Zone {
+            zone: Id::ROOT_ZONE,
+            motion,
+            luminosity: None,
+        }
+    }
+
+    #[cfg(feature = "script-recipes")]
+    #[test]
+    fn built_in_recipes_get_every_event_at_once_even_when_the_scripts_spent_the_turn() {
+        let home = Home::new(1);
+        let (mut engine, count, calls) = slow_world(2);
+        let events = vec![root_motion(true), root_motion(false), root_motion(true)];
+        engine.turn(&home, events, 1, 1);
+        // The first script instance took the budget: one script call in the turn, the rest carried
+        // (three events, none of them lost) ...
+        assert_eq!(calls.lock().unwrap().len(), 1);
+        assert_eq!(engine.carry.len(), 3);
+        // ... but the built-in recipe had all three events in the turn (and its timer's tick).
+        assert_eq!(count.load(Ordering::SeqCst), 3 + 1);
+    }
+
+    #[cfg(feature = "script-recipes")]
+    #[test]
+    fn past_the_carried_bound_the_oldest_script_deliveries_are_dropped_the_built_ins_lose_none() {
+        let home = Home::new(1);
+        let (mut engine, count, _) = slow_world(2);
+        let sent = MAX_CARRIED_EVENTS + 5;
+        let events: Vec<Event> = (0..sent).map(|n| root_motion(n % 2 == 0)).collect();
+        engine.turn(&home, events, 1, 1);
+        assert_eq!(engine.carry.len(), MAX_CARRIED_EVENTS);
+        assert_eq!(count.load(Ordering::SeqCst), sent + 1); // and the turn's tick
+    }
+
+    #[cfg(feature = "script-recipes")]
+    #[test]
+    fn a_carried_event_goes_on_with_the_next_instance_when_the_one_it_waited_for_was_deleted() {
+        let home = Home::new(1);
+        let (mut engine, _, calls) = slow_world(3);
+        engine.turn(&home, vec![root_motion(true)], 1, 1);
+        // The first script instance (handle 10) took the budget; the event waits for the second.
+        assert_eq!(*calls.lock().unwrap(), vec![10]);
+        let waiting = engine.slots[2].instance.id;
+        assert_eq!(engine.carry[0].resume.as_ref().map(|r| r.0), Some(waiting));
+        engine.delete(&waiting.to_string()).unwrap();
+        engine.turn(&home, Vec::new(), 2, 2);
+        // The third (handle 12) is the one the event goes to now: it is not lost.
+        assert_eq!(*calls.lock().unwrap(), vec![10, 12]);
+    }
+
+    #[cfg(feature = "script-recipes")]
+    #[test]
+    fn at_most_one_failed_script_comes_back_in_a_turn() {
+        let home = Home::new(1);
+        let clock: ScriptClock = Arc::new(|| 0);
+        let mut engine = RecipeEngine::new();
+        for id in ["first", "second"] {
+            let recipe = Slow {
+                id,
+                clock: Arc::default(),
+                ms: 0,
+                calls: Arc::default(),
+            };
+            engine
+                .add_script(
+                    Box::new(recipe),
+                    Box::new(move || {
+                        Ok(Box::new(Slow {
+                            id,
+                            clock: Arc::default(),
+                            ms: 0,
+                            calls: Arc::default(),
+                        }) as Box<dyn Recipe + Send>)
+                    }),
+                    clock.clone(),
+                )
+                .unwrap();
+        }
+        for native in engine.natives.iter_mut().filter(|n| n.is_script()) {
+            native.recipe = None;
+            native.script.as_mut().unwrap().failed = Some(Failed {
+                since: 0,
+                reason: "test".into(),
+            });
+        }
+        let failed = |engine: &RecipeEngine| {
+            engine
+                .natives
+                .iter()
+                .filter(|n| n.failure().is_some())
+                .count()
+        };
+        engine.turn(&home, Vec::new(), 60_000, 60_000);
+        assert_eq!(failed(&engine), 1);
+        engine.turn(&home, Vec::new(), 60_001, 60_001);
+        assert_eq!(failed(&engine), 0);
     }
 
     #[test]
     fn an_instance_whose_handler_fails_does_not_stop_the_others() {
         let home = Home::new(1);
-        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let mut engine = RecipeEngine::new();
-        engine.slots.push(slot(1, Box::new(Failing)));
-        engine
-            .slots
-            .push(slot(2, Box::new(Counting(count.clone()))));
+        let count = Arc::new(AtomicUsize::new(0));
+        let mut engine = engine_with(vec![Box::new(Failing), Box::new(Counting(count.clone()))]);
+        engine.slots.push(slot(1, "failing", Some(1)));
+        engine.slots.push(slot(2, "counting", Some(2)));
         let event = Event::Zone {
             zone: Id::ROOT_ZONE,
             motion: true,
@@ -927,7 +2273,7 @@ mod tests {
         };
         engine.handle(&home, &event, 1, 1);
         engine.tick(&home, 2, 2);
-        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
         // The failure is in the failing instance's log, not in the other's.
         let failing = engine.slots[0].instance.id.to_string();
         let healthy = engine.slots[1].instance.id.to_string();
@@ -946,9 +2292,7 @@ mod tests {
         let mut engine = RecipeEngine::new();
         engine.set_live(hub.clone());
         // Params that no recipe takes: the start fails whatever the way it is asked for.
-        let mut stopped = slot(1, Box::new(Counting(Default::default())));
-        stopped.runner = None;
-        engine.slots.push(stopped);
+        engine.slots.push(slot(1, "motion-light", None));
         // The start right after a create: log line and event.
         assert!(
             engine
@@ -967,5 +2311,36 @@ mod tests {
         assert_eq!(hub.take_batch(client), None);
         let id = engine.slots[0].instance.id.to_string();
         assert_eq!(engine.log(&id, 50).len(), 3);
+    }
+
+    /// `levels` nested lists inside the params object: the object is the first level.
+    fn nested(levels: usize) -> Value {
+        let mut value = json!([]);
+        for _ in 0..levels.saturating_sub(2) {
+            value = json!([value]);
+        }
+        json!({ "deep": value })
+    }
+
+    #[test]
+    fn params_nested_eight_levels_deep_pass_and_nine_or_a_hundred_are_refused() {
+        // Counting levels: the params object is the first one.
+        for (levels, ok) in [(1, true), (7, true), (8, true), (9, false), (100, false)] {
+            let value = if levels == 1 {
+                json!({})
+            } else {
+                nested(levels)
+            };
+            assert_eq!(
+                depth(&value, MAX_PARAMS_DEPTH),
+                levels.min(MAX_PARAMS_DEPTH + 1)
+            );
+            assert_eq!(check_depth(&value).is_ok(), ok, "{levels} levels");
+        }
+        let refused = check_depth(&nested(9)).unwrap_err();
+        assert_eq!(refused.status, 400);
+        assert_eq!(refused.message, "Invalid params: params nested too deeply");
+        // Wide is not deep: 200 members in one list.
+        assert!(check_depth(&json!({"list": (0..200).collect::<Vec<_>>()})).is_ok());
     }
 }

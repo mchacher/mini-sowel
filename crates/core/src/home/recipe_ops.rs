@@ -15,6 +15,23 @@ impl Home {
         &self.recipes
     }
 
+    /// Loads a script recipe (spec 041): `GET /recipes` lists it from then on. The error is
+    /// `Script recipe invalid: <reason>`.
+    #[cfg(feature = "script-recipes")]
+    pub fn load_script_recipe(
+        &mut self,
+        source: &str,
+        runtimes: std::sync::Arc<dyn crate::recipes::script::ScriptRuntimes>,
+        clock: crate::recipes::ScriptClock,
+    ) -> Result<crate::recipes::script::ScriptSummary, String> {
+        self.recipes.load_script(source, runtimes, clock)
+    }
+
+    /// The counters of the script recipes loaded, for the box's `scripts:` line.
+    pub fn script_stats(&self) -> Vec<(String, solite_recipe_sdk::RunStats)> {
+        self.recipes.script_stats()
+    }
+
     /// The events waiting for the engine.
     pub fn events(&self) -> &EventQueue {
         &self.events
@@ -29,7 +46,7 @@ impl Home {
     /// Runs `f` with the engine taken out of the home, so that the engine can read the home it
     /// belongs to.
     fn engine_reads_home<R>(&mut self, f: impl FnOnce(&mut RecipeEngine, &Home) -> R) -> R {
-        let mut engine = std::mem::take(&mut self.recipes);
+        let mut engine = std::mem::replace(&mut self.recipes, RecipeEngine::placeholder());
         let result = f(&mut engine, self);
         self.recipes = engine;
         result
@@ -67,10 +84,12 @@ impl Home {
         wall: u64,
     ) -> Outcome<RecipeInstance> {
         let mono = self.mono(wall);
-        let instance =
-            self.with_engine(|engine, home| engine.update(home, id, params, wall, mono))?;
-        self.recipes_changed = true;
-        Ok(instance)
+        let result = self.with_engine(|engine, home| engine.update(home, id, params, wall, mono));
+        // A script recipe that fails at once is 500 with the new settings kept: written.
+        if result.is_ok() || result.as_ref().is_err_and(|f| f.status == 500) {
+            self.recipes_changed = true;
+        }
+        result
     }
 
     /// `DELETE /recipe-instances/:id`.
@@ -83,10 +102,17 @@ impl Home {
     /// `POST /recipe-instances/:id/enable` and `/disable`.
     pub fn set_recipe_enabled(&mut self, id: &str, enabled: bool, wall: u64) -> Outcome<()> {
         let mono = self.mono(wall);
-        let changed =
-            self.with_engine(|engine, home| engine.set_enabled(home, id, enabled, wall, mono))?;
-        if changed {
-            self.recipes_changed = true;
+        let result =
+            self.with_engine(|engine, home| engine.set_enabled(home, id, enabled, wall, mono));
+        match result {
+            Ok(true) => self.recipes_changed = true,
+            Ok(false) => {}
+            // A script recipe that fails at once is 500, the instance enabled: written.
+            Err(failure) if failure.status == 500 && enabled => {
+                self.recipes_changed = true;
+                return Err(failure);
+            }
+            Err(failure) => return Err(failure),
         }
         Ok(())
     }
@@ -123,13 +149,12 @@ impl Home {
         if self.recipes.is_empty() {
             return;
         }
-        // The running instances do not change here: the interest stays.
-        self.engine_reads_home(|engine, home| {
-            for event in &events {
-                engine.handle(home, event, wall, mono);
-            }
-            engine.tick(home, wall, mono);
-        });
+        self.engine_reads_home(|engine, home| engine.turn(home, events, wall, mono));
+        // A turn restarts failed scripts and calls leave new listen sets: what the running
+        // instances listen to is read again when they changed.
+        if self.recipes.take_interest_stale() {
+            self.interest = self.recipes.interest();
+        }
     }
 
     // ---- What is to be written ----
