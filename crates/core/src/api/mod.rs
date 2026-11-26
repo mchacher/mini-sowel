@@ -5,6 +5,7 @@
 
 mod auth;
 mod devices;
+pub mod drain;
 mod equipments;
 pub(crate) mod input;
 mod orders;

@@ -17,6 +17,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Instant;
 
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
@@ -31,6 +32,7 @@ use esp_idf_svc::sys::{
     httpd_req_to_sockfd, httpd_resp_send, httpd_resp_send_chunk, httpd_resp_set_hdr,
     httpd_resp_set_status, httpd_resp_set_type, httpd_sess_trigger_close, httpd_uri_t,
 };
+use solite_core::api::drain::{DRAIN_LIMIT_MS, drain_body};
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
     MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
@@ -520,6 +522,29 @@ impl Read for BodyReader<'_> {
     }
 }
 
+impl BodyReader<'_> {
+    /// Reads and drops what is left of the body, before the connection closes after a refusal: a
+    /// socket closed with unread bytes ends with a reset and the client loses the answer. Bounded
+    /// by the declared length and `DRAIN_LIMIT_MS`, checked between two reads (a read may wait its
+    /// receive timeout, 5 s, past it); the 1 KB buffer is on the stack, which fits
+    /// the jobs' threads (10 KB for the backup, 16 KB for the update). Not used on the 413 of a
+    /// declared length over the limit: the client must not be made to send 2 MB.
+    fn drain(&mut self) {
+        static START: OnceLock<Instant> = OnceLock::new();
+        let remaining = self.remaining;
+        let mut clock = || {
+            u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
+        };
+        let began = Instant::now();
+        let dropped = drain_body(self, remaining, &mut clock, DRAIN_LIMIT_MS);
+        log::info!(
+            "http: refused body drained: {dropped} bytes dropped, {} left, {} ms",
+            remaining.saturating_sub(dropped),
+            began.elapsed().as_millis()
+        );
+    }
+}
+
 /// `POST /api/v1/system/update`, once the core has let it through: the body goes into
 /// `Updates::install`, through the OTA thread. Answers; true when the update is installed and the
 /// ESP32 must restart (after `complete`, so the answer is out first). Runs on the `update` thread
@@ -539,6 +564,7 @@ fn answer_update(raw: &Raw, length: usize) -> bool {
     let installed = response.status == 200;
     raw.answer(&response, &[]);
     if !installed {
+        source.drain();
         raw.close_after();
     }
     installed
@@ -659,8 +685,8 @@ fn answer_export(raw: &Raw, ticket: BackupTicket, password: Option<&str>) {
 
 /// `POST /api/v1/system/backup`, once the core has let it through: the body goes into
 /// `BackupTicket::restore`. Answers; true when the restore is staged and the ESP32 must restart
-/// (after `complete`, so the answer is out first). A refusal leaves body bytes unread: the
-/// connection closes. Runs on the `backup` thread (`job_thread::run`): it writes the flash.
+/// (after `complete`, so the answer is out first). A refusal reads and drops the rest of
+/// the body, then the connection closes. Runs on the `backup` thread (`job_thread::run`): it writes the flash.
 fn answer_restore(
     raw: &Raw,
     ticket: BackupTicket,
@@ -683,6 +709,11 @@ fn answer_restore(
     raw.answer(&response, &[]);
     if response.status == 200 {
         return true;
+    }
+    // A body declared over the limit is refused before a byte is read: the client is not made to
+    // send it (413 `Backup too large`).
+    if response.status != 413 {
+        source.drain();
     }
     raw.close_after();
     false
