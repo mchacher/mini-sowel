@@ -55,4 +55,5 @@
 
 - **D78**: script recipes are installed from a catalogue or an upload, as files signed with a recipe
   key of their own (magic `SOLITERS`, not the firmware's), checked at install and at every boot,
-  admitted by the PSRAM's lowest free since boot against a reserve; not in the backup.
+  admitted by the PSRAM free now against a reserve; not in the backup; routes of Solite's own
+  under `/recipes/*` (Sowel's plugin store serves packages, not scripts).

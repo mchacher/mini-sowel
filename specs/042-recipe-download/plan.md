@@ -30,13 +30,13 @@
 | install | A built-in id; an installed id; a third script recipe; an unknown id; `minVersion` above the firmware | 409, 409, 409, 404, 409 |
 | install | Kept stopped instances of that id, enabled and disabled | The enabled ones start |
 | guard | An install during a backup; an update during an install; a backup during an install | 409 with the running job's name |
-| memory | Probe with `minFree − limit` under the reserve; just over | Refused with the figures; admitted |
+| memory | Probe with `free − limit` under the reserve; just over | Refused with the figures; admitted |
 | update | Newer version that loads | Instances restarted with their settings, file replaced |
 | update | Newer version that does not load | Old one back, instances restarted, 400 with the reason |
 | update | Same or older version (catalogue or upload) | 409 |
 | update | The write fails after the new version loaded | Old version back, 500 |
 | update | The old file does not load again | Recipe failed, instances stopped with the reason, 500 |
-| uninstall | Installed recipe | Instances stopped and kept, `Recipe not installed` logged, file removed |
+| uninstall | Installed recipe | Instances stopped and kept, `Recipe not found: <id>` logged, file removed |
 | uninstall | A built-in script | 409 |
 | boot | Two installed files; one changed on the flash | The good one loaded; the other refused, logged, left in place |
 | boot | Safe mode | No installed script loaded |
