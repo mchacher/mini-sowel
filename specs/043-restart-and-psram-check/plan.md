@@ -2,12 +2,12 @@
 
 ## Steps
 
-- [ ] 1. Probation `Health` with the PSRAM, its reason logged once; the firmware's `healthy()` and the
+- [x] 1. Probation `Health` with the PSRAM, its reason logged once; the firmware's `healthy()` and the
       OTA thread without its buffer
-- [ ] 2. The restart route, `Reply::Restart`, the safe mode's exception; host 501; firmware 202 then
+- [x] 2. The restart route, `Reply::Restart`, the safe mode's exception; host 501; firmware 200 (Sowel's answer) then
       `restart_after_update`, once
-- [ ] 3. The Restart card
-- [ ] 4. Docs: living spec, sowel-subset, D79, roadmap
+- [x] 3. The Restart card
+- [x] 4. Docs: living spec, sowel-subset, D79, roadmap
 
 ## Test plan
 

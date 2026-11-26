@@ -359,6 +359,7 @@ recipes"). The routes:
 | `GET /api/v1/auth/status`, `POST /api/v1/auth/setup`, `/login`, `/refresh`, `/logout` | Sowel's authentication (see "Protects the home with a password") |
 | `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
 | `GET /api/v1/system/version`, `POST /api/v1/system/version/check`, `POST /api/v1/system/update` | the version and the last check's latest release; a check now; the signed update file as the body, or an empty body to pull the latest release (see "Updates itself from a signed file") |
+| `POST /api/v1/system/restart` | restarts the box (an empty body; see "Restarts on request" under "Updates itself from a signed file") |
 | `GET /api/v1/system/backup`, `POST /api/v1/system/backup` | the full backup file, with the password in `X-Backup-Password`; its restore (see "Backs up and restores the whole box") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
@@ -429,7 +430,7 @@ except:
   431 (the backup's password header can need 1536 of them). A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
 - In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
   `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`),
-  `POST /api/v1/system/update` and `POST /api/v1/system/version/check`; a restore and a factory reset are refused too.
+  `POST /api/v1/system/update`, `POST /api/v1/system/version/check` and `POST /api/v1/system/restart`; a restore and a factory reset are refused too.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -1069,6 +1070,12 @@ copy embedded in the radio image at build time.
   `error` (danger token) under it; after a success, "The box restarts; reload the page in a
   minute." The upload is disabled during a pull or a check, and they are during an upload. The file
   goes as the body, `Content-Type: application/octet-stream`, with the bearer token. French and English labels.
+  The **Restart** card (after the Firmware update card): a "Restart" button, a confirmation ("Restart
+  the box? It is back in about a minute."; Cancel sends nothing), then `POST /api/v1/system/restart`
+  and a message while the box is away; the page polls `GET /api/v1/system/version` every 2 s (never
+  two at once) and reloads once it answers again after being away, a 401 included (the session ends with the restart, the
+  reload shows the login). After 90 s without an answer, a message asks to reload by hand. A refusal
+  (409, 501, ...) shows the server's text and the button is enabled again. French and English.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is not open for 3 s (also at the first load) the top bar's link indicator says so:
   "Connecting..." while it tries, "Disconnected" between tries; the interface reconnects (1 s, 2 s, 4 s... up to
@@ -1168,9 +1175,14 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   slot holds the image to fall back to). No key: 503.
 - **Probation.** A newly booted image is on probation. It is confirmed (the running image is kept
   from then on, logged `update: running image confirmed`) once it has run healthy for 60 s without
-  a break; a break restarts the minute. Healthy means the engine's loop is running and the API
-  server is listening; the Wi-Fi link is not required, so a router that is off does not roll back a
-  good update (decision D54). An image not confirmed 300 s after its start is rolled back (logged
+  a break; a break restarts the minute. Healthy means the engine's loop is running, the API
+  server is listening and the PSRAM is there (its size read from the heap, D79; every Solite image
+  expects it); the Wi-Fi link is not required, so a router that is off does not roll back a
+  good update (decision D54). The reason an image is not healthy is logged once, when it changes
+  (`update: unhealthy: no PSRAM`, `engine stopped` or `API not listening`). The OTA thread starts
+  without PSRAM too, with no chunk buffer: every update call then answers 503 `No memory for an
+  update` and the probation ticks, so an image without its PSRAM is rolled back at 300 s. The host
+  has no PSRAM to expect and always reports it present. An image not confirmed 300 s after its start is rolled back (logged
   `update: not confirmed in time, rolling back`): the previous image becomes the next boot, and the
   box restarts into it. A confirmation or a rollback that fails is logged (`update: confirm
   failed: ...`, `update: roll back failed: ...`) and tried again at the next tick, about one
@@ -1327,6 +1339,18 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   (a panic, a watchdog, the last rung of the ladder) rolls the image back like any other restart,
   and an image that boots into the safe mode is not healthy (its engine's loop does not run): it
   rolls back 300 s after its start like any image that does not confirm.
+- **Restarts on request.** `POST /api/v1/system/restart` (Sowel's route, Solite's answer, D79; the session's, 401 without;
+  an empty body) answers Sowel's 200 `{"success": true, "message": "Restarting"}`, then the box restarts as after an update: 500 ms
+  for the answer to leave, the engine stopped (its final save runs, 10 s at most), then the boot's
+  cause is `asked` (D58: not a crash, the restart count and the safe mode clear). A second request
+  while a restart is under way is answered the same, and the box restarts once. Refused with 409: while
+  an update is received or installed (`Update already in progress`), while an update check runs
+  (`Update check already in progress`), while a backup or a restore runs (`Backup already in
+  progress`), and while the running image is on probation (`The update is being checked, restart in
+  a minute`: a reset would roll the update back). Allowed when an update is installed and waits for its restart, or a
+  restore waits for its: the box is about to restart. The safe mode lets the route through (the way
+  out of it; the engine is already stopped, no wait). An open pairing window is closed by the restart.
+  The Mac's host answers 501 `{"error": "The host does not restart itself"}`.
 
 ### Supervises its engine
 
@@ -1366,9 +1390,11 @@ way in. Nothing of this writes the flash.
   the engine thread does not start (no radio reset, no loop, no saver, no boot marker, no pairing,
   no recipe). The home is loaded and served, so one can log in, look for a release and install an update; a home that
   cannot be loaded is replaced in RAM by an empty one (logged), and the stored files are never
-  touched. Every request that is not a `GET` is refused with 503 but the account's, the update's and the release check's (`POST /api/v1/system/version/check`);
+  touched. Every request that is not a `GET` is refused with 503 but the account's, the update's, the release check's (`POST /api/v1/system/version/check`)
+  and the restart's (`POST /api/v1/system/restart`, D79);
   a restore and a factory reset need the presence a power-on gives, so they are refused too: the
-  update is the way out over the network, otherwise a USB flash or a power-on. The first-password
+  restart and the update are the ways out over the network (a restart asked for clears the safe
+  mode), otherwise a USB flash or a power-on. The first-password
   setup follows the reset reason as always, so a safe mode never opens it. The safe mode is
   retried: after 1 hour the first time since the power-on, 4 hours the second, 24 hours from the
   third on, the box restarts once with the cause `safe-mode-retry`, the restart times cleared; a
@@ -1791,3 +1817,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
 | 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |
+| 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |

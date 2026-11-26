@@ -175,3 +175,16 @@ fn in_normal_mode_a_zone_can_be_created() {
     let (status, body) = whole(server.send("POST", "/api/v1/zones", true, br#"{"name":"Attic"}"#));
     assert_eq!(status, 201, "{body}");
 }
+
+#[test]
+fn in_safe_mode_the_restart_goes_through_and_another_post_is_503() {
+    let server = Server::new();
+    for mode in [Mode::Safe, Mode::SafeBare] {
+        server.set_mode(mode);
+        let reply = server.send("POST", "/api/v1/system/restart", true, b"");
+        assert!(matches!(reply, Reply::Restart), "{mode:?}: {reply:?}");
+        let (status, body) = whole(server.send("POST", "/api/v1/zones", true, b"{}"));
+        assert_eq!(status, 503, "{mode:?}");
+        assert_eq!(body, json!({"error": SAFE_MODE_ERROR}));
+    }
+}

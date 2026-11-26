@@ -17,7 +17,7 @@ questions the spec review raised were decided in the run and are marked **(decid
 
 ## Goals
 
-1. `POST /api/v1/system/restart` restarts the box (the Mac's host answers that it cannot), and
+1. `POST /api/v1/system/restart` (Sowel's route) restarts the box (the Mac's host answers that it cannot), and
    Settings has a "Restart" card with a confirmation.
 2. An image on probation is confirmed only with its PSRAM; without it, it is rolled back.
 
@@ -31,7 +31,7 @@ questions the spec review raised were decided in the run and are marked **(decid
 
 1. `POST /api/v1/system/restart`, the administrator's (spec 029's session; 401 without, the gate runs
    first), empty body. The core answers `Reply::Restart` (as `Reply::Update`): the firmware sends
-   `202 { "restarting": true }` and then runs the existing `ota::restart_after_update()`
+   Sowel's answer, `200 { "success": true, "message": "Restarting" }`, and then runs the existing `ota::restart_after_update()`
    (`ota.rs:408`): 500 ms for the answer to leave, the engine stopped (it saves as it stops), at most
    10 s, then `supervisor::asked_restart()` (the boot's cause `asked`, D58: not a crash, it clears
    the restart count and the safe mode) and `esp_restart`. The box answers again after its boot.
@@ -44,9 +44,9 @@ questions the spec review raised were decided in the run and are marked **(decid
      checked, restart in a minute` (a reset then makes the bootloader roll the update back)
      **(decided in the run: refuse; the person can wait a minute)**.
    Allowed: when an update is installed and waits for its restart, or a restore waits for its
-   restart (the box is about to restart anyway): the same 202. While the pairing window is open: the
+   restart (the box is about to restart anyway): the same answer. While the pairing window is open: the
    restart closes it **(decided in the run: accept)**.
-3. A second request while a restart is under way: 202 again, one restart (a static flag in the
+3. A second request while a restart is under way: the same answer, one restart (a static flag in the
    firmware).
 4. The safe mode (D58, `safe_mode_refusal`, `api/mod.rs:416`) lets this route through, beside
    `auth/*`, `system/update` and `system/version/check`: restarting is the way out of it (the cause
@@ -55,7 +55,7 @@ questions the spec review raised were decided in the run and are marked **(decid
 5. The Mac's host maps `Reply::Restart` to `501 { "error": "The host does not restart itself" }`.
 6. Settings: a "Restart" card (Sowel's `card`, tokens) with a button; a confirmation ("Restart the
    box? It is back in about a minute."); then a message while the box is away; the page polls
-   `GET /api/v1/system/version` every 2 s and reloads once it answers, **a 401 included** (the
+   `GET /api/v1/system/version` every 2 s and reloads once it answers again after being away, **a 401 included** (the
    session ends with the restart: the reload shows the login); after 90 s without an answer, a
    message to reload by hand. A 409 shows its text and the button is enabled again. French and
    English. The interface's budget (170 KB gzip) holds.
@@ -86,7 +86,7 @@ questions the spec review raised were decided in the run and are marked **(decid
 
 ### docs/sowel-subset.md
 
-The route as a Solite extension (the system routes' table and the safe mode's list).
+Sowel's route with Solite's answer (the system routes' table and the safe mode's list).
 
 ### docs/decisions.md
 
@@ -117,8 +117,8 @@ D65, grows by one), refused during a probation.
 | Case | Behaviour |
 | ---- | --------- |
 | Restart during the 60 s probation of a new image | 409 `The update is being checked, restart in a minute` |
-| Two restart requests | 202 twice, one restart |
-| Restart in safe mode | 202; no engine to stop; the restart leaves safe mode |
+| Two restart requests | Answered twice, one restart |
+| Restart in safe mode | Answered; no engine to stop; the restart leaves safe mode |
 | Saves held (`saves hold`, the box tests' mode) | The engine's stop flushes them, as before an update's restart |
 | The box does not come back within 90 s | The card says so, offers a reload |
 | The session ends with the restart | The poll's 401 counts as an answer: reload, the login shows |
@@ -127,8 +127,10 @@ D65, grows by one), refused during a probation.
 
 ## Sowel contract
 
-No Sowel route restarts the engine; `POST /api/v1/system/restart` is a Solite extension, written in
-`docs/sowel-subset.md`.
+Sowel has `POST /api/v1/system/restart` (`src/api/routes/system.ts:181`, it restarts its
+container): Solite takes its name and its answer's shape (200 `{ "success": true, "message": "Restarting" }`), with
+its own 409s, written in `docs/sowel-subset.md`. (The first draft of this spec said Sowel had no such route;
+the contract test showed otherwise during the build.)
 
 ## How the user will check it
 

@@ -3,15 +3,16 @@
 //! probation's verdict (R5).
 
 use std::io::{ErrorKind, Read};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ed25519_dalek::VerifyingKey;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::{
-    CHUNK_BYTES, HEADER_BYTES, Probation, Refusal, UpdateAdapter, Verdict, Version, check_header,
-    parse_public_key,
+    CHUNK_BYTES, HEADER_BYTES, Health, Probation, Refusal, UpdateAdapter, Verdict, Version,
+    check_header, parse_public_key,
 };
 use crate::api::{Response, error};
 use crate::devices::lock;
@@ -34,11 +35,44 @@ enum Watch {
     On(Probation),
 }
 
+/// What the rest of the program may read of the updates (spec 043): whether an installation runs
+/// and whether the running image is on probation. Shared between `Updates` and the home, which
+/// refuses a restart that would break either.
+#[derive(Debug)]
+pub struct UpdateStatus {
+    state: Mutex<State>,
+    on_probation: AtomicBool,
+}
+
+impl Default for UpdateStatus {
+    fn default() -> Self {
+        UpdateStatus {
+            state: Mutex::new(State::Idle),
+            on_probation: AtomicBool::new(false),
+        }
+    }
+}
+
+impl UpdateStatus {
+    /// Why a restart now would do harm (`None`: it can go on): an installation in progress, or the
+    /// running image on probation (a reset then makes the bootloader roll the update back). An
+    /// update installed and waiting for its restart does not refuse: the box restarts anyway.
+    pub fn restart_refusal(&self) -> Option<&'static str> {
+        if matches!(*lock(&self.state), State::Installing) {
+            return Some("Update already in progress");
+        }
+        if self.on_probation.load(Ordering::SeqCst) {
+            return Some("The update is being checked, restart in a minute");
+        }
+        None
+    }
+}
+
 /// The update machinery of a program: one per program, shared by its threads.
 pub struct Updates {
     key: Option<VerifyingKey>,
     running: Version,
-    state: Mutex<State>,
+    status: Arc<UpdateStatus>,
     watch: Mutex<Watch>,
 }
 
@@ -60,7 +94,7 @@ pub(crate) struct Expected<'a> {
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        *lock(&self.updates.state) = if self.installed {
+        *lock(&self.updates.status.state) = if self.installed {
             State::Installed
         } else {
             State::Idle
@@ -74,7 +108,7 @@ impl Updates {
         Updates {
             key,
             running,
-            state: Mutex::new(State::Idle),
+            status: Arc::new(UpdateStatus::default()),
             watch: Mutex::new(Watch::Unchecked),
         }
     }
@@ -95,6 +129,11 @@ impl Updates {
             },
         };
         (Updates::new(key, running), line)
+    }
+
+    /// The status the home reads for the restart route (spec 043).
+    pub fn status(&self) -> Arc<UpdateStatus> {
+        Arc::clone(&self.status)
     }
 
     /// True when the build has a valid key.
@@ -126,7 +165,7 @@ impl Updates {
                 "Updates are not configured: this build has no update key",
             ));
         }
-        let mut state = lock(&self.state);
+        let mut state = lock(&self.status.state);
         match *state {
             State::Installing => return Err(Refusal::new(409, "Update already in progress")),
             State::Installed => {
@@ -253,10 +292,11 @@ impl Updates {
     /// monotonic time and the program's health. The first call asks `adapter.pending()`: a
     /// program not on probation then does nothing, ever. A `confirm` or `roll_back` that fails is
     /// logged and asked again at the next tick.
-    pub fn watch(&self, adapter: &mut dyn UpdateAdapter, now_ms: u64, healthy: bool) {
+    pub fn watch(&self, adapter: &mut dyn UpdateAdapter, now_ms: u64, health: Health) {
         let mut watch = lock(&self.watch);
         if matches!(*watch, Watch::Unchecked) {
             *watch = if adapter.pending() {
+                self.status.on_probation.store(true, Ordering::SeqCst);
                 Watch::On(Probation::new(now_ms))
             } else {
                 Watch::Off
@@ -265,19 +305,26 @@ impl Updates {
         let Watch::On(probation) = &mut *watch else {
             return;
         };
-        match probation.tick(now_ms, healthy) {
+        if let Some(reason) = probation.reason_changed(health) {
+            log::warn!("update: unhealthy: {reason}");
+        }
+        match probation.tick(now_ms, health) {
             Verdict::Wait => {}
             Verdict::Confirm => match adapter.confirm() {
                 Ok(()) => {
                     log::info!("update: running image confirmed");
                     *watch = Watch::Off;
+                    self.status.on_probation.store(false, Ordering::SeqCst);
                 }
                 Err(message) => log::warn!("update: confirm failed: {message}"),
             },
             Verdict::RollBack => {
                 log::warn!("update: not confirmed in time, rolling back");
                 match adapter.roll_back() {
-                    Ok(()) => *watch = Watch::Off,
+                    Ok(()) => {
+                        *watch = Watch::Off;
+                        self.status.on_probation.store(false, Ordering::SeqCst);
+                    }
                     Err(message) => log::warn!("update: roll back failed: {message}"),
                 }
             }

@@ -2095,6 +2095,7 @@ mod tests {
         ms: u64,
         calls: Arc<std::sync::Mutex<Vec<u32>>>,
     }
+    #[cfg(feature = "script-recipes")]
     impl Recipe for Slow {
         fn info(&self) -> Value {
             json!({"id": self.id, "name": "Slow", "slots": []})

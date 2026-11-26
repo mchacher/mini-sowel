@@ -147,6 +147,7 @@ interface's files).
 | `GET /api/v1/system/version` | The running version and the last check's latest release (Sowel's `VersionInfo`, a subset, D53, D65) |
 | `POST /api/v1/system/version/check` | Checks for a release now (Sowel's route, D65) |
 | `POST /api/v1/system/update` | Installs the signed update file in its body, or, with no body, pulls the latest release (Sowel's route takes no body, D53, D65) |
+| `POST /api/v1/system/restart` | Restarts the box (Sowel's route, Solite's answer, D79) |
 | `GET /api/v1/system/supervisor` | The supervisor's status: mode, boot cause, last incident, restarts (deviation, D58) |
 
 ## Equipment types with behaviour
@@ -169,7 +170,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53, D56, D58, D65 to D67).
+D44, D47 to D49, D53, D56, D58, D65 to D67, D79).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -205,10 +206,15 @@ the last check (`null` and `false` before one), without Sowel's two Docker field
 above the running version (Sowel has no such rule). The settings `update.manifestUrl` and
 `update.autoCheck` are Solite's own (D67).
 
+Differences of value in the restart (D79), none a new name or shape: `POST /api/v1/system/restart` is Sowel's
+route (it restarts Sowel's container through docker, answers `{success, message}` and refuses with 400, 403, 409 and 503
+of its own); Solite's restarts the box, answers the same shape, 200 `{"success": true, "message": "Restarting"}`, and refuses with 409 while an update, an
+update check, a backup or a probation is on (401 without a session, as every route).
+
 Differences of value in the safe mode (D58), none a new name: while the supervisor holds the engine
 stopped, every request that is not a `GET` answers 503 `{"error": "Safe mode: the engine is
 stopped"}`, except the account's routes (`/auth/*`), `POST /api/v1/system/update` and `POST
-/api/v1/system/version/check`. Sowel has no
+/api/v1/system/version/check` and `POST /api/v1/system/restart` (D79). Sowel has no
 such mode.
 
 ## Script recipes

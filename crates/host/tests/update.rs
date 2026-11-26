@@ -487,6 +487,32 @@ fn a_host_built_without_a_key_says_so_at_start_and_answers_503() {
 }
 
 #[test]
+fn the_host_answers_501_to_a_restart_and_401_without_a_token() {
+    let data = temp("restart");
+    let serving = serve(Path::new(plain_binary()), &data);
+    let answer = serving.request(
+        "POST",
+        "/api/v1/system/restart",
+        b"",
+        "application/json",
+        true,
+    );
+    assert_eq!(answer.status, 501, "{}", answer.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&answer.body).unwrap(),
+        json!({"error": "The host does not restart itself"})
+    );
+    let answer = serving.request(
+        "POST",
+        "/api/v1/system/restart",
+        b"",
+        "application/json",
+        false,
+    );
+    assert_eq!(answer.status, 401, "{}", answer.body);
+}
+
+#[test]
 #[ignore = "slow: waits for the door's 30 s idle timeout"]
 fn an_upload_that_stops_mid_image_ends_within_the_idle_timeout_and_the_next_one_is_not_409() {
     let host = keyed_host();

@@ -91,6 +91,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/system/supervisor"),
     ("POST", "/api/v1/system/update"),
     ("POST", "/api/v1/system/version/check"),
+    ("POST", "/api/v1/system/restart"),
     ("GET", "/api/v1/system/backup"),
     ("POST", "/api/v1/system/backup"),
 ];
@@ -155,6 +156,10 @@ pub enum Reply {
     /// `POST /system/version/check` with its gate passed (spec 039, R2): the caller runs
     /// `ReleaseTicket::check`, the lock being released.
     VersionCheck(ReleaseTicket),
+    /// `POST /system/restart` with its gate passed and nothing to interrupt (spec 043, D79): the
+    /// caller answers Sowel's 200 `{"success": true, "message": "Restarting"}`, then restarts the box as after an update (the
+    /// host cannot: 501).
+    Restart,
     /// `GET /system/backup` with its gate passed (spec 035, R1): the caller reads the header
     /// `X-Backup-Password` and calls `BackupTicket::export`, then streams the archive it returns,
     /// the home's lock being released.
@@ -295,6 +300,7 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
         Reply::Update | Reply::UpdatePull(_) | Reply::VersionCheck(_) => {
             error(501, UPDATES_NEED_STREAMING)
         }
+        Reply::Restart => error(501, RESTARTS_NEED_STREAMING),
         Reply::BackupExport(_) | Reply::BackupRestore { .. } => error(501, BACKUPS_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
@@ -378,6 +384,17 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
             Err(e) => Reply::Whole(failure(&e)),
         };
     }
+    // The restart reads no body either (spec 043): refused while it would break an update, a
+    // check, a backup or a probation, else the caller restarts.
+    if is_restart_path(request.path) {
+        if request.method != "POST" {
+            return Reply::Whole(method_not_allowed());
+        }
+        return match guard.restart_refusal() {
+            Some(message) => Reply::Whole(error(409, message)),
+            None => Reply::Restart,
+        };
+    }
     // The update's body is a file of megabytes, streamed by the caller: no 16 KB or JSON check,
     // and the home is let go before the caller reads it. An empty body is the pull (spec 039).
     if is_update_request(request.method, request.path) {
@@ -402,7 +419,8 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
 }
 
 /// The 503 of the safe mode (spec 036 R5, D58): every request that is not a `GET` but the
-/// account's (`/auth/*`) and the update's (`/system/update`, `/system/version/check`), while the engine is stopped. `None`
+/// account's (`/auth/*`), the update's (`/system/update`, `/system/version/check`) and the
+/// restart's (`/system/restart`, spec 043, D79), while the engine is stopped. `None`
 /// otherwise.
 fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
     if home.supervision().mode == Mode::Normal || request.method == "GET" {
@@ -413,7 +431,11 @@ fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
         .strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_prefix('/'))?;
     let first = rest.split('/').next().unwrap_or("");
-    if first == "auth" || rest == "system/update" || rest == "system/version/check" {
+    if first == "auth"
+        || rest == "system/update"
+        || rest == "system/version/check"
+        || rest == "system/restart"
+    {
         return None;
     }
     Some(error(503, SAFE_MODE_MESSAGE))
@@ -480,6 +502,11 @@ fn is_version_check_path(path: &str) -> bool {
     path.split(['?', '#']).next() == Some("/api/v1/system/version/check")
 }
 
+/// True for `/api/v1/system/restart`, with or without a query.
+fn is_restart_path(path: &str) -> bool {
+    path.split(['?', '#']).next() == Some("/api/v1/system/restart")
+}
+
 /// True for `POST /api/v1/system/update`: the one request whose body the caller must not read
 /// before `handle_guarded` has answered, and streams (spec 032, R6).
 pub fn is_update_request(method: &str, path: &str) -> bool {
@@ -500,6 +527,10 @@ pub fn static_reply(request: &Request) -> Option<Reply> {
 
 /// What the plain handlers answer to the update route: they cannot stream a body.
 const UPDATES_NEED_STREAMING: &str = "Updates need the streaming handler";
+
+/// What the plain handlers answer to the restart route: only the streaming handler checks what it
+/// would interrupt.
+const RESTARTS_NEED_STREAMING: &str = "Restart needs the streaming handler";
 
 /// What the plain handlers answer to the backup routes: they cannot stream.
 const BACKUPS_NEED_STREAMING: &str = "Backups need the streaming handler";
@@ -552,6 +583,13 @@ fn dispatch(
     if is_version_check_path(request.path) {
         return Reply::Whole(if request.method == "POST" {
             error(501, UPDATES_NEED_STREAMING)
+        } else {
+            method_not_allowed()
+        });
+    }
+    if is_restart_path(request.path) {
+        return Reply::Whole(if request.method == "POST" {
+            error(501, RESTARTS_NEED_STREAMING)
         } else {
             method_not_allowed()
         });

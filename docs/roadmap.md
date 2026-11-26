@@ -243,10 +243,8 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | Date | Need | Came from |
 | ---- | ---- | --------- |
 | 2026-11-26 | F2: admit a script recipe or instance at install time by the RAM really free (PSRAM minimum since boot minus the recipe's limit kept above a reserve), refuse with a plain message, and show the user the box's state (a Resources card: RAM used and free, each recipe's share, flash, a warning near the reserve); the fixed bounds (2 scripts, 8 instances each) stay the guarantee | The user, spec 041 |
-| 2026-11-26 | The update's probation checks that the PSRAM is there: `CONFIG_SPIRAM_IGNORE_NOTFOUND` lets a box whose PSRAM fails (at 80 MHz since D77) boot without it, and the image is confirmed all the same | Spec 041, D77 |
 | 2026-11-26 | A restore refused for a wrong password closes the connection before its answer is read (the client sees no status: box session B7.1), the same unread-body defect as the refused update of 2026-11-25: read and drop the body before answering | Box session 2026-11-26 |
 | 2026-11-26 | The HTTP server's task waits about 5 s for each request whose body never comes, and every other request waits behind it, `GET /` included (4, 9, 14 and 19 s with 1 to 4 such requests; box session B7.6, never run on the box before) | Box session 2026-11-26 |
-| 2026-11-26 | A "Restart" button in the interface (the box restarts by software today only through the serial console or a Wi-Fi change) | Box session 2026-11-26 |
 | 2026-11-26 | `box-session.sh` shows each step's line as it runs (the person sees nothing for minutes today) | Box session 2026-11-26 |
 | 2026-11-26 | The session's gestures left undone on 2026-11-26 (H3, H4, H5, H8, H9), and a wave at the garage's `motion-light-script` instance on the 240 MHz image (its second pass had no person) | Box session 2026-11-26, spec 041 |
 | 2026-11-25 | `box.sh` sends one raw line to the radio image's console, so the session checks spec 023's long and unknown console lines | spec 033 |
@@ -517,3 +515,4 @@ Every change to this roadmap: date, what changed, why.
   spec 041 replaced by that inbox line. New lines: the PSRAM in the
   probation, the restore's and the server's defects of the session (B7.1, B7.6), a Restart button,
   the session's live lines, the gestures left undone.
+- 2026-11-26: spec 043 built (the user away): a Restart button (`POST /api/v1/system/restart`, refused during a probation, allowed in safe mode, 501 on the host) and the update's probation checks the PSRAM (the OTA thread starts without it so the probation ticks). The inbox's two lines for them are done. Box check pending: the button, the boot cause `asked`.

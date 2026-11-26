@@ -278,6 +278,7 @@ fn safe_home(bare: bool) -> std::sync::Arc<std::sync::Mutex<solite_core::home::H
         Arc::new(mono),
     ));
     supervisor::set_supervision(&mut home);
+    ota::share_status(&mut home);
     let home = Arc::new(Mutex::new(home));
     supervisor::watch_home(&home);
     home
