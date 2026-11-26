@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 use solite_core::devices::Id;
 use solite_core::live::{ClientId, LiveHandle};
 use solite_core::recipes::script::{
-    NewRuntime, RefusedFlag, SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes, SystemRuntimes,
+    HeldCounter, NewRuntime, RefusedFlag, SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes,
+    SystemRuntimes,
 };
 use solite_core::recipes::{MAX_INSTANCES_PER_SCRIPT, MAX_SCRIPT_RECIPES, ScriptClock};
 use solite_recipe_sdk::{Clock, ErrorKind, Event, Host, Recipe};
@@ -35,7 +36,7 @@ const GARBAGE: &str = include_str!("fixtures/scripts/garbage.js");
 // ---- Helpers ----
 
 /// A monotonic clock that moves one millisecond at each reading: a loop that never ends meets its
-/// 100 ms after a hundred readings, whatever the machine.
+/// 200 ms after two hundred readings, whatever the machine.
 fn ticking() -> (ScriptClock, Arc<AtomicU64>) {
     let reads = Arc::new(AtomicU64::new(0));
     let counter = reads.clone();
@@ -883,6 +884,120 @@ fn mode_energy_and_history_are_not_available() {
     }
 }
 
+const SENSOR_A: &str = "00000000-0000-0000-0000-00000000000a";
+const SENSOR_B: &str = "00000000-0000-0000-0000-00000000000b";
+const LAMP: &str = "00000000-0000-0000-0000-00000000000c";
+
+/// A zone where two equipments hold the same motion sensor (one device, one key): a report of it is
+/// two calls of the script, one per equipment.
+struct SharedSensor;
+
+impl Host for SharedSensor {
+    fn equipment(&self, id: &str) -> Option<solite_recipe_sdk::EquipmentView> {
+        let motion = solite_recipe_sdk::DataBindingView {
+            id: format!("{id}-motion"),
+            alias: "motion".into(),
+            category: Some("motion".into()),
+            device_id: Some("0x00124b0000000001".into()),
+            key: Some("occupancy".into()),
+            value: solite_recipe_sdk::EventValue::Bool(false),
+        };
+        let data = if id == LAMP { Vec::new() } else { vec![motion] };
+        Some(solite_recipe_sdk::EquipmentView {
+            id: id.into(),
+            name: id.into(),
+            kind: if id == LAMP { "light_onoff" } else { "sensor" }.into(),
+            enabled: true,
+            zone_id: ZONE.into(),
+            data_bindings: data,
+            order_bindings: Vec::new(),
+        })
+    }
+    fn zone_equipment_ids(&self, _: &str) -> Vec<String> {
+        vec![SENSOR_A.into(), SENSOR_B.into(), LAMP.into()]
+    }
+    fn zone_data(&self, id: &str) -> Option<solite_recipe_sdk::ZoneData> {
+        NoHome.zone_data(id)
+    }
+    fn sunlight(&self) -> solite_recipe_sdk::Sunlight {
+        solite_recipe_sdk::Sunlight::default()
+    }
+    fn order(&self, _: &str, _: &str, _: &Value) -> solite_recipe_sdk::OrderStatus {
+        solite_recipe_sdk::OrderStatus::NoBinding
+    }
+    fn log(&self, _: solite_recipe_sdk::Level, _: &str) {}
+}
+
+#[test]
+fn an_event_of_two_calls_keeps_the_listen_set_the_first_one_changed() {
+    let source = format!(
+        "recipe({{api: 1, id: 'shared', name: 'S', slots: {{lights: {{type: 'equipment', name: 'L', list: true}}}}, \
+         start: function (api) {{ api.onMotionReport(function (v, eq) {{ \
+         if (eq === '{SENSOR_A}') api.on('lights', 'state', function () {{}}); \
+         else api.state.set('seen', eq); }}); }}}});"
+    );
+    let mut recipe = direct(&source);
+    let params = json!({"zone": ZONE, "lights": [LAMP]});
+    recipe
+        .start(&SharedSensor, 1, &params, clock_at(0))
+        .unwrap();
+    let report = Event::Device {
+        device: "0x00124b0000000001".into(),
+        key: "occupancy".into(),
+        value: solite_recipe_sdk::EventValue::Bool(true),
+    };
+    // The first call (sensor A) listens to the lamp; the second (sensor B) changes only the state.
+    let update = recipe
+        .on_event(&SharedSensor, 1, &report, clock_at(1))
+        .unwrap()
+        .expect("an update");
+    assert!(update.state.contains(SENSOR_B), "{}", update.state);
+    let listen = update.listen.expect("the first call's listen set");
+    assert!(
+        listen.contains(&solite_recipe_sdk::ListenEntry::Equipment {
+            equipment: LAMP.into(),
+            alias: "state".into(),
+        }),
+        "{listen:?}"
+    );
+}
+
+#[test]
+fn a_start_that_ends_without_its_listen_set_does_not_run_deaf() {
+    // The script ends its own call early through the shim it can reach by name: the real end of
+    // the call then has no listen set, and the start is refused.
+    let mut recipe = direct(
+        "recipe({api: 1, id: 'early', name: 'E', slots: {}, start: function (api) { \
+         api.onZone('motion', function () {}); \
+         Promise.resolve().then(function () { globalThis.__solite_shim.end(1); }); }});",
+    );
+    let error = recipe
+        .start(&NoHome, 1, &json!({"zone": ZONE}), clock_at(0))
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Recipe);
+    assert_eq!(error.message, "bad end of call: no listen set");
+}
+
+#[test]
+fn a_call_that_changes_only_the_state_leaves_the_instance_listening() {
+    let (mut rig, g) = loaded(&script(
+        "{api: 1, id: 'counter', name: 'C', slots: {}, start: function (api) { \
+         api.onZone('motion', function (m) { var n = (api.state.get('n') || 0) + 1; \
+         api.state.set('n', n); api.log('motion ' + n); }); }}",
+    ));
+    let id = created(&mut rig, "counter", json!({"zone": g.zone}));
+    let mut on = false;
+    for _ in 0..4 {
+        toggle_motion(&mut rig, &mut on);
+    }
+    // Every call after the first changed the state only: the instance still heard each change.
+    assert!(
+        has(&rig.messages(&id), "motion 4"),
+        "{:?}",
+        rig.messages(&id)
+    );
+}
+
 /// A host with no home: a zone that exists and no equipment, for the calls that need none.
 struct NoHome;
 
@@ -1257,7 +1372,7 @@ fn an_infinite_loop_fails_the_recipe_within_its_time_and_the_others_run_on() {
     toggle_motion(&mut rig, &mut on);
     assert_eq!(
         failed_text(&mut rig, &id).as_deref(),
-        Some("Script recipe failed: took more than 100 ms")
+        Some("Script recipe failed: took more than 200 ms")
     );
     assert!(!running(&rig, &id));
     // The instance stays enabled and nothing was written; the events say it stopped and why.
@@ -1375,7 +1490,7 @@ fn a_script_that_loops_when_loaded_is_refused_and_one_that_loops_in_validate_fai
         reason(&mut rig, "slow-validate", json!({"zone": g.zone})),
         (
             500,
-            "Script recipe failed: took more than 100 ms".to_string()
+            "Script recipe failed: took more than 200 ms".to_string()
         )
     );
 }
@@ -1398,6 +1513,7 @@ impl ScriptRuntimes for Refusing {
         Ok(NewRuntime {
             runtime: SystemRuntimes.new_runtime()?.runtime,
             refused: Some(flag),
+            held: None,
         })
     }
 
@@ -1459,6 +1575,48 @@ fn an_allocation_the_allocator_refused_fails_the_recipe_even_if_the_script_caugh
     let host = Refuses(runtimes.flag(0));
     let error = recipe
         .on_event(&host, 1, &zone_event(true), clock_at(1))
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Recipe);
+    assert!(
+        error.message.starts_with("out of memory"),
+        "{}",
+        error.message
+    );
+}
+
+/// The system's runtimes, with a count of the held bytes the test sets (as the box's allocator
+/// keeps one): the engine reads it in place of QuickJS's accounting.
+struct Counted(HeldCounter);
+
+impl ScriptRuntimes for Counted {
+    fn new_runtime(&self) -> Result<NewRuntime, String> {
+        Ok(NewRuntime {
+            runtime: SystemRuntimes.new_runtime()?.runtime,
+            refused: None,
+            held: Some(self.0.clone()),
+        })
+    }
+
+    fn memory_limit(&self) -> usize {
+        SYSTEM_MEMORY_LIMIT
+    }
+}
+
+#[test]
+fn the_allocators_count_is_the_held_memory_and_nine_tenths_of_the_limit_fails_the_recipe() {
+    let held: HeldCounter = Arc::new(std::sync::atomic::AtomicUsize::new(10_000));
+    let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(Counted(held.clone()));
+    let (clock, _) = ticking();
+    let mut recipe = ScriptRecipe::load(TOUCH, &runtimes, &clock).unwrap().0;
+    assert_eq!(recipe.held_bytes(), 10_000);
+    recipe
+        .start(&NoHome, 1, &json!({"zone": ZONE}), clock_at(0))
+        .unwrap();
+    // The allocator says the runtime holds almost all its limit, whatever QuickJS counts: after
+    // the collection it still does, so the call failed the recipe.
+    held.store(SYSTEM_MEMORY_LIMIT / 100 * 95, Ordering::SeqCst);
+    let error = recipe
+        .on_event(&NoHome, 1, &zone_event(true), clock_at(1))
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Recipe);
     assert!(
@@ -1550,7 +1708,7 @@ fn a_create_or_a_change_while_failed_restarts_the_recipe_and_a_recipe_that_fails
     );
     assert_eq!(
         (status, error.as_str()),
-        (500, "Script recipe failed: took more than 100 ms")
+        (500, "Script recipe failed: took more than 200 ms")
     );
     assert_eq!(rig.home.recipes().len(), count);
     assert!(!running(&rig, &first) && !running(&rig, &second));

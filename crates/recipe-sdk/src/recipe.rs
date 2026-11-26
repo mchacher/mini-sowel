@@ -1,7 +1,7 @@
 //! The `Recipe` trait: what a recipe implements (spec 041, R1.1). One value serves every
 //! instance of the recipe; an instance is a handle the engine gives at `start`. The calls that
-//! change an instance return what the engine keeps of it: the state text and the listen set
-//! (R2.5), so that readers never call the recipe.
+//! change an instance return what the engine keeps of it: the state text and the listen set, or
+//! no listen set when it is unchanged (R2.5), so that readers never call the recipe.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +24,9 @@ pub struct Clock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
     pub state: String,
-    pub listen: Vec<ListenEntry>,
+    /// The listen set, or `None` when it is the one the last update gave (a recipe need not keep
+    /// a copy of it to answer a call that changed only its state). A start always gives one.
+    pub listen: Option<Vec<ListenEntry>>,
 }
 
 impl Update {
@@ -37,7 +39,8 @@ impl Update {
                 self.state.len()
             ));
         }
-        let count = |f: fn(&ListenEntry) -> bool| self.listen.iter().filter(|e| f(e)).count();
+        let listen = self.listen.as_deref().unwrap_or(&[]);
+        let count = |f: fn(&ListenEntry) -> bool| listen.iter().filter(|e| f(e)).count();
         let zones = count(|e| matches!(e, ListenEntry::Zone { .. }));
         let equipments = count(|e| matches!(e, ListenEntry::Equipment { .. }));
         let devices = count(|e| matches!(e, ListenEntry::Device { .. }));

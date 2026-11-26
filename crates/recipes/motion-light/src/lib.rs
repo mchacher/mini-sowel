@@ -42,7 +42,7 @@ impl MotionLightRecipe {
 fn update_of(machine: &MotionLight) -> Update {
     Update {
         state: machine.state_text(),
-        listen: machine.listen(),
+        listen: Some(machine.listen()),
     }
 }
 

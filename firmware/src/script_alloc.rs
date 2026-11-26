@@ -14,7 +14,7 @@
 //! calls into ESP-IDF's heap and the allocator trait itself, each with its `SAFETY` comment.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use esp_idf_svc::sys::{
     MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, free, heap_caps_calloc, heap_caps_get_allocated_size,
@@ -22,7 +22,7 @@ use esp_idf_svc::sys::{
 };
 use rquickjs::Runtime;
 use rquickjs::allocator::Allocator;
-use solite_core::recipes::script::{NewRuntime, SCRIPT_MEMORY_LIMIT, ScriptRuntimes};
+use solite_core::recipes::script::{HeldCounter, NewRuntime, SCRIPT_MEMORY_LIMIT, ScriptRuntimes};
 
 /// The capabilities of every block: PSRAM, byte-addressable.
 const CAPS: u32 = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
@@ -44,19 +44,29 @@ unsafe fn block_size(ptr: *mut u8) -> usize {
 }
 
 /// One runtime's allocator: PSRAM blocks, counted with their real size, refused above `limit`.
+/// The count is shared with the engine, which reads it after each call (QuickJS's own accounting
+/// walks the whole heap, in PSRAM: slow).
 pub struct PsramAllocator {
-    used: usize,
+    used: HeldCounter,
     limit: usize,
     refused: Arc<AtomicBool>,
 }
 
 impl PsramAllocator {
-    fn new(limit: usize, refused: Arc<AtomicBool>) -> Self {
+    fn new(limit: usize, refused: Arc<AtomicBool>, used: HeldCounter) -> Self {
         PsramAllocator {
-            used: 0,
+            used,
             limit,
             refused,
         }
+    }
+
+    fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    fn set_used(&self, bytes: usize) {
+        self.used.store(bytes, Ordering::Relaxed);
     }
 
     /// Records a refusal in the runtime's own flag.
@@ -76,7 +86,7 @@ impl PsramAllocator {
 #[allow(unsafe_code)]
 unsafe impl Allocator for PsramAllocator {
     fn alloc(&mut self, size: usize) -> *mut u8 {
-        if self.used.saturating_add(size) > self.limit {
+        if self.used().saturating_add(size) > self.limit {
             self.refuse();
             return std::ptr::null_mut();
         }
@@ -86,14 +96,14 @@ unsafe impl Allocator for PsramAllocator {
             self.refuse();
         } else {
             // SAFETY: `ptr` is the live non-null block `heap_caps_malloc` just returned.
-            self.used += unsafe { block_size(ptr) };
+            self.set_used(self.used() + unsafe { block_size(ptr) });
         }
         ptr
     }
 
     fn calloc(&mut self, count: usize, size: usize) -> *mut u8 {
         let total = count.saturating_mul(size);
-        if self.used.saturating_add(total) > self.limit {
+        if self.used().saturating_add(total) > self.limit {
             self.refuse();
             return std::ptr::null_mut();
         }
@@ -103,14 +113,14 @@ unsafe impl Allocator for PsramAllocator {
             self.refuse();
         } else {
             // SAFETY: `ptr` is the live non-null block `heap_caps_calloc` just returned.
-            self.used += unsafe { block_size(ptr) };
+            self.set_used(self.used() + unsafe { block_size(ptr) });
         }
         ptr
     }
 
     unsafe fn dealloc(&mut self, ptr: *mut u8) {
         // SAFETY: the trait's contract: `ptr` is a live block of this allocator, freed just below.
-        self.used = self.used.saturating_sub(unsafe { block_size(ptr) });
+        self.set_used(self.used().saturating_sub(unsafe { block_size(ptr) }));
         // SAFETY: the caller gives a block of this allocator (the trait's contract), which came
         // from the heap_caps functions and is freed once.
         unsafe { free(ptr.cast()) };
@@ -119,7 +129,7 @@ unsafe impl Allocator for PsramAllocator {
     unsafe fn realloc(&mut self, ptr: *mut u8, new_size: usize) -> *mut u8 {
         // SAFETY: the trait's contract: `ptr` is null or a live block of this allocator.
         let old = unsafe { block_size(ptr) };
-        if new_size > old && self.used.saturating_sub(old).saturating_add(new_size) > self.limit {
+        if new_size > old && self.used().saturating_sub(old).saturating_add(new_size) > self.limit {
             // The old block stays as it is, as `realloc` does when it fails.
             self.refuse();
             return std::ptr::null_mut();
@@ -132,7 +142,7 @@ unsafe impl Allocator for PsramAllocator {
             return next;
         }
         // SAFETY: `next` is the live non-null block `heap_caps_realloc` just returned.
-        self.used = self.used.saturating_sub(old) + unsafe { block_size(next) };
+        self.set_used(self.used().saturating_sub(old) + unsafe { block_size(next) });
         next
     }
 
@@ -148,14 +158,17 @@ pub struct EspRuntimes;
 impl ScriptRuntimes for EspRuntimes {
     fn new_runtime(&self) -> Result<NewRuntime, String> {
         let refused = Arc::new(AtomicBool::new(false));
+        let held: HeldCounter = Arc::new(AtomicUsize::new(0));
         let runtime = Runtime::new_with_alloc(PsramAllocator::new(
             SCRIPT_MEMORY_LIMIT,
             Arc::clone(&refused),
+            Arc::clone(&held),
         ))
         .map_err(|e| e.to_string())?;
         Ok(NewRuntime {
             runtime,
             refused: Some(refused),
+            held: Some(held),
         })
     }
 

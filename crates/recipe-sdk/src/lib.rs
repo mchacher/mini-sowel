@@ -1,6 +1,6 @@
 //! The recipe SDK (spec 041): the contract between Solite's engine and a recipe. A recipe
 //! implements `Recipe` and reads and commands the home through `Host` only; the engine gives it
-//! events and clocks, and keeps the state text and listen set each call returns. The data that
+//! events and clocks, and keeps the state text and listen set each call returns (no listen set: unchanged). The data that
 //! crosses the boundary (events, views, results) is serde types with Sowel's names, and `bounds`
 //! holds the bounds both sides share. No dependency on the core: a recipe is linked into the core
 //! (`motion-light`) or is a script the core runs through the same trait.

@@ -57,7 +57,15 @@ Rust refuses a handle that is not one of this recipe's instances.
   `malloc_size` QuickJS reads), the firmware `Runtime::new_with_alloc(PsramAllocator)`, an allocator
   over `heap_caps_malloc(MALLOC_CAP_SPIRAM)` with `heap_caps_get_allocated_size` as its usable size
   (its `unsafe` under D11, each with a `SAFETY` comment). An allocation refused during a call sets a
-  flag the engine reads after it (R3.5), through the adapter (`refused_since_last_call`).
+  flag the engine reads after it (R3.5), through the adapter (`NewRuntime.refused`). The firmware's
+  allocator also shares its count of the bytes it holds (`NewRuntime.held`): the engine reads it after
+  each call, where `memory_usage()` walks the whole heap (slow in PSRAM); the host has no count and
+  reads `memory_usage()`.
+- **The internal RAM on the box**: every heap block of 4 KB or less goes to the internal RAM, so the
+  Rust side keeps few small blocks per recipe and per instance: the recipe's info is kept as one JSON
+  text (parsed when asked for), and an instance keeps no copy of its listen set (the engine holds it;
+  `Update.listen` is `None` when a call left it unchanged). Measured in QEMU: loading
+  `motion-light-script` holds about 4 KB of internal RAM (30 KB as `Value` trees), an instance 3 to 5 KB.
 - **Threads**: `rquickjs`'s `parallel` feature makes the runtime `Send` (the engine's `Box<dyn Recipe
   + Send>`) and resets QuickJS's stack top at each `Context::with`, so the stack limit holds on
   whichever thread calls. The home lock already serialises every call.
@@ -130,11 +138,13 @@ No file of the data folder changes: `recipes.json` keeps `recipeId`.
 - **D73**: recipes outside the firmware are JavaScript scripts in Sowel's script-recipe format, run
   by QuickJS through `rquickjs` (replaces D1's `wasmi`; the measures in `research.md`).
 - **D74**: one runtime per script recipe, its bounds (224 KB through QuickJS's own limit, 2 recipes, 8
-  instances each, 1000 ms to load, 100 ms per call, 300 ms per turn, 16 KB of stack, the arena off by a vendored patch), PSRAM on the box through
+  instances each, 1000 ms to load, 200 ms per call, 300 ms per turn, 16 KB of stack, the arena off by a vendored patch), PSRAM on the box through
   the firmware's allocator (D11 kept), calls on internal-RAM stacks (the engine thread, a `script`
   job thread for API requests); a recipe fails as a whole and restarts after 1 minute, 3 times in
   24 h.
 - **D75**: a script reaches only its slots (the allow-list in the host); what Solite adds to and
   leaves out of Sowel's draft API.
+- **D77**: the box's CPU at 240 MHz, its flash and PSRAM at 80 MHz (after the box's measure of a
+  call: 24 ms on average, 83 ms at the most at 160 MHz).
 - **D76**: where scripts come from in this spec: `--recipe-script` on the Mac, built into the radio
   image (so into releases) on the box; download and signing are F2, with a key of their own.

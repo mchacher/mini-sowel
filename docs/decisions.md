@@ -1449,13 +1449,15 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   one per instance). Bounds: 2 script recipes (at most 8 instances of each, a ninth is refused with 400), 16 KB of
   source, a memory limit of 224 KB per runtime on the box (448 KB on the Mac, whose 64-bit pointers
   make everything larger; QuickJS's own limit, counting with the allocator's usable size; 448 KB for
-  the two, under a 512 KB ceiling), 1000 ms to load a script, 100 ms per call (the interrupt handler
-  on a monotonic clock the engine is given), 300 ms of script calls per turn of the engine's loop, 16 KB of
+  the two, under a 512 KB ceiling), 1000 ms to load a script, 200 ms per call (the interrupt handler
+  on a monotonic clock the engine is given; 100 ms at first, raised on the box's measure, 24 ms on average and
+  83 ms at the most for `motion-light-script` at 160 MHz, with the user's agreement), 300 ms of script calls per turn of the engine's loop, 16 KB of
   JavaScript stack; QuickJS's small-object arena is off (`rquickjs-sys` vendored under
   `vendor/rquickjs-sys` with a two-line `#ifndef` patch: about 85 KB per runtime saved); the garbage
   collector's threshold kept under ¾ of the limit, and a collection after a call that leaves more than
-  85 % of the limit held or 32 KB more than the last collection left (the heap is walked once per
-  call); QuickJS is built with `JS_NO_FUNCTION_SOURCE`, a patch of the same vendored
+  85 % of the limit held or 32 KB more than the last collection left (what the runtime holds is the
+  box's allocator's own count, read after each call; on the Mac, where the system's allocator
+  counts nothing, QuickJS's accounting, which walks the heap); QuickJS is built with `JS_NO_FUNCTION_SOURCE`, a patch of the same vendored
   crate: a script's functions do not keep their source text (`Function.prototype.toString` answers
   `function f() { [native code] }`), which saves the source of every function of every runtime and
   of the shim. On the box the firmware's allocator puts the
@@ -1508,3 +1510,23 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   4 MB slot stays under the 75 % warning: the radio image takes 69 % of it).
 - **Alternatives**: scripts out of releases until F2 (a box image of its own for the test); a route
   to upload a script now (it is F2's, with its signature).
+
+## D77: The box's CPU at 240 MHz, its flash and PSRAM at 80 MHz (spec 041)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, the user away, with their leave to flash)
+- **Choice**: every firmware image sets the CPU to 240 MHz (ESP-IDF's default 160), the flash to
+  80 MHz and the PSRAM to 80 MHz (40 each by default), in `firmware/sdkconfig.defaults`. The flash
+  stays in DIO mode. The chip is an ESP32-D0WDR2-V3, whose PSRAM ESP-IDF drives at 80 MHz with the
+  flash at 80 MHz.
+- **Why**: QuickJS interprets the script recipes from the flash, through the cache, with its heap in
+  PSRAM: on the box, a call of `motion-light-script` took 24 ms on average and 83 ms at the most at
+  160 MHz and 40 MHz; 13.9 ms and 36 ms after the change (with the RAM fixes of spec 041). The
+  application's PSRAM start-up sets the flash's clock too (ESP-IDF's `psram_gpio_config`, its mode with
+  the flash and the PSRAM at 80 MHz), so an image installed over the air runs both at 80 MHz whatever
+  the bootloader's setting. The risk: `CONFIG_SPIRAM_IGNORE_NOTFOUND` lets a box whose PSRAM fails
+  at 80 MHz boot without it, and the update's probation does not look at the PSRAM (an inbox item
+  of the roadmap); the box's boot log of 2026-11-26 shows the PSRAM found at 80 MHz, its memory test
+  passed, and the CPU at 240 MHz.
+- **Alternatives**: QIO flash (faster still, but it needs the flash's write-protect and hold pins
+  wired as data lines, not checked on the Dongle Max); QuickJS compiled at `-O2` (a larger image,
+  more cache misses; not measured); keeping 160 MHz and a slower limit per call.

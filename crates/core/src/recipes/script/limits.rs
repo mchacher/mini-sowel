@@ -3,7 +3,7 @@
 //! the garbage collector. The runtimes themselves come from the `ScriptRuntimes` adapter: the host
 //! uses the system's allocator (`SystemRuntimes`), the firmware its PSRAM allocator.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rquickjs::Runtime;
@@ -25,8 +25,10 @@ pub const SCRIPT_MEMORY_LIMIT: usize = 224 * 1024;
 /// 1.6 times the 32-bit figure (measured: `motion-light-script` with 8 instances holds about
 /// 206 KB on the Mac, over 2 times under this limit).
 pub const SYSTEM_MEMORY_LIMIT: usize = 2 * SCRIPT_MEMORY_LIMIT;
-/// One call into a script takes at most this long (the interrupt handler stops it).
-pub const SCRIPT_CALL_LIMIT_MS: u64 = 100;
+/// One call into a script takes at most this long (the interrupt handler stops it). Measured on
+/// the box: a call of `motion-light-script` takes about 24 ms on average and up to 83 ms at 160 MHz
+/// (2026-11-26); 200 ms leaves room for the slowest without letting a loop hold the engine long.
+pub const SCRIPT_CALL_LIMIT_MS: u64 = 200;
 /// Loading a script (compile, top level, the `recipe()` call, its info) takes at most this long:
 /// it is done once, and compiling is slow on the box.
 pub const SCRIPT_LOAD_LIMIT_MS: u64 = 1000;
@@ -57,12 +59,18 @@ const HELD_AFTER_GC_DEN: usize = 10;
 
 /// Set by a runtime's allocator when it refuses an allocation (one flag per runtime).
 pub type RefusedFlag = Arc<AtomicBool>;
+/// The bytes a runtime's allocator holds, counted as it goes (one per runtime).
+pub type HeldCounter = Arc<AtomicUsize>;
 
 /// What `ScriptRuntimes::new_runtime` makes.
 pub struct NewRuntime {
     pub runtime: Runtime,
     /// The runtime's own refusal flag, when its allocator can tell; the system's cannot.
     pub refused: Option<RefusedFlag>,
+    /// What the runtime's allocator holds, when it counts it: read after each call in place of
+    /// QuickJS's own accounting, which walks the whole heap (slow on the box, where the heap is in
+    /// PSRAM). The system's allocator does not count: `None`.
+    pub held: Option<HeldCounter>,
 }
 
 /// Where the engine gets its runtimes. The core never touches the allocator: the host's default
@@ -99,6 +107,7 @@ impl ScriptRuntimes for SystemRuntimes {
         Ok(NewRuntime {
             runtime: Runtime::new().map_err(|e| e.to_string())?,
             refused: None,
+            held: None,
         })
     }
 
@@ -237,9 +246,13 @@ pub fn was_refused(refused: &Option<RefusedFlag>) -> bool {
         .is_some_and(|flag| flag.swap(false, Ordering::SeqCst))
 }
 
-/// The bytes QuickJS holds now.
-pub fn held(runtime: &Runtime) -> usize {
-    usize::try_from(runtime.memory_usage().malloc_size).unwrap_or(0)
+/// The bytes the runtime holds now: the allocator's count when it keeps one, else QuickJS's own
+/// accounting (which walks the whole heap).
+pub fn held(runtime: &Runtime, counter: &Option<HeldCounter>) -> usize {
+    match counter {
+        Some(counter) => counter.load(Ordering::Relaxed),
+        None => usize::try_from(runtime.memory_usage().malloc_size).unwrap_or(0),
+    }
 }
 
 /// What a call left the runtime holding.
@@ -254,16 +267,21 @@ pub struct AfterCall {
     pub now: usize,
 }
 
-/// After a call: `held` is read once (it walks the whole heap); the collector runs when the
-/// runtime holds more than 85 % of its limit or `GC_GROWTH_BYTES` more than the last collection
-/// left (`after_gc`, kept by the caller).
-pub fn after_call(runtime: &Runtime, limit: usize, after_gc: &mut usize) -> AfterCall {
-    let at_end = held(runtime);
+/// After a call: `held` is read once (without the allocator's count, it walks the whole heap); the
+/// collector runs when the runtime holds more than 85 % of its limit or `GC_GROWTH_BYTES` more than
+/// the last collection left (`after_gc`, kept by the caller).
+pub fn after_call(
+    runtime: &Runtime,
+    counter: &Option<HeldCounter>,
+    limit: usize,
+    after_gc: &mut usize,
+) -> AfterCall {
+    let at_end = held(runtime, counter);
     let mut now = at_end;
     let over = at_end > limit / 100 * GC_AFTER_CALL_PERCENT;
     if over || at_end > after_gc.saturating_add(GC_GROWTH_BYTES) {
         runtime.run_gc();
-        now = held(runtime);
+        now = held(runtime, counter);
         *after_gc = now;
     }
     AfterCall {

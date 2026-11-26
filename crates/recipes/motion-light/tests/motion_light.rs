@@ -281,7 +281,7 @@ fn the_listen_set_is_the_zone_the_lights_the_buttons_and_with_a_failsafe_the_mot
     let params = json!({"zone": ZONE, "lights": [LIGHT], "buttons": [BUTTON]});
     let update = recipe.start(&host, 1, &params, CLOCK).unwrap();
     assert_eq!(
-        update.listen,
+        update.listen.clone().unwrap(),
         [
             ListenEntry::Zone { zone: ZONE.into() },
             ListenEntry::Equipment {
@@ -297,7 +297,7 @@ fn the_listen_set_is_the_zone_the_lights_the_buttons_and_with_a_failsafe_the_mot
     let params = json!({"zone": ZONE.to_uppercase(), "lights": [LIGHT.to_uppercase()], "maxOnDuration": "5m"});
     let update = recipe.start(&host, 2, &params, CLOCK).unwrap();
     assert_eq!(
-        update.listen,
+        update.listen.clone().unwrap(),
         [
             ListenEntry::Zone { zone: ZONE.into() },
             ListenEntry::Equipment {

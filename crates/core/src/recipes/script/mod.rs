@@ -17,8 +17,8 @@ mod slots;
 use std::sync::Arc;
 
 pub use limits::{
-    MAX_ALIAS_BYTES, MAX_LOG_LINES_PER_CALL, MAX_SCRIPT_BYTES, MAX_TIMERS, NewRuntime, Reason,
-    RefusedFlag, SCRIPT_CALL_LIMIT_MS, SCRIPT_LOAD_LIMIT_MS, SCRIPT_MEMORY_LIMIT,
+    HeldCounter, MAX_ALIAS_BYTES, MAX_LOG_LINES_PER_CALL, MAX_SCRIPT_BYTES, MAX_TIMERS, NewRuntime,
+    Reason, RefusedFlag, SCRIPT_CALL_LIMIT_MS, SCRIPT_LOAD_LIMIT_MS, SCRIPT_MEMORY_LIMIT,
     SCRIPT_STACK_BYTES, SYSTEM_MEMORY_LIMIT, ScriptRuntimes, SystemRuntimes,
 };
 pub use load::ScriptSummary;

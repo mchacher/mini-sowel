@@ -5,23 +5,24 @@
 - [x] 1. Contract and move (pass A, built before the change of runtime): SDK, `motion-light` crate,
       `NativeHost`, registry, state and listen caches, settle through `prune`, depth check, JSON
       pinned
-- [ ] 2. Remove the WebAssembly parts (pass B's step 5) and rewrite the living spec's WebAssembly
+- [x] 2. Remove the WebAssembly parts (pass B's step 5) and rewrite the living spec's WebAssembly
       section as script recipes
-- [ ] 3. `rquickjs` in the core behind `script-recipes`; the arena setting (flag or vendored patch);
+- [x] 3. `rquickjs` in the core behind `script-recipes`; the arena setting (flag or vendored patch);
       the `ScriptRuntimes` adapter and the limits; the vendored `rquickjs-sys`; builds on the Mac and for `xtensa-esp32-espidf` (the firmware's
       `[env]` variables)
-- [ ] 4. The shim, the loader, `ScriptRecipe`, the host's slot validation, the allow-list, timers,
+- [x] 4. The shim, the loader, `ScriptRecipe`, the host's slot validation, the allow-list, timers,
       state, log; failures and restarts in the engine
-- [ ] 5. `motion-light-script.js`; parity tests; the bad scripts
-- [ ] 6. Host `--recipe-script`
-- [ ] 7. Firmware: `PsramAllocator`, scripts built in, API calls on an internal-RAM stack, engine
+- [x] 5. `motion-light-script.js`; parity tests; the bad scripts
+- [x] 6. Host `--recipe-script`
+- [x] 7. Firmware: `PsramAllocator`, scripts built in, API calls on an internal-RAM stack, engine
       stack, the `scripts:` line; QEMU phase and gates
-- [ ] 8. Measures (Mac, QEMU, flash, worst case); bounds fixed (D74)
-- [ ] 9. Box session step; docs (architecture, memory budget, decisions D73 to D76, sowel-subset,
+- [x] 8. Measures (Mac, QEMU, flash, worst case); bounds fixed (D74)
+- [x] 9. Box session step; docs (architecture, memory budget, decisions D73 to D76, sowel-subset,
       roadmap, CLAUDE.md); the "No longer true" search
-- [ ] 10. Interface: not applicable (the form is built from the slots, as for any recipe; checked
+- [x] 10. Interface: not applicable (the form is built from the slots, as for any recipe; checked
       once in the browser on the Mac)
-- [ ] 11. Box run: the user's flash (D6), then the result written in the spec
+- [x] 11. Box run: the user's flash (D6), then the result written in the spec (a second pass after the
+      fixes, flashed with the user's leave; a wave on the final image left, roadmap inbox)
 
 ## Test plan
 
@@ -49,7 +50,7 @@
 | log | 21 lines in one call; a line of 300 bytes | 20 kept and one warning; cut at 200 |
 | errors | `start` throws | `Failed to start: Script error: <message>` |
 | errors | A handler throws | A log line, the instance runs on |
-| limits | Infinite loop; allocation bomb; deep recursion | Recipe failed within 100 ms / at 224 KB / at the stack limit; instances stopped with the line and the two events; another recipe runs on; enabled kept, not written |
+| limits | Infinite loop; allocation bomb; deep recursion | Recipe failed within 200 ms / at 224 KB / at the stack limit; instances stopped with the line and the two events; another recipe runs on; enabled kept, not written |
 | restarts | 1 minute after a failure; fourth failure in 24 h; `enable` then; create while failed and fails again at once | Restarted with its line; stays failed; restarted by the person's action; 500 |
 | restarts | A settle while failed | Its instances left alone |
 | bounds | 8 instances of a script recipe; a 9th; a restore with 9 | Within 224 KB; 400 `Too many instances of <id> (max 8)`; the 9th fails to restore and stays stopped |
@@ -82,6 +83,6 @@
 
 ## Validation
 
-- [ ] Validate command green
-- [ ] Agent review done, blocking findings fixed
-- [ ] Demo seen and approved by the user (the box run: the user's flash)
+- [x] Validate command green
+- [x] Agent review done, blocking findings fixed
+- [x] Demo seen and approved by the user (the box run: the user's flash; "garde le script et prépare la PR", 2026-11-26)

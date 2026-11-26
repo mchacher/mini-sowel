@@ -138,13 +138,6 @@ stays a person's. The first run is expected to show route or timing mismatches (
   setting that seemed to delete `home.name` and the location, was not reproduced on the Mac
   (`crates/host/tests/settings_merge.rs`, across a restart); the interface sends the whole map
   anyway, and the storage-loss line of the inbox (2026-11-25) stays open.
-- Spec 041 (script recipes), the user present, one pass, no loop (D39), on the radio image of the
-  spec flashed with the user's `--yes-flash` (D6, D55), with `--with-gestures`: the session's
-  script step (spec 041 R7) disables the garage's `motion-light`, creates a `motion-light-script`
-  instance with its settings and a 1-minute timeout, asks the person to wave at the motion sensor,
-  checks the ZBMINIR2 goes on then off, reads the `scripts:` and `heap:` lines, then puts
-  `motion-light` back. The figures (time of a call on the real chip, internal RAM minimum, the
-  script's PSRAM) go into spec 041 and `docs/memory-budget.md`.
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -224,7 +217,7 @@ skipped: decisions are D1, D2...
 
 | Rank | Milestone | Content | Note |
 | ---- | --------- | ------- | ---- |
-| 1 | **F. Script recipes** | F1: recipes as JavaScript scripts in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots, `motion-light-script`, measured (spec 041, D73 to D76; WebAssembly measured and dropped). F2: a script downloaded, signed with a key of its own, installed, updated and removed without a new firmware. F3: Sowel's recipes brought as scripts (`switch-light`, `schedule-on-off`, `motion-light-dimmable`...) | Raised to first place by the user. F1 in progress (spec 041) |
+| 1 | **F. Script recipes** | F1 (spec 041, done but the box's wave on its final image): recipes as JavaScript scripts in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots, `motion-light-script`, measured (D73 to D77; WebAssembly measured and dropped). F2: a script downloaded, signed with a key of its own, installed, updated and removed without a new firmware. F3: Sowel's recipes brought as scripts (`switch-light`, `schedule-on-off`, `motion-light-dimmable`...) | Raised to first place by the user. F1 built and merged (spec 041); R7's wave on the final image is an inbox line |
 | 2 | **I1. Targeted recognition** | Data and order categories for common devices, with their clusters: `action` (buttons: On/Off, Level and Scenes commands), `contact_window` (IAS contact on a window; today every IAS contact is `contact_door`), `power`, `energy`, `current` (Electrical Measurement `0x0B04`, Metering `0x0702`), `shutter_position` with `shutter_move` and `set_shutter_position` (Window Covering `0x0102`), `setpoint` with `set_setpoint` (Thermostat `0x0201`) | Solite knows 15 of Sowel's about 75 categories; the types `button`, `shutter` and `thermostat` exist but nothing feeds them |
 | 3 | **I2. Equipment types without rules** | Binding rules and zone counts of Sowel for `water_heater`, `heater`, `water_valve`, `vmc`, then the others (23 types accepted without rules) | As a real device needs one, not before |
 | 4 | **C1. Minimal modes** | Sowel's modes (day, night, away), their routes and events; no calendar and no triggers at first | Added to the roadmap; a prerequisite of proposals (the rest of C) and of G |
@@ -250,6 +243,12 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | Date | Need | Came from |
 | ---- | ---- | --------- |
 | 2026-11-26 | F2: admit a script recipe or instance at install time by the RAM really free (PSRAM minimum since boot minus the recipe's limit kept above a reserve), refuse with a plain message, and show the user the box's state (a Resources card: RAM used and free, each recipe's share, flash, a warning near the reserve); the fixed bounds (2 scripts, 8 instances each) stay the guarantee | The user, spec 041 |
+| 2026-11-26 | The update's probation checks that the PSRAM is there: `CONFIG_SPIRAM_IGNORE_NOTFOUND` lets a box whose PSRAM fails (at 80 MHz since D77) boot without it, and the image is confirmed all the same | Spec 041, D77 |
+| 2026-11-26 | A restore refused for a wrong password closes the connection before its answer is read (the client sees no status: box session B7.1), the same unread-body defect as the refused update of 2026-11-25: read and drop the body before answering | Box session 2026-11-26 |
+| 2026-11-26 | The HTTP server's task waits about 5 s for each request whose body never comes, and every other request waits behind it, `GET /` included (4, 9, 14 and 19 s with 1 to 4 such requests; box session B7.6, never run on the box before) | Box session 2026-11-26 |
+| 2026-11-26 | A "Restart" button in the interface (the box restarts by software today only through the serial console or a Wi-Fi change) | Box session 2026-11-26 |
+| 2026-11-26 | `box-session.sh` shows each step's line as it runs (the person sees nothing for minutes today) | Box session 2026-11-26 |
+| 2026-11-26 | The session's gestures left undone on 2026-11-26 (H3, H4, H5, H8, H9), and a wave at the garage's `motion-light-script` instance on the 240 MHz image (its second pass had no person) | Box session 2026-11-26, spec 041 |
 | 2026-11-25 | `box.sh` sends one raw line to the radio image's console, so the session checks spec 023's long and unknown console lines | spec 033 |
 | 2026-11-25 | The box's `storage` lost its files once (wifi.json, auth.json, the home: 28 KB used afterwards) between two flashes with `--keep-storage`, after two panics during the backup export; the mount printed no `storage: formatted` line. Not reproduced (a normal reboot keeps everything). Find out whether a reset in the middle of a FAT write can empty the partition, and whether the firmware must log or refuse a silent loss: a month alone with power cuts depends on it | Box run 2026-11-25 |
 | 2026-11-25 | A refused update with a bad signature in the header closes the connection before its 400 is read (curl status 000 after 0.2 s, the box log shows the refusal): the unread body makes the close a reset. The client (interface) sees a network error instead of the message | Box run 2026-11-25 |
@@ -508,3 +507,13 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-26: spec 040 built on the Mac and in QEMU (the user away; nothing tagged, no secret created, the box not touched): J5b's step 3. A key rotation is a bridging release declared by `release/update-key.bridge`, with the next key checked, two secrets in the CI and a procedure and a leaked-key section in `docs/release.md`, its logic proved by a Mac chain test with two host builds (D70); the Settings page's update card checks, links the release notes, updates after a confirmation and polls through the restart, and every save of the page sends the whole settings map (D71); a cut download resumes with a `Range` request, three tries at most (D72), and QEMU's pull check includes one cut and its resume. Two observations of spec 039's box run settled: (a) pinned by a test and logged with the address, (b) not reproduced. Inbox lines resolved and removed: the interface's button and notes, and resuming a cut download. The box checks are in "Tests to run with the box in hand".
 - 2026-11-26: second run on the box (radio image of main with a test update key): the release download of spec 039 works (a version check against a Mac server: 0.1 s, `latest 0.1.1`; a pull with an empty body installed 0.1.1 in 36 s and the box came back on it) and TLS reaches GitHub (certificate validated, redirect followed, 404 as no release exists yet, update-check thread stack 14.7 KB unused of 20 KB, update-pull 9.9 KB unused); the resume of spec 040 works (the server cut the image after 900,000 bytes, the box asked again with a Range request, got 206 and finished: 39 s). Not run on the box: the Settings update card in a browser, the key rotation (needs two test-key images and a USB flash), the first check right after a restart (observation a of spec 040), the internal RAM minimum during a TLS session. The real release feed (tag, secret, key) waits for the author.
 - 2026-11-26: priorities after milestone J set with the user, from a comparison of Sowel's base features with Solite's subset (recipes apart): WebAssembly recipes first (F), then targeted recognition (I1), equipment types without rules as devices need them (I2), minimal modes added (C1), the link with Sowel after the modes (G), the monitoring finishes, history and MQTT (H), notifications not a priority. The later milestones are now a ranked table. Inbox lines kept: they are the sources of I2, C1 and the monitoring finishes.
+- 2026-11-26: spec 041 (F1) checked on the box in two passes. The first, the user's flash, ran the
+  script on the garage (the light on and off) but read 47 KB of internal RAM at the lowest and calls
+  of 83 ms at the most. The fixes (the recipe's info as one text, no listen-set copy per instance,
+  the allocator's own count, 200 ms per call, the CPU at 240 MHz and the flash and PSRAM at 80 MHz,
+  D77) gave 74 KB at the lowest and 36 ms at the most in the second pass, flashed by Claude with the
+  user's leave. R7 is met in two halves (the wave in the first pass, the RAM in the second): F1
+  merged, its row "done (box check pending)" until a wave on the final image; the box-test item of
+  spec 041 replaced by that inbox line. New lines: the PSRAM in the
+  probation, the restore's and the server's defects of the session (B7.1, B7.6), a Restart button,
+  the session's live lines, the gestures left undone.

@@ -105,7 +105,7 @@ pub fn load(
     let made = runtimes
         .new_runtime()
         .map_err(|e| format!("no runtime: {e}"))?;
-    let (rt, refused) = (made.runtime, made.refused);
+    let (rt, refused, held) = (made.runtime, made.refused, made.held);
     let gate = Arc::new(Gate::default());
     let limit = runtimes.memory_limit();
     limits::configure(&rt, &gate, clock, limit, runtimes.quickjs_limit());
@@ -162,7 +162,7 @@ pub fn load(
     let declared: Declared =
         serde_json::from_str(&declared).map_err(|e| format!("bad definition: {e}"))?;
     let (info, summary_id, version, defs, has_validate) = check(declared)?;
-    let runtime_bytes = limits::held(&rt);
+    let runtime_bytes = limits::held(&rt, &held);
     let summary = ScriptSummary {
         id: summary_id,
         version,
@@ -176,6 +176,7 @@ pub fn load(
         clock: Arc::clone(clock),
         limit,
         refused,
+        held,
         info,
         defs,
         has_validate,

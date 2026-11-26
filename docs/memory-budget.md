@@ -35,7 +35,8 @@ The account (spec 029) is small and not driven by the worst case: at most 8 sess
 700 bytes beside the home, and one account of about 250 bytes. The password hash keeps under 1 KB
 on the stack of the HTTP worker that runs it (inside its 10 KB), nothing on the heap that grows; it
 takes 1.1 to 1.4 s on the box (**M**, a login timed on the box on 2026-11-25, the request whole;
-the CPU runs at 160 MHz, `CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ`).
+the CPU ran at 160 MHz then; it runs at 240 MHz since spec 041, D77, so a login is now
+faster, not timed again).
 
 The backup's key derivation (spec 035) is ten times that (100,000 iterations; under a second on
 the Mac), run in slices that pause 10 ms every 5,000 iterations so the task watchdog is fed. On
@@ -92,6 +93,7 @@ never taken by an allocation that may go to PSRAM.
 | The worst overlap of the job threads' stacks: an automatic check or pull (20 KB), an upload (16 KB) and a backup (10 KB) at once, each answered by its own thread, with the client's 5 KB (the `script` thread is permanent, counted on its own line above) | 20 + 16 + 10 KB + 5 KB = 51 KB of the 109 KB left (a pull and an upload exclude each other, 409, so the worst case that can happen is a pull or an upload with a backup: 35 KB); the automatic check, an upload and a backup are the worst overlap allowed | E, from the settings |
 | mbedTLS, its small internal allocations | 8 KB | E |
 | QuickJS's static data in the radio image (spec 041): linked in, it takes 12 KB of internal RAM from the boot (347 KB free in the script build against 359 KB in the box's image) | 12 KB | M, QEMU (2026-11-26) |
+| The script recipes' small blocks on the Rust side (spec 041): a loaded script recipe keeps its info as one JSON text, an instance its slots' ids, its state and its motion sensors (no copy of its listen set: the engine holds it); every block of 4 KB or less goes to the internal RAM | About 4 KB per loaded script recipe (30 KB before, its info kept twice as `Value` trees), 3 to 5 KB per instance (5 to 6.5 KB before); `MAX_INSTANCES` (16, all recipes) script instances would hold up to about 80 KB, **not added**: the measured figures below are the reading, and past the reserve the small blocks spill into PSRAM | M, QEMU with a counting allocator (2026-11-26) |
 | Left for the engine's small allocations and the rest, before the reserve | 359 − 70 − 64 − 8 − 12 − 32 = 173 KB | |
 | Reserve kept for DMA and the network stack | 64 KB | settings |
 | **Left for the engine's small allocations** | 173 − 64 = **109 KB**, pessimistic by up to 64 KB: Wi-Fi's own internal allocations (the 70 KB above) draw from the reserve, so the reserve and the network line are partly counted twice | |
@@ -124,6 +126,7 @@ The radio image's application, as `esptool elf2image` writes it (the size line o
 | Before spec 039 (`main` at the merge of spec 038, built 2026-11-26) | 2,193,632 bytes (2142 KB) | 52 % |
 | With spec 039 (2026-11-26) | 2,328,192 bytes (2273 KB) | 55 % |
 | With spec 041, the scripts (QuickJS, the shim, `motion-light-script`; 2026-11-26) | 2,934,192 bytes (2865 KB) | 69 % |
+| With spec 041's fixes after the box run (2026-11-26) | 2,964,768 bytes (2895 KB) | 70 % |
 
 The difference, **134,560 bytes (131 KB)**, is the TLS client (ESP-IDF's HTTP client, `esp-tls`, the
 client side of mbedTLS), the common certificate bundle (`CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN`,
@@ -228,3 +231,4 @@ and becomes a line of the roadmap's inbox (or a decision for the ceiling): the l
 | The 33 requests of an equipment with 16 + 16 bindings | Measured on 2026-11-22 over Wi-Fi, the garage's two devices known, a browser tab open on the box: eight runs, never a 503 `Busy`, totals 14.4, 9.0, 10.5, 10.7, 16.1, 19.1, 22.3 and 20.6 s (slowest request 0.8 to 1.1 s); in two runs (9.0 and 10.5 s) one request got no answer (curl status 000), the other 32 answered 201. Over the 10 s limit in seven of the eight: each creation takes 0.15 to 0.65 s against about 0.05 s for a GET (a line of the roadmap inbox) | `sh scripts/measure-api.sh <box address>` |
 | The serial link's buffers | 115200 baud, receive ring 4096 B, highest use 262 B, full 0 times, in 4 minutes with one device (2026-11-22) | `sh scripts/box.sh log --image radio` (the `serial:` line, every 240 s) |
 | The radio image's internal RAM: minimum free and the engine stack's high-water mark | Boot of the radio image: internal 352 KB free (largest block 160 KB), PSRAM 2046 KB free. After 4 minutes with one device: internal 303 KB free (minimum 234 KB), PSRAM 2020 KB free (minimum 2016 KB), engine stack 27 KB unused of 32 KB. Nothing against D27: the home holds one device (2026-11-22). Since spec 034 the line also prints the largest free block of each memory (the fragmentation's indicator; not yet read on the box) | `sh scripts/box.sh log --image radio` (the `heap:` line) |
+| Script recipes on the box (spec 041): internal RAM and the time of a call, one `motion-light-script` instance on the garage | First pass (CPU 160 MHz, flash and PSRAM 40 MHz, before the fixes): `memory-network` 75 KB internal free; after the wave, internal minimum **47 KB**; `scripts:` 12 calls, 24.4 ms on average, 82.7 ms at the most, heap 117 KB. Second pass (the fixes, CPU 240 MHz, flash and PSRAM 80 MHz, D77): `memory-network` 102 KB; after 240 s, minimum 88 KB; after a login, the recipe list, the interface's page and four orders to the light (eight reports into the script), minimum **74 KB**; `scripts:` 15 calls, **13.9 ms** on average, **36.1 ms** at the most, heap 117 KB; PSRAM minimum 1737 KB free (2026-11-26) | `sh scripts/box.sh log --raw` (the `memory-network:`, `heap:` and `scripts:` lines) |

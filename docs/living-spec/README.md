@@ -839,8 +839,10 @@ same routes and from a room's page, with the same log, state and events.
   text and stay stopped); each runs in its own QuickJS runtime of at most 224 KB on the box (448 KB
   on the Mac, whose pointers are twice as large), shared by its instances; loading a script stops
   after 1000 ms (`Script recipe invalid: the script took more than 1000 ms when loaded`); a call
-  into a script stops after 100 ms, its stack at 16 KB; script calls take at most 300 ms per turn
-  of the engine's loop, the rest waiting for the next turn (the built-in recipes get each event at
+  into a script stops after 200 ms, its stack at 16 KB; no event or timer goes to a script once
+  300 ms of a turn of the engine's loop are spent on scripts (the one under way finishes: one call
+  per instance, or per equipment holding a reporting motion sensor, each of at most 200 ms), the rest
+  waiting for the next turn (the built-in recipes get each event at
   once whatever the scripts spent); a failed script's restart, one recipe per turn, counts in those
   300 ms, and its load may take up to its 1000 ms limit (that turn is longer). A call that leaves
   the runtime over 85 % of its memory limit, or 32 KB more than the last collection left, is

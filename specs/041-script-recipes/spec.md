@@ -159,11 +159,14 @@ test stays in this spec.
    - `SCRIPT_LOAD_LIMIT_MS` = 1000 ms to load a script (compile, top level, the `recipe()` call, its
      info): done once, and compiling is slow on the box; a script that runs past it is refused
      (`Script recipe invalid: the script took more than 1000 ms when loaded`);
-   - `SCRIPT_CALL_LIMIT_MS` = 100 ms per call (the interrupt handler, reading a monotonic clock the
-     engine is given; a fake one in tests);
-   - `SCRIPT_TURN_LIMIT_MS` = 300 ms of script calls per turn of the engine's loop; the script
-     deliveries and timers left are carried to the next turn (the radio loop is never held longer than
-     that by scripts, but for a restart's load, below); the built-in recipes always get each event at
+   - `SCRIPT_CALL_LIMIT_MS` = 200 ms per call (the interrupt handler, reading a monotonic clock the
+     engine is given; a fake one in tests). First 100 ms; the box's run measured 24 ms on average and
+     83 ms at the most at 160 MHz, too close: raised with the user's agreement (2026-11-26);
+   - `SCRIPT_TURN_LIMIT_MS` = 300 ms of script calls per turn of the engine's loop, checked before
+     each delivery: none starts once 300 ms are spent, and the one under way finishes (one call, or
+     one per equipment holding a reporting motion sensor, each of at most 200 ms); the script deliveries and timers left are carried
+     to the next turn (the radio loop is never held longer than that by scripts, but for a restart's
+     load, below); the built-in recipes always get each event at
      once, in the turn it came, whatever the scripts spent. A failed script's restart (R3.6) counts
      in the same budget: at most one script recipe is restarted per turn, and its load (up to
      `SCRIPT_LOAD_LIMIT_MS`, 1 s) and the starts of its instances are time of the turn: the starts stop
@@ -176,8 +179,8 @@ test stays in this spec.
      it);
    - the garbage collector: before each call its threshold is set to at most ¾ of the limit; after a
      call that leaves the runtime holding more than 85 % of the limit, or more than 32 KB more than
-     the last collection left, it runs (what the runtime holds is read once per call: it walks the
-     heap); a runtime that holds 90 % of the limit after it has failed in all but name;
+     the last collection left, it runs (what the runtime holds is read once per call: on the box the
+     allocator's own count, on the Mac QuickJS's accounting, which walks the heap); a runtime that holds 90 % of the limit after it has failed in all but name;
    - `MAX_TIMERS`, the state's 512 bytes, 20 log lines per call, 32 listened pairs (R2).
    `MAX_INSTANCES` (16, all recipes together) and the engine's other bounds are unchanged and shared.
 4. **The box**: the runtime's allocations go to PSRAM through the firmware's allocator
@@ -312,22 +315,25 @@ when the light went on and off, both lines are read, and the internal RAM minimu
 
 ## Acceptance criteria
 
-- [ ] `motion-light-script` gives the same orders and state as the built-in recipe in the shared
+- [x] `motion-light-script` gives the same orders and state as the built-in recipe in the shared
       behaviour scenarios (both ways); each difference of R5.2 has its test.
-- [ ] A script cannot read, listen to or command an equipment outside its slots, nor reach another
+- [x] A script cannot read, listen to or command an equipment outside its slots, nor reach another
       instance (tested: unknown slot, raw id, forged handle, two instances in two zones).
-- [ ] `solite-host --sim scenarios/garage.json --serve --recipe-script recipes/scripts/motion-light-script.js`
+- [x] `solite-host --sim scenarios/garage.json --serve --recipe-script recipes/scripts/motion-light-script.js`
       runs it; the garage's light switches through the script.
-- [ ] A script that loops, eats memory (caught or not) or recurses fails as R3.5 says; another recipe
+- [x] A script that loops, eats memory (caught or not) or recurses fails as R3.5 says; another recipe
       keeps running; it comes back after a minute, three times in 24 h at most.
-- [ ] Without a script loaded, `GET /api/v1/recipes`, `GET /recipes/:id` and the instances' JSON are
+- [x] Without a script loaded, `GET /api/v1/recipes`, `GET /recipes/:id` and the instances' JSON are
       byte for byte today's; the Sowel contract test is green; a script's `RecipeInfo` has Sowel's
       shape.
-- [ ] `sh scripts/qemu.sh` prints the `recipes: script` line and passes its gates; the measuring image
+- [x] `sh scripts/qemu.sh` prints the `recipes: script` line and passes its gates; the measuring image
       and the box's own image have no QuickJS (checked by a symbol search); the figures of R6 are in
       `docs/memory-budget.md`.
 - [ ] The box check of R7 is run by the user after their flash; its result is written in this spec.
-- [ ] Decisions D73 to D76 written; `sh scripts/validate.sh` green.
+      Met in two halves ("Result on the box"): the wave and the light in the first pass, the
+      internal RAM over 64 KB in the second, without a person; a wave on the final image is left
+      (roadmap inbox).
+- [x] Decisions D73 to D77 written; `sh scripts/validate.sh` green.
 
 ## Edge cases
 
@@ -373,3 +379,38 @@ when the light went on and off, both lines are read, and the internal RAM minimu
 3. `sh scripts/qemu.sh`: the `recipes: script` line and the new rows of `docs/memory-budget.md`.
 4. **On the box** (R7): the user types the box session with `--yes-flash --with-gestures` (D6, D55);
    result written here: date, devices, what was seen, the figures.
+
+### Result on the box (2026-11-26)
+
+Devices: the Dongle Max (ESP32-D0WDR2-V3, radio image), a SONOFF ZBMINIR2 relay (the garage's
+light) and a SONOFF SNZB-03PR2 motion sensor, both paired that day, in the user's garage.
+
+1. **First pass, the user's flash** (`box-session.sh --yes-flash --with-gestures`): 15 steps passed, 3
+   failed, 9 skipped. B6 failed for want of a relay at that moment. B7.1 (a restore with a wrong
+   password answers no status) and B7.6 (the busy test gets no answer) failed. Both come from the
+   HTTP server, not from this spec, and went to the roadmap's inbox. Step B11, the script, was run
+   by hand once the user had made the garage:
+   - the light went on 8 s after the wave, and off 60 s after the sensor cleared, with the log lines
+     `Motion detected — 1 light(s) turned on` and `No motion for 1min — lights turned off`;
+   - `scripts:` gave 12 calls, 24.4 ms on average, 82.7 ms at the most;
+   - `heap:` gave an internal RAM minimum of **47 KB**: R7's 64 KB was not met.
+2. **Fixes**:
+   - the recipe's info is kept as one JSON text, not twice as `Value` trees: loading took 30 KB of
+     internal RAM, now 4 KB, in QEMU;
+   - an instance keeps no copy of its listen set (`Update.listen` is `None` when unchanged): 1.5 KB
+     less per instance;
+   - the box's allocator gives the held bytes, so no walk of the heap after each call;
+   - the limit per call is 200 ms (the user's agreement);
+   - the CPU runs at 240 MHz, the flash and the PSRAM at 80 MHz (D77).
+3. **Second pass, flashed by Claude with the user's leave** (`box.sh flash --image radio
+   --keep-storage`, the home kept; the user away, so no wave):
+   - the boot log reads `SPI Speed: 80MHz`, `esp_psram: Speed: 80MHz`, `SPI SRAM memory test OK`
+     and `cpu freq: 240000000 Hz`;
+   - with Wi-Fi up, 102 KB of internal RAM is free (75 KB before the fixes);
+   - after 240 s with the garage's `motion-light-script` instance restored: **minimum 88 KB**;
+   - then a login, the recipe list, the interface's page and four orders to the light through the
+     API (eight `light_state` reports that call the script): **minimum 74 KB**, over the 64 KB of R7;
+   - `scripts:` gave 15 calls, **13.9 ms on average and 36.1 ms at the most**, a held heap of 117 KB
+     (this time includes the check after each call, the memory read and the collector, which the
+     first pass's did not: the gain is larger than the figures show);
+   - one flash write since boot.

@@ -3,7 +3,8 @@
 //! logs. A recipe is written once against the recipe SDK (`solite-recipe-sdk`): the engine asks the
 //! registry for the provider of a recipe id (the built-in recipes, `motion-light`, then the script
 //! recipes loaded, spec 041), calls it through the SDK's `Recipe` trait with a `NativeHost` over
-//! the home, and keeps the state text and listen set each call returns, so that readers never call
+//! the home, and keeps the state text and listen set each call returns (no listen set: the one it
+//! had), so that readers never call
 //! a recipe. A script recipe can fail as a whole (its runtime is dropped, its instances stop) and
 //! comes back by itself within a bound. No I/O and no thread: the host's radio loop gives the
 //! events and the time (`turn`, or `handle` and `tick`), a recipe's orders go to the home's queue,
@@ -128,7 +129,9 @@ pub type Rebuild = Box<dyn FnMut() -> Result<Box<dyn Recipe + Send>, String> + S
 /// What a script recipe has that a built-in one has not: its definition (kept while its runtime is
 /// dropped), how to make the runtime again, and whether it runs.
 struct ScriptMeta {
-    info: Value,
+    /// The `RecipeInfo` as JSON text, parsed when asked for: one block, not a tree of small ones
+    /// (the box's internal RAM, spec 041).
+    info: String,
     rebuild: Rebuild,
     /// `Some` while the recipe failed and its runtime is dropped.
     failed: Option<Failed>,
@@ -180,7 +183,7 @@ impl Native {
 
     fn info(&self) -> Value {
         match (&self.script, &self.recipe) {
-            (Some(script), _) => script.info.clone(),
+            (Some(script), _) => serde_json::from_str(&script.info).unwrap_or(Value::Null),
             (None, Some(recipe)) => recipe.info(),
             (None, None) => Value::Null,
         }
@@ -848,11 +851,23 @@ impl RecipeEngine {
                 self.interest_stale = true;
                 self.next_handle = self.next_handle.wrapping_add(1);
                 let started = update.state.as_str() != NO_STATE;
+                if update.listen.is_none() {
+                    // The SDK's contract: a start gives its listen set. Without one the instance
+                    // listens to nothing; said, not hidden.
+                    log::warn!(
+                        "recipes: {} started with no listen set: it hears no event",
+                        slot.instance.recipe_id
+                    );
+                }
                 slot.running = Some(Running {
                     provider,
                     handle,
                     state: update.state.into(),
-                    listen: self.listens.indexes(&update.listen),
+                    listen: update
+                        .listen
+                        .as_deref()
+                        .map(|l| self.listens.indexes(l))
+                        .unwrap_or_default(),
                 });
                 let (id, recipe) = (slot.instance.id, &slot.instance.recipe_id);
                 announce(&self.live, || EngineEvent::RecipeInstanceStarted {
@@ -1143,7 +1158,7 @@ impl RecipeEngine {
             names,
             recipe: Some(recipe),
             script: Some(ScriptMeta {
-                info,
+                info: info.to_string(),
                 rebuild,
                 failed: None,
                 restarts: Vec::new(),
@@ -1597,7 +1612,9 @@ impl RecipeEngine {
             Ok(update) => {
                 if let Some(running) = slot.running.as_mut() {
                     running.state = update.state.into();
-                    running.listen = self.listens.indexes(&update.listen);
+                    if let Some(listen) = &update.listen {
+                        running.listen = self.listens.indexes(listen);
+                    }
                 }
             }
             Err(error) if error.kind == ErrorKind::Recipe => {
@@ -1740,8 +1757,12 @@ impl RecipeEngine {
                     });
                 }
                 running.state = update.state.into();
-                running.listen = self.listens.indexes(&update.listen);
-                self.interest_stale = true;
+                // A call that changed only the state leaves the listen set, and the home's
+                // interest, as they were.
+                if let Some(listen) = &update.listen {
+                    running.listen = self.listens.indexes(listen);
+                    self.interest_stale = true;
+                }
                 None
             }
             Ok(None) => None,
@@ -1967,7 +1988,7 @@ mod tests {
         ) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn stop(&mut self, _: u32) {}
@@ -1986,7 +2007,7 @@ mod tests {
         fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {
@@ -2011,7 +2032,7 @@ mod tests {
         ) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn stop(&mut self, _: u32) {}
@@ -2032,7 +2053,7 @@ mod tests {
         fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {
@@ -2090,7 +2111,7 @@ mod tests {
         ) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn stop(&mut self, _: u32) {}
@@ -2111,7 +2132,7 @@ mod tests {
         fn refresh(&mut self, _: &dyn Host, _: u32, _: &Value) -> Result<Update, RecipeError> {
             Ok(Update {
                 state: "{}".into(),
-                listen: Vec::new(),
+                listen: Some(Vec::new()),
             })
         }
         fn prune(&self, _: &dyn Host, _: &Value, _: &Change) -> Option<Pruned> {

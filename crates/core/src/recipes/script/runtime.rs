@@ -19,8 +19,8 @@ use solite_recipe_sdk::{
 };
 
 use super::limits::{
-    self, Gate, MAX_ALIAS_BYTES, MAX_END_LINE_BYTES, MAX_LOG_LINES_PER_CALL, MAX_TIMERS,
-    RefusedFlag, ScriptRuntimes,
+    self, Gate, HeldCounter, MAX_ALIAS_BYTES, MAX_END_LINE_BYTES, MAX_LOG_LINES_PER_CALL,
+    MAX_TIMERS, RefusedFlag, ScriptRuntimes,
 };
 use super::slots::{self, SlotDef, SlotIds, SlotKind};
 use crate::home::CLOCK_SET_AFTER_MS;
@@ -54,9 +54,9 @@ struct Instance {
     handle: u32,
     /// The zone and equipment slots, with the ids the script may reach.
     slots: Vec<SlotIds>,
-    /// The state text and listen set the last call left (the engine's copies are served).
+    /// The state text the last call left (the engine's copy is served). The listen set is not
+    /// kept here: the engine holds it, and a call that leaves it as it was says nothing of it.
     state: String,
-    listen: Vec<ListenEntry>,
     /// The motion sensors, resolved when the script listens to motion reports.
     sensors: Vec<Sensor>,
     /// The timers, as the last call left them: the next monotonic due time, and the times of day
@@ -219,6 +219,7 @@ pub(super) struct Parts {
     pub clock: ScriptClock,
     pub limit: usize,
     pub refused: Option<RefusedFlag>,
+    pub held: Option<HeldCounter>,
     pub info: serde_json::Value,
     pub defs: Vec<SlotDef>,
     pub has_validate: bool,
@@ -235,7 +236,12 @@ pub struct ScriptRecipe {
     limit: usize,
     /// The runtime's own refusal flag (the box's allocator sets it; the system's has none).
     refused: Option<RefusedFlag>,
-    info: serde_json::Value,
+    /// The allocator's count of what the runtime holds (the box's), read after each call.
+    held: Option<HeldCounter>,
+    /// The `RecipeInfo`, as JSON text: one block, where a `Value` tree is hundreds of small ones
+    /// (on the box, every block of 4 KB or less goes to the internal RAM). Parsed when asked for:
+    /// the API's recipe list, a settle, the engine's registry.
+    info: String,
     defs: Vec<SlotDef>,
     has_validate: bool,
     instances: Vec<Instance>,
@@ -287,7 +293,7 @@ pub(super) fn describe(ctx: &Ctx<'_>, error: rquickjs::Error) -> String {
 impl ScriptRecipe {
     /// Assembled by the loader.
     pub(super) fn assemble(parts: Parts) -> ScriptRecipe {
-        let loaded = limits::held(&parts.rt);
+        let loaded = limits::held(&parts.rt, &parts.held);
         ScriptRecipe {
             counters: Mutex::new(Counters {
                 held: loaded,
@@ -301,7 +307,8 @@ impl ScriptRecipe {
             clock: parts.clock,
             limit: parts.limit,
             refused: parts.refused,
-            info: parts.info,
+            held: parts.held,
+            info: parts.info.to_string(),
             defs: parts.defs,
             has_validate: parts.has_validate,
             instances: Vec::new(),
@@ -320,7 +327,7 @@ impl ScriptRecipe {
 
     /// The bytes QuickJS holds for this recipe now.
     pub fn held_bytes(&self) -> usize {
-        limits::held(&self.rt)
+        limits::held(&self.rt, &self.held)
     }
 
     /// QuickJS's memory accounting for this recipe (its own, for the measures).
@@ -361,7 +368,8 @@ impl ScriptRecipe {
         let refused = limits::was_refused(&self.refused);
         let after = {
             let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
-            let after = limits::after_call(&self.rt, self.limit, &mut counters.after_gc);
+            let after =
+                limits::after_call(&self.rt, &self.held, self.limit, &mut counters.after_gc);
             counters.held = after.now;
             counters.peak = counters.peak.max(after.at_end);
             after
@@ -423,6 +431,9 @@ impl ScriptRecipe {
                 run().map_err(|e| describe(&ctx, e))
             })
         });
+        // The check after the call (the memory read, the collector) is part of the call's time:
+        // the engine waits for it as for the script.
+        let checked = self.after_call_check();
         {
             let us = u64::try_from(began.elapsed().as_micros()).unwrap_or(u64::MAX);
             let mut counters = self.counters.lock().unwrap_or_else(PoisonError::into_inner);
@@ -430,7 +441,7 @@ impl ScriptRecipe {
             counters.total_us = counters.total_us.saturating_add(us);
             counters.max_us = counters.max_us.max(us);
         }
-        self.after_call_check()?;
+        checked?;
         let (status, end) = raw.map_err(|m| classify(m, self.limit))?;
         // The end of the call is the shim's text, but the script runs in the same context: the
         // engine checks it as input, and a recipe that corrupts it fails.
@@ -474,6 +485,7 @@ impl ScriptRecipe {
             instance.state = state;
             changed = true;
         }
+        let mut listened = None;
         if let Some(listen) = end.l {
             instance.sensors = if listen.m {
                 instance
@@ -515,12 +527,12 @@ impl ScriptRecipe {
                     entries.push(entry);
                 }
             }
-            instance.listen = entries;
+            listened = Some(entries);
             changed = true;
         }
         changed.then(|| Update {
             state: instance.state.clone(),
-            listen: instance.listen.clone(),
+            listen: listened,
         })
     }
 
@@ -619,7 +631,7 @@ impl Recipe for ScriptRecipe {
     }
 
     fn info(&self) -> serde_json::Value {
-        self.info.clone()
+        serde_json::from_str(&self.info).unwrap_or(serde_json::Value::Null)
     }
 
     fn validate(&self, host: &dyn Host, params: &serde_json::Value) -> Result<(), RecipeError> {
@@ -641,7 +653,6 @@ impl Recipe for ScriptRecipe {
             handle,
             slots,
             state: "{}".to_string(),
-            listen: Vec::new(),
             sensors: Vec::new(),
             next_mono: None,
             at_timers: Vec::new(),
@@ -651,6 +662,12 @@ impl Recipe for ScriptRecipe {
             slots: &slots_text,
         };
         match self.call(host, handle, op, clock) {
+            // The shim always gives the listen set of a start: without it the instance would be
+            // deaf, so the end of the call is refused as any other corrupt one.
+            Ok(end) if end.l.is_none() => {
+                self.drop_instance(handle, false);
+                Err(RecipeError::recipe("bad end of call: no listen set"))
+            }
             Ok(end) => self
                 .apply(host, handle, end, true)
                 .ok_or_else(|| RecipeError::instance("Script error: the instance is gone")),
@@ -711,10 +728,15 @@ impl Recipe for ScriptRecipe {
                 })
                 .unwrap_or_default(),
         };
-        let mut update = None;
+        let mut update: Option<Update> = None;
         for op in calls {
             let end = self.call(host, handle, op, clock)?;
-            if let Some(next) = self.apply(host, handle, end, false) {
+            if let Some(mut next) = self.apply(host, handle, end, false) {
+                // A later call that left the listen set as it was does not undo an earlier one's
+                // change: the engine still has to hear of it.
+                if next.listen.is_none() {
+                    next.listen = update.and_then(|u| u.listen);
+                }
                 update = Some(next);
             }
         }
