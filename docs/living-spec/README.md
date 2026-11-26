@@ -688,7 +688,10 @@ answers 404), behind the token:
   `Invalid backup: truncated`), a changed byte anywhere or bytes after the end (400 `Invalid
   backup: <reason>`), an unknown or repeated file name, a secret stored plain, a file over 1 MiB,
   more than 7 files, a chunk over 4096 bytes, iterations out of range, a body over 2 MiB (413
-  `Backup too large`). The staged copies are then removed. A refused file may have written up to
+  `Backup too large`). The staged copies are then removed. The refusal is answered first, then the box reads and drops
+  what is left of the declared body (about 10 s at most, plus one receive wait of 5 s) before it
+  closes the connection: the client gets the refusal's answer, not a reset (not on the 413, where
+  the client is not made to send the file). A refused file may have written up to
   its size in staged copies to the flash before its check fails.
 - **Applied at the next start**: once everything holds, the staged copies are synced and a marker
   file, `restore.pending`, names what to do for each file (`promote <name>` or `remove <name>`).
@@ -1198,7 +1201,11 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   on the box a chunked upload is 411. The body ends at `Content-Length` bytes, so the check for a
   longer file never waits on the socket. Every refusal of this route that leaves body bytes unread
   (401, 403, 405, 409, 411, 413, 415, 503, a header refused, an error mid-image) closes the
-  connection after its answer, so the image's bytes are never read as a next request. Through the
+  connection after its answer, so the image's bytes are never read as a next request. A refusal
+  that comes while the body is still being read (a header refused, an error mid-image) is answered
+  first, then the box reads and drops what is left of the declared body, about 10 s at most (plus
+  one receive wait of 5 s), before it closes: the client gets the refusal's answer whatever was left of its upload, not a reset (not
+  on the 413, where the client is not made to send the file). Through the
   core's plain request handler (tests and tools, which cannot stream) the update and check routes
   answer 501 `Updates need the streaming handler`.
 - **From a release.** The box reads the release's `manifest.json` (see "Publishing a release"),
