@@ -82,6 +82,22 @@ fn free_port() -> u16 {
         .port()
 }
 
+/// The tree's own version (`[workspace.package]` of the root Cargo.toml) with its patch number raised
+/// by `by`: what the script builds for the next version and the rollback image. Read, not written
+/// in the tests, so that a release does not break them.
+fn tree_version_plus(by: u32) -> String {
+    let manifest =
+        fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml")).unwrap();
+    let version = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.split('"').next())
+        .expect("a version in the workspace manifest");
+    let mut parts: Vec<u32> = version.split('.').map(|p| p.parse().unwrap()).collect();
+    parts[2] += by;
+    format!("{}.{}.{}", parts[0], parts[1], parts[2])
+}
+
 fn write_exec(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
@@ -1490,9 +1506,18 @@ fn the_nominal_pass_flashes_once_runs_the_groups_inside_saves_and_gives_a_verdic
         "{calls}"
     );
     // The builds: the base image with the key, the next version and the rollback image.
-    assert!(calls.contains("builder base 0.1.0 key:"), "{calls}");
-    assert!(calls.contains("builder next 0.1.1 key:"), "{calls}");
-    assert!(calls.contains("builder rollback 0.1.2 key:"), "{calls}");
+    assert!(
+        calls.contains(&format!("builder base {} key:", tree_version_plus(0))),
+        "{calls}"
+    );
+    assert!(
+        calls.contains(&format!("builder next {} key:", tree_version_plus(1))),
+        "{calls}"
+    );
+    assert!(
+        calls.contains(&format!("builder rollback {} key:", tree_version_plus(2))),
+        "{calls}"
+    );
     // B8 against the simulator: no key, the checks after the 401 are skipped.
     out.ok("B8.1");
     out.skipped("B8.2", "this build has no update key");
@@ -1889,7 +1914,12 @@ fn api_only_makes_the_key_signs_16_bytes_flips_them_and_leaves_no_key() {
     let port = free_port().to_string();
     let out = session.run(&["--api-only", &port], Tty::None);
     out.ok("P2");
-    assert_eq!(out.status("P4"), "OK (next 0.1.1)", "{}", out.text);
+    assert_eq!(
+        out.status("P4"),
+        format!("OK (next {})", tree_version_plus(1)),
+        "{}",
+        out.text
+    );
     out.skipped("P3", "box only");
     out.skipped("B1", "box only");
     let run = session.run_dir();

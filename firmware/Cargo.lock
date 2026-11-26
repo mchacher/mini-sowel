@@ -1436,7 +1436,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "solite-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chacha20",
  "ed25519-dalek",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "solite-firmware"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "embuild",
@@ -1463,7 +1463,7 @@ dependencies = [
 
 [[package]]
 name = "solite-sim"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "serde",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "solite-ui-embed"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "flate2",
 ]

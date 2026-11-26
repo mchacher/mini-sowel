@@ -5,7 +5,7 @@ members = ["crates/core", "crates/host", "crates/sim", "crates/ui-embed"]
 exclude = ["firmware"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "AGPL-3.0-only"
 repository = "https://github.com/mchacher/solite"
