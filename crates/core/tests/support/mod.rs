@@ -80,6 +80,7 @@ impl Rig {
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 authorization: None,
+                content_length: None,
                 body: body.as_bytes(),
             },
             self.now,

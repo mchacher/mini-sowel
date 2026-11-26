@@ -20,6 +20,7 @@ fn stream(rig: &mut Rig, path: &str) -> ListCursor {
             reach: Reach::Loopback,
             content_type: Some("application/json"),
             authorization: None,
+            content_length: None,
             body: b"",
         },
         rig.now,

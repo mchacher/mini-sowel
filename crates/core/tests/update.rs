@@ -855,6 +855,7 @@ impl Server {
                 reach: Reach::Loopback,
                 content_type,
                 authorization: authorization.as_deref(),
+                content_length: Some(body.len() as u64),
                 body,
             },
             T0,
@@ -913,12 +914,12 @@ fn the_update_route_refuses_a_foreign_host_before_anything_else() {
 fn the_update_route_with_a_json_content_type_is_415() {
     let (server, token) = Server::with_token();
     let (status, body) =
-        whole(server.send("POST", UPDATE, Some(&token), Some("application/json"), b""));
+        whole(server.send("POST", UPDATE, Some(&token), Some("application/json"), b"x"));
     assert_eq!(
         (status, body),
         (415, json!({"error": "Unsupported Media Type"}))
     );
-    let (status, _) = whole(server.send("POST", UPDATE, Some(&token), None, b""));
+    let (status, _) = whole(server.send("POST", UPDATE, Some(&token), None, b"x"));
     assert_eq!(status, 415);
 }
 
@@ -926,7 +927,7 @@ fn the_update_route_with_a_json_content_type_is_415() {
 fn the_update_route_with_a_token_and_octet_stream_is_left_to_the_streaming_caller() {
     let (server, token) = Server::with_token();
     for content_type in ["application/octet-stream", "Application/Octet-Stream; x=1"] {
-        let reply = server.send("POST", UPDATE, Some(&token), Some(content_type), b"");
+        let reply = server.send("POST", UPDATE, Some(&token), Some(content_type), b"x");
         assert!(matches!(reply, Reply::Update), "{content_type}: {reply:?}");
     }
     // The route is recognised on its path and method alone, query string aside.
@@ -984,6 +985,7 @@ fn the_plain_handler_cannot_stream_an_update_and_answers_501() {
                 reach: Reach::Loopback,
                 content_type: Some(content_type),
                 authorization: None,
+                content_length: Some(20_000),
                 body: &[0u8; 20_000],
             },
             T0,

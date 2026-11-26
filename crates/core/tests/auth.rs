@@ -100,6 +100,7 @@ impl Server {
                 reach: Reach::Loopback,
                 content_type,
                 authorization,
+                content_length: None,
                 body: body.as_bytes(),
             },
             self.now.get(),
@@ -134,6 +135,8 @@ impl Server {
             Reply::Static(_) => (200, Value::Null),
             Reply::Order(_)
             | Reply::Update
+            | Reply::UpdatePull(_)
+            | Reply::VersionCheck(_)
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. } => (202, Value::Null),
         }
@@ -1176,6 +1179,7 @@ fn the_pairing_route_answers_on_the_lan_with_the_token() {
                 },
                 content_type: Some("application/json"),
                 authorization,
+                content_length: None,
                 body: body.as_bytes(),
             },
             T0,
@@ -1442,6 +1446,7 @@ fn the_unguarded_handler_serves_the_auth_routes_and_never_gates() {
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 authorization: None,
+                content_length: None,
                 body: body.as_bytes(),
             },
             T0,

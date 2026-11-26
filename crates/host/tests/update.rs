@@ -513,3 +513,209 @@ fn an_upload_that_stops_mid_image_ends_within_the_idle_timeout_and_the_next_one_
     let next = serving.upload(&file, true);
     assert_eq!(next.status, 200, "{}", next.body);
 }
+
+// ---- A release pulled from a server (spec 039) ----
+
+fn answer(status: u16, headers: &[String], body: &[u8]) -> Vec<u8> {
+    let mut out = format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\n", body.len()).into_bytes();
+    for header in headers {
+        out.extend_from_slice(format!("{header}\r\n").as_bytes());
+    }
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(body);
+    out
+}
+
+fn digest_hex(bytes: &[u8]) -> String {
+    solite_core::update::image_digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A server of a release `version` whose file is `sup`, behind two redirects; its port.
+fn serve_release(sup: &[u8], version: &str) -> u16 {
+    // The port is not known before the listener exists: the manifest's URL is a path of the
+    // same server, which a redirect from `/m.json`'s neighbour `/a` resolves.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let manifest = json!({
+        "format": 1, "version": version, "minVersion": null,
+        "image": {
+            "size": sup.len(),
+            "sha256": digest_hex(sup),
+            "url": format!("http://127.0.0.1:{port}/a"),
+        },
+    });
+    let routes = vec![
+        ("/m.json", answer(200, &[], manifest.to_string().as_bytes())),
+        (
+            "/a",
+            answer(302, &[format!("Location: http://127.0.0.1:{port}/b")], b""),
+        ),
+        ("/b", answer(302, &["Location: /c".to_string()], b"")),
+        ("/c", answer(200, &[], sup)),
+    ];
+    // The same port, bound again: nothing else takes it in these few lines.
+    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
+    thread::spawn(move || {
+        for mut stream in listener.incoming().map_while(Result::ok) {
+            let routes = routes.clone();
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).into_owned();
+                let path = text.split(' ').nth(1).unwrap_or("/");
+                if let Some((_, a)) = routes.iter().find(|(p, _)| *p == path) {
+                    let _ = stream.write_all(a);
+                }
+            });
+        }
+    });
+    port
+}
+
+fn set_manifest_url(serving: &Serving, port: u16) {
+    let body = json!({"update.manifestUrl": format!("http://127.0.0.1:{port}/m.json")});
+    let answer = serving.request(
+        "PUT",
+        "/api/v1/settings",
+        body.to_string().as_bytes(),
+        "application/json",
+        true,
+    );
+    assert_eq!(answer.status, 200, "{}", answer.body);
+}
+
+#[test]
+fn a_check_then_an_empty_post_pulls_the_release_through_two_redirects() {
+    let host = keyed_host();
+    let data = temp("pull");
+    let mut serving = serve(&host.binary, &data);
+    let sup = sign(&image(40 * 1024), "0.2.0");
+    let port = serve_release(&sup, "0.2.0");
+    set_manifest_url(&serving, port);
+
+    let check = serving.request(
+        "POST",
+        "/api/v1/system/version/check",
+        &[],
+        "text/plain",
+        true,
+    );
+    assert_eq!(check.status, 200, "{}", check.body);
+    let info: Value = serde_json::from_str(&check.body).unwrap();
+    assert_eq!(info["latest"], "0.2.0");
+    assert_eq!(info["updateAvailable"], true);
+    let version = serving.request(
+        "GET",
+        "/api/v1/system/version",
+        &[],
+        "application/json",
+        true,
+    );
+    assert_eq!(serde_json::from_str::<Value>(&version.body).unwrap(), info);
+
+    let pull = serving.request(
+        "POST",
+        "/api/v1/system/update",
+        &[],
+        "application/json",
+        true,
+    );
+    assert_eq!(pull.status, 200, "{}", pull.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&pull.body).unwrap()["message"],
+        "Installed 0.2.0, restarting"
+    );
+    let line = wait_for_line(&mut serving, "written to slot");
+    assert!(
+        line.starts_with("update: 0.2.0 written to slot 1"),
+        "{line}"
+    );
+    assert_eq!(
+        std::fs::read(data.join("update/slot-1.bin")).unwrap(),
+        sup[128..]
+    );
+}
+
+#[test]
+fn an_empty_post_without_a_content_length_is_the_pull_and_a_release_not_newer_is_400() {
+    let host = keyed_host();
+    let data = temp("pull-old");
+    let serving = serve(&host.binary, &data);
+    let sup = sign(&image(10 * 1024), "0.0.1");
+    let port = serve_release(&sup, "0.0.1");
+    set_manifest_url(&serving, port);
+    // No `Content-Length`, no `Transfer-Encoding`: an empty body, so the pull (not the upload's 415).
+    let head = format!(
+        "POST /api/v1/system/update HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\n\r\n",
+        serving.port, serving.token
+    );
+    let pulled = serving.send_raw(head.as_bytes(), &[]);
+    assert_eq!(pulled.status, 400, "{}", pulled.body);
+    assert_eq!(
+        serde_json::from_str::<Value>(&pulled.body).unwrap(),
+        json!({"error": "No update available"})
+    );
+    assert!(!data.join("update/slot-1.bin").exists());
+    // The upload form still wants its content type.
+    let upload = serving.request(
+        "POST",
+        "/api/v1/system/update",
+        b"x",
+        "application/json",
+        true,
+    );
+    assert_eq!(upload.status, 415);
+}
+
+#[test]
+fn the_settings_of_the_release_check_are_accepted_and_checked() {
+    let host = keyed_host();
+    let data = temp("settings");
+    let serving = serve(&host.binary, &data);
+    let good =
+        json!({"update.manifestUrl": "http://192.168.1.5:8000/m.json", "update.autoCheck": "true"});
+    let put = serving.request(
+        "PUT",
+        "/api/v1/settings",
+        good.to_string().as_bytes(),
+        "application/json",
+        true,
+    );
+    assert_eq!(put.status, 200, "{}", put.body);
+    for (body, message) in [
+        (
+            json!({"update.autoCheck": "yes"}),
+            "Invalid value for update.autoCheck",
+        ),
+        (
+            json!({"update.manifestUrl": "http://example.com/m"}),
+            "Invalid value for update.manifestUrl",
+        ),
+    ] {
+        let put = serving.request(
+            "PUT",
+            "/api/v1/settings",
+            body.to_string().as_bytes(),
+            "application/json",
+            true,
+        );
+        assert_eq!(put.status, 400);
+        assert_eq!(
+            serde_json::from_str::<Value>(&put.body).unwrap(),
+            json!({"error": message})
+        );
+    }
+    let get = serving.request("GET", "/api/v1/settings", &[], "application/json", true);
+    let settings: Value = serde_json::from_str(&get.body).unwrap();
+    assert_eq!(settings["update.autoCheck"], "true");
+}

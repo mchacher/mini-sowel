@@ -33,7 +33,7 @@ use esp_idf_svc::sys::{
 };
 use solite_core::HeapStats;
 use solite_core::auth::BootPresence;
-use solite_core::backup::BackupFiles;
+use solite_core::backup::{BackupFiles, Pacing};
 use solite_core::devices::lock;
 use solite_core::engine::{
     self, Clocks, DEFINITION_DELAY_MS, RunError, SaveControl, Saver, Storage, load_home,
@@ -51,9 +51,12 @@ use solite_core::radio::{
 };
 use solite_core::radio::{identity_lines, network_line};
 use solite_core::supervisor::Reason;
+use solite_core::update::release::Limits;
 
-use crate::backup_files::data_files;
+use crate::backup_files::{BoxPacing, data_files};
+use crate::fetch::EspFetcher;
 use crate::http_server;
+use crate::job_thread::{self, FETCH_STACK_BYTES};
 use crate::memory;
 use crate::ota::ENGINE_RUNNING;
 use crate::radio_uart::{UartTransport, reset_radio};
@@ -72,6 +75,10 @@ pub static PAIR_ASKED: AtomicBool = AtomicBool::new(false);
 /// The saves held and flushed by the console's `saves hold` and `saves flush` (spec 025): in RAM
 /// only, so every boot starts with saves not held.
 pub static SAVES: SaveControl = SaveControl::new();
+
+/// The pair-watch thread's ticks (500 ms) between two asks of the automatic release check (spec
+/// 039 R6): about once a minute.
+const RELEASE_ASK_TICKS: u32 = 120;
 
 /// The marker written at each boot and removed after `STABLE_MS` of running.
 const MARKER_FILE: &str = "booting";
@@ -534,17 +541,37 @@ fn drive(
     }
 }
 
-/// Turns the console's `pair` line into a pairing request, every half second.
+/// Turns the console's `pair` line into a pairing request, every half second; and, about once a
+/// minute, asks whether the automatic release check is due (spec 039 R6): when it is, the check
+/// runs on its own `update-check` thread (20 KB, internal RAM), which this thread does not wait
+/// for and which never holds the home's lock while it waits on the network.
 fn start_pair_watch(home: &Arc<Mutex<Home>>) {
     let home = Arc::clone(home);
     let spawned = std::thread::Builder::new()
         .name("pair-watch".into())
-        .stack_size(4096)
+        .stack_size(6 * 1024)
         .spawn(move || {
+            let mut pacing = BoxPacing;
+            let mut ticks = 0u32;
             loop {
                 std::thread::sleep(Duration::from_millis(500));
                 if PAIR_ASKED.swap(false, Ordering::SeqCst) {
                     lock(&home).pairing_mut().request(PAIR_AT_BOOT_SECONDS);
+                }
+                ticks += 1;
+                if ticks >= RELEASE_ASK_TICKS {
+                    ticks = 0;
+                    // The ticket is taken under the lock and the lock let go before the thread.
+                    let ticket = lock(&home).auto_check_ticket(wall_ms(), pacing.now_ms());
+                    if let Some(ticket) = ticket
+                        && let Err(e) =
+                            job_thread::spawn(c"update-check", FETCH_STACK_BYTES, move || {
+                                ticket.check_auto(&mut EspFetcher, &mut BoxPacing, Limits::CHECK);
+                            })
+                    {
+                        log::warn!("{e}");
+                        lock(&home).auto_check_postpone(pacing.now_ms());
+                    }
                 }
             }
         });

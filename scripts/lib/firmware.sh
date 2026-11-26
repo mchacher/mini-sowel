@@ -181,8 +181,9 @@ fw_check_radio() {
 # The update's stack check of the sim image (D60, `firmware/src/update_check.rs`), $1 the log: the
 # `update check:` line shows the three installations' statuses (200, 400, 400), and the `update`
 # thread left at least UPDATE_STACK_MARGIN bytes of its stack unused, for the frames the box adds
-# (the request's body reader and answer). Prints the reason and returns 1 otherwise.
+# (the request's body reader and answer); and the pull's (see below). Prints the reason and returns 1 otherwise.
 UPDATE_STACK_MARGIN=2048
+PULL_STACK_MARGIN=8192
 fw_check_update_stack() {
   check=$(grep -a 'update check: ' "$1" | tail -n 1)
   [ -n "$check" ] || { echo "the update check's line (update check: ...) is missing."; return 1; }
@@ -192,6 +193,17 @@ fw_check_update_stack() {
     | sed -E 's/update: thread stack ([0-9]+) .*/\1/')
   [ -n "$unused" ] || { echo "the update thread's stack line (update: thread stack ...) is missing."; return 1; }
   [ "$unused" -ge "$UPDATE_STACK_MARGIN" ] || { echo "the update thread left $unused bytes of its stack unused, below the $UPDATE_STACK_MARGIN bytes kept for the box's request frames (D60)."; return 1; }
+  # The pull of a release (spec 039 R10): one pull from an in-memory fetcher on an `update-pull`
+  # thread, status 200, and at least PULL_STACK_MARGIN of its 20480 bytes unused: the room the TLS
+  # handshake needs, which QEMU cannot run.
+  pull=$(grep -a 'update pull check: ' "$1" | tail -n 1)
+  [ -n "$pull" ] || { echo "the pull check's line (update pull check: ...) is missing."; return 1; }
+  echo "$pull" | grep -qF 'status 200' \
+    || { echo "the pull check went wrong: ${pull#*update pull check: }"; return 1; }
+  pull_unused=$(grep -aoE 'update-pull: thread stack [0-9]+ of [0-9]+ bytes never used' "$1" | tail -n 1 \
+    | sed -E 's/update-pull: thread stack ([0-9]+) .*/\1/')
+  [ -n "$pull_unused" ] || { echo "the update-pull thread's stack line (update-pull: thread stack ...) is missing."; return 1; }
+  [ "$pull_unused" -ge "$PULL_STACK_MARGIN" ] || { echo "the update-pull thread left $pull_unused of its 20480 bytes unused, below the $PULL_STACK_MARGIN bytes kept for the TLS handshake (spec 039 R10, D68)."; return 1; }
   return 0
 }
 

@@ -31,10 +31,12 @@ use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
+use solite_core::update::release::Limits;
 use solite_core::update::{MAX_UPLOAD_BYTES, Updates};
 use tiny_http::{Header, Response, Server};
 
 use crate::backup_files::{DataFiles, HostPacing};
+use crate::fetch::HttpFetcher;
 use crate::front::{self, Door};
 use crate::random::SystemRandom;
 use crate::static_files;
@@ -69,6 +71,9 @@ impl Health {
 
 /// How often the probation is ticked.
 const WATCH_TICK: Duration = Duration::from_secs(1);
+
+/// How often the automatic check is asked for (ms).
+const AUTO_ASK_MS: u64 = 60_000;
 
 /// The server, so that Ctrl-C can unblock the HTTP thread.
 static SERVER: OnceLock<Arc<Server>> = OnceLock::new();
@@ -189,6 +194,23 @@ fn answer(
         .iter()
         .find(|h| h.field.equiv("Authorization"))
         .map(|h| h.value.to_string());
+    // The declared length of the body (spec 039): none declared and not chunked is an empty body,
+    // which the update route reads as the pull; a chunked body has no length.
+    let content_length = match request
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Content-Length"))
+    {
+        Some(h) => h.value.as_str().trim().parse::<u64>().ok(),
+        None if request
+            .headers()
+            .iter()
+            .any(|h| h.field.equiv("Transfer-Encoding")) =>
+        {
+            None
+        }
+        None => Some(0),
+    };
     // The update's and the backup's bodies are files of megabytes: they are not read here, the
     // core answers the gate first and the file is then streamed (spec 032 R6, spec 035).
     let streaming = is_streamed_request(&method, &path);
@@ -218,6 +240,7 @@ fn answer(
                 reach: Reach::Loopback,
                 content_type: request_type.as_deref(),
                 authorization: authorization.as_deref(),
+                content_length,
                 body: &body,
             },
             now_ms(),
@@ -225,7 +248,7 @@ fn answer(
         )
     };
     // A download holds no body to skip, but is streamed all the same.
-    if streaming || matches!(reply, Reply::BackupExport(_)) {
+    if streaming || matches!(reply, Reply::BackupExport(_) | Reply::VersionCheck(_)) {
         return answer_streamed(
             request,
             reply,
@@ -266,6 +289,8 @@ fn answer(
         | Reply::Static(_)
         | Reply::StaticError(_)
         | Reply::Update
+        | Reply::UpdatePull(_)
+        | Reply::VersionCheck(_)
         | Reply::BackupExport(_)
         | Reply::BackupRestore { .. } => request.respond(Response::empty(500)),
         Reply::Whole(response) => match response.body {
@@ -304,7 +329,8 @@ fn send_archive(request: tiny_http::Request, reader: ArchiveReader) {
     ));
 }
 
-/// `POST /system/update` and the two backup routes, once the core has answered: a refusal of the
+/// `POST /system/update` (the upload and the pull), `POST /system/version/check` and the two
+/// backup routes, once the core has answered: a refusal of the
 /// gate or of the content type, or the order to stream. The update's body is streamed from the
 /// server's reader, bounded to the declared length, into `Updates::install`; the backup's, bounded
 /// the same way, into `BackupTicket::restore`; an export streams the archive back, chunked. Every
@@ -376,6 +402,28 @@ fn answer_streamed(
                 }
                 response
             }
+        }
+        Reply::VersionCheck(ticket) => {
+            ticket.check(&mut HttpFetcher::new(), &mut HostPacing, Limits::CHECK)
+        }
+        Reply::UpdatePull(ticket) => {
+            let mut adapter = update.adapter.clone();
+            let response = ticket.pull(
+                &update.updates,
+                &mut HttpFetcher::new(),
+                &mut adapter,
+                &mut HostPacing,
+                Limits::CHECK,
+                Limits::DOWNLOAD,
+            );
+            if response.status == 200 {
+                println!(
+                    "update: {} written to slot {}; restart the host to put it on probation",
+                    installed_version(response.body.as_deref()),
+                    adapter.boot_slot(),
+                );
+            }
+            response
         }
         Reply::Whole(response) | Reply::StaticError(response) => response,
         Reply::List(_) | Reply::Order(_) | Reply::Static(_) => solite_core::api::Response {
@@ -515,17 +563,33 @@ pub fn serve<T: RadioTransport>(
     let health = Arc::new(Health::default());
     let watch_stop = Arc::new(AtomicBool::new(false));
     {
-        let (update, health, watch_stop) = (
+        let (update, health, watch_stop, home) = (
             Arc::clone(&update),
             Arc::clone(&health),
             Arc::clone(&watch_stop),
+            Arc::clone(&home),
         );
         thread::spawn(move || {
             let mut adapter = update.adapter.clone();
+            let mut next_auto = 0;
             while !watch_stop.load(Ordering::SeqCst) {
-                update
-                    .updates
-                    .watch(&mut adapter, monotonic_ms(), health.healthy());
+                let now = monotonic_ms();
+                update.updates.watch(&mut adapter, now, health.healthy());
+                // The automatic check (spec 039, R6): asked about once a minute; a check, when
+                // due, runs on a thread of its own and never installs.
+                if now >= next_auto {
+                    next_auto = now + AUTO_ASK_MS;
+                    let ticket = lock(&home).auto_check_ticket(now_ms(), now);
+                    if let Some(ticket) = ticket {
+                        thread::spawn(move || {
+                            ticket.check_auto(
+                                &mut HttpFetcher::new(),
+                                &mut HostPacing,
+                                Limits::CHECK,
+                            );
+                        });
+                    }
+                }
                 thread::sleep(WATCH_TICK);
             }
         });

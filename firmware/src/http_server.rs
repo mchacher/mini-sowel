@@ -31,15 +31,19 @@ use esp_idf_svc::sys::{
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
     MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
-    is_streamed_request, order_response, static_reply,
+    is_streamed_request, is_update_request, order_response, static_reply,
 };
 use solite_core::backup::{BackupTicket, CHUNK_BYTES};
 use solite_core::devices::lock;
 use solite_core::home::Home;
 use solite_core::update::MAX_UPLOAD_BYTES;
+use solite_core::update::release::{Limits, ReleaseTicket};
 
 use crate::backup_files::{BoxPacing, data_files};
-use crate::job_thread::{self, BACKUP_STACK_BYTES, UPDATE_STACK_BYTES, stack_unused};
+use crate::fetch::EspFetcher;
+use crate::job_thread::{
+    self, BACKUP_STACK_BYTES, FETCH_STACK_BYTES, UPDATE_STACK_BYTES, stack_unused,
+};
 use crate::live_ws;
 use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
@@ -326,6 +330,7 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
         reach: Reach::Lan { name: api.name },
         content_type: None,
         authorization: None,
+        content_length: Some(0),
         body: b"",
     });
     match reply {
@@ -349,6 +354,8 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
             Reply::List(_)
             | Reply::Order(_)
             | Reply::Update
+            | Reply::UpdatePull(_)
+            | Reply::VersionCheck(_)
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. },
         )
@@ -452,7 +459,38 @@ fn answer_update(raw: &Raw, length: usize) -> bool {
     installed
 }
 
-/// A request lent to a job's thread (`backup` or `update`) for one job.
+/// `POST /api/v1/system/version/check`, once the core has let it through: one check of the
+/// manifest, over TLS. Runs on the `update-check` thread (`FETCH_STACK_BYTES`), the home's lock not
+/// held.
+fn answer_check(raw: &Raw, ticket: ReleaseTicket) {
+    let response = ticket.check(&mut EspFetcher, &mut BoxPacing, Limits::CHECK);
+    raw.answer(&response, &[]);
+}
+
+/// `POST /api/v1/system/update` with an empty body, once the core has let it through: the latest
+/// release is downloaded into the installation, through the OTA thread. Answers; true when it is
+/// installed and the ESP32 must restart (after `complete`, so the answer is out first). Runs on
+/// the `update-pull` thread (`FETCH_STACK_BYTES`): the signature check needs more stack than a
+/// worker has left (D60) and the TLS handshake runs in the calling task (D68). The request has no
+/// body: nothing is left unread, the connection stays open after a refusal.
+fn answer_pull(raw: &Raw, ticket: ReleaseTicket) -> bool {
+    let (Some(updates), Some(mut adapter)) = (ota::updates(), ota::adapter()) else {
+        raw.answer(&error_body(503, "Updates are not available"), &[]);
+        return false;
+    };
+    let response = ticket.pull(
+        updates,
+        &mut EspFetcher,
+        &mut adapter,
+        &mut BoxPacing,
+        Limits::CHECK,
+        Limits::DOWNLOAD,
+    );
+    raw.answer(&response, &[]);
+    response.status == 200
+}
+
+/// A request lent to a job's thread (`backup`, `update`, `update-check` or `update-pull`) for one job.
 struct Lent<'a>(&'a Raw);
 
 // SAFETY: the worker that owns the request lends it to the job's thread and waits for that thread
@@ -577,7 +615,14 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         raw.close_after();
         return raw.complete();
     }
-    if streaming && raw.header(c"Content-Length").is_none() {
+    // A body sent without a length is refused, except on the update route, where an empty one
+    // (neither `Content-Length` nor `Transfer-Encoding`) is the pull of the latest release (spec
+    // 039 R4): the core sees `content_length` `Some(0)`. A chunked update stays 411 (above), and
+    // the backup restore keeps its 411.
+    if streaming
+        && raw.header(c"Content-Length").is_none()
+        && !is_update_request(head.method, &head.uri)
+    {
         raw.answer(&error_body(411, "Length required"), &[]);
         raw.close_after();
         return raw.complete();
@@ -612,6 +657,8 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
                 reach: Reach::Lan { name: api.name },
                 content_type: head.content_type.as_deref(),
                 authorization: head.authorization.as_deref(),
+                // The declared length: 0 when absent and not chunked, none when chunked.
+                content_length: (!head.chunked).then_some(head.length as u64),
                 body: &buffer[..received],
             },
             wall_ms(),
@@ -627,8 +674,12 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
     let too_large = matches!(reply, Reply::Update) && head.length as u64 > MAX_UPLOAD_BYTES;
     // Every refusal of a streamed route leaves body bytes unread: the connection closes after the
     // answer (a restore closes it itself, once the core has answered).
-    let close_after_answer =
-        streaming && (too_large || !matches!(reply, Reply::Update | Reply::BackupRestore { .. }));
+    let close_after_answer = streaming
+        && (too_large
+            || !matches!(
+                reply,
+                Reply::Update | Reply::UpdatePull(_) | Reply::BackupRestore { .. }
+            ));
     let mut restart = false;
     if too_large {
         raw.answer(&error_body(413, "Update too large"), &[]);
@@ -683,6 +734,20 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         }
         Reply::Order(_) | Reply::Static(_) => {
             raw.answer(&error_body(500, "Internal error"), &[]);
+        }
+        Reply::VersionCheck(ticket) => {
+            let lent = Lent(&raw);
+            let ran = job_thread::run(c"update-check", FETCH_STACK_BYTES, move || {
+                answer_check(lent.get(), ticket);
+            });
+            after_job_thread(&raw, "update-check", ran);
+        }
+        Reply::UpdatePull(ticket) => {
+            let lent = Lent(&raw);
+            let ran = job_thread::run(c"update-pull", FETCH_STACK_BYTES, move || {
+                answer_pull(lent.get(), ticket)
+            });
+            restart = after_job_thread(&raw, "update-pull", ran).unwrap_or(false);
         }
         Reply::Update => {
             let length = head.length;

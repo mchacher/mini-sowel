@@ -10,6 +10,8 @@ mod backup_files;
 #[cfg(feature = "radio")]
 mod console;
 #[cfg(feature = "radio")]
+mod fetch;
+#[cfg(feature = "radio")]
 mod http_server;
 #[cfg(any(feature = "radio", feature = "sim"))]
 mod job_thread;

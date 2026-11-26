@@ -32,6 +32,7 @@ fn commands(
             reach: Reach::Loopback,
             content_type: Some("application/json"),
             authorization: None,
+            content_length: None,
             body: body.as_bytes(),
         },
         rig.now,
@@ -530,6 +531,7 @@ fn a_third_order_over_the_route_is_a_503_busy_and_the_queue_frees_as_orders_are_
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 authorization: None,
+                content_length: None,
                 body: br#"{"value":true}"#,
             },
             rig.now,
@@ -690,6 +692,7 @@ fn post_order_typed(
         reach: Reach::Loopback,
         content_type,
         authorization: None,
+        content_length: None,
         body: br#"{"value":true}"#,
     };
     if streaming {
@@ -932,6 +935,7 @@ fn api_order(rig: &mut Rig, equipment: &str, body: &str) -> solite_core::orders:
             reach: Reach::Loopback,
             content_type: Some("application/json"),
             authorization: None,
+            content_length: None,
             body: body.as_bytes(),
         },
         rig.now,

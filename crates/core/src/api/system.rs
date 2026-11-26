@@ -1,7 +1,8 @@
 //! `/system/timezone` (Sowel's `src/api/routes/system.ts`): the home's time zone as
 //! `{tz, source, offsetHours}`; `GET /system/version`: Sowel's `VersionInfo` (spec 032, a subset:
-//! no Docker fields, `latest` always null). `POST /system/update` is the streaming handler's
-//! (`Reply::Update`, spec 032, D53), and so is `/system/backup` (spec 035): only their other
+//! no Docker fields, `latest` from the last check's cache, spec 039). `POST /system/version/check`
+//! and `POST /system/update` are the streaming handler's
+//! (`Reply::VersionCheck`, `Reply::Update`, `Reply::UpdatePull`, spec 032 and 039, D53, D65), and so is `/system/backup` (spec 035): only their other
 //! methods are answered here. Sowel's other
 //! `/system` routes (mode...) are not Solite's. `POST /system/factory-reset` is Solite's (spec 029,
 //! D48). `GET /system/supervisor` is Solite's too (spec 036, D58): the supervisor's status.
@@ -13,6 +14,8 @@ use super::auth::{confirm_required, empty_body};
 use super::{Request, Response, error, failure, json, method_not_allowed, no_content};
 use crate::home::Home;
 use crate::settings;
+use crate::update::Version;
+use crate::update::release::Releases;
 
 pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) -> Response {
     match (segments, request.method) {
@@ -20,12 +23,13 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         (["system", "timezone"], _) => method_not_allowed(),
         (["system", "factory-reset"], "POST") => factory_reset(home, request.body, now),
         (["system", "factory-reset"], _) => method_not_allowed(),
-        (["system", "version"], "GET") => version(),
+        (["system", "version"], "GET") => version_response(&home.releases()),
         // `GET` and `POST /system/backup` are the streaming handler's (`Reply::BackupExport` and
         // `BackupRestore`, spec 035, D56): only its other methods are answered here.
         (["system", "supervisor"], "GET") => json(200, home.supervision()),
         (
             ["system", "version"]
+            | ["system", "version", "check"]
             | ["system", "update"]
             | ["system", "supervisor"]
             | ["system", "backup"],
@@ -55,20 +59,22 @@ fn factory_reset(home: &mut Home, body: &[u8], now: u64) -> Response {
 #[serde(rename_all = "camelCase")]
 struct VersionInfo {
     current: &'static str,
-    latest: Option<&'static str>,
+    latest: Option<String>,
     update_available: bool,
-    release_url: Option<&'static str>,
+    release_url: Option<String>,
 }
 
-/// The running version, no release known.
-fn version() -> Response {
+/// The running version and what the last check found (the cache; `null`/`false` before any).
+pub(crate) fn version_response(releases: &Releases) -> Response {
+    let running = Version::parse(crate::VERSION).unwrap_or(Version::new(0, 0, 0));
+    let info = releases.info(running);
     json(
         200,
         &VersionInfo {
             current: crate::VERSION,
-            latest: None,
-            update_available: false,
-            release_url: None,
+            latest: info.latest,
+            update_available: info.update_available,
+            release_url: info.release_url,
         },
     )
 }

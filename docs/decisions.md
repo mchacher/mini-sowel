@@ -1267,3 +1267,86 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: several public keys per build and a revocation list (a larger image and a
   format change, for a need not yet met); a rotation field in format 1 (the reserved bytes are
   refused today, so a box that has not the new reader would reject the file).
+
+## D65: The update route has two forms, and the box checks and pulls a release itself (spec 039, refines D53, D58)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: `POST /api/v1/system/update` takes the signed file as its body (spec 032's upload,
+  `application/octet-stream`) **or** an empty body, which pulls the latest release: the manifest
+  (cached ten minutes), the `.sup` it names, installed through the same pipeline. `POST
+  /api/v1/system/version/check` (Sowel's route) checks now; `GET /api/v1/system/version` answers
+  the last check. Differences of value from Sowel: the check's interval is 60 s (Sowel 10 s) and no
+  `Retry-After` header is sent; the pull answers when it is installed (Sowel answers at once and
+  reports progress by events); `updateAvailable` is false when the release's `minVersion` is above
+  the running version. The safe mode's exceptions (D58) become the account's routes,
+  `/system/update` and `/system/version/check`. The core decides the form from a new field of its
+  request, `content_length` (the declared length, `Some(0)` for a request with neither
+  `Content-Length` nor `Transfer-Encoding`, `None` for a chunked body): `Some(0)` is the pull. The
+  box's server gives that value on the update route only (a missing length there is the pull; a
+  chunked update stays 411; the backup restore keeps its 411), and the two tests that sent an
+  empty upload to the core moved to a declared length.
+- **Why**: one route for the interface and for Sowel's clients; a box in safe mode must still be
+  able to find the release that fixes it.
+- **Alternatives**: a new route for the pull (Sowel's clients call `/system/update` with no body);
+  events for the progress (Solite has none yet).
+
+## D66: Where the box may fetch from (spec 039)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: `https://` to any host; `http://` only to an IPv4 literal of `10/8`, `172.16/12`,
+  `192.168/16` or `127/8`, or to `localhost`. Redirects are followed by the core (five at most,
+  never from `https` to `http`), not by the platform's client (the box's `EspHttpConnection` is
+  set to follow none): one rule, tested on the Mac, for both adapters. The file is signed and its
+  hash checked, so its integrity does not rest on TLS. The box verifies the server with ESP-IDF's
+  certificate bundle, set to its common list (the authorities of most of the web, GitHub's
+  included) rather than the full one, which keeps the image smaller.
+- **Why**: TLS keeps a public network from seeing or blocking which version a box takes; a name
+  could resolve to the Internet, hence the literal-only rule for plain http, which a test server on
+  the local network uses.
+- **Alternatives**: any scheme to any host (an `http://` name on the Internet); only `https` (no
+  test server on the local network).
+
+## D67: The automatic check is off by default, and its two settings are Solite's own (spec 039)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: the settings `update.manifestUrl` (default the GitHub address of the latest release's
+  manifest) and `update.autoCheck` (`"true"` turns it on; off by default) join the settings of spec
+  026. The automatic check runs 10 minutes after the start, then every 24 hours, only reports and
+  never installs.
+- **Why**: a box contacts the Internet only when its user asked, until the TLS session's memory has
+  been measured on the box.
+- **Alternatives**: on by default (the box talks to GitHub unasked); no automatic check (a user who
+  wants it has no way).
+
+## D68: The check and the pull run on a thread of 20 KB in internal RAM (spec 039, follows D59, D60)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: on the box, a check and a pull run on a thread started for the job (`update-check`,
+  `update-pull`), 20 KB of internal RAM each, one at a time. ESP-IDF's `esp-tls` runs mbedTLS in the
+  calling task and its HTTPS examples give such a task 8 KB; the installation's Ed25519 check takes
+  9.2 KB (D60) and runs after the handshake returned. The HTTP client's buffers are 4096 bytes to
+  receive (GitHub's redirect `Location`, a signed address of several hundred characters, is over
+  the default 512) and 1024 to send, both in internal RAM. The API worker that took the request
+  lends it and waits, as for D59 and D60; the automatic check's thread (started once a minute at
+  most, from the console watch thread) is not waited for.
+- **Measured** (2026-11-26): QEMU's pull of a 64 KB file through one redirect, from an in-memory
+  fetcher on this thread, leaves 9412 of 20480 bytes unused; `scripts/qemu.sh` fails below 8192,
+  the room left for the handshake, which QEMU cannot run. The radio image's application grows from
+  2,193,632 to 2,328,192 bytes (+134,560, 52 % to 55 % of the slot): the TLS client, the
+  certificate bundle and the release code, the split not measured. The handshake's share of the
+  stack and the internal RAM minimum during a check are read on the box (the roadmap's list).
+- **Why**: the API's workers and the engine keep their stacks; a deep handshake never runs on a
+  stack that was not sized for it.
+- **Alternatives**: the API worker's own stack (not sized for TLS); a larger stack (internal RAM is
+  the tight resource).
+
+## D69: The host fetches `https` through the system's `curl`, no TLS library (spec 039)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: the host's fetch adapter does `http://` with the standard library and `https://`
+  through the `curl` program (`-q`, `-g` so `[ ] { }` in a URL are never expanded, HTTP/1.1, no redirect followed, the same timeouts; a `chunked` header in its output is ignored, the body being decoded); without it
+  the error reads `https needs the curl program`. No TLS library joins the workspace.
+- **Why**: the host is a development and demo tool; a TLS library adds a large dependency tree to
+  audit for a path the box does not use (it has ESP-IDF's mbedTLS).
+- **Alternatives**: `rustls` or `native-tls` in the host (a dependency tree and a build time for
+  a development tool).

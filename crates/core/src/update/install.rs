@@ -44,9 +44,18 @@ pub struct Updates {
 
 /// Puts the state back to idle on every path out of `install` (a panic included), unless the
 /// installation went through.
-struct Guard<'a> {
+pub(crate) struct Guard<'a> {
     updates: &'a Updates,
     installed: bool,
+}
+
+/// What a download promised, checked by the installation (spec 039, R4): the file's size (header
+/// and image) and version, which the header must agree with before anything is written, and a
+/// last check, run after the image and before the slot is made the next boot.
+pub(crate) struct Expected<'a> {
+    pub size: u64,
+    pub version: Version,
+    pub verify: &'a mut dyn FnMut() -> Result<(), Refusal>,
 }
 
 impl Drop for Guard<'_> {
@@ -93,37 +102,63 @@ impl Updates {
         self.key.is_some()
     }
 
+    /// The running version.
+    pub fn running(&self) -> Version {
+        self.running
+    }
+
     /// Installs the update file `source` yields into the inactive slot of `adapter` (R4): the
     /// answer is Sowel's `{"success": true, "message": ...}` or `{"error": ...}`. The image is
     /// never held whole: a header, one buffer of `CHUNK_BYTES` and the hash state.
     pub fn install(&self, source: &mut dyn Read, adapter: &mut dyn UpdateAdapter) -> Response {
+        match self.claim() {
+            Ok(guard) => self.install_claimed(guard, source, adapter, None),
+            Err(refusal) => refuse(&refusal),
+        }
+    }
+
+    /// Takes the installation: 503 without a key, 409 while another installation runs or one
+    /// waits for the restart. The guard puts the state back when it is dropped.
+    pub(crate) fn claim(&self) -> Result<Guard<'_>, Refusal> {
+        if self.key.is_none() {
+            return Err(Refusal::new(
+                503,
+                "Updates are not configured: this build has no update key",
+            ));
+        }
+        let mut state = lock(&self.state);
+        match *state {
+            State::Installing => return Err(Refusal::new(409, "Update already in progress")),
+            State::Installed => {
+                return Err(Refusal::new(
+                    409,
+                    "An update is installed and waits for the restart",
+                ));
+            }
+            State::Idle => {}
+        }
+        *state = State::Installing;
+        Ok(Guard {
+            updates: self,
+            installed: false,
+        })
+    }
+
+    /// Installs once the installation is claimed (`expected`: a download's promises, spec 039).
+    pub(crate) fn install_claimed(
+        &self,
+        mut guard: Guard<'_>,
+        source: &mut dyn Read,
+        adapter: &mut dyn UpdateAdapter,
+        expected: Option<Expected<'_>>,
+    ) -> Response {
         let Some(key) = &self.key else {
             return refuse(&Refusal::new(
                 503,
                 "Updates are not configured: this build has no update key",
             ));
         };
-        let mut guard = {
-            let mut state = lock(&self.state);
-            match *state {
-                State::Installing => {
-                    return refuse(&Refusal::new(409, "Update already in progress"));
-                }
-                State::Installed => {
-                    return refuse(&Refusal::new(
-                        409,
-                        "An update is installed and waits for the restart",
-                    ));
-                }
-                State::Idle => {}
-            }
-            *state = State::Installing;
-            Guard {
-                updates: self,
-                installed: false,
-            }
-        };
-        match self.run(key, source, adapter) {
+        match self.run(key, source, adapter, expected) {
             Ok(done) => {
                 guard.installed = true;
                 done
@@ -137,6 +172,7 @@ impl Updates {
         key: &VerifyingKey,
         source: &mut dyn Read,
         adapter: &mut dyn UpdateAdapter,
+        expected: Option<Expected<'_>>,
     ) -> Result<Response, Refusal> {
         if adapter.pending() {
             return Err(Refusal::new(409, "The running image is not confirmed yet"));
@@ -146,6 +182,13 @@ impl Updates {
             return Err(Refusal::new(400, "Truncated update"));
         }
         let header = check_header(&header, key, self.running, adapter.capacity())?;
+        let mut expected = expected;
+        if let Some(expected) = &expected
+            && (HEADER_BYTES as u64 + u64::from(header.length) != expected.size
+                || header.version != expected.version)
+        {
+            return Err(mismatch());
+        }
         adapter.begin(header.length).map_err(failed)?;
         let mut hash = Sha256::new();
         let mut buffer = vec![0u8; CHUNK_BYTES];
@@ -178,6 +221,12 @@ impl Updates {
         if hash.finalize().as_slice() != header.digest {
             adapter.abort();
             return Err(Refusal::new(400, "Image does not match its signature"));
+        }
+        if let Some(expected) = &mut expected
+            && let Err(refusal) = (expected.verify)()
+        {
+            adapter.abort();
+            return Err(refusal);
         }
         if let Err(message) = adapter.finish() {
             adapter.abort();
@@ -236,7 +285,12 @@ impl Updates {
     }
 }
 
-fn refuse(refusal: &Refusal) -> Response {
+/// 400: the download is not the file the manifest announced.
+pub(crate) fn mismatch() -> Refusal {
+    Refusal::new(400, "Download does not match the manifest")
+}
+
+pub(crate) fn refuse(refusal: &Refusal) -> Response {
     error(refusal.status, &refusal.message)
 }
 

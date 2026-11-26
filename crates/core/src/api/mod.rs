@@ -20,6 +20,7 @@ pub use crate::home::{CHUNK_ITEMS, ListCursor};
 pub use orders::order_response;
 pub use slots::{MAX_WORKERS, SlotGuard, Slots};
 pub use static_files::{StaticFile, content_type};
+pub(crate) use system::version_response;
 
 use std::sync::Mutex;
 
@@ -31,6 +32,7 @@ use crate::failure::Failure;
 use crate::home::Home;
 use crate::orders::OrderWait;
 use crate::supervisor::Mode;
+use crate::update::release::ReleaseTicket;
 
 /// Request bodies over this many bytes are refused (413).
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
@@ -88,6 +90,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v1/system/version"),
     ("GET", "/api/v1/system/supervisor"),
     ("POST", "/api/v1/system/update"),
+    ("POST", "/api/v1/system/version/check"),
     ("GET", "/api/v1/system/backup"),
     ("POST", "/api/v1/system/backup"),
 ];
@@ -118,6 +121,10 @@ pub struct Request<'a> {
     pub content_type: Option<&'a str>,
     /// The `Authorization` header, if any (`Bearer <access token>`), read by `handle_guarded`.
     pub authorization: Option<&'a str>,
+    /// The declared length of the body (spec 039): `Some(0)` for a request with neither
+    /// `Content-Length` nor `Transfer-Encoding` too, `None` for a chunked body. It tells the
+    /// update route's two forms apart: an empty body pulls the latest release.
+    pub content_length: Option<u64>,
     /// At most `MAX_BODY_BYTES + 1` bytes are needed to see that it is too long.
     pub body: &'a [u8],
 }
@@ -142,6 +149,12 @@ pub enum Reply {
     /// signed update file, not read yet. The caller streams it into `Updates::install` (the host
     /// from its server's reader, the box from its socket), the home's lock being released.
     Update,
+    /// `POST /system/update` with an empty body (spec 039, R4): pull the latest release. The
+    /// caller runs `ReleaseTicket::pull`, the lock being released.
+    UpdatePull(ReleaseTicket),
+    /// `POST /system/version/check` with its gate passed (spec 039, R2): the caller runs
+    /// `ReleaseTicket::check`, the lock being released.
+    VersionCheck(ReleaseTicket),
     /// `GET /system/backup` with its gate passed (spec 035, R1): the caller reads the header
     /// `X-Backup-Password` and calls `BackupTicket::export`, then streams the archive it returns,
     /// the home's lock being released.
@@ -211,7 +224,7 @@ pub(crate) fn method_not_allowed() -> Response {
 const NAME_SUFFIXES: [&str; 4] = [".local", ".lan", ".home", ".home.arpa"];
 
 /// True when `host` is an IPv4 address of `10/8`, `172.16/12`, `192.168/16` or `127/8`.
-fn private_ipv4(host: &str) -> bool {
+pub(crate) fn private_ipv4(host: &str) -> bool {
     let mut octets = [0u8; 4];
     let mut count = 0;
     for part in host.split('.') {
@@ -279,7 +292,9 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
         Reply::Static(_) => error(404, "Not found"),
         Reply::StaticError(response) => response,
         // Not reachable: the plain handler refuses the route before the gate.
-        Reply::Update => error(501, UPDATES_NEED_STREAMING),
+        Reply::Update | Reply::UpdatePull(_) | Reply::VersionCheck(_) => {
+            error(501, UPDATES_NEED_STREAMING)
+        }
         Reply::BackupExport(_) | Reply::BackupRestore { .. } => error(501, BACKUPS_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
@@ -352,9 +367,26 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
     if let Some(refusal) = safe_mode_refusal(&guard, request) {
         return Reply::Whole(refusal);
     }
+    // The check route reads no body (a body is ignored) and needs no content type (spec 039 R2):
+    // answered before the JSON check, the ticket taken here under the lock.
+    if is_version_check_path(request.path) {
+        if request.method != "POST" {
+            return Reply::Whole(method_not_allowed());
+        }
+        return match guard.release_ticket(true, now) {
+            Ok(ticket) => Reply::VersionCheck(ticket),
+            Err(e) => Reply::Whole(failure(&e)),
+        };
+    }
     // The update's body is a file of megabytes, streamed by the caller: no 16 KB or JSON check,
-    // and the home is let go before the caller reads it.
+    // and the home is let go before the caller reads it. An empty body is the pull (spec 039).
     if is_update_request(request.method, request.path) {
+        if request.content_length == Some(0) {
+            return match guard.release_ticket(false, now) {
+                Ok(ticket) => Reply::UpdatePull(ticket),
+                Err(e) => Reply::Whole(failure(&e)),
+            };
+        }
         return if octet_stream_content_type(request.content_type) {
             Reply::Update
         } else {
@@ -370,7 +402,7 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
 }
 
 /// The 503 of the safe mode (spec 036 R5, D58): every request that is not a `GET` but the
-/// account's (`/auth/*`) and the update's (`/system/update`), while the engine is stopped. `None`
+/// account's (`/auth/*`) and the update's (`/system/update`, `/system/version/check`), while the engine is stopped. `None`
 /// otherwise.
 fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
     if home.supervision().mode == Mode::Normal || request.method == "GET" {
@@ -381,7 +413,7 @@ fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
         .strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_prefix('/'))?;
     let first = rest.split('/').next().unwrap_or("");
-    if first == "auth" || rest == "system/update" {
+    if first == "auth" || rest == "system/update" || rest == "system/version/check" {
         return None;
     }
     Some(error(503, SAFE_MODE_MESSAGE))
@@ -441,6 +473,11 @@ fn wifi_asked(path: &str) -> bool {
             .split('&')
             .any(|p| p == "wifi=true")
     })
+}
+
+/// True for `/api/v1/system/version/check`, with or without a query.
+fn is_version_check_path(path: &str) -> bool {
+    path.split(['?', '#']).next() == Some("/api/v1/system/version/check")
 }
 
 /// True for `POST /api/v1/system/update`: the one request whose body the caller must not read
@@ -511,6 +548,13 @@ fn dispatch(
     // The update route is the streaming handler's: refused here, before the 16 KB and JSON checks.
     if is_update_request(request.method, request.path) {
         return Reply::Whole(error(501, UPDATES_NEED_STREAMING));
+    }
+    if is_version_check_path(request.path) {
+        return Reply::Whole(if request.method == "POST" {
+            error(501, UPDATES_NEED_STREAMING)
+        } else {
+            method_not_allowed()
+        });
     }
     if is_backup_path(request.path) && matches!(request.method, "GET" | "POST") {
         return Reply::Whole(error(501, BACKUPS_NEED_STREAMING));

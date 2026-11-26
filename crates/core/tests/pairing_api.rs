@@ -36,6 +36,7 @@ fn call(
             reach: Reach::Loopback,
             content_type: Some(content_type),
             authorization: None,
+            content_length: None,
             body: body.as_bytes(),
         },
         T0,

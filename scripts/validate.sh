@@ -173,6 +173,9 @@ if want firmware; then
       || { echo "validate: the radio build lacks CONFIG_ESP_TASK_WDT_PANIC=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
     ! grep -aqs '^CONFIG_ESP_TASK_WDT_PANIC=y' target/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
       || { echo "validate: the other images' build holds CONFIG_ESP_TASK_WDT_PANIC=y: they must keep their settings" >&2; exit 1; }
+    # The certificate bundle the box's https check and pull verify with (spec 039 R8): the common list.
+    grep -aqs '^CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \
+      || { echo "validate: the radio build lacks CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y (sdkconfig.radio.defaults was not read)" >&2; exit 1; }
     # The interface embedded is the one just built: the marker and the name of its hashed script.
     elf=target/radio/xtensa-esp32-espidf/release/solite-firmware
     grep -aqF 'solite-ui ' "$elf" || { echo "validate: the radio image holds no embedded interface (no solite-ui marker)" >&2; exit 1; }

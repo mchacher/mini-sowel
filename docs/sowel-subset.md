@@ -90,6 +90,8 @@ The events Solite sends on `/ws` (Sowel's `EngineEvent`); the others are not sen
 | `home.timezone` | Local time (Sowel's global key; D41, D44) |
 | `home.sunriseOffset` | motion-light's "Inactive during day" |
 | `home.sunsetOffset` | motion-light's "Inactive during day" |
+| `update.manifestUrl` | Where the box reads the latest release's manifest (Solite's own, D67) |
+| `update.autoCheck` | The automatic check for a release, off by default (Solite's own, D67) |
 
 ## Routes
 
@@ -142,8 +144,9 @@ interface's files).
 | `POST /api/v1/system/factory-reset` | Erases the home and the account (deviation, D48) |
 | `GET /api/v1/system/backup` | The full backup archive (deviation, D56) |
 | `POST /api/v1/system/backup` | Restores the full backup archive (deviation, D56) |
-| `GET /api/v1/system/version` | The running version (Sowel's `VersionInfo`, a subset, D53) |
-| `POST /api/v1/system/update` | Installs the signed update file in its body (Sowel's route takes none, D53) |
+| `GET /api/v1/system/version` | The running version and the last check's latest release (Sowel's `VersionInfo`, a subset, D53, D65) |
+| `POST /api/v1/system/version/check` | Checks for a release now (Sowel's route, D65) |
+| `POST /api/v1/system/update` | Installs the signed update file in its body, or, with no body, pulls the latest release (Sowel's route takes no body, D53, D65) |
 | `GET /api/v1/system/supervisor` | The supervisor's status: mode, boot cause, last incident, restarts (deviation, D58) |
 
 ## Equipment types with behaviour
@@ -166,7 +169,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53, D56, D58).
+D44, D47 to D49, D53, D56, D58, D65 to D67).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -177,6 +180,8 @@ D44, D47 to D49, D53, D56, D58).
 | route | `GET /api/v1/system/backup` | D56 |
 | route | `POST /api/v1/system/backup` | D56 |
 | route | `GET /api/v1/system/supervisor` | D58 |
+| setting | `update.manifestUrl` | D67 |
+| setting | `update.autoCheck` | D67 |
 
 Differences of value in the authentication (D47 to D49), none a new name: one account, always
 `admin` (no other user, no `/me`, no `/users`, no API token, no MFA: `trustedDeviceToken` is
@@ -187,14 +192,21 @@ rate limit for the box (10 attempts per minute on setup and login together); `/w
 from the first `bearer.` subprotocol other than `bearer.none`, and the box echoes `bearer.none`
 only, so a client that offers `bearer.<token>` alone gets no subprotocol echoed there (D49).
 
-Differences of value in the updates (D53), none a new name: `POST /api/v1/system/update` takes the
-signed update file as its body (`application/octet-stream`; Sowel's route takes none and pulls
-the release itself) and answers Sowel's `{success, message}`, its `{error}` shape and its 409
-`Update already in progress`; `GET /api/v1/system/version` answers `current`, `latest` (always
-`null`), `updateAvailable` (always `false`) and `releaseUrl` (`null`), without Sowel's two Docker
-fields (`dockerAvailable`, `composeManaged`).
+Differences of value in the updates (D53, D65), none a new name: `POST /api/v1/system/update` takes
+the signed update file as its body (`application/octet-stream`) **or** an empty body, which pulls
+the latest release; Sowel's route takes no body. It answers Sowel's `{success, message}`, its
+`{error}` shape, its 409 `Update already in progress` and its 400 `No update available`, when the
+update is installed (Sowel answers at once and reports its progress by events, which Solite does
+not have). `POST /api/v1/system/version/check` answers Sowel's `VersionInfo`, its 429 (60 s between
+two checks, Sowel 10 s, no `Retry-After` header) and its 500 `Update check failed: ...`;
+`GET /api/v1/system/version` answers `current`, `latest`, `updateAvailable` and `releaseUrl` from
+the last check (`null` and `false` before one), without Sowel's two Docker fields
+(`dockerAvailable`, `composeManaged`); `updateAvailable` is false when the release's `minVersion` is
+above the running version (Sowel has no such rule). The settings `update.manifestUrl` and
+`update.autoCheck` are Solite's own (D67).
 
 Differences of value in the safe mode (D58), none a new name: while the supervisor holds the engine
 stopped, every request that is not a `GET` answers 503 `{"error": "Safe mode: the engine is
-stopped"}`, except the account's routes (`/auth/*`) and `POST /api/v1/system/update`. Sowel has no
+stopped"}`, except the account's routes (`/auth/*`), `POST /api/v1/system/update` and `POST
+/api/v1/system/version/check`. Sowel has no
 such mode.
