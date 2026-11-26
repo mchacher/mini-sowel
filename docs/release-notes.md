@@ -7,6 +7,11 @@ alone or `## <version>` followed by a space and more text (`## 0.2.0` and `## 0.
 `## 0.2.01`) as the text of the GitHub release and of `manifest.json`. A release with no section here is
 refused before anything is built.
 
+## 0.1.1 (2026-11-26)
+
+A small release that proves the update path: a box running 0.1.0 checks GitHub, downloads this one
+and installs it by itself. Nothing else changes.
+
 ## 0.1.0 (2026-11-26)
 
 The first release: Solite runs by itself in a Sonoff Dongle Max, with no server, no Docker and no
