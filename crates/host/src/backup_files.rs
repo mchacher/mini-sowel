@@ -215,7 +215,7 @@ impl BackupFiles for DataFiles {
     }
 }
 
-/// The monotonic clock and a 10 ms sleep.
+/// The monotonic clock, a 10 ms sleep, and the waits of a resumed download.
 pub struct HostPacing;
 
 impl Pacing for HostPacing {
@@ -225,6 +225,10 @@ impl Pacing for HostPacing {
 
     fn pause(&mut self) {
         thread::sleep(Duration::from_millis(10));
+    }
+
+    fn wait_ms(&mut self, ms: u64) {
+        thread::sleep(Duration::from_millis(ms));
     }
 }
 

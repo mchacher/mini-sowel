@@ -336,4 +336,8 @@ impl Pacing for Clock {
             hook(self.pauses.get());
         }
     }
+
+    fn wait_ms(&mut self, ms: u64) {
+        self.now.set(self.now.get() + ms);
+    }
 }

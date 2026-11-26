@@ -81,33 +81,42 @@ fn contents_write_is_only_in_the_publish_job() {
 }
 
 #[test]
-fn the_secret_is_read_by_two_steps_of_the_sign_job_only() {
+fn the_secrets_are_read_by_two_steps_of_the_sign_job_only() {
     let text = read(WORKFLOW);
-    let all: Vec<&str> = code_lines(&text)
+    // Every line that names a key variable and reads a secret is one of the two `env:` entries
+    // (the signing key, and the old key of a bridging release, spec 040).
+    for l in code_lines(&text)
         .into_iter()
-        .filter(|l| l.contains("SOLITE_UPDATE_KEY"))
-        .collect();
-    for l in &all {
+        .filter(|l| l.contains("SOLITE_UPDATE_KEY") && l.contains("secrets."))
+    {
         assert!(
-            !l.contains("secrets.")
-                || l.trim() == "SOLITE_UPDATE_KEY: ${{ secrets.SOLITE_UPDATE_KEY }}",
+            matches!(
+                l.trim(),
+                "SOLITE_UPDATE_KEY: ${{ secrets.SOLITE_UPDATE_KEY }}"
+                    | "SOLITE_UPDATE_KEY_PREVIOUS: ${{ secrets.SOLITE_UPDATE_KEY_PREVIOUS }}"
+            ),
             "{l}"
         );
     }
-    // `secrets.` appears twice in the whole workflow, both in the sign job.
+    // `secrets.` appears four times in the whole workflow (two secrets, two steps), all in the
+    // sign job.
     let secrets: Vec<&str> = code_lines(&text)
         .into_iter()
         .filter(|l| l.contains("secrets."))
         .collect();
-    assert_eq!(secrets.len(), 2, "{secrets:?}");
+    assert_eq!(secrets.len(), 4, "{secrets:?}");
     let sign = job(&text, "sign");
-    assert_eq!(
-        sign.iter()
-            .filter(|l| l.contains("secrets.SOLITE_UPDATE_KEY"))
-            .count(),
-        2
-    );
-    // The job that runs third-party build code (build.rs, cmake, pip, npm) never names the secret.
+    for name in [
+        "secrets.SOLITE_UPDATE_KEY }}",
+        "secrets.SOLITE_UPDATE_KEY_PREVIOUS }}",
+    ] {
+        assert_eq!(
+            sign.iter().filter(|l| l.contains(name)).count(),
+            2,
+            "{name}"
+        );
+    }
+    // The job that runs third-party build code (build.rs, cmake, pip, npm) never names a secret.
     for other in ["firmware", "dry-run", "publish"] {
         assert!(
             job(&text, other)
@@ -116,13 +125,75 @@ fn the_secret_is_read_by_two_steps_of_the_sign_job_only() {
             "{other} must not name the secret"
         );
     }
-    // The two uses are the refusal step's `env:` and the release script's `env:`.
+    // The normal command is unchanged; the bridge's reads the old key to sign and the new one as
+    // the next key.
     assert!(
         sign.iter()
-            .any(|l| l.contains("--key-env SOLITE_UPDATE_KEY"))
+            .any(|l| l.contains("--key-env SOLITE_UPDATE_KEY \\"))
     );
+    let body = sign.join("\n");
+    assert!(body.contains("--key-env SOLITE_UPDATE_KEY_PREVIOUS"));
+    assert!(body.contains("--next-key-env SOLITE_UPDATE_KEY \\"));
     // The key is never passed on a command line.
     assert!(!text.contains("--key $"));
+    assert!(!text.contains("--next-key $"));
+}
+
+#[test]
+fn a_bridge_without_its_secret_is_refused_and_a_normal_release_keeps_its_command() {
+    let text = read(WORKFLOW);
+    let body = job(&text, "sign").join("\n");
+    // The refusal step: the file present, the old key empty, an error and no release.
+    let refusal = body
+        .find("[ -f release/update-key.bridge ] && [ -z \"$SOLITE_UPDATE_KEY_PREVIOUS\" ]")
+        .expect("the bridge's refusal");
+    assert!(body[refusal..].contains("::error::release/update-key.bridge is present but the secret SOLITE_UPDATE_KEY_PREVIOUS is not set"));
+    // Unset right after, before the other refusals and the build.
+    let unset = body.find("unset SOLITE_UPDATE_KEY_PREVIOUS").unwrap();
+    assert!(refusal < unset);
+    assert!(unset < body.find("merge-base").unwrap());
+    // The signing step: the bridge's command under the file's test, the current one in `else`.
+    let step = body.find("Sign and check the release").unwrap();
+    let signing = &body[step..];
+    let test = signing.find("if [ -f release/update-key.bridge ]").unwrap();
+    let bridge = signing
+        .find("--key-env SOLITE_UPDATE_KEY_PREVIOUS")
+        .unwrap();
+    let normal = signing.find("--key-env SOLITE_UPDATE_KEY \\").unwrap();
+    assert!(test < bridge && bridge < signing.find("else").unwrap());
+    assert!(signing.find("else").unwrap() < normal);
+    // The firmware job is unchanged: it builds with the committed public key, no bridge.
+    assert!(
+        job(&text, "firmware")
+            .iter()
+            .all(|l| !l.contains("bridge") && !l.contains("--next-key"))
+    );
+}
+
+#[test]
+fn the_dry_run_of_a_bridge_makes_its_own_second_key_and_bridge_file_and_reads_no_secret() {
+    let text = read(WORKFLOW);
+    let dry = job(&text, "dry-run").join("\n");
+    let test = dry.find("if [ -f release/update-key.bridge ]").unwrap();
+    let bridge = &dry[test..];
+    assert!(bridge.contains("--update-keygen \"$RUNNER_TEMP/dry/next-key\""));
+    assert!(bridge.contains("echo \"version $version\""));
+    assert!(bridge.contains("echo \"previous $(cat \"$RUNNER_TEMP/dry/key.pub\")\""));
+    for option in [
+        "--key-file \"$RUNNER_TEMP/dry/key\"",
+        "--next-key-file \"$RUNNER_TEMP/dry/next-key\"",
+        "--public-key-file \"$RUNNER_TEMP/dry/next-key.pub\"",
+        "--bridge-file \"$RUNNER_TEMP/dry/update-key.bridge\"",
+    ] {
+        assert!(bridge.contains(option), "{option}");
+    }
+    // Without the file, the dry run is the current one.
+    let else_at = bridge.find("else").unwrap();
+    assert!(
+        bridge[else_at..].contains("--public-key-file \"$RUNNER_TEMP/dry/key.pub\"")
+            && !bridge[else_at..].contains("--next-key-file")
+    );
+    assert!(!dry.contains("secrets.") && !dry.contains("SOLITE_UPDATE_KEY"));
 }
 
 #[test]

@@ -1350,3 +1350,73 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   audit for a path the box does not use (it has ESP-IDF's mbedTLS).
 - **Alternatives**: `rustls` or `native-tls` in the host (a dependency tree and a build time for
   a development tool).
+
+## D70: A key rotation is a bridging release declared by a committed file (spec 040, refines D64)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: the bridge is declared by `release/update-key.bridge` (`version` and `previous`, the old
+  public key) committed in the release's pull request beside the new `release/update-key.pub`. The
+  image carries the new public key; the `.sup` is signed with the old private key; the new private
+  key is given too (`--next-key-file` or `--next-key-env`) and must match `release/update-key.pub`,
+  so that boxes never move to a key nobody holds. The script checks, after signing, that the old key
+  accepts the file and the new key refuses it. The manifest has no field for a bridge: a box accepts
+  the file by its compiled (old) key and trusts the key its new image carries once confirmed. The CI
+  holds two secrets for the time of the bridge, `SOLITE_UPDATE_KEY_PREVIOUS` (old) and
+  `SOLITE_UPDATE_KEY` (new), read by the `sign` job only. The procedure and the leaked-key case are
+  in `docs/release.md`; the Mac's chain test (`crates/host/tests/rotation.rs`, two host builds) checks
+  the logic, the on-box run (two test-key images, a USB flash) the compiled key.
+- **Why**: a committed file makes the bridge reviewable in the pull request and refusable by its
+  version when it is left behind; a flag or a secret alone would leave no trace in the tree. The box
+  needs nothing new, so no format changes and no old box is left behind by one.
+- **Alternatives**: a next-key field in the manifest or the update file (a format change that a box
+  without the new reader rejects, D64); several public keys per build and a revocation list (a
+  larger image for a need a bridge meets); the bridge decided by the tag name (nothing to review).
+
+## D71: The update card links to the release page, and the settings are always sent whole (spec 040)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: the Settings page's update card shows the check, the latest version, "Update to vX"
+  with a confirmation, and a link to `releaseUrl` for the release notes: the API does not expose the
+  notes (the cache keeps none, a manifest's notes could take 16 KB) and `VersionInfo` is unchanged.
+  After the click the card polls `GET /api/v1/system/version` every 3 s, never two at once, each
+  with a 5 s timeout; it ends at 3 minutes (the pull answered 200) or 11 minutes (the connection
+  dropped during the request: the 600 s download and a restart), from the **last** poll: the same
+  version means the update was not kept, no answer means "reload the page". Every save of the page
+  (the Home card, the automatic check, the manifest's address) reads `GET /api/v1/settings` and
+  sends the whole map with its own keys changed.
+- **Why**: the pull's request waits for the whole install, unlike Sowel's overlay, so the card
+  counts seconds rather than a countdown and ends on what the last answer said. The whole-map save
+  does not rely on the server's merge rule: the first run of spec 039 on the box saw keys vanish
+  after a PUT of one key (not reproduced on the Mac, `settings_merge.rs`; the storage-loss line of the
+  roadmap is the likelier cause), and Sowel's own Settings page sends its whole form. It costs one
+  GET per save, and a value changed in another tab in the same second can be written back.
+- **Alternatives**: the notes in `VersionInfo` or in the card (a field Sowel does not have, memory
+  held for text); a full-screen overlay as Sowel's (the sessions end at the restart, the card keeps
+  the context); a PUT of the changed keys only (relies on the merge).
+
+## D72: A cut download resumes with a Range request, at most three times (spec 040, refines D65)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: during a pull, a read that fails or a body that ends before `image.size` bytes is
+  resumed: the cut body is dropped (one TLS session at a time), the core waits 2, 4 then 8 s
+  (`RESUME_WAIT_MS` doubled, through `Pacing::wait_ms`), fetches `image.url` again from the start of
+  its redirects (a GitHub asset's signed address expires within minutes) with `Range: bytes=<count>-`,
+  and continues the same reader (the same hash, count and slot) when the 206's `Content-Range` is
+  exactly the rest, its `Content-Length` too and its `ETag` (when both answers have one, at most 256
+  characters) the first one's. At most 3 attempts within the 600 s; a resumed request that fails
+  (adapter error) or answers a 5xx counts as one attempt. A 200, a 416, a changed range, size or
+  `ETag` fails cleanly (`the server does not resume (200 to a range request)`, `the file changed on
+  the server`, the cached manifest dropped for the last two), as any other status. A read error
+  once the count already equals `image.size` is the end of the body, not a cut. The QEMU rule for
+  the pull thread becomes `resumes 1` and 1024 unused bytes (it was 8192, D68), the resumed request
+  touching an 8 KB array for the handshake; 8336 unused measured.
+- **Why**: a Wi-Fi blip or an access point's roam lasts seconds and the pull of 2 MB takes about
+  35 s, which should not be lost; three tries over 14 s cover that, and a longer outage is better
+  met by a later pull than by a request holding the update thread and the TLS memory. Nothing is
+  kept on flash across pulls, and the final count, hash and signature checks decide as before. The
+  pull does not restart from byte 0 inside the request: that would erase and rewrite the 4 MB slot a
+  second time on a server that just proved unreliable; a clean failure is shorter to reason about
+  and the user's next click starts over.
+- **Alternatives**: no resume (spec 039); a resume kept across pulls in flash (flash wear and a
+  state to invalidate); an unbounded retry (holds the thread and the memory); a restart from byte 0
+  in the request (above).

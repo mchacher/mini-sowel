@@ -115,6 +115,9 @@ pub trait Pacing {
     fn now_ms(&mut self) -> u64;
     /// Hands the CPU back for a moment (feeds the watchdog; the wait for the Saver).
     fn pause(&mut self);
+    /// Waits this many milliseconds (a download's pause before it resumes, spec 040 R6.4): the
+    /// servers sleep, a test's clock advances. No default: every adapter says what a wait is.
+    fn wait_ms(&mut self, ms: u64);
 }
 
 /// A staged copy of a file, being written: `finish` closes it and syncs it to the medium

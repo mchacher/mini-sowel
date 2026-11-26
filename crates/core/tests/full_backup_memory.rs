@@ -118,6 +118,7 @@ impl Pacing for NoPacing {
         0
     }
     fn pause(&mut self) {}
+    fn wait_ms(&mut self, _ms: u64) {}
 }
 
 fn random(buffer: &mut [u8]) -> Result<(), String> {

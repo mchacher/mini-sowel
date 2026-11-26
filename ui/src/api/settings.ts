@@ -14,6 +14,15 @@ export async function updateSettings(data: Settings): Promise<void> {
   await fetchJSON<unknown>(`${API_BASE}/settings`, { method: "PUT", body: JSON.stringify(data) });
 }
 
+/**
+ * Spec 040, R4.10: every save of the Settings page reads the map just before and sends it whole,
+ * with its own keys changed, so no card drops another's keys whatever the server's merge rule.
+ */
+export async function saveSettings(changes: Settings): Promise<void> {
+  const current = await getSettings();
+  await updateSettings({ ...current, ...changes });
+}
+
 /** Sowel's `SystemTimezoneInfo` (ui/src/api/system.ts, Sowel commit 2d360726): the home's time zone. */
 export interface SystemTimezoneInfo {
   tz: string;
@@ -60,13 +69,27 @@ export async function restoreBackup(
   });
 }
 
-/** Sowel's `VersionInfo` as Solite answers it: only the running version. */
+/** Sowel's `VersionInfo` without its two Docker fields (spec 040, R4.1; Sowel ui/src/api/system.ts). */
 export interface VersionInfo {
   current: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  releaseUrl: string | null;
 }
 
-export async function getSystemVersion(): Promise<VersionInfo> {
-  return fetchJSON<VersionInfo>(`${API_BASE}/system/version`);
+/** The signal lets the update card's polling give up on a poll that hangs (5 s). */
+export async function getSystemVersion(signal?: AbortSignal): Promise<VersionInfo> {
+  return fetchJSON<VersionInfo>(`${API_BASE}/system/version`, signal ? { signal } : undefined);
+}
+
+/** Sowel's `checkSystemVersion`: fetches the manifest now, answers the refreshed `VersionInfo`. */
+export async function checkSystemVersion(): Promise<VersionInfo> {
+  return fetchJSON<VersionInfo>(`${API_BASE}/system/version/check`, { method: "POST" });
+}
+
+/** Sowel's `triggerSystemUpdate`: the pull of the latest release, no body; waits for the whole install. */
+export async function triggerSystemUpdate(): Promise<UpdateResult> {
+  return fetchJSON<UpdateResult>(`${API_BASE}/system/update`, { method: "POST" });
 }
 
 /** The answer of `POST /api/v1/system/update`. */

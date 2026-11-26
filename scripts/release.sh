@@ -10,6 +10,12 @@
 #   sh scripts/release.sh <version> --build-only [--public-key-file <path>] [--out <folder>]
 #                         [--notes <file>]
 #
+# A bridging release (spec 040, docs/release.md) is declared by release/update-key.bridge in the
+# tree: the image carries the new public key, the file is signed with the old private key
+# (--key-file / --key-env), and the new private key is given too (--next-key-file or
+# --next-key-env), so that boxes never move to a key nobody holds. --bridge-file overrides the
+# declaration's path (for the tests).
+#
 # Two steps in release.yml, in two jobs: --build-only builds the radio image (no key, none is
 # allowed) and writes app.bin and flash.bin to --out; then --prebuilt <folder> signs those two
 # files (a key is required) instead of building. By hand, one command with a key does both.
@@ -19,7 +25,7 @@
 # unset, before the script assigns anything: no tool the build runs (build.rs, cmake, pip, npm)
 # can inherit it. It reaches a file only while solite-host needs it (the probe, the signing) and
 # while grep searches the output and the log for it, in a folder of its own (umask 077) that holds
-# no file during the build.
+# no file during the build. The next key of a bridge is read the same way.
 #
 # Seams for the tests: SOLITE_RELEASE_BUILDER, SOLITE_HOST_BIN, SOLITE_RELEASE_TREE,
 # SOLITE_RELEASE_TIME (spec 038 R1.10).
@@ -29,34 +35,52 @@ umask 077
 
 # ---- the command line (shell built-ins only: the key may be in the environment) ----------------
 
-# The key comes out of the environment first, before the script assigns any variable of its own
+# The keys come out of the environment first, before the script assigns any variable of its own
 # (a name it uses, VERSION or OUT, is then no trouble: the unset happens before). printenv sees the
-# environment only. The name is checked here and again below.
+# environment only. The name is checked here and again below. --key-env gives the signing key,
+# --next-key-env the next key of a bridging release (the first of each is read).
 _ke_val=
+_ne_val=
+_ke_done=false
+_ne_done=false
 _ke_prev=
 for _ke_arg in "$@"; do
-  if [ "$_ke_prev" = --key-env ]; then
-    case $_ke_arg in
-      [A-Za-z_]*)
-        case $_ke_arg in
-          *[!A-Za-z0-9_]*) ;;
-          *)
-            _ke_val=$(printenv "$_ke_arg" 2>/dev/null || :)
-            [ -z "$_ke_val" ] || unset "$_ke_arg"
-            ;;
-        esac
-        ;;
-    esac
-    break
-  fi
+  case $_ke_prev in
+    --key-env | --next-key-env)
+      case $_ke_arg in
+        [A-Za-z_]*)
+          case $_ke_arg in
+            *[!A-Za-z0-9_]*) ;;
+            *)
+              if [ "$_ke_prev" = --key-env ]; then
+                if ! $_ke_done; then
+                  _ke_done=true
+                  _ke_val=$(printenv "$_ke_arg" 2>/dev/null || :)
+                  [ -z "$_ke_val" ] || unset "$_ke_arg"
+                fi
+              elif ! $_ne_done; then
+                _ne_done=true
+                _ne_val=$(printenv "$_ke_arg" 2>/dev/null || :)
+                [ -z "$_ne_val" ] || unset "$_ke_arg"
+              fi
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
   _ke_prev=$_ke_arg
 done
 KEY=$_ke_val
-unset _ke_prev _ke_arg _ke_val
+NEXT_KEY=$_ne_val
+unset _ke_prev _ke_arg _ke_val _ne_val _ke_done _ne_done
 
 VERSION=
 KEY_FILE=
 KEY_ENV=
+NEXT_KEY_FILE=
+NEXT_KEY_ENV=
+BRIDGE_FILE=
 PUB_FILE=
 PREBUILT=
 BUILD_ONLY=false
@@ -69,11 +93,14 @@ BAD_USAGE=
 while [ $# -gt 0 ]; do
   case "$1" in
     --build-only) BUILD_ONLY=true; shift ;;
-    --key-file | --key-env | --public-key-file | --prebuilt | --out | --notes | --min-version | --repo)
+    --key-file | --key-env | --next-key-file | --next-key-env | --bridge-file | --public-key-file | --prebuilt | --out | --notes | --min-version | --repo)
       if [ $# -lt 2 ]; then BAD_USAGE="$1 needs a value"; break; fi
       case "$1" in
         --key-file) KEY_FILE=$2 ;;
         --key-env) KEY_ENV=$2 ;;
+        --next-key-file) NEXT_KEY_FILE=$2 ;;
+        --next-key-env) NEXT_KEY_ENV=$2 ;;
+        --bridge-file) BRIDGE_FILE=$2 ;;
         --public-key-file) PUB_FILE=$2 ;;
         --prebuilt) PREBUILT=$2 ;;
         --out) OUT=$2 ;;
@@ -97,6 +124,13 @@ if [ -n "$KEY_ENV" ]; then
   case "$KEY_ENV" in
     [A-Za-z_]*) case "$KEY_ENV" in *[!A-Za-z0-9_]*) KEY_ENV_BAD=true ;; esac ;;
     *) KEY_ENV_BAD=true ;;
+  esac
+fi
+NEXT_ENV_BAD=false
+if [ -n "$NEXT_KEY_ENV" ]; then
+  case "$NEXT_KEY_ENV" in
+    [A-Za-z_]*) case "$NEXT_KEY_ENV" in *[!A-Za-z0-9_]*) NEXT_ENV_BAD=true ;; esac ;;
+    *) NEXT_ENV_BAD=true ;;
   esac
 fi
 
@@ -220,10 +254,11 @@ run_logged() {
   return "$_rc"
 }
 
-# Searches a path for the key's text (the pattern file lives only for the search): 0 when found
+# Searches a path for the key's text (both keys of a bridge) (the pattern file lives only for the search): 0 when found
 # or when the search itself failed (closed on doubt), 1 when the key is not there.
 key_in() {
   printf '%s\n' "$KEY" >"$KEYDIR/pattern"
+  [ -z "$NEXT_KEY" ] || printf '%s\n' "$NEXT_KEY" >>"$KEYDIR/pattern"
   grep -rqiF -f "$KEYDIR/pattern" "$1" 2>/dev/null
   _g=$?
   rm -f "$KEYDIR/pattern"
@@ -235,7 +270,7 @@ key_in() {
 fail1() {
   echo "release: $1" >&2
   if [ -n "$LOG" ] && [ -f "$LOG" ] && [ -n "$KEYDIR" ]; then
-    if [ -n "$KEY" ] && key_in "$LOG"; then
+    if { [ -n "$KEY" ] || [ -n "$NEXT_KEY" ]; } && key_in "$LOG"; then
       rm -rf "$LOGDIR"
       echo "release: the log held the key's text: removed" >&2
     else
@@ -252,6 +287,7 @@ fail1() {
 [ -z "$BAD_USAGE" ] || {
   echo "release: $BAD_USAGE" >&2
   echo "usage: sh scripts/release.sh <version> (--key-file <path> | --key-env <NAME>) [--prebuilt <folder>] [--public-key-file <path>] [--out <folder>] [--notes <file>] [--min-version <x.y.z>] [--repo <owner/name>]" >&2
+  echo "                             [--next-key-file <path> | --next-key-env <NAME>] [--bridge-file <path>]   (a bridging release)" >&2
   echo "       sh scripts/release.sh <version> --build-only [--public-key-file <path>] [--out <folder>] [--notes <file>]" >&2
   exit 2
 }
@@ -269,9 +305,12 @@ ui_version=$(sed -n 's/^  "version": *"\([^"]*\)".*/\1/p' "$TREE/ui/package.json
 
 # R1.2: the key's source.
 $KEY_ENV_BAD && refuse "--key-env $KEY_ENV: not a variable name (letters, digits and _, not starting with a digit)"
+$NEXT_ENV_BAD && refuse "--next-key-env $NEXT_KEY_ENV: not a variable name (letters, digits and _, not starting with a digit)"
+if [ -n "$NEXT_KEY_FILE" ] && [ -n "$NEXT_KEY_ENV" ]; then refuse "give --next-key-file or --next-key-env, not both"; fi
 if [ -n "$KEY_FILE" ] && [ -n "$KEY_ENV" ]; then refuse "give --key-file or --key-env, not both"; fi
 if $BUILD_ONLY; then
-  [ -z "$KEY_FILE" ] && [ -z "$KEY_ENV" ] || refuse "--build-only takes no key: the signing is the next step (--prebuilt)"
+  [ -z "$KEY_FILE" ] && [ -z "$KEY_ENV" ] && [ -z "$NEXT_KEY_FILE" ] && [ -z "$NEXT_KEY_ENV" ] \
+    || refuse "--build-only takes no key: the signing is the next step (--prebuilt)"
   [ -z "$PREBUILT" ] || refuse "--build-only and --prebuilt are two steps: give one"
 elif [ -z "$KEY_FILE" ] && [ -z "$KEY_ENV" ]; then
   refuse "a release is always signed: give --key-file <path> or --key-env <NAME>"
@@ -300,6 +339,72 @@ PUB_FILE=${PUB_FILE:-$ROOT/release/update-key.pub}
 PUB=$(trim_hex "$(cat "$PUB_FILE")")
 [ -n "$PUB" ] || refuse "the public key file $PUB_FILE is not 64 hexadecimal characters (docs/release.md)"
 PUB8=$(printf '%s' "$PUB" | cut -c1-8)
+
+# Spec 040 R1.1 to R1.3: a bridging release is declared by a file in the tree; every check of it
+# is here, before the build (the keys' probes follow, once the host program is there).
+BRIDGE_FILE=${BRIDGE_FILE:-$TREE/release/update-key.bridge}
+BRIDGE=false
+PREVIOUS=
+PREV8=
+if [ -f "$BRIDGE_FILE" ]; then
+  BRIDGE=true
+  _bv=
+  _bp=
+  while IFS= read -r _bl || [ -n "$_bl" ]; do
+    _bl=$(printf '%s' "$_bl" | tr -d '\r')
+    _bk=${_bl#"${_bl%%[![:space:]]*}"}
+    case $_bk in '' | '#'*) continue ;; esac
+    _bname=${_bk%%[[:space:]]*}
+    _bval=${_bk#"$_bname"}
+    _bval=${_bval#"${_bval%%[![:space:]]*}"}
+    _bval=${_bval%"${_bval##*[![:space:]]}"}
+    case $_bname in
+      version)
+        [ -z "$_bv" ] || refuse "release/update-key.bridge: version given twice"
+        case $_bval in '' | *[[:space:]]*) refuse "release/update-key.bridge: version needs one value" ;; esac
+        _bv=$_bval
+        ;;
+      previous)
+        [ -z "$_bp" ] || refuse "release/update-key.bridge: previous given twice"
+        case $_bval in '' | *[[:space:]]*) refuse "release/update-key.bridge: previous needs one value" ;; esac
+        _bp=$_bval
+        ;;
+      *) refuse "release/update-key.bridge: unknown line: $_bk" ;;
+    esac
+  done <"$BRIDGE_FILE"
+  [ -n "$_bv" ] || refuse "release/update-key.bridge: version is missing"
+  [ -n "$_bp" ] || refuse "release/update-key.bridge: previous is missing"
+  [ "$_bv" = "$VERSION" ] \
+    || refuse "release/update-key.bridge is for $_bv, not $VERSION: a bridge is one release; remove the file after it (docs/release.md)"
+  PREVIOUS=$(trim_hex "$_bp")
+  [ -n "$PREVIOUS" ] || refuse "release/update-key.bridge: previous is not 64 hex characters"
+  _pl=$(printf '%s' "$PREVIOUS" | tr 'A-F' 'a-f')
+  _nl=$(printf '%s' "$PUB" | tr 'A-F' 'a-f')
+  [ "$_pl" != "$_nl" ] || refuse "release/update-key.bridge: previous is the current public key: nothing to rotate"
+  PREVIOUS=$_pl
+  PREV8=$(printf '%s' "$PREVIOUS" | cut -c1-8)
+  unset _bv _bp _bl _bk _bname _bval _pl _nl
+elif [ -n "$NEXT_KEY_FILE" ] || [ -n "$NEXT_KEY_ENV" ]; then
+  refuse "--next-key-* is for a bridging release only (release/update-key.bridge)"
+fi
+
+# The next key of a bridge: required in a signing run, with the same rules as the signing key.
+if $BRIDGE && ! $BUILD_ONLY; then
+  if [ -n "$NEXT_KEY_ENV" ]; then
+    [ -n "$NEXT_KEY" ] || refuse "the next key is missing: $NEXT_KEY_ENV is empty"
+  elif [ -n "$NEXT_KEY_FILE" ]; then
+    [ -f "$NEXT_KEY_FILE" ] && [ -r "$NEXT_KEY_FILE" ] || refuse "the next key file $NEXT_KEY_FILE does not exist or cannot be read"
+    _nk_dir=$(cd "$(dirname "$NEXT_KEY_FILE")" && pwd -P)
+    in_working_tree "$_nk_dir" && refuse "the next key file $NEXT_KEY_FILE is inside a git working tree: keep the keys outside the repository"
+    case "$_nk_dir/" in "$OUT_ABS"/*) refuse "the next key file $NEXT_KEY_FILE is inside the output folder $OUT" ;; esac
+    NEXT_KEY=$(cat "$NEXT_KEY_FILE")
+  else
+    refuse "a bridging release needs the next key (--next-key-file or --next-key-env): boxes must not move to a key nobody holds"
+  fi
+  NEXT_KEY=$(trim_hex "$NEXT_KEY")
+  [ -n "$NEXT_KEY" ] || refuse "the next key is not 64 hexadecimal characters (make one with solite-host --update-keygen)"
+  [ "$NEXT_KEY" != "$KEY" ] || refuse "the next key and the signing key are the same: a bridge is signed with the old key"
+fi
 
 # R1.4: the notes.
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/solite-release-work.XXXXXX") || refuse "cannot make a temporary folder"
@@ -350,6 +455,7 @@ LOG=$LOGDIR/release.log
 : >"$LOG"
 
 echo "release: version $VERSION checked"
+! $BRIDGE || echo "release: bridging release (previous key $PREV8, the image carries $PUB8)"
 [ -z "$BUILDER" ] || [ -n "$PREBUILT" ] || echo "release: builder $BUILDER (a test seam)"
 
 # A prebuilt image must carry the committed public key: the check that stands for the build's.
@@ -374,12 +480,17 @@ if ! $BUILD_ONLY; then
 fi
 
 # Runs solite-host with the key in its own file for the time of the command only.
-with_key() {
-  printf '%s\n' "$KEY" >"$KEYDIR/key"
+with_key_value() {
+  _kv=$1
+  shift
+  printf '%s\n' "$_kv" >"$KEYDIR/key"
   "$@" --key "$KEYDIR/key" >>"$LOG" 2>&1
   _kr=$?
   rm -f "$KEYDIR/key"
   return "$_kr"
+}
+with_key() {
+  with_key_value "$KEY" "$@"
 }
 
 # ---- R1.7: the probe ----------------------------------------------------------------------------
@@ -388,9 +499,22 @@ if ! $BUILD_ONLY; then
   printf 'solite-probe-key' >"$WORK/probe.bin"
   with_key "$HOSTBIN" --update-sign "$WORK/probe.bin" --version "$VERSION" --out "$WORK/probe.sup" \
     || fail1 "the probe could not be signed"
-  "$HOSTBIN" --update-verify "$WORK/probe.sup" --public-key "$PUB" >>"$LOG" 2>&1 \
-    || fail1 "the signing key does not match $PUB_FILE: nothing is published"
-  echo "release: key matches the public key $PUB8"
+  if $BRIDGE; then
+    # A bridge is signed with the old key: the probe is verified against `previous`.
+    "$HOSTBIN" --update-verify "$WORK/probe.sup" --public-key "$PREVIOUS" >>"$LOG" 2>&1 \
+      || fail1 "the signing key does not match the bridge's previous key: nothing is published"
+    echo "release: key matches the bridge's previous key $PREV8"
+    # The next key signs nothing that is published: only this probe, against the committed key.
+    with_key_value "$NEXT_KEY" "$HOSTBIN" --update-sign "$WORK/probe.bin" --version "$VERSION" --out "$WORK/probe-next.sup" \
+      || fail1 "the probe could not be signed with the next key"
+    "$HOSTBIN" --update-verify "$WORK/probe-next.sup" --public-key "$PUB" >>"$LOG" 2>&1 \
+      || fail1 "the next key does not match $PUB_FILE: nothing is published"
+    echo "release: next key matches the public key $PUB8"
+  else
+    "$HOSTBIN" --update-verify "$WORK/probe.sup" --public-key "$PUB" >>"$LOG" 2>&1 \
+      || fail1 "the signing key does not match $PUB_FILE: nothing is published"
+    echo "release: key matches the public key $PUB8"
+  fi
 fi
 
 # ---- R1.6: the build ----------------------------------------------------------------------------
@@ -471,9 +595,18 @@ if [ -z "$BUILDER" ] && grep -qF 'signed: no application descriptor' "$LOG"; the
   [ "$(grep -cF 'signed: no application descriptor' "$LOG")" -le 1 ] \
     || fail1 "the image has no application descriptor: its version was not checked"
 fi
-"$HOSTBIN" --update-verify "$STAGE/$SUP" --public-key "$PUB" >>"$LOG" 2>&1 \
-  || fail1 "the signing key does not match $PUB_FILE: nothing is published"
-echo "release: signed and verified (public key $PUB8)"
+if $BRIDGE; then
+  "$HOSTBIN" --update-verify "$STAGE/$SUP" --public-key "$PREVIOUS" >>"$LOG" 2>&1 \
+    || fail1 "the signing key does not match the bridge's previous key: nothing is published"
+  if "$HOSTBIN" --update-verify "$STAGE/$SUP" --public-key "$PUB" >>"$LOG" 2>&1; then
+    fail1 "the bridge's file verifies with the new key: nothing is published"
+  fi
+  echo "release: key bridge: signed with $PREV8, the image carries $PUB8"
+else
+  "$HOSTBIN" --update-verify "$STAGE/$SUP" --public-key "$PUB" >>"$LOG" 2>&1 \
+    || fail1 "the signing key does not match $PUB_FILE: nothing is published"
+  echo "release: signed and verified (public key $PUB8)"
+fi
 
 # ---- R1.8: manifest, checksums, notes -----------------------------------------------------------
 

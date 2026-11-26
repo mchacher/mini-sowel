@@ -94,10 +94,14 @@ Each of the three programs starts and says which tool it is, with its version:
   image changed 400, signature changed 400` and the thread's `update: thread stack <n> of 16384
   bytes never used`; the run fails when a status differs or fewer than 2048 bytes stay unused.
   It then pulls a release once, from an in-memory fetch adapter (a manifest, one redirect, a signed
-  file made at boot), on an `update-pull` thread of the radio image (20 KB of stack), and logs
-  `update pull check: status 200` and the thread's `update-pull: thread stack <n> of 20480 bytes
-  never used`; the run fails when the status differs or fewer than 8192 bytes stay unused (the
-  room left for the TLS handshake, which the image, with no network, cannot run).
+  file made at boot, whose first answer is cut after 40 KB and whose `Range` request is answered
+  206), on an `update-pull` thread of the radio image (20 KB of stack), and logs
+  `update pull check: status 200, resumes 1` and the thread's `update-pull: thread stack <n> of
+  20480 bytes never used`; the run fails when the status differs, when the pull did not resume
+  once, or when fewer than 1024 bytes stay unused. The resumed request touches an 8 KB array on the
+  stack, standing for the TLS handshake a box runs there and the image, with no network, cannot
+  (D68's margin); the signature check after the download is deeper still, so 1024 bytes is what
+  is left at the deepest point (8336 unused measured).
   The measuring image (`flash-saves`) runs the same check at its boot. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
   application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
@@ -924,8 +928,9 @@ copy embedded in the radio image at build time.
   The dialogs close on Escape and on a click outside.
 - **Settings** (`#/settings`): the **Home** card (Sowel's): name, latitude, longitude (a typed `,`
   becomes `.`), sunrise and sunset offsets, and the time zone, picked in the list (`UTC` when
-  unset); Save shows when something changed and sends the six home keys; a refusal shows the host's
-  text. Under it, **Today**: sunrise, sunset and "Day" or "Night", live from the root zone; "Set
+  unset); Save shows when something changed and sends the whole settings map, read just before
+  (`GET /api/v1/settings`) with its own six keys changed, so no other key is dropped (every save of
+  the page does the same, D71); a refusal shows the host's text. Under it, **Today**: sunrise, sunset and "Day" or "Night", live from the root zone; "Set
   the location to get the sun times" when unknown. The **Backup** card: under "Export", a password and its confirmation (8 to 128 characters, the two
   equal; else the button stays disabled and the reason shows under it) and an "Export" button
   ("Exporting..." while it runs, a few seconds on the box), which downloads
@@ -939,12 +944,38 @@ copy embedded in the radio image at build time.
   "Factory reset" button and a confirmation dialog (what is erased, "Erase everything"); success
   clears the tokens and shows the first-start screen, a refusal (the confirmation's text, "Pairing in
   progress") shows the host's text. Between the Backup and Factory reset cards, the **Firmware
-  update** card: the running version (`GET /api/v1/system/version`), a file input (`.sup`), an
-  "Install" button, disabled until a file is chosen and during the upload ("Installing..."), then
-  the answer's `message` (success token) or `error` (danger token) on a line under it; after a
-  success, "The box restarts; reload the page in a minute." (the connection drops with the restart;
-  the page does not poll). The file goes as the body, `Content-Type: application/octet-stream`, with
-  the bearer token. French and English labels.
+  update** card (Sowel's version badge and update overlay, inside the card): "Running version
+  x.y.z" (`GET /api/v1/system/version`) and, under it, one of four lines from `latest` and
+  `updateAvailable`: "No check since the box started"; "Version x.y.z is available", with a
+  "Release notes" link to the release page (`releaseUrl`, a new tab, absent when null) and an
+  "Update to vx.y.z" button; "Version x.y.z cannot be installed directly from this version: see
+  its release notes" (its `minVersion` is above the running one, no button); "Up to date (latest
+  x.y.z)". The versions are compared as three numbers. "Check for updates" posts
+  `/api/v1/system/version/check` with a spinner and refreshes the card; every refusal (429, 503,
+  500, 409) shows the server's text under the buttons. The release notes are not in the API. "Update
+  to vx.y.z" opens a confirmation (the box downloads and installs, restarts in about a minute, goes
+  back by itself if the new version does not start, the user logs in again; Cancel sends nothing)
+  and Update posts `/api/v1/system/update` with no body. While it installs the buttons are
+  disabled and "Downloading and installing... <n> s" counts the seconds. Then the card polls `GET
+  /api/v1/system/version` every 3 s (never two at once, each with a 5 s timeout, stopped when the
+  card unmounts): after the 200 "Installed x.y.z, the box restarts...", a `current` other than the
+  one before gives "Now running x.y.z"; the restart ends the sessions, so the next answer is a 401
+  and the login screen shows, and the new version shows after logging in. At 3 minutes the card
+  says "The box still runs x.y.z: the new version was not kept (see the box's log)" when the last
+  poll answered with the same version, else "The box has not answered for 3 minutes: reload the
+  page". A network error during the request itself ("The connection was lost; waiting for the
+  box...") polls for up to 11 minutes (the 600 s download and a restart): "Now running x.y.z", or
+  at the end "The update did not complete: the box still runs x.y.z" or the reload text. Any other
+  refusal (400 `No update available`, `Version ... needs ...`, `Download does not match the
+  manifest`, 409, 413, 429, 500 `Download failed: <reason>`, 503) shows the server's text and the
+  card returns to its state. A checkbox "Check for a new version once a day" is `update.autoCheck`,
+  saved at once; under "Advanced", a field for `update.manifestUrl` (the default GitHub address as
+  placeholder, `""` returns to it) with its Save; the refusals show. Under its own heading,
+  "Install from a file": a file input (`.sup`), an "Install" button, disabled until a file is
+  chosen and during the upload ("Installing..."), then the answer's `message` (success token) or
+  `error` (danger token) under it; after a success, "The box restarts; reload the page in a
+  minute." The upload is disabled during a pull or a check, and they are during an upload. The file
+  goes as the body, `Content-Type: application/octet-stream`, with the bearer token. French and English labels.
 - **Live**: values, motion and lights change as the events arrive (spec 013's `/ws`); when the
   connection is not open for 3 s (also at the first load) the top bar's link indicator says so:
   "Connecting..." while it tries, "Disconnected" between tries; the interface reconnects (1 s, 2 s, 4 s... up to
@@ -1097,7 +1128,9 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
     <reason>` (`<url>: <status>`, `too many redirects`, `redirect without Location`, `plain http
     is refused for <host>`, `redirect from https to http refused`, `invalid URL`, `timed out`,
     `took longer than <n> s`, a connection error, or the manifest's message), logged `update: check
-    failed: <reason>`; a success logs `update: check: latest <x.y.z>, running <x.y.z>`. The setting
+    failed: <reason>`; a success logs `update: check: latest <x.y.z>, running <x.y.z> (<manifest
+    address>)`, so the log says which server answered. The cache is in RAM only: a fresh start has
+    `latest` null, and a check always reaches the network, the cache filled or not. The setting
     `update.manifestUrl` names the manifest; the clock must be set (a date before 2020 is not).
   - **Where the box may fetch from.** Every address (the setting, `image.url`, a redirect) is at
     most 2048 visible ASCII characters: `http` or `https`, a host of letters, digits, `-` and `.`
@@ -1129,9 +1162,29 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
     timeout, the total time passed or a body that ends early drops the slot as a truncated upload
     does and answers 500 `Download failed: <reason>` (`connection lost`, `timed out`, `took longer
     than 600 s`, the adapter's error), logged `update: download failed: <reason>`; the next attempt
-    starts over from byte 0. The answer is the upload's 200 `{"success": true, "message":
-    "Installed <x.y.z>, restarting"}`, sent when the file is installed. Between reads the download
-    hands the CPU back every 64 KB.
+    starts over from byte 0, once the resumes below are spent or refused. The answer is the
+    upload's 200 `{"success": true, "message": "Installed <x.y.z>, restarting"}`, sent when the
+    file is installed. Between reads the download hands the CPU back every 64 KB.
+  - **A cut download resumes.** After the download's first answer, a read that fails (reset, or
+    no byte for 30 s) or a body that ends before `image.size` bytes does not fail the pull at
+    once: the cut body is dropped (its connection closed), the core waits, and fetches `image.url`
+    again from the start of its redirects (a GitHub asset's signed address expires within
+    minutes), every request carrying `Range: bytes=<bytes already read>-`. A 206 whose
+    `Content-Range` is exactly `bytes <count>-<size - 1>/<size>`, whose `Content-Length` (when
+    given) is the rest and whose `ETag` (when both answers have one, at most 256 characters) is
+    the first answer's continues the same installation: the same hash, the same count, the same
+    slot; nothing is kept on flash across pulls. At most 3 resumed requests per pull, waiting 2, 4
+    then 8 s before each, all within the 600 s (the total time is never resumed); a resumed
+    request that fails, answers a 5xx or is cut again counts as one attempt. Each logs `update:
+    download cut at <count> of <size> bytes (<reason>), resuming (<n>/3)`. The pull fails cleanly
+    (the slot dropped, 500 `Download failed: <reason>`) and the next one starts over from byte 0
+    when: the attempts are spent (`<reason> (after 3 resumes)`); the server answers 200 to the
+    range request (`the server does not resume (200 to a range request)`); it answers 416 or a
+    206 that is not the rest asked for or whose `ETag` changed (`the file changed on the server`,
+    and the cached manifest is dropped, so the next pull reads it again); or another status
+    (`<url>: <status>`). Whatever the number of resumes, the count must equal `image.size` and the
+    hash the manifest's, then the signature check runs, before the slot becomes the next boot
+    (D72).
   - **The automatic check.** The setting `update.autoCheck` turns it on (`"true"`; off when unset,
     `""` or `"false"`, D67). On, a check runs 10 minutes after the start, then every 24 hours, when
     the clock is set and no check or pull runs (otherwise it waits for the next minute); it fills
@@ -1265,18 +1318,22 @@ The steps a maintainer follows are in `docs/release.md` (the `/solite-release` s
    `release/update-key.pub` and a tagged commit that is not on `main` before its build, then runs
    `sh scripts/release.sh X.Y.Z --build-only` and uploads `app.bin` and `flash.bin`. Its `sign` job
    (the environment `release`, `needs: firmware`) refuses (before the host is built, an
-   `::error::`) an empty secret, a missing `release/update-key.pub` and a tagged commit that is not
+   `::error::`) an empty secret (`SOLITE_UPDATE_KEY_PREVIOUS` too when `release/update-key.bridge`
+   is in the tagged tree, point 7), a missing `release/update-key.pub` and a tagged commit that is not
    on `main`; it builds the host program only (no ESP32 toolchain, no npm), downloads the artifact
    and runs `sh scripts/release.sh X.Y.Z --key-env SOLITE_UPDATE_KEY --prebuilt <folder>`. Its
    `publish` job (`needs: sign`), the only one with
    `contents: write`, makes the GitHub release (not a draft, not a pre-release; an existing release
    for the tag makes it fail: a release is never replaced). Run by hand (Run workflow), the
    workflow is a dry run: a throwaway key, the script, and only `manifest.json` and `SHA256SUMS`
-   kept as an artifact; nothing is published and the secret is not read. The concurrency group is
+   kept as an artifact; nothing is published and no secret is read (with a bridge file in the tree,
+   the dry run makes a second throwaway key and a bridge file of its own and runs the bridge's
+   checks with them, point 7). The concurrency group is
    `release-<event>`: a dry run never cancels a tag run, and a second tag run waits for the first.
 3. **The script.** `sh scripts/release.sh <x.y.z|vx.y.z> (--key-file <path> | --key-env <NAME>)
    [--prebuilt <folder>] [--public-key-file <path>] [--out <folder>] [--notes <file>]
-   [--min-version <x.y.z>] [--repo <owner/name>]`, or `sh scripts/release.sh <x.y.z> --build-only
+   [--min-version <x.y.z>] [--repo <owner/name>] [--next-key-file <path> | --next-key-env <NAME>]
+   [--bridge-file <path>]`, or `sh scripts/release.sh <x.y.z> --build-only
    [--public-key-file <path>] [--out <folder>] [--notes <file>]`. It refuses (exit 2, nothing built) a version that is not `x.y.z` or that is not
    the `version` of `Cargo.toml`'s `[workspace.package]`, of `firmware/Cargo.toml` and of
    `ui/package.json`; no key option, both, a key variable that is unset or empty, or a key file
@@ -1301,7 +1358,8 @@ The steps a maintainer follows are in `docs/release.md` (the `/solite-release` s
    is accepted, must hold the public key's text (`grep`). The signing key is never in the
    environment of a job that builds with third-party tools (the `firmware` job has no secret, the
    `sign` job builds only the host program), and the script takes it from the environment before
-   assigning any variable (`--key-env` reads it with `printenv`, then unsets it), so no command it
+   assigning any variable (`--key-env` and `--next-key-env` read it with `printenv`, then unset it,
+   both keys of a bridge), so no command it
    runs inherits it; it is neither on a command line, in the output nor in the log; the staging
    folder and the log are searched for it before anything is kept. A signal (Ctrl-C) stops the
    script's whole process group (the build's children included) and removes its folders.
@@ -1316,9 +1374,34 @@ The steps a maintainer follows are in `docs/release.md` (the `/solite-release` s
    "size", "sha256" (of the `.sup`), "url"}}`, two spaces of indent. Solite's own JSON, not
    Sowel's (decision D63). A running box reads it (see "Updates itself from a signed file", "From a
    release").
-6. **Install** from the Settings page's Firmware update card (see "Shows the home in the browser"),
+6. **Install** from the Settings page's Firmware update card (Update to x.y.z, or a `.sup` chosen
+   from a file; see "Shows the home in the browser"),
    or `POST` the `.sup` to `/api/v1/system/update` with the token. A box never flashed with Solite
    takes the full-flash image over USB (`docs/release.md`).
+7. **A bridging release** rotates the signing key (D70; the steps are in `docs/release.md`). It is
+   declared by the file `release/update-key.bridge` in the release's tree (`--bridge-file <path>`
+   overrides the path): `version <x.y.z>` and `previous <64 hex>` once each, `#` lines and blank
+   lines ignored, else `release/update-key.bridge: <reason>`. The image carries the new public key
+   (`release/update-key.pub`, as always); the `.sup` is signed with the old private key
+   (`--key-file` / `--key-env`), and the new private key is given too (`--next-key-file` or
+   `--next-key-env`, read like the signing key, 64 hex characters), so that boxes never move to a
+   key nobody holds. The script refuses, before the build and with nothing written: a bridge for
+   another version (`a bridge is one release; remove the file after it`); a `previous` that is not
+   64 hex characters or is the current public key; a signing key that does not match `previous`; a
+   missing next key; a next key that does not match `release/update-key.pub`; a `--next-key-*`
+   without a bridge file, or with `--build-only`. After signing, `--update-verify` must accept the
+   `.sup` with `previous` and refuse it with the new key (else `the bridge's file verifies with the
+   new key: nothing is published`); the script prints `release: key bridge: signed with
+   <previous8>, the image carries <pub8>`. The manifest has no field for a bridge: a box accepts the
+   bridge by its compiled (old) key and trusts the key its new image carries once it is confirmed,
+   refusing the old key's files (`Invalid signature`). In `release.yml`, the `sign` job with the
+   bridge file in the tagged tree needs the environment secrets `SOLITE_UPDATE_KEY_PREVIOUS` (the
+   old private key) and `SOLITE_UPDATE_KEY` (the new one), read by that job only, and runs the
+   script with `--key-env SOLITE_UPDATE_KEY_PREVIOUS --next-key-env SOLITE_UPDATE_KEY`; an empty
+   `SOLITE_UPDATE_KEY_PREVIOUS` is an `::error::` and no release. Without the file, the command is
+   the normal one. The Mac's chain test (`crates/host/tests/rotation.rs`) builds the host with two
+   keys and checks that a box before the bridge refuses a file signed by the new key and the box
+   after it refuses one signed by the old.
 
 `solite-host --update-sign <image> --version <x.y.z> --key <file> --out <file>.sup` writes the file
 above and prints `signed: <out>, version <x.y.z>, <bytes> bytes, key <first 8 hex>` (the bytes are

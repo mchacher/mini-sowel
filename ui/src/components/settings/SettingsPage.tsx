@@ -3,18 +3,22 @@
 // is a select over `GET /api/v1/settings/timezones` (D41) in place of Sowel's read-only source line;
 // no restart toast (the box applies a new location at once); a "Today" line from the root zone's
 // aggregation; the backup is Solite's own (D56): a password, an encrypted file, a restore at the box's restart.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { Loader2 } from "lucide-react";
+import { ArrowUpCircle, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import {
+  checkSystemVersion,
   exportBackup,
   getSettings,
   getSystemVersion,
   getTimezones,
   installUpdate,
   restoreBackup,
-  updateSettings,
+  saveSettings,
+  triggerSystemUpdate,
+  type Settings,
+  type VersionInfo,
 } from "../../api";
 import { useAuth } from "../../store/useAuth";
 import { useZoneAggregation } from "../../store/useZoneAggregation";
@@ -23,6 +27,7 @@ import { useTimezone } from "../../store/useTimezone";
 import { ROOT_ZONE_ID } from "../../zones";
 import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
+import { compareVersions } from "../../lib/version";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_LABEL, Modal } from "../ui/Modal";
 
 /** The backup password's length, in characters, as the host checks it (spec 035, R1). */
@@ -62,11 +67,23 @@ function formOf(all: Record<string, string>): Form {
 }
 
 /**
- * The text a backup call shows (spec 035, R10): the server's own words, including for a 5xx
- * (`Busy saving, try again`, `Restore failed: <reason>`), which the generic text would hide.
+ * The text a backup call shows (spec 035, R10): the server's own words for a 5xx (`Busy saving, try
+ * again`, `Restore failed: <reason>`), which the generic text would hide.
  */
 function backupErrorText(err: unknown, t: TFunction): string {
   if (err instanceof ApiError && err.fromServer && err.status >= 500 && err.message) {
+    return err.message;
+  }
+  return formErrorText(err, t);
+}
+
+/**
+ * The text an update call shows (spec 040 R4.3): the server's own words for a 4xx or a 5xx
+ * (`Please wait 12s before checking again`, `Download failed: <reason>`); the client's own text
+ * only when the server gave none.
+ */
+function serverErrorText(err: unknown, t: TFunction): string {
+  if (err instanceof ApiError && err.fromServer && err.status >= 400 && err.message) {
     return err.message;
   }
   return formErrorText(err, t);
@@ -121,7 +138,7 @@ function HomeSettingsSection() {
     setSaving(true);
     setError(null);
     try {
-      await updateSettings({
+      await saveSettings({
         "home.name": form.homeName,
         "home.latitude": form.latitude,
         "home.longitude": form.longitude,
@@ -470,28 +487,159 @@ function BackupSection() {
   );
 }
 
-/** Spec 032, R9: the running version and the install of a signed `.sup` file. */
+/** The polling of the update card (spec 040, R4.6): 3 s between two polls, 5 s for one, 3 min or 11 min in all. */
+const POLL_GAP_MS = 3000;
+const POLL_TIMEOUT_MS = 5000;
+const WAIT_AFTER_ANSWER_MS = 3 * 60 * 1000;
+const WAIT_AFTER_LOST_MS = 11 * 60 * 1000;
+
+type Notice = { text: string; error: boolean };
+
+/**
+ * Spec 040, R4: the version, the check, the pull of a release and the install of a signed `.sup`
+ * file (spec 032, R9). Modelled on Sowel's `VersionBadge` and `UpdateOverlay`.
+ */
 function UpdateSection() {
   const { t } = useTranslation();
-  const [version, setVersion] = useState<string | null>(null);
+  const [info, setInfo] = useState<VersionInfo | null>(null);
+  const [settings, setSettings] = useState<Settings>({});
+  const [manifest, setManifest] = useState("");
+  const [settingsNotice, setSettingsNotice] = useState<Notice | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [phase, setPhase] = useState<"idle" | "pulling" | "waiting">("idle");
+  const [elapsed, setElapsed] = useState(0);
+  const [confirming, setConfirming] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState<Notice | null>(null);
   const [installed, setInstalled] = useState(false);
+  const alive = useRef(true);
+  const poll = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    let live = true;
+    alive.current = true;
     getSystemVersion()
-      .then((v) => live && setVersion(v.current))
+      .then((v) => alive.current && setInfo(v))
       .catch(() => {});
+    getSettings()
+      .then((all) => {
+        if (!alive.current) return;
+        setSettings(all);
+        setManifest(all["update.manifestUrl"] ?? "");
+      })
+      .catch(() => {});
+    // The card leaves (the 401 after the restart sends to the login screen): no further poll.
     return () => {
-      live = false;
+      alive.current = false;
+      poll.current?.abort();
     };
   }, []);
 
+  // The elapsed count of the install: seconds since the click, not a countdown.
+  useEffect(() => {
+    if (phase !== "pulling") return;
+    const started = Date.now();
+    setElapsed(0);
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [phase]);
+
+  const pulling = phase !== "idle";
+  const locked = pulling || uploading;
+
+  const check = async () => {
+    setNotice(null);
+    setChecking(true);
+    try {
+      setInfo(await checkSystemVersion());
+    } catch (err) {
+      setNotice({ text: serverErrorText(err, t), error: true });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  /** Polls the version until it changes or the time is up; the ending is chosen from the last poll. */
+  const watch = async (before: string, limitMs: number, minutes: number, endKey: string) => {
+    const started = Date.now();
+    let lastSame: boolean;
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_GAP_MS));
+      if (!alive.current) return;
+      const controller = new AbortController();
+      poll.current = controller;
+      const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+      try {
+        const v = await getSystemVersion(controller.signal);
+        if (!alive.current) return;
+        setInfo(v);
+        if (v.current !== before) {
+          setNotice({ text: t("settings.updateNowRunning", { version: v.current }), error: false });
+          setPhase("idle");
+          return;
+        }
+        lastSame = true;
+      } catch {
+        if (!alive.current) return;
+        lastSame = false; // a network error, a timeout or a 5xx: the box is down or busy
+      } finally {
+        clearTimeout(timer);
+      }
+      if (Date.now() - started >= limitMs) {
+        const text = lastSame
+          ? t(endKey, { version: before })
+          : t("settings.updateNoAnswer", { minutes });
+        setNotice({ text, error: true });
+        setPhase("idle");
+        return;
+      }
+    }
+  };
+
+  const pull = async () => {
+    if (!info) return;
+    setConfirming(false);
+    setNotice(null);
+    setPhase("pulling");
+    const before = info.current;
+    try {
+      await triggerSystemUpdate();
+    } catch (err) {
+      if (!alive.current) return;
+      if (err instanceof ApiError && err.status === 0) {
+        // The connection dropped; the pull may still run in the box (up to 600 s) and restart it.
+        setNotice({ text: t("settings.updateLost"), error: false });
+        setPhase("waiting");
+        await watch(before, WAIT_AFTER_LOST_MS, 11, "settings.updateNotComplete");
+      } else {
+        setNotice({ text: serverErrorText(err, t), error: true });
+        setPhase("idle");
+      }
+      return;
+    }
+    if (!alive.current) return;
+    setNotice({
+      text: t("settings.updateInstalledWait", { version: info.latest ?? "" }),
+      error: false,
+    });
+    setPhase("waiting");
+    await watch(before, WAIT_AFTER_ANSWER_MS, 3, "settings.updateNotKept");
+  };
+
+  const saveSetting = async (changes: Settings) => {
+    setSettingsNotice(null);
+    try {
+      await saveSettings(changes);
+      setSettings((s) => ({ ...s, ...changes }));
+    } catch (err) {
+      setSettingsNotice({ text: serverErrorText(err, t), error: true });
+    }
+  };
+
   const install = async () => {
     if (!file) return;
-    setBusy(true);
+    setUploading(true);
     setMessage(null);
     setInstalled(false);
     try {
@@ -501,30 +649,156 @@ function UpdateSection() {
     } catch (err) {
       setMessage({ text: formErrorText(err, t), error: true });
     } finally {
-      setBusy(false);
+      setUploading(false);
     }
   };
+
+  const newer = info?.latest != null && compareVersions(info.latest, info.current) > 0;
+  const notes = info?.releaseUrl ? (
+    <a
+      href={info.releaseUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-small text-primary hover:underline"
+    >
+      {t("settings.updateNotes")}
+      <ExternalLink size={14} strokeWidth={1.5} />
+    </a>
+  ) : null;
 
   return (
     <section className="card p-5">
       <h2 className="text-body font-semibold text-text mb-1">{t("settings.update")}</h2>
       <p className="text-caption text-text-tertiary mb-4">{t("settings.updateDescription")}</p>
-      {version && (
-        <p className="text-small text-text mb-3">
-          {t("settings.updateVersion")} {version}
+      {info && (
+        <div className="mb-3 space-y-1">
+          <p className="text-small text-text">
+            {t("settings.updateVersion")} {info.current}
+          </p>
+          {info.latest === null ? (
+            <p className="text-small text-text-secondary">{t("settings.updateNoCheck")}</p>
+          ) : info.updateAvailable ? (
+            <p className="text-small text-text-secondary flex flex-wrap items-center gap-x-3">
+              <span className="inline-flex items-center gap-1">
+                <ArrowUpCircle size={14} strokeWidth={1.5} className="text-primary" />
+                {t("settings.updateAvailable", { version: info.latest })}
+              </span>
+              {notes}
+            </p>
+          ) : newer ? (
+            <p className="text-small text-text-secondary flex flex-wrap items-center gap-x-3">
+              <span>{t("settings.updateBlocked", { version: info.latest })}</span>
+              {notes}
+            </p>
+          ) : (
+            <p className="text-small text-text-secondary">
+              {t("settings.updateUpToDate", { version: info.latest })}
+            </p>
+          )}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {info?.updateAvailable && info.latest && (
+          <button
+            type="button"
+            disabled={locked || checking}
+            onClick={() => setConfirming(true)}
+            className={BUTTON_PRIMARY}
+          >
+            {t("settings.updateTo", { version: info.latest })}
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={locked || checking}
+          onClick={check}
+          className={`${BUTTON_SECONDARY} inline-flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed`}
+        >
+          {checking ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <RefreshCw size={16} strokeWidth={1.5} />
+          )}
+          {t("update.checkNow")}
+        </button>
+      </div>
+      {phase === "pulling" && (
+        <p className="text-small text-text-secondary mt-3 flex items-center gap-2" role="status">
+          <Loader2 size={16} className="animate-spin text-text-tertiary" />
+          {t("settings.updateProgress", { seconds: elapsed })}
         </p>
       )}
+      {notice && (
+        <p
+          className={`text-small mt-3 flex items-center gap-2 ${notice.error ? "text-error" : "text-text-secondary"}`}
+          role="status"
+        >
+          {phase === "waiting" && <Loader2 size={16} className="animate-spin text-text-tertiary" />}
+          {notice.text}
+        </p>
+      )}
+      <label className="flex items-center gap-2 mt-4 text-small text-text">
+        <input
+          type="checkbox"
+          checked={settings["update.autoCheck"] === "true"}
+          onChange={(e) =>
+            void saveSetting({
+              "update.autoCheck": (e.currentTarget as HTMLInputElement).checked ? "true" : "false",
+            })
+          }
+        />
+        {t("settings.updateAutoCheck")}
+      </label>
+      <details className="mt-3">
+        <summary className="text-small text-text-secondary cursor-pointer">
+          {t("settings.updateAdvanced")}
+        </summary>
+        <div className="mt-2">
+          <label htmlFor="update-manifest-url" className={FIELD_LABEL}>
+            {t("settings.updateManifestUrl")}
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="update-manifest-url"
+              type="url"
+              value={manifest}
+              placeholder="https://github.com/mchacher/solite/releases/latest/download/manifest.json"
+              className={INPUT}
+              onInput={(e) => setManifest((e.currentTarget as HTMLInputElement).value)}
+            />
+            <button
+              type="button"
+              aria-label={t("settings.updateManifestSave")}
+              disabled={manifest === (settings["update.manifestUrl"] ?? "")}
+              onClick={() => void saveSetting({ "update.manifestUrl": manifest.trim() })}
+              className={BUTTON_PRIMARY}
+            >
+              {t("common.save")}
+            </button>
+          </div>
+          <p className="text-caption text-text-tertiary mt-1">{t("settings.updateManifestHelp")}</p>
+        </div>
+      </details>
+      {settingsNotice && <p className="text-small text-error mt-3">{settingsNotice.text}</p>}
+      <h3 className="text-small font-semibold text-text mt-5 mb-2">
+        {t("settings.updateFileHeading")}
+      </h3>
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="file"
           accept=".sup"
           aria-label={t("settings.updateFile")}
-          disabled={busy}
+          disabled={locked}
           className="text-small text-text-secondary"
           onChange={(e) => setFile((e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
         />
-        <button type="button" disabled={!file || busy} onClick={install} className={BUTTON_PRIMARY}>
-          {busy ? t("settings.updateInstalling") : t("settings.updateInstall")}
+        <button
+          type="button"
+          disabled={!file || locked}
+          onClick={install}
+          className={BUTTON_SECONDARY}
+        >
+          {uploading ? t("settings.updateInstalling") : t("settings.updateInstall")}
         </button>
       </div>
       {message && (
@@ -534,6 +808,26 @@ function UpdateSection() {
       )}
       {installed && (
         <p className="text-small text-text-secondary mt-1">{t("settings.updateRestart")}</p>
+      )}
+      {confirming && info?.latest && (
+        <Modal
+          title={t("update.confirmTitle", { version: info.latest })}
+          onClose={() => setConfirming(false)}
+        >
+          <div className="px-6 py-4">
+            <p className="text-body text-text-secondary">
+              {t("settings.updateConfirm", { version: info.latest })}
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 px-6 py-4 border-t border-border-light">
+            <button type="button" onClick={() => setConfirming(false)} className={BUTTON_SECONDARY}>
+              {t("common.cancel")}
+            </button>
+            <button type="button" onClick={pull} className={BUTTON_PRIMARY}>
+              {t("update.confirmAction")}
+            </button>
+          </div>
+        </Modal>
       )}
     </section>
   );

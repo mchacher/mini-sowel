@@ -85,10 +85,10 @@ A release (the GitHub Releases page) holds `solite-<version>-flash.bin` (the who
   original firmware: optionally back it up first (`sh scripts/box.sh backup --out <folder>`).
   Details: [docs/release.md](docs/release.md).
 - **A box already running Solite**: never flashed this way (it would lose its home); upload the
-  `.sup` in Settings, the Firmware update card, or let the box pull the latest release itself
-  through the API: `POST /api/v1/system/version/check` (it reads the release's `manifest.json`),
-  then `POST /api/v1/system/update` with an empty body (the interface has no button for it). The
-  box checks the signature either way; the manifest's address is the setting `update.manifestUrl`
+  `.sup` in Settings, the Firmware update card, or let the box pull the latest release itself:
+  the same card's "Check for updates" then "Update to vX" (it reads the release's `manifest.json`),
+  or through the API `POST /api/v1/system/version/check` then `POST /api/v1/system/update` with an
+  empty body. A download cut by a network blip resumes from the byte written. The box checks the signature either way; the manifest's address is the setting `update.manifestUrl`
   and `update.autoCheck` turns on a daily check.
 
 ## How the project is worked on

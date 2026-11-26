@@ -7,11 +7,11 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -718,4 +718,233 @@ fn the_settings_of_the_release_check_are_accepted_and_checked() {
     let get = serving.request("GET", "/api/v1/settings", &[], "application/json", true);
     let settings: Value = serde_json::from_str(&get.body).unwrap();
     assert_eq!(settings["update.autoCheck"], "true");
+}
+
+// ---- A cut download resumed (spec 040 R6) ----
+
+/// What the server of `serve_cutting` does after it cut the file's first answer.
+#[derive(Clone, Copy, PartialEq)]
+enum Then {
+    /// Honours the `Range`: a 206 with the rest.
+    Resumes,
+    /// Ignores the `Range`: a 200 with the whole file.
+    IgnoresRange,
+    /// Honours it, but with another `ETag`: the file changed.
+    OtherEtag,
+    /// Honours it, and cuts after 1000 bytes every time.
+    CutsAgain,
+}
+
+/// A server of a release whose file is `sup` behind two redirects: its first answer for the file
+/// stops after `at` bytes (the length announced is the whole file's); the ranged requests are
+/// answered as `then` says. Returns the port and the `Range` headers seen, each as
+/// `<path> <header>`.
+fn serve_cutting(
+    sup: &[u8],
+    version: &str,
+    at: usize,
+    then: Then,
+) -> (u16, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let manifest = json!({
+        "format": 1, "version": version, "minVersion": null,
+        "image": {
+            "size": sup.len(),
+            "sha256": digest_hex(sup),
+            "url": format!("http://127.0.0.1:{port}/a"),
+        },
+    })
+    .to_string();
+    let sup = sup.to_vec();
+    let ranges: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = Arc::clone(&ranges);
+    thread::spawn(move || {
+        for mut stream in listener.incoming().map_while(Result::ok) {
+            let (sup, manifest, seen) = (sup.clone(), manifest.clone(), Arc::clone(&seen));
+            thread::spawn(move || {
+                let mut head = Vec::new();
+                let mut byte = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => head.push(byte[0]),
+                        _ => return,
+                    }
+                }
+                let text = String::from_utf8_lossy(&head).into_owned();
+                let path = text.split(' ').nth(1).unwrap_or("/").to_string();
+                let range = text
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Range: "))
+                    .map(str::to_string);
+                if let Some(range) = &range {
+                    seen.lock().unwrap().push(format!("{path} {range}"));
+                }
+                let len = sup.len();
+                let reply = match path.as_str() {
+                    "/m.json" => answer(200, &[], manifest.as_bytes()),
+                    "/a" => answer(302, &[format!("Location: http://127.0.0.1:{port}/b")], b""),
+                    "/b" => answer(302, &["Location: /c".to_string()], b""),
+                    "/c" => match range
+                        .as_deref()
+                        .and_then(|r| r.strip_prefix("bytes="))
+                        .and_then(|r| r.strip_suffix('-'))
+                        .and_then(|r| r.parse::<usize>().ok())
+                    {
+                        // The first answer: the whole length announced, `at` bytes sent.
+                        None => {
+                            let mut out = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {len}\r\nETag: \"v1\"\r\n\r\n"
+                            )
+                            .into_bytes();
+                            out.extend_from_slice(&sup[..at]);
+                            out
+                        }
+                        Some(_) if then == Then::IgnoresRange => answer(200, &[], &sup),
+                        Some(from) => {
+                            let etag = if then == Then::OtherEtag {
+                                "\"v2\""
+                            } else {
+                                "\"v1\""
+                            };
+                            let end = if then == Then::CutsAgain {
+                                (from + 1000).min(len)
+                            } else {
+                                len
+                            };
+                            let mut out = format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {from}-{}/{len}\r\nContent-Length: {}\r\nETag: {etag}\r\n\r\n",
+                                len - 1,
+                                len - from
+                            )
+                            .into_bytes();
+                            out.extend_from_slice(&sup[from..end]);
+                            out
+                        }
+                    },
+                    _ => answer(404, &[], b""),
+                };
+                let _ = stream.write_all(&reply);
+            });
+        }
+    });
+    (port, ranges)
+}
+
+fn pull(serving: &Serving) -> (u16, Value) {
+    let answer = serving.request(
+        "POST",
+        "/api/v1/system/update",
+        &[],
+        "application/json",
+        true,
+    );
+    let body = serde_json::from_str(&answer.body).unwrap_or(Value::Null);
+    (answer.status, body)
+}
+
+fn no_slot(data: &Path) {
+    assert!(!data.join("update/slot-1.bin").exists());
+    assert!(!data.join("update/slot-1.bin.part").exists());
+    assert!(!data.join("update/boot.json").exists());
+}
+
+#[test]
+fn a_cut_download_is_resumed_through_the_redirects_and_installs() {
+    let host = keyed_host();
+    let data = temp("resume");
+    let mut serving = serve(&host.binary, &data);
+    let sup = sign(&image(40 * 1024), "0.2.0");
+    let (port, ranges) = serve_cutting(&sup, "0.2.0", 15_000, Then::Resumes);
+    set_manifest_url(&serving, port);
+    let (status, body) = pull(&serving);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["message"], "Installed 0.2.0, restarting");
+    // Every hop of the chain carried the range, from the byte read.
+    assert_eq!(
+        *ranges.lock().unwrap(),
+        vec![
+            "/a bytes=15000-".to_string(),
+            "/b bytes=15000-".to_string(),
+            "/c bytes=15000-".to_string()
+        ]
+    );
+    let line = wait_for_line(&mut serving, "resuming (1/3)");
+    assert!(
+        line.contains(&format!("download cut at 15000 of {} bytes", sup.len())),
+        "{line}"
+    );
+    assert_eq!(
+        std::fs::read(data.join("update/slot-1.bin")).unwrap(),
+        sup[128..]
+    );
+}
+
+#[test]
+fn a_server_without_range_support_fails_the_pull_cleanly() {
+    let host = keyed_host();
+    let data = temp("resume-norange");
+    let serving = serve(&host.binary, &data);
+    let sup = sign(&image(40 * 1024), "0.2.0");
+    let (port, _) = serve_cutting(&sup, "0.2.0", 15_000, Then::IgnoresRange);
+    set_manifest_url(&serving, port);
+    let (status, body) = pull(&serving);
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(
+        body["error"],
+        "Download failed: the server does not resume (200 to a range request)"
+    );
+    no_slot(&data);
+}
+
+#[test]
+fn a_file_changed_between_the_two_requests_fails_the_pull_cleanly() {
+    let host = keyed_host();
+    let data = temp("resume-changed");
+    let serving = serve(&host.binary, &data);
+    let sup = sign(&image(40 * 1024), "0.2.0");
+    let (port, _) = serve_cutting(&sup, "0.2.0", 15_000, Then::OtherEtag);
+    set_manifest_url(&serving, port);
+    let (status, body) = pull(&serving);
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(
+        body["error"],
+        "Download failed: the file changed on the server"
+    );
+    no_slot(&data);
+}
+
+#[test]
+#[ignore = "slow: waits the real 2 + 4 + 8 s of the resumes (the core tests prove the waits on a fake clock)"]
+fn a_server_that_cuts_every_time_fails_after_three_resumes_waiting_2_4_and_8_seconds() {
+    let host = keyed_host();
+    let data = temp("resume-exhausted");
+    let serving = serve(&host.binary, &data);
+    let sup = sign(&image(40 * 1024), "0.2.0");
+    let (port, ranges) = serve_cutting(&sup, "0.2.0", 15_000, Then::CutsAgain);
+    set_manifest_url(&serving, port);
+    let started = Instant::now();
+    let (status, body) = pull(&serving);
+    let elapsed = started.elapsed();
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(
+        body["error"],
+        "Download failed: connection lost (after 3 resumes)"
+    );
+    // The waits are real seconds on the host (2 + 4 + 8): never shorter, whatever the machine's
+    // speed (no upper bound is asserted).
+    assert!(elapsed >= Duration::from_secs(14), "{elapsed:?}");
+    // Three resumed requests, each from the byte the last one stopped at, over the three hops.
+    let froms: Vec<String> = ranges
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|seen| seen.starts_with("/c "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        froms,
+        vec!["/c bytes=15000-", "/c bytes=16000-", "/c bytes=17000-"]
+    );
+    no_slot(&data);
 }
