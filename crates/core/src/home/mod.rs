@@ -10,6 +10,7 @@ mod equipment_ops;
 pub mod events;
 pub mod pairing;
 mod recipe_ops;
+mod release_ops;
 mod settings_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
@@ -33,6 +34,7 @@ use crate::recipes::{RecipeEngine, Settle};
 use crate::settings::Settings;
 use crate::settings::sun::Sunlight;
 use crate::supervisor::Status;
+use crate::update::release::Releases;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
 use events::{Event, EventQueue, EventValue, Interest};
@@ -118,7 +120,7 @@ pub struct Home {
     recomputed_at: u64,
     /// The pairing window (spec 017): what the API asked, what the radio loop did.
     pairing: PairingWindow,
-    /// The home's settings (spec 026): six values at most.
+    /// The home's settings (spec 026): eight values at most.
     settings: Settings,
     settings_changed: bool,
     /// The sun data and the wall-clock minute it was computed for: one value, cleared by any
@@ -144,6 +146,9 @@ pub struct Home {
     auth_changed: bool,
     /// The backup in progress (spec 035): shared with its ticket and with the saver.
     backup: Arc<BackupState>,
+    /// The releases found by the box and the check or pull in progress (spec 039): one cache
+    /// entry, shared with the tickets.
+    releases: Arc<Releases>,
     /// What the supervisor decided at boot, for `GET /system/supervisor` (spec 036): one value.
     supervision: Status,
 }
@@ -249,6 +254,7 @@ impl Home {
             presence: auth_ops::PresenceSlot::default(),
             auth_changed: false,
             backup: Arc::new(BackupState::default()),
+            releases: Arc::new(Releases::default()),
             supervision: Status::default(),
         }
     }

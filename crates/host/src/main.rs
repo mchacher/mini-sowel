@@ -2,6 +2,7 @@
 
 mod backup;
 mod backup_files;
+mod fetch;
 mod front;
 mod logger;
 mod radio_tcp;

@@ -619,6 +619,7 @@ fn a_recipe_switching_three_lights_never_makes_the_api_answer_busy() {
                 reach: Reach::Loopback,
                 content_type: Some("application/json"),
                 authorization: None,
+                content_length: None,
                 body: br#"{"value":true}"#,
             },
             rig.now,

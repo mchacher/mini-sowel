@@ -1,4 +1,4 @@
-//! `/settings` (Sowel's `src/api/routes/settings.ts`): the home's six keys (spec 026 R1), and
+//! `/settings` (Sowel's `src/api/routes/settings.ts`): the home's eight keys (spec 026 R1), and
 //! `/settings/timezones`, Solite's own list of the time zones the box knows (decision D41).
 
 use serde_json::Value;

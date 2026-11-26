@@ -104,6 +104,23 @@ stays a person's. The first run is expected to show route or timing mismatches (
   most one save of the files due plus the boot marker written at the next boot (`box.sh log`). The
   safe mode and the watchdog itself are not forced on the box: they are the Mac's tests. The route
   check stays a person's (the box session does not read it).
+- Spec 039 (the box pulls a release), the box check, the user present, one pass, no loop (D39).
+  (1) With a test key: the radio image built with a test public key (`SOLITE_UPDATE_PUBLIC_KEY`),
+  which is a USB flash and **needs the user's explicit yes** (D6, D55), and a flash back with an
+  image of the release key afterwards, or the box refuses real releases. A Mac HTTP server on the
+  local network (`python3 -m http.server`) serves a `manifest.json` and a `.sup` made with
+  `solite-host --update-sign` and that test key, a version above the box's; `PUT /settings`
+  `update.manifestUrl` to it; `POST /system/version/check` (200, `updateAvailable` true), then an
+  empty `POST /system/update`: the answer, the restart, the probation and its confirmation a
+  minute later. (2) The real address (the default setting; the repository must be public): until a
+  release exists GitHub answers 404 at once, so `POST /system/version/check` answers 500 `Update
+  check failed: ...manifest.json: 404` after the TLS handshake, which proves the certificate
+  bundle and the TLS memory; once a release exists, the redirects to the asset host too. Read, in
+  `box.sh log --image radio`, the `update-check: thread stack <n> of 20480 bytes never used` and
+  `update-pull: ...` lines (D68's 20 KB, by reasoning until then; the QEMU run left the figure in
+  `docs/memory-budget.md` before the handshake) and the `heap:` line's internal RAM minimum during
+  the check, then fill the TLS row of `docs/memory-budget.md`. The automatic check (`update.autoCheck`
+  `"true"`) is read from the log 10 minutes after a boot.
 - Then E3d (access point `Solite-XXXX`, retry) and E3e (Ethernet), and the box's button wired
   (its pin; a short press confirms through `ButtonPresence`, a long press calls
   `Home::factory_reset`; spec 029, D48).
@@ -123,7 +140,7 @@ in a real annex without intervention (the true north's test).
 | J3 | Recipes from the interface: the list, the form built from the slots as Sowel's, enable and disable, the log | motion-light set without `curl` | done 2026-11-23 (spec 024): the flow run once on the box over the API; a recipe settles when what it uses changes (D38); the browser demo is the user's |
 | J4 | A password at commissioning, confirmed by the box's button (EN 18031: no common default password); factory reset | The box asks for a password on first start | built 2026-11-25 (spec 029): Sowel's `/auth` routes and bearer token on the API and `/ws`, PBKDF2 in `auth.json`, factory reset, first-start and login screens; the confirmation is the 10 minutes after a power-on until the button is wired; box check pending |
 | J5 | Updates from afar: signed firmware, written to the inactive partition, automatic return to the old one if the new does not start | An update installed from the interface, and one that fails rolled back; a rollback to a release older than spec 031 cannot read a `devices.json` holding a `json` data (D51): the rollback handles it | built 2026-11-25 (spec 032): a signed update file (Ed25519 over a 128-byte header carrying the image's SHA-256, key given at build time, D52) streamed into the inactive slot through `POST /api/v1/system/update`, a probation (confirmed after 1 minute healthy, rolled back after 5, D54), `--update-keygen` and `--update-sign`, a Firmware update card; box check pending |
-| J5b | The box updates itself from a GitHub release, in three steps: (1) the CI publishes a signed release; (2) the box reads `manifest.json` at `releases/latest/download/manifest.json` and downloads the update (Sowel's version check: `POST /api/v1/system/version/check`, `latest`, `updateAvailable`, `releaseUrl` filled from GitHub releases); (3) key rotation (several keys or a bridging release, a revocation list, what a box does when its key is lost, D64) | A box on release N installs release N+1 with no file from the user | step 1 built 2026-11-25 (spec 038): `scripts/release.sh`, `release.yml`, `--update-verify`, `docs/release.md`; the first real release is pending the user's key (public key committed, environment `release` and its secret set); steps 2 and 3 not started |
+| J5b | The box updates itself from a GitHub release, in three steps: (1) the CI publishes a signed release; (2) the box reads `manifest.json` at `releases/latest/download/manifest.json` and downloads the update (Sowel's version check: `POST /api/v1/system/version/check`, `latest`, `updateAvailable`, `releaseUrl` filled from GitHub releases); (3) key rotation (several keys or a bridging release, a revocation list, what a box does when its key is lost, D64) | A box on release N installs release N+1 with no file from the user | step 1 built 2026-11-25 (spec 038): `scripts/release.sh`, `release.yml`, `--update-verify`, `docs/release.md`; the first real release is pending the user's key (public key committed, environment `release` and its secret set); step 2 built 2026-11-26 (spec 039, on the Mac and in QEMU; TLS and the real GitHub address not yet run on the box, see "Tests to run with the box in hand"): the check, the pull, the automatic check (off by default), the setting `update.manifestUrl`; the interface's button and the release notes (step 3 of the interface) and key rotation (step 3) not started |
 | J6 | Home settings: the location (sun times, so "inactive during day" works), the time zone; export and import of the configuration | The light no longer switches on in daylight | built 2026-11-24 (spec 026): settings, sun times on the root zone, Settings page, export and import of the settings and zones; the box run is pending (inbox) |
 
 ## Built, waiting for the real hardware
@@ -254,6 +271,12 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-25 | Sowel's `GET /api/v1/health` (its anonymous liveness shape, for an uptime monitor) | Spec 036, D58 |
 | 2026-11-25 | Presence counted from the last power-on across restarts, so a restore or a factory reset is a way out of the safe mode (today only the update, a power-on or a USB flash is) | Spec 036, D58 |
 | 2026-11-25 | Supervise the boot before the storage: a crash while the data partition mounts or a pending restore is applied (`firmware/src/main.rs`, `mount_storage`) happens before the supervisor boots, so it is neither counted nor stopped by the safe mode | Spec 036 review |
+| 2026-11-26 | The interface's button and notes: the Settings card shows the latest release, its notes and an "Update now" that pulls it (step 3 of the interface of J5b) | spec 039 |
+| 2026-11-26 | Resume a cut download (an HTTP `Range` from the byte written) instead of starting over from byte 0 | spec 039 |
+| 2026-11-26 | Pull a given version, or the intermediate release a `minVersion` asks for, from the box (today the user uploads it from its GitHub page) | spec 039 |
+| 2026-11-26 | Sowel's `system.update.*` events for the progress of a check and a pull (the answer waits for the end today) | spec 039 |
+| 2026-11-26 | `scripts/release.sh` refuses a manifest over 12 KB (the box reads at most 16 KB, spec 038's notes are not bounded) | spec 039 |
+| 2026-11-26 | Revisit the default of `update.autoCheck` (off, D67) once the TLS session's memory is measured on the box | spec 039 |
 
 ## Sowel issues to open
 
@@ -452,3 +475,4 @@ Every change to this roadmap: date, what changed, why.
   14 November); a test pins it. Lines removed: the sun times check; narrowed: the current-time
   pill line to the logs. New line: a hint after pairing.
 - 2026-11-25: spec 038 built on the Mac (the user away; nothing tagged, no secret created): the CI publishes a signed release (`scripts/release.sh`, `.github/workflows/release.yml`, `solite-host --update-verify`, `docs/release.md`, D63 and D64). J5b added (the box updates itself from a release, three steps; step 1 built, the first real release pending the user's key); the inbox lines "Publishing a release", "Fetch updates from a release feed" and "Key rotation" folded into J5b's steps 1 to 3; added: sign `SHA256SUMS`.
+- 2026-11-26: spec 039 built on the Mac and in QEMU (the user away; nothing tagged, no secret created, the box not touched): the box and the host check a release's `manifest.json` and pull the `.sup` it names (`POST /system/version/check`, an empty `POST /system/update`, `GET /system/version` from the cache), through spec 032's installation; the core follows the redirects and bounds every size and time, the box fetches over TLS with ESP-IDF's common certificate bundle on a thread of 20 KB (D65 to D69); an automatic check, off by default, with the settings `update.manifestUrl` and `update.autoCheck`. J5b's step 2 built; TLS and the real GitHub address are in "Tests to run with the box in hand". Six inbox lines added (the interface's button and notes, resuming a download, a given version, Sowel's update events, `release.sh` and the manifest's size, the default of `update.autoCheck`).

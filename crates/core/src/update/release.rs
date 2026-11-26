@@ -1,0 +1,782 @@
+//! A release found and pulled by the box itself (spec 039, D65 to D69): the manifest of spec 038
+//! and its rules (R1), where the box may fetch from (R3), the check and the pull (R2, R4), the
+//! automatic check (R6). The core follows the redirects, applies the rules, bounds sizes and
+//! times and keeps the cache; an adapter (`Fetcher`) only moves the bytes of one GET.
+
+use std::cell::RefCell;
+use std::io::{self, ErrorKind, Read};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use super::install::{Expected, mismatch, refuse};
+use super::{HEADER_BYTES, Refusal, SLOT_BYTES, UpdateAdapter, Updates, Version};
+use crate::api::{Response, error, private_ipv4, version_response};
+use crate::backup::Pacing;
+use crate::devices::lock;
+use crate::failure::{Failure, Outcome};
+use crate::home::CLOCK_SET_AFTER_MS;
+
+/// The manifest is read whole into memory, at most this long (R1).
+pub const MAX_MANIFEST_BYTES: usize = 16 * 1024;
+/// The longest URL of any kind (the setting, `image.url`, a `Location`), in characters.
+pub const MAX_URL_CHARS: usize = 2048;
+/// The redirects followed for one fetch.
+pub const MAX_REDIRECTS: usize = 5;
+/// The least time between two checks asked through the API or a pull (ms, monotonic).
+pub const MIN_CHECK_INTERVAL_MS: u64 = 60_000;
+/// A pull uses the cached manifest when its check is younger than this (ms).
+pub const FRESH_MS: u64 = 600_000;
+/// The first automatic check, after the start (ms, monotonic).
+pub const AUTO_FIRST_AFTER_MS: u64 = 600_000;
+/// The automatic checks, one after the other (ms, monotonic).
+pub const AUTO_EVERY_MS: u64 = 86_400_000;
+/// A busy or unset clock postpones the automatic check by this much (ms).
+pub const AUTO_RETRY_MS: u64 = 60_000;
+/// The download hands the CPU back every this many bytes.
+pub const PAUSE_EVERY_BYTES: u64 = 64 * 1024;
+/// The manifest the box reads when the setting is unset.
+pub const DEFAULT_MANIFEST_URL: &str =
+    "https://github.com/mchacher/solite/releases/latest/download/manifest.json";
+
+/// The text of the 503 of a clock not set yet.
+pub const CLOCK_NOT_SET: &str = "The clock is not set yet: checking a release needs the date";
+
+/// Bounds of the waits of one fetch: each read at most `idle_ms` (the adapter's), the whole at
+/// most `total_ms` (checked between reads, on the monotonic clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    pub idle_ms: u64,
+    pub total_ms: u64,
+}
+
+impl Limits {
+    /// A check alone (R4).
+    pub const CHECK: Limits = Limits {
+        idle_ms: 15_000,
+        total_ms: 30_000,
+    };
+    /// A download (R4).
+    pub const DOWNLOAD: Limits = Limits {
+        idle_ms: 30_000,
+        total_ms: 600_000,
+    };
+}
+
+/// What one GET gave.
+pub enum Fetched {
+    /// 200: the declared length if any, and the body.
+    Body {
+        length: Option<u64>,
+        body: Box<dyn Read>,
+    },
+    /// 301, 302, 303, 307, 308: the `Location` header, if any.
+    Redirect(Option<String>),
+    /// Any other status.
+    Status(u16),
+}
+
+/// One GET, behind the platform (the host: `http` by itself and `https` by `curl`; the box: ESP-IDF's
+/// HTTP client with its certificate bundle). Redirects are not followed: the core does it.
+pub trait Fetcher {
+    /// One GET of `url` (already checked by the core), each read bounded by `idle_ms`. The
+    /// body owns what it needs (the connection): the core may call `get` again for a redirect.
+    /// Errors are a message (connection refused, TLS failure, timed out...).
+    fn get(&mut self, url: &str, idle_ms: u64) -> Result<Fetched, String>;
+}
+
+// ---- The URL rule (R3) ----
+
+/// A URL that passed R3's rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Url {
+    https: bool,
+    host: String,
+    /// `scheme://authority`, to resolve a `Location` that is a path.
+    origin: String,
+}
+
+/// Parses the form (R3's first bullet), without the plain-http rule: `None` is `invalid URL`.
+fn parse_url(text: &str) -> Option<Url> {
+    if text.len() > MAX_URL_CHARS || !text.bytes().all(|b| (b'!'..=b'~').contains(&b)) {
+        return None;
+    }
+    let (scheme, rest) = text.split_once("://")?;
+    let https = if scheme.eq_ignore_ascii_case("https") {
+        true
+    } else if scheme.eq_ignore_ascii_case("http") {
+        false
+    } else {
+        return None;
+    };
+    let end = rest.find('/').unwrap_or(rest.len());
+    let authority = &rest[..end];
+    // After the authority: nothing, or a path starting with `/` (the `find` above).
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.')
+    {
+        return None;
+    }
+    if let Some(port) = port
+        && (port.is_empty()
+            || port.len() > 5
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || port.parse::<u16>().ok().is_none_or(|p| p == 0))
+    {
+        return None;
+    }
+    Some(Url {
+        https,
+        host: host.to_ascii_lowercase(),
+        origin: format!("{}://{authority}", scheme.to_ascii_lowercase()),
+    })
+}
+
+/// True for `localhost`, or an IPv4 literal of exactly four decimal octets (no leading zero, so
+/// no octal) of `10/8`, `172.16/12`, `192.168/16` or `127/8`.
+fn lan_host(host: &str) -> bool {
+    if host == "localhost" {
+        return true;
+    }
+    let plain = host
+        .split('.')
+        .all(|part| part == "0" || !part.starts_with('0'));
+    plain && private_ipv4(host)
+}
+
+/// R3's rule for one URL: `Err` is the reason (`invalid URL`, `plain http is refused for <host>`).
+fn check(text: &str) -> Result<Url, String> {
+    let url = parse_url(text).ok_or_else(|| "invalid URL".to_string())?;
+    if !url.https && !lan_host(&url.host) {
+        return Err(format!("plain http is refused for {}", url.host));
+    }
+    Ok(url)
+}
+
+/// True when `text` is a URL the box may fetch from (the setting `update.manifestUrl`).
+pub fn url_allowed(text: &str) -> bool {
+    check(text).is_ok()
+}
+
+// ---- The manifest (R1) ----
+
+/// What a check keeps: the cache's one entry, bounded by the fields below.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    /// The monotonic time of the check (ms).
+    pub at_ms: u64,
+    pub latest: Version,
+    pub min_version: Option<Version>,
+    /// At most `MAX_URL_CHARS`.
+    pub url: String,
+    pub size: u64,
+    pub sha256: [u8; 32],
+    pub release_url: Option<String>,
+}
+
+fn invalid(field: &str) -> String {
+    format!("Invalid manifest: {field}")
+}
+
+fn hex32(text: &str) -> Option<[u8; 32]> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let high = char::from(bytes[2 * i]).to_digit(16)?;
+        let low = char::from(bytes[2 * i + 1]).to_digit(16)?;
+        *byte = u8::try_from(high * 16 + low).ok()?;
+    }
+    Some(out)
+}
+
+/// The release page of a GitHub asset address, `None` for any other.
+fn release_url(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let rest = rest.split(['?', '#']).next()?;
+    let parts: Vec<&str> = rest.split('/').collect();
+    match parts.as_slice() {
+        [owner, repo, "releases", "download", tag, name]
+            if ![owner, repo, tag, name].iter().any(|p| p.is_empty()) =>
+        {
+            Some(format!(
+                "https://github.com/{owner}/{repo}/releases/tag/{tag}"
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Reads the manifest's text (R1). `at_ms` is the time of the check.
+fn parse_manifest(body: &[u8], at_ms: u64) -> Result<Checked, String> {
+    let value: Value = serde_json::from_slice(body).map_err(|_| invalid("format"))?;
+    let object = value.as_object().ok_or_else(|| invalid("format"))?;
+    match object.get("format").and_then(Value::as_u64) {
+        Some(1) => {}
+        Some(other) => return Err(format!("Unsupported manifest format {other}")),
+        None => return Err(invalid("format")),
+    }
+    let latest = object
+        .get("version")
+        .and_then(Value::as_str)
+        .and_then(Version::parse)
+        .ok_or_else(|| invalid("version"))?;
+    let min_version = match object.get("minVersion") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .and_then(Version::parse)
+                .ok_or_else(|| invalid("minVersion"))?,
+        ),
+    };
+    let image = object.get("image").and_then(Value::as_object);
+    let field = |name: &str| image.and_then(|image| image.get(name));
+    let size = field("size")
+        .and_then(Value::as_u64)
+        .filter(|size| (HEADER_BYTES as u64 + 1..=HEADER_BYTES as u64 + SLOT_BYTES).contains(size))
+        .ok_or_else(|| invalid("image.size"))?;
+    let sha256 = field("sha256")
+        .and_then(Value::as_str)
+        .and_then(hex32)
+        .ok_or_else(|| invalid("image.sha256"))?;
+    let url = field("url")
+        .and_then(Value::as_str)
+        .filter(|url| check(url).is_ok())
+        .ok_or_else(|| invalid("image.url"))?;
+    Ok(Checked {
+        at_ms,
+        latest,
+        min_version,
+        release_url: release_url(url),
+        url: url.to_string(),
+        size,
+        sha256,
+    })
+}
+
+// ---- Fetching with redirects (R3) ----
+
+/// The reason text of a read error.
+fn io_reason(error: &io::Error) -> String {
+    match error.kind() {
+        ErrorKind::TimedOut | ErrorKind::WouldBlock => "timed out".to_string(),
+        _ => error.to_string(),
+    }
+}
+
+/// The text of the total time's failure.
+fn too_long(limits: Limits) -> String {
+    format!("took longer than {} s", limits.total_ms / 1000)
+}
+
+/// The elapsed time is over the limit.
+fn over(pacing: &mut dyn Pacing, started: u64, limits: Limits) -> bool {
+    pacing.now_ms().saturating_sub(started) > limits.total_ms
+}
+
+/// Fetches `start`, following the redirects (R3); the answer is a 200's length and body.
+fn fetch(
+    fetcher: &mut dyn Fetcher,
+    start: &str,
+    limits: Limits,
+    pacing: &mut dyn Pacing,
+    started: u64,
+) -> Result<(Option<u64>, Box<dyn Read>), String> {
+    let mut url = start.to_string();
+    let mut current = check(&url)?;
+    let mut redirects = 0;
+    loop {
+        if over(pacing, started, limits) {
+            return Err(too_long(limits));
+        }
+        match fetcher.get(&url, limits.idle_ms)? {
+            Fetched::Body { length, body } => return Ok((length, body)),
+            Fetched::Status(status) => return Err(format!("{url}: {status}")),
+            Fetched::Redirect(location) => {
+                redirects += 1;
+                if redirects > MAX_REDIRECTS {
+                    return Err("too many redirects".to_string());
+                }
+                let location = location.ok_or_else(|| "redirect without Location".to_string())?;
+                let next = if location.starts_with('/') && !location.starts_with("//") {
+                    let joined = format!("{}{location}", current.origin);
+                    if joined.len() > MAX_URL_CHARS {
+                        return Err("invalid URL".to_string());
+                    }
+                    joined
+                } else {
+                    location
+                };
+                let parsed = parse_url(&next).ok_or_else(|| "invalid URL".to_string())?;
+                if current.https && !parsed.https {
+                    return Err("redirect from https to http refused".to_string());
+                }
+                current = check(&next)?;
+                url = next;
+            }
+        }
+    }
+}
+
+/// Fetches and reads the manifest at `url` (R1, R3, bounds of `Limits::CHECK`).
+fn fetch_manifest(
+    fetcher: &mut dyn Fetcher,
+    url: &str,
+    limits: Limits,
+    pacing: &mut dyn Pacing,
+) -> Result<Checked, String> {
+    let started = pacing.now_ms();
+    let (_, mut body) = fetch(fetcher, url, limits, pacing, started)?;
+    // Bound: the manifest's limit plus the one byte that shows it is too long.
+    let mut text: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+        if over(pacing, started, limits) {
+            return Err(too_long(limits));
+        }
+        let count = loop {
+            match body.read(&mut chunk) {
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                other => break other,
+            }
+        }
+        .map_err(|e| io_reason(&e))?;
+        if count == 0 {
+            break;
+        }
+        text.extend_from_slice(&chunk[..count]);
+        if text.len() > MAX_MANIFEST_BYTES {
+            return Err("Manifest too large".to_string());
+        }
+    }
+    parse_manifest(&text, pacing.now_ms())
+}
+
+// ---- The state: the cache, one job at a time ----
+
+#[derive(Debug)]
+struct Inner {
+    /// One entry, at most about 2.2 KB.
+    cache: Option<Checked>,
+    /// A check or a pull holds a ticket.
+    busy: bool,
+    /// The start of the last check asked through the API or of a pull's check (monotonic).
+    last_api_check_ms: Option<u64>,
+    /// The automatic check is due from this monotonic time on.
+    next_auto_ms: u64,
+}
+
+/// What the home knows of the releases: the cache and the one-job-at-a-time mark, shared with
+/// the tickets through an `Arc`.
+#[derive(Debug)]
+pub struct Releases {
+    inner: Mutex<Inner>,
+}
+
+impl Default for Releases {
+    fn default() -> Self {
+        Releases {
+            inner: Mutex::new(Inner {
+                cache: None,
+                busy: false,
+                last_api_check_ms: None,
+                next_auto_ms: AUTO_FIRST_AFTER_MS,
+            }),
+        }
+    }
+}
+
+/// The answer of `GET /system/version` from the cache: the latest version, whether it is
+/// available to install directly, and its page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Info {
+    pub latest: Option<String>,
+    pub update_available: bool,
+    pub release_url: Option<String>,
+}
+
+/// What a ticket is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// `POST /system/version/check`.
+    Check,
+    /// `POST /system/update` with an empty body.
+    Pull,
+    /// The automatic check.
+    Auto,
+}
+
+impl Releases {
+    /// What `GET /system/version` says, from the cache and never from the network.
+    pub fn info(&self, running: Version) -> Info {
+        match &lock(&self.inner).cache {
+            None => Info {
+                latest: None,
+                update_available: false,
+                release_url: None,
+            },
+            Some(cached) => Info {
+                latest: Some(cached.latest.to_string()),
+                update_available: cached.latest > running
+                    && cached.min_version.is_none_or(|min| min <= running),
+                release_url: cached.release_url.clone(),
+            },
+        }
+    }
+
+    /// The right to run one check or pull: 503 while the clock is not set (`wall_ms`), 409 while
+    /// another job runs. The ticket ends the job when it is dropped.
+    fn begin(
+        self: &Arc<Self>,
+        kind: Kind,
+        manifest_url: &str,
+        wall_ms: u64,
+    ) -> Outcome<ReleaseTicket> {
+        if wall_ms < CLOCK_SET_AFTER_MS {
+            return Err(Failure::new(503, CLOCK_NOT_SET));
+        }
+        let mut inner = lock(&self.inner);
+        if inner.busy {
+            return Err(Failure::new(
+                409,
+                if kind == Kind::Check {
+                    "Update check already in progress"
+                } else {
+                    "Update already in progress"
+                },
+            ));
+        }
+        inner.busy = true;
+        Ok(ReleaseTicket {
+            releases: Arc::clone(self),
+            manifest_url: manifest_url.to_string(),
+        })
+    }
+
+    /// For `POST /system/version/check` (R2).
+    pub fn begin_check(
+        self: &Arc<Self>,
+        manifest_url: &str,
+        wall_ms: u64,
+    ) -> Outcome<ReleaseTicket> {
+        self.begin(Kind::Check, manifest_url, wall_ms)
+    }
+
+    /// For `POST /system/update` with an empty body (R4).
+    pub fn begin_pull(
+        self: &Arc<Self>,
+        manifest_url: &str,
+        wall_ms: u64,
+    ) -> Outcome<ReleaseTicket> {
+        self.begin(Kind::Pull, manifest_url, wall_ms)
+    }
+
+    /// The automatic check (R6): `Some` when it is on (`enabled`), due on the monotonic clock
+    /// (`mono_ms`), the clock set and no job running; then the next one is set 24 hours on. A busy
+    /// or unset clock postpones it to the next minute.
+    pub fn auto_ticket(
+        self: &Arc<Self>,
+        enabled: bool,
+        manifest_url: &str,
+        wall_ms: u64,
+        mono_ms: u64,
+    ) -> Option<ReleaseTicket> {
+        if !enabled {
+            return None;
+        }
+        {
+            let inner = lock(&self.inner);
+            if mono_ms < inner.next_auto_ms {
+                return None;
+            }
+        }
+        // The next check is set 24 hours on only once the ticket is taken: a refusal (busy, clock
+        // not set) asks again in a minute.
+        let ticket = self.begin(Kind::Auto, manifest_url, wall_ms).ok();
+        lock(&self.inner).next_auto_ms = mono_ms.saturating_add(if ticket.is_some() {
+            AUTO_EVERY_MS
+        } else {
+            AUTO_RETRY_MS
+        });
+        ticket
+    }
+
+    /// The automatic check's ticket was taken but its job could not start (no thread): the next
+    /// ask is a minute after `mono_ms`, not 24 hours.
+    pub fn postpone_auto(&self, mono_ms: u64) {
+        lock(&self.inner).next_auto_ms = mono_ms.saturating_add(AUTO_RETRY_MS);
+    }
+}
+
+/// The right to run one check or pull. Dropping it ends the job.
+#[derive(Debug)]
+pub struct ReleaseTicket {
+    releases: Arc<Releases>,
+    manifest_url: String,
+}
+
+impl Drop for ReleaseTicket {
+    fn drop(&mut self) {
+        lock(&self.releases.inner).busy = false;
+    }
+}
+
+/// The running version of this core.
+fn running_version() -> Version {
+    Version::parse(crate::VERSION).unwrap_or(Version::new(0, 0, 0))
+}
+
+impl ReleaseTicket {
+    /// 429 while a check or a pull's check was started less than `MIN_CHECK_INTERVAL_MS` ago;
+    /// else the start is noted.
+    fn pace(&self, now: u64) -> Result<(), Refusal> {
+        let mut inner = lock(&self.releases.inner);
+        if let Some(last) = inner.last_api_check_ms {
+            let next = last.saturating_add(MIN_CHECK_INTERVAL_MS);
+            if now < next {
+                let seconds = (next - now).div_ceil(1000);
+                return Err(Refusal::new(
+                    429,
+                    format!("Please wait {seconds}s before checking again"),
+                ));
+            }
+        }
+        inner.last_api_check_ms = Some(now);
+        Ok(())
+    }
+
+    /// Fetches the manifest and fills the cache; the reason text on a failure (logged).
+    fn refresh(
+        &self,
+        fetcher: &mut dyn Fetcher,
+        limits: Limits,
+        pacing: &mut dyn Pacing,
+    ) -> Result<Checked, String> {
+        match fetch_manifest(fetcher, &self.manifest_url, limits, pacing) {
+            Ok(checked) => {
+                log::info!(
+                    "update: check: latest {}, running {}",
+                    checked.latest,
+                    running_version()
+                );
+                lock(&self.releases.inner).cache = Some(checked.clone());
+                Ok(checked)
+            }
+            Err(reason) => {
+                log::warn!("update: check failed: {reason}");
+                Err(reason)
+            }
+        }
+    }
+
+    /// `POST /system/version/check` (R2): 429 within 60 s of the last check, 500 `Update check
+    /// failed: <reason>`, else 200 with the `VersionInfo`.
+    pub fn check(
+        self,
+        fetcher: &mut dyn Fetcher,
+        pacing: &mut dyn Pacing,
+        limits: Limits,
+    ) -> Response {
+        if let Err(refusal) = self.pace(pacing.now_ms()) {
+            return refuse(&refusal);
+        }
+        match self.refresh(fetcher, limits, pacing) {
+            Ok(_) => version_response(&self.releases),
+            Err(reason) => error(500, &format!("Update check failed: {reason}")),
+        }
+    }
+
+    /// The automatic check (R6): fills the cache like `check`, never installs, never counts for
+    /// the 60 s of the API; a failure is logged.
+    pub fn check_auto(self, fetcher: &mut dyn Fetcher, pacing: &mut dyn Pacing, limits: Limits) {
+        let _ = self.refresh(fetcher, limits, pacing);
+    }
+
+    /// `POST /system/update` with an empty body (R4): the manifest (cached when younger than
+    /// `FRESH_MS`), its rules, the download through `Updates`' installation.
+    pub fn pull(
+        self,
+        updates: &Updates,
+        fetcher: &mut dyn Fetcher,
+        adapter: &mut dyn UpdateAdapter,
+        pacing: &mut dyn Pacing,
+        check_limits: Limits,
+        download_limits: Limits,
+    ) -> Response {
+        let guard = match updates.claim() {
+            Ok(guard) => guard,
+            Err(refusal) => return refuse(&refusal),
+        };
+        if adapter.pending() {
+            return refuse(&Refusal::new(409, "The running image is not confirmed yet"));
+        }
+        let now = pacing.now_ms();
+        let cached = lock(&self.releases.inner)
+            .cache
+            .clone()
+            .filter(|cached| now.saturating_sub(cached.at_ms) < FRESH_MS);
+        let manifest = match cached {
+            Some(cached) => cached,
+            None => {
+                if let Err(refusal) = self.pace(now) {
+                    return refuse(&refusal);
+                }
+                match self.refresh(fetcher, check_limits, pacing) {
+                    Ok(checked) => checked,
+                    Err(reason) => return error(500, &format!("Update check failed: {reason}")),
+                }
+            }
+        };
+        let running = updates.running();
+        if manifest.latest <= running {
+            return error(400, "No update available");
+        }
+        if let Some(min) = manifest.min_version
+            && min > running
+        {
+            return error(
+                400,
+                &format!(
+                    "Version {} needs {min} or later first (running {running}): install {min} before it",
+                    manifest.latest
+                ),
+            );
+        }
+        if manifest.size > HEADER_BYTES as u64 + adapter.capacity() {
+            return error(413, "Image too large for the update slot");
+        }
+        let started = pacing.now_ms();
+        let (length, body) = match fetch(fetcher, &manifest.url, download_limits, pacing, started) {
+            Ok(fetched) => fetched,
+            Err(reason) => return download_failed(&reason),
+        };
+        if length.is_some_and(|length| length != manifest.size) {
+            return error(400, "Download size differs from the manifest");
+        }
+        let audit = Rc::new(RefCell::new(Audit {
+            count: 0,
+            hash: Sha256::new(),
+            failure: None,
+        }));
+        let mut reader = Download {
+            body,
+            audit: Rc::clone(&audit),
+            size: manifest.size,
+            limits: download_limits,
+            started,
+            since_pause: 0,
+            pacing,
+        };
+        let verify_audit = Rc::clone(&audit);
+        let (size, sha256) = (manifest.size, manifest.sha256);
+        let mut verify = move || {
+            let audit = verify_audit.borrow();
+            if audit.count == size && audit.hash.clone().finalize().as_slice() == sha256 {
+                Ok(())
+            } else {
+                Err(mismatch())
+            }
+        };
+        let response = updates.install_claimed(
+            guard,
+            &mut reader,
+            adapter,
+            Some(Expected {
+                size: manifest.size,
+                version: manifest.latest,
+                verify: &mut verify,
+            }),
+        );
+        let failure = audit.borrow().failure.clone();
+        match failure {
+            Some(reason) if response.status != 200 => download_failed(&reason),
+            _ => response,
+        }
+    }
+}
+
+/// 500 `Download failed: <reason>`, logged.
+fn download_failed(reason: &str) -> Response {
+    log::warn!("update: download failed: {reason}");
+    error(500, &format!("Download failed: {reason}"))
+}
+
+/// What the download's reader counts and keeps, shared with the installation's last check.
+struct Audit {
+    count: u64,
+    hash: Sha256,
+    /// The first failure the reader met: kept as the reason of the answer.
+    failure: Option<String>,
+}
+
+/// The body, bounded to `size + 1` bytes, hashed and counted; an end before `size`, a read
+/// error and the total time are failures (R4).
+struct Download<'a> {
+    body: Box<dyn Read>,
+    audit: Rc<RefCell<Audit>>,
+    size: u64,
+    limits: Limits,
+    started: u64,
+    since_pause: u64,
+    pacing: &'a mut dyn Pacing,
+}
+
+impl Download<'_> {
+    fn fail(&self, reason: String) -> io::Error {
+        let mut audit = self.audit.borrow_mut();
+        if audit.failure.is_none() {
+            audit.failure = Some(reason.clone());
+        }
+        io::Error::other(reason)
+    }
+}
+
+impl Read for Download<'_> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if let Some(reason) = self.audit.borrow().failure.clone() {
+            return Err(io::Error::other(reason));
+        }
+        let count = self.audit.borrow().count;
+        // One byte more than announced is read, to see a body that is too long.
+        let room = self.size.saturating_add(1).saturating_sub(count);
+        if room == 0 || out.is_empty() {
+            return Ok(0);
+        }
+        if over(self.pacing, self.started, self.limits) {
+            return Err(self.fail(too_long(self.limits)));
+        }
+        if self.since_pause >= PAUSE_EVERY_BYTES {
+            self.since_pause = 0;
+            self.pacing.pause();
+        }
+        let want = out.len().min(usize::try_from(room).unwrap_or(usize::MAX));
+        match self.body.read(&mut out[..want]) {
+            Ok(0) => {
+                if count < self.size {
+                    return Err(self.fail("connection lost".to_string()));
+                }
+                Ok(0)
+            }
+            Ok(read) => {
+                let mut audit = self.audit.borrow_mut();
+                audit.hash.update(&out[..read]);
+                audit.count += read as u64;
+                self.since_pause += read as u64;
+                Ok(read)
+            }
+            Err(e) if e.kind() == ErrorKind::Interrupted => Err(e),
+            Err(e) => Err(self.fail(io_reason(&e))),
+        }
+    }
+}

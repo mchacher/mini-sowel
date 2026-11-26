@@ -33,3 +33,8 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 # the next boot. The other images keep the default (a log line only).
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
 CONFIG_ESP_TASK_WDT_PANIC=y
+# The certificate bundle for https (spec 039 R8, D68): the common list (the authorities of most of
+# the web, GitHub's included), not the full one, to keep the image smaller. The release check and
+# pull verify the server with it (`esp_crt_bundle_attach`).
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y

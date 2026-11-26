@@ -63,8 +63,14 @@
 //!   multiplies.
 //! - `live/session.rs::MAX_INCOMING_BYTES`: a client's incoming frame, 1 KB, inside the 2 KB read
 //!   buffer counted with `live/mod.rs::MAX_QUEUED_BYTES`.
-//! - `settings/mod.rs::MAX_HOME_NAME_CHARS`: the six settings at their longest (a name of 64
-//!   characters, numbers at the length of their pattern), `settings.json` written.
+//! - `settings/mod.rs::MAX_HOME_NAME_CHARS`, `settings/mod.rs::MAX_MANIFEST_URL_CHARS`: the eight
+//!   settings at their longest (a name of 64 characters, numbers at the length of their pattern,
+//!   a manifest address of 512 characters), `settings.json` written.
+//! - `update/release.rs::MAX_MANIFEST_BYTES`, `update/release.rs::MAX_URL_CHARS`,
+//!   `update/release.rs::MAX_REDIRECTS` (spec 039): a manifest of 16 KB is held by one check or
+//!   pull at a time (one job, `Releases`' mark), beside the cache's one entry of about 2 KB; both
+//!   are far under the engine's worst case and counted in `docs/memory-budget.md`, not driven
+//!   here (`tests/release.rs` tests each bound); the redirects are a count, not memory.
 //! - `auth/mod.rs::MAX_SESSIONS`, `auth/mod.rs::MAX_ATTEMPTS`: 8 sessions of 72 bytes and 10
 //!   attempt times of 8 bytes, in RAM only (spec 029); about 700 bytes in all, far below the
 //!   rest, so the worst case does not drive them (`tests/auth.rs` tests each bound).
@@ -144,6 +150,7 @@ fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
         reach: Reach::Loopback,
         content_type: Some("application/json"),
         authorization: None,
+        content_length: None,
         body,
     }
 }
@@ -634,7 +641,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     }
     file_bytes.push(recipes_bytes);
 
-    // The settings (spec 026): the six keys at their longest, `settings.json` written, the sun
+    // The settings (spec 026, 039): the eight keys at their longest, `settings.json` written, the sun
     // computed.
     let settings = json!({
         "home.name": "n".repeat(MAX_HOME_NAME_CHARS),
@@ -643,6 +650,8 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         "home.timezone": "America/Los_Angeles",
         "home.sunriseOffset": "-180",
         "home.sunsetOffset": "-180",
+        "update.manifestUrl": format!("https://example.com/{}", "m".repeat(512 - 20)),
+        "update.autoCheck": "false",
     })
     .to_string();
     let put = handle(

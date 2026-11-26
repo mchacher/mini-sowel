@@ -93,6 +93,11 @@ Each of the three programs starts and says which tool it is, with its version:
   radio image (16 KB of stack, the slot a counter in memory), and logs `update check: valid 200,
   image changed 400, signature changed 400` and the thread's `update: thread stack <n> of 16384
   bytes never used`; the run fails when a status differs or fewer than 2048 bytes stay unused.
+  It then pulls a release once, from an in-memory fetch adapter (a manifest, one redirect, a signed
+  file made at boot), on an `update-pull` thread of the radio image (20 KB of stack), and logs
+  `update pull check: status 200` and the thread's `update-pull: thread stack <n> of 20480 bytes
+  never used`; the run fails when the status differs or fewer than 8192 bytes stay unused (the
+  room left for the TLS handshake, which the image, with no network, cannot run).
   The measuring image (`flash-saves`) runs the same check at its boot. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
   application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
@@ -339,14 +344,14 @@ from another site is also refused by a `Host` check, and by an `Origin` check on
 | `POST /api/v1/integrations/solite/permit-join` `{"time"?: 0..254}` | 202 with the same body, the state asked for: opens joining for `time` seconds (180 when missing; a window already open restarts), or closes it (`0`); 400 `Invalid field: time` for anything but an integer from 0 to 254, `Unknown field: <field>`, `Invalid JSON`; 404 `Integration not found` for another integration id; `DELETE /devices/:id` of a device being identified or set up answers 409 `Device is being paired` |
 | `GET /api/v1/auth/status`, `POST /api/v1/auth/setup`, `/login`, `/refresh`, `/logout` | Sowel's authentication (see "Protects the home with a password") |
 | `POST /api/v1/system/factory-reset` | 204: erases the home and the account (see "Protects the home with a password") |
-| `GET /api/v1/system/version`, `POST /api/v1/system/update` | the version; the signed update file as the body (see "Updates itself from a signed file") |
+| `GET /api/v1/system/version`, `POST /api/v1/system/version/check`, `POST /api/v1/system/update` | the version and the last check's latest release; a check now; the signed update file as the body, or an empty body to pull the latest release (see "Updates itself from a signed file") |
 | `GET /api/v1/system/backup`, `POST /api/v1/system/backup` | the full backup file, with the password in `X-Backup-Password`; its restore (see "Backs up and restores the whole box") |
 | `POST /api/v1/equipments/:id/orders/:alias` `{"value": ...}` | sends the order to the bound devices (see "Organises the home") |
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
 
-Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>` and 501 on the update route (501 on the backup routes too, through the plain handler); 502 for an order no device took; 503 `Busy` beyond 4 requests at
+Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>`, `Update check failed: <reason>` and `Download failed: <reason>`, and 501 on the update and check routes (501 on the backup routes too, through the plain handler); 502 for an order no device took; 503 `Busy` beyond 4 requests at
 once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
 `application/json`, so a web page cannot send one from the browser; the exceptions are the update route and the backup restore, which take
 `application/octet-stream` (a cross-origin form cannot send that type, and the token is required). The lists of devices and equipments are sent in chunks (HTTP chunked transfer), so
@@ -404,13 +409,13 @@ except:
   origin not allowed, 1013 for a 5th client. The development origins (`http://localhost:5173`,
   `http://127.0.0.1:5173`) are accepted as on the Mac. The subprotocol `bearer.none` is echoed; the token is read from the second subprotocol (or the `Authorization` header), so a client that offers only `bearer.<token>` gets no subprotocol echoed and its browser drops the socket.
   A dead client is found by TCP keep-alive (about 45 s) instead of 60 s of silence.
-- A body sent without a length is answered 411 `Length required`; a body over 16 KB, 413 (except
+- A body sent without a length is answered 411 `Length required` (the update route is the exception: with neither `Content-Length` nor `Transfer-Encoding` its body is empty, which pulls the latest release; a chunked upload to it is 411, and the backup restore keeps its 411); a body over 16 KB, 413 (except
   the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file", and the backup restore's, streamed up to 2 MiB); a body
   that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 4096 bytes,
   431 (the backup's password header can need 1536 of them). A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
 - In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
-  `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`) and
-  `POST /api/v1/system/update`; a restore and a factory reset are refused too.
+  `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`),
+  `POST /api/v1/system/update` and `POST /api/v1/system/version/check`; a restore and a factory reset are refused too.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -578,12 +583,15 @@ under the root. A `zones.json`, `equipments.json` or `settings.json` that cannot
 The home's name, location, time zone and sun offsets, through Sowel's settings routes, and the sun
 times computed from them, as Sowel's sunlight manager does.
 
-- **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, six
+- **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, eight
   keys: `home.name` (64 characters at most), `home.latitude` (−90 to 90) and `home.longitude`
   (−180 to 180), written `48.8566` (digits, an optional `-` and decimals; no exponent, `+` or
   `inf`), `home.timezone` (a key Sowel names among its global ones; a name of `GET
   /api/v1/settings/timezones`, Solite's own list, `UTC` when unset),
-  `home.sunriseOffset` and `home.sunsetOffset` (whole minutes, −180 to 180; 30 and 45 when unset).
+  `home.sunriseOffset` and `home.sunsetOffset` (whole minutes, −180 to 180; 30 and 45 when unset),
+  and Solite's own `update.manifestUrl` (a URL the box may fetch from, 512 characters at most; the
+  GitHub address of the latest release's manifest when unset or `""`) and `update.autoCheck`
+  (`"true"` or `"false"`; off when unset), see "Updates itself from a signed file".
   A PUT changes the keys it gives and keeps the others; `""` is kept and reads as unset (as Sowel); it is checked whole
   first: 400 `Invalid body`, `Unknown setting: <key>` or `Invalid value for <key>`, nothing
   changed; else `{"success":true}` and Sowel's `settings.changed` event with the keys. The settings
@@ -916,7 +924,7 @@ copy embedded in the radio image at build time.
   The dialogs close on Escape and on a click outside.
 - **Settings** (`#/settings`): the **Home** card (Sowel's): name, latitude, longitude (a typed `,`
   becomes `.`), sunrise and sunset offsets, and the time zone, picked in the list (`UTC` when
-  unset); Save shows when something changed and sends the six keys; a refusal shows the host's
+  unset); Save shows when something changed and sends the six home keys; a refusal shows the host's
   text. Under it, **Today**: sunrise, sunset and "Day" or "Night", live from the root zone; "Set
   the location to get the sun times" when unknown. The **Backup** card: under "Export", a password and its confirmation (8 to 128 characters, the two
   equal; else the button stays disabled and the reason shows under it) and an "Export" button
@@ -987,7 +995,8 @@ the box at most once per milestone, inside `box.sh saves` (decision D39), and no
 ### Updates itself from a signed file
 
 A box is updated from a **signed update file** (`.sup`, "Solite update package") sent to Sowel's
-`POST /api/v1/system/update`. The file is a header of exactly 128 bytes, then the image (the ESP32
+`POST /api/v1/system/update`, or pulled by the box itself from the latest release (see "From a
+release"). The file is a header of exactly 128 bytes, then the image (the ESP32
 application image of the slot, as `esptool elf2image` writes it, the same as `scripts/box.sh` and `scripts/release.sh` make). Integers are little-endian.
 
 | Offset | Bytes | Field |
@@ -1052,18 +1061,88 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   (its state stays new, nothing is pending) and nothing rolls back. The sim and QEMU images get
   the setting too; with `otadata` erased they boot `ota_0` as before.
 - **The routes**, behind the token (401 and 403 as every route, before any body byte is read):
-  `GET /api/v1/system/version` answers 200 `{"current": "<version>", "latest": null,
-  "updateAvailable": false, "releaseUrl": null}` (Sowel's `VersionInfo` without its two Docker
-  fields); `POST /api/v1/system/update` takes the signed file as its body, sent as
-  `application/octet-stream` (415 `Unsupported Media Type` otherwise; a deviation from Sowel's
-  route, which takes no body and pulls a release itself, decision D53). Another method on either:
-  405. The 16 KB body limit does not apply to this route; a declared `Content-Length` over 128
-  bytes + 4 MB + 1 is 413 before any read, and on the box a missing one is 411 (a chunked upload
-  too). The body ends at `Content-Length` bytes, so the check for a longer file never waits on the
-  socket. Every refusal of this route that leaves body bytes unread (401, 403, 405, 409, 411, 413,
-  415, 503, a header refused, an error mid-image) closes the connection after its answer, so the
-  image's bytes are never read as a next request. Through the core's plain request handler (tests
-  and tools, which cannot stream) the route answers 501 `Updates need the streaming handler`.
+  `GET /api/v1/system/version` answers 200 `{"current": "<version>", "latest": <x.y.z or null>,
+  "updateAvailable": <bool>, "releaseUrl": <url or null>}` (Sowel's `VersionInfo` without its two
+  Docker fields) from the last check, never from the network: `latest` is `null` and
+  `updateAvailable` false before any successful check; `POST /api/v1/system/version/check` checks
+  now (see "From a release"); `POST /api/v1/system/update` takes the signed file as its body, sent
+  as `application/octet-stream` (415 `Unsupported Media Type` otherwise), **or** an empty body
+  (`Content-Length: 0`, or neither `Content-Length` nor `Transfer-Encoding`; any content type),
+  which pulls the latest release (a deviation from Sowel's route, which takes no body, decisions
+  D53 and D65). Another method on any of them: 405. The 16 KB body limit does not apply to the
+  update route; a declared `Content-Length` over 128 bytes + 4 MB + 1 is 413 before any read, and
+  on the box a chunked upload is 411. The body ends at `Content-Length` bytes, so the check for a
+  longer file never waits on the socket. Every refusal of this route that leaves body bytes unread
+  (401, 403, 405, 409, 411, 413, 415, 503, a header refused, an error mid-image) closes the
+  connection after its answer, so the image's bytes are never read as a next request. Through the
+  core's plain request handler (tests and tools, which cannot stream) the update and check routes
+  answer 501 `Updates need the streaming handler`.
+- **From a release.** The box reads the release's `manifest.json` (see "Publishing a release"),
+  says whether a newer release exists, and downloads and installs it on request, through the same
+  installation as the upload (signature, streamed hash into the inactive slot, no downgrade,
+  probation, rollback).
+  - **The manifest.** Fetched whole, at most 16 KB (`Manifest too large`); `format` must be 1
+    (`Unsupported manifest format <n>`); `version`, `minVersion` (null, absent or `x.y.z`),
+    `image.size` (129 bytes to 128 + 4 MB), `image.sha256` (64 hex characters) and `image.url`
+    are checked (`Invalid manifest: <field>`); the notes and the date are not kept. One entry is
+    kept (the cache): the version, the minimum version, the file's address, size and hash, and the
+    release page, which for a GitHub asset address is `https://github.com/<owner>/<repo>/releases/tag/<tag>`
+    and `null` for any other. A failed check keeps the previous entry.
+  - **The check.** `POST /api/v1/system/version/check` (no body read, no content type needed)
+    checks now and answers 200 with the `VersionInfo` above. `updateAvailable` is true when `latest`
+    is newer than the running version and `minVersion` is not newer than it. Refusals, in order:
+    the clock not set 503 `The clock is not set yet: checking a release needs the date`; a check
+    or a download in progress 409 `Update check already in progress`; a check started less than 60
+    s ago 429 `Please wait <n>s before checking again`; a failure 500 `Update check failed:
+    <reason>` (`<url>: <status>`, `too many redirects`, `redirect without Location`, `plain http
+    is refused for <host>`, `redirect from https to http refused`, `invalid URL`, `timed out`,
+    `took longer than <n> s`, a connection error, or the manifest's message), logged `update: check
+    failed: <reason>`; a success logs `update: check: latest <x.y.z>, running <x.y.z>`. The setting
+    `update.manifestUrl` names the manifest; the clock must be set (a date before 2020 is not).
+  - **Where the box may fetch from.** Every address (the setting, `image.url`, a redirect) is at
+    most 2048 visible ASCII characters: `http` or `https`, a host of letters, digits, `-` and `.`
+    (no user, no IPv6), an optional port, an optional path; anything else is `invalid URL`.
+    `https://` to any host; `http://` only to an IPv4 literal of `10/8`, `172.16/12`, `192.168/16`
+    or `127/8` (four decimal numbers, no leading zero) or to `localhost`, so a test server on the
+    local network works and a name or public address does not (D66). Redirects (301, 302, 303,
+    307, 308) are followed with a GET, five at most, never from `https` to `http`; a `Location` is
+    an absolute address or a path starting with one `/`. Nothing but a GET is sent, with
+    `User-Agent: solite/<version>`, no cookie and no authentication header.
+  - **The pull.** `POST /api/v1/system/update` with an empty body, in this order: the clock not
+    set 503; a check or another pull in progress 409 `Update already in progress`; no key 503; an
+    installation in progress, an update waiting for the restart or the running image on probation:
+    the 409s above, before any network access (and an upload meanwhile gets them); then the
+    manifest (the cache when its check is younger than 10 minutes, else a check now, with the check's
+    messages and its 60 s: a second one within a minute of a failed one is 429, without a new
+    connection); `latest` not newer 400 `No update available`; `minVersion` above the running
+    version 400 `Version <latest> needs <minVersion> or later first (running <current>): install
+    <minVersion> before it` (the intermediate release is uploaded from its GitHub page, then the
+    latest pulled); an image over the slot 413. The file is then fetched: a declared length that
+    differs from `image.size` is 400 `Download size differs from the manifest` before any write;
+    the body is read through a reader bounded to `image.size` + 1 bytes that hashes and counts every
+    byte, given to the installation as its source; the header's length and version must agree with
+    the manifest (400 `Download does not match the manifest`, before anything is written), then the
+    installation's checks run, and after the image, before the slot becomes the next boot, the
+    count and SHA-256 must equal the manifest's (else the same 400, the slot dropped). A body longer
+    than announced is 400 `Update longer than declared`. Every read waits at most 30 s, the whole
+    download 10 minutes (a check alone 15 s and 30 s). A connection that drops, a read error, a
+    timeout, the total time passed or a body that ends early drops the slot as a truncated upload
+    does and answers 500 `Download failed: <reason>` (`connection lost`, `timed out`, `took longer
+    than 600 s`, the adapter's error), logged `update: download failed: <reason>`; the next attempt
+    starts over from byte 0. The answer is the upload's 200 `{"success": true, "message":
+    "Installed <x.y.z>, restarting"}`, sent when the file is installed. Between reads the download
+    hands the CPU back every 64 KB.
+  - **The automatic check.** The setting `update.autoCheck` turns it on (`"true"`; off when unset,
+    `""` or `"false"`, D67). On, a check runs 10 minutes after the start, then every 24 hours, when
+    the clock is set and no check or pull runs (otherwise it waits for the next minute); it fills
+    the cache like the route, logs the same lines, never installs, and its failures wait for the
+    next day without counting for the 60 s of the route. Turning it on after the first 10 minutes
+    checks at the next minute.
+  - **The settings.** `update.manifestUrl` is a URL of the rule above, 512 characters at most
+    (default `https://github.com/mchacher/solite/releases/latest/download/manifest.json`; another
+    value 400 `Invalid value for update.manifestUrl`); `update.autoCheck` is `"true"` or `"false"`
+    (400 `Invalid value for update.autoCheck`). Both are in `settings.json`; the previous release
+    drops them with its warning and writes the file again.
 - **The host** keeps its slots as files in `<data>/update/`: `slot-0.bin`, `slot-1.bin` and
   `boot.json` (`{"boot": 0|1, "pending": <bool>}`, absent meaning slot 0, not pending), each
   written through a temporary file and a rename. It does not run the image it stores nor restart:
@@ -1071,7 +1150,12 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   on probation`. At start, a `boot.json` with `pending: true` puts the host on probation, logged
   `update: slot <n> on probation`, and `update: running image confirmed` follows a minute later. The
   `update:` lines are printed without `--verbose`. A stalled upload ends within 30 s (the door's
-  idle read timeout), the installation counts as truncated and the next upload is accepted.
+  idle read timeout), the installation counts as truncated and the next upload is accepted. The
+  host fetches `http://` by itself (a body delimited by `Content-Length` or by the connection's
+  end; a chunked answer is refused, `chunked answers are not supported over http`) and `https://`
+  through the system's `curl` program (`https needs the curl program` without it; no TLS library
+  is in the workspace, D69); a check or a pull runs on the API worker that took the request, the
+  automatic check on a thread of its own, asked once a minute.
 - **The box** (radio image) serves the same route. One OTA thread, with a 6 KB stack in internal
   RAM, does every call that touches the flash (the API workers' stacks are in PSRAM and never
   touch the flash, a read neither), receives them through a channel one request at a time, and ticks the probation
@@ -1082,7 +1166,17 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   stack, more than a worker's 10 KB holds with the request's own frames. When the thread cannot
   start, the answer is 503 `Busy, try again` and the connection closes. The thread logs `update:
   thread stack <n> of 16384 bytes never used` at the end of every attempt, accepted or refused
-  (D60). After a success the answer is sent, then the engine stops (its
+  (D60). A check (`POST /system/version/check`, or the automatic one) and a pull (an empty `POST
+  /system/update`) run the same way on an `update-check` or an `update-pull` thread, 20 KB of
+  stack in internal RAM (D68), one at a time (the 409s of "From a release"): the worker that took
+  the request waits for the thread, the automatic check's thread is not waited for (the box asks
+  whether it is due about once a minute), and neither holds the home's lock while it waits on the
+  network. The box fetches through ESP-IDF's HTTP client, https verified with ESP-IDF's common
+  certificate bundle (the authorities of most of the web, GitHub's included), redirects followed
+  by the core, one TLS session at a time; an empty body on the update route reaches the core with
+  a declared length of 0 (a chunked update stays 411, and so does the backup restore without a
+  length). The threads log `<name>: thread stack <n> of 20480 bytes never used`; a thread that
+  cannot start answers 503 `Busy, try again`. After a success of an upload or of a pull the answer is sent, then the engine stops (its
   final save runs) and the box restarts, logged `restarting`. Its start lines are the host's. A restart the supervisor makes before the confirmation
   (a panic, a watchdog, the last rung of the ladder) rolls the image back like any other restart,
   and an image that boots into the safe mode is not healthy (its engine's loop does not run): it
@@ -1124,9 +1218,9 @@ way in. Nothing of this writes the flash.
   it the **bare safe mode**, where the home's files are not even read.
 - **The safe mode.** The console, the update thread, the Wi-Fi station and the server run as usual;
   the engine thread does not start (no radio reset, no loop, no saver, no boot marker, no pairing,
-  no recipe). The home is loaded and served, so one can log in and install an update; a home that
+  no recipe). The home is loaded and served, so one can log in, look for a release and install an update; a home that
   cannot be loaded is replaced in RAM by an empty one (logged), and the stored files are never
-  touched. Every request that is not a `GET` is refused with 503 but the account's and the update's;
+  touched. Every request that is not a `GET` is refused with 503 but the account's, the update's and the release check's (`POST /api/v1/system/version/check`);
   a restore and a factory reset need the presence a power-on gives, so they are refused too: the
   update is the way out over the network, otherwise a USB flash or a power-on. The first-password
   setup follows the reset reason as always, so a safe mode never opens it. The safe mode is
@@ -1220,7 +1314,8 @@ The steps a maintainer follows are in `docs/release.md` (the `/solite-release` s
    `{"format": 1, "version", "releasedAt" (UTC, ISO 8601 to the second), "notes", "minVersion"
    (null, or `x.y.z`: a box below it goes through an intermediate release), "image": {"name",
    "size", "sha256" (of the `.sup`), "url"}}`, two spaces of indent. Solite's own JSON, not
-   Sowel's (decision D63).
+   Sowel's (decision D63). A running box reads it (see "Updates itself from a signed file", "From a
+   release").
 6. **Install** from the Settings page's Firmware update card (see "Shows the home in the browser"),
    or `POST` the `.sup` to `/api/v1/system/update` with the token. A box never flashed with Solite
    takes the full-flash image over USB (`docs/release.md`).
@@ -1451,7 +1546,8 @@ The engine stays under 300 KB on the Mac for a realistic home (50 devices, 10 zo
 recipe instances with full logs, a live client with a full queue, the largest answer in flight).
 In the emulated ESP32 it stays under 350 KB for the realistic home with the fixture scenario
 playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
-fills them). It stays
+fills them). The same image pulls a release from an in-memory fetch adapter on a thread of 20 KB
+and must leave 8 KB of that stack unused, the room for the TLS handshake the box runs. It stays
 under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
 equipments of 16 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures

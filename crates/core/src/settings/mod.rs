@@ -1,5 +1,5 @@
 //! The home's settings (spec 026 R1): Sowel's flat key-value map of strings (`src/api/routes/
-//! settings.ts`, the keys of `src/zones/sunlight-manager.ts`), limited to the six keys Solite knows,
+//! settings.ts`, the keys of `src/zones/sunlight-manager.ts`), limited to the eight keys Solite knows,
 //! each checked by its rule. No I/O: the home keeps them, the saver writes `settings.json`.
 
 pub mod sun;
@@ -10,14 +10,16 @@ use serde_json::{Map, Value};
 use crate::failure::{Failure, Outcome};
 use tz::TimeZone;
 
-/// The keys Solite knows, in the order they are written; any other is refused. Bound: six values.
-pub const KEYS: [&str; 6] = [
+/// The keys Solite knows, in the order they are written; any other is refused. Bound: eight values.
+pub const KEYS: [&str; 8] = [
     NAME,
     LATITUDE,
     LONGITUDE,
     TIMEZONE,
     SUNRISE_OFFSET,
     SUNSET_OFFSET,
+    MANIFEST_URL,
+    AUTO_CHECK,
 ];
 pub const NAME: &str = "home.name";
 pub const LATITUDE: &str = "home.latitude";
@@ -26,6 +28,12 @@ pub const LONGITUDE: &str = "home.longitude";
 pub const TIMEZONE: &str = "home.timezone";
 pub const SUNRISE_OFFSET: &str = "home.sunriseOffset";
 pub const SUNSET_OFFSET: &str = "home.sunsetOffset";
+/// Solite's own keys (spec 039, D67): the manifest's address and the automatic check.
+pub const MANIFEST_URL: &str = "update.manifestUrl";
+pub const AUTO_CHECK: &str = "update.autoCheck";
+
+/// The longest `update.manifestUrl`, in characters.
+pub const MAX_MANIFEST_URL_CHARS: usize = 512;
 
 /// The longest home name, in characters, after trimming. The numbers are bounded by their pattern
 /// (17 characters at most); a time zone is a name of the list.
@@ -35,10 +43,10 @@ pub const MAX_HOME_NAME_CHARS: usize = 64;
 const DEFAULT_SUNRISE_OFFSET: i64 = 30;
 const DEFAULT_SUNSET_OFFSET: i64 = 45;
 
-/// The six values, `None` when unset; each set value passed its rule.
+/// The eight values, `None` when unset; each set value passed its rule.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Settings {
-    values: [Option<String>; 6],
+    values: [Option<String>; 8],
 }
 
 /// `^-?[0-9]{1,int}(\.[0-9]{1,frac})?$`, ASCII digits only; the value, or `None`.
@@ -72,6 +80,11 @@ fn check(key: &str, value: &str) -> Option<String> {
         SUNRISE_OFFSET | SUNSET_OFFSET => {
             decimal(value, 3, 0).is_some_and(|v| (-180.0..=180.0).contains(&v))
         }
+        MANIFEST_URL => {
+            value.chars().count() <= MAX_MANIFEST_URL_CHARS
+                && crate::update::release::url_allowed(value)
+        }
+        AUTO_CHECK => value == "true" || value == "false",
         _ => false,
     };
     ok.then(|| value.to_string())

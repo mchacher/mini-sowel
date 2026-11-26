@@ -33,7 +33,7 @@ enum Kind {
     RecipeInstances,
     /// `recipes.json`.
     SavedRecipes,
-    /// `settings.json`: one JSON object, written whole in one chunk (six values at most).
+    /// `settings.json`: one JSON object, written whole in one chunk (eight values at most).
     SavedSettings,
     /// `auth.json`: one JSON object, written whole in one chunk (one account at most).
     SavedAuth,

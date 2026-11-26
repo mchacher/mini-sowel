@@ -8,6 +8,7 @@
 
 mod install;
 mod probation;
+pub mod release;
 
 pub use install::Updates;
 pub use probation::{Probation, Verdict};

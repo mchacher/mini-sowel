@@ -554,6 +554,7 @@ fn call(home: &mut Home, method: &str, path: &str, body: &str) -> Response {
             reach: Reach::Loopback,
             content_type: Some("application/json"),
             authorization: None,
+            content_length: None,
             body: body.as_bytes(),
         },
         T0 + 2000,

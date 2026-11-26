@@ -6,7 +6,7 @@ The behaviour is in [the living spec](living-spec/README.md), "Publishing a rele
 
 A release holds `solite-<version>.sup` (the signed update file a running box installs),
 `solite-<version>-flash.bin` (the whole image for a first USB flash), `SHA256SUMS` and
-`manifest.json`. The notes come from [release-notes.md](release-notes.md).
+`manifest.json` (which a running box reads to find the latest release, spec 039). The notes come from [release-notes.md](release-notes.md).
 
 ## The key, once
 

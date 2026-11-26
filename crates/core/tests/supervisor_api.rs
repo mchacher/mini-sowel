@@ -73,6 +73,7 @@ impl Server {
                 reach: Reach::Loopback,
                 content_type: Some(content_type),
                 authorization: with_token.then_some(authorization.as_str()),
+                content_length: Some(body.len() as u64),
                 body,
             },
             T0,
@@ -153,8 +154,11 @@ fn in_safe_mode_a_change_is_refused_with_503_and_a_read_or_a_login_answers_as_us
 fn in_safe_mode_the_update_is_left_to_the_streaming_caller() {
     let server = Server::new();
     server.set_mode(Mode::Safe);
-    let reply = server.send("POST", "/api/v1/system/update", true, b"");
+    let reply = server.send("POST", "/api/v1/system/update", true, b"x");
     assert!(matches!(reply, Reply::Update), "{reply:?}");
+    // An empty body pulls the latest release (spec 039): let through as well.
+    let reply = server.send("POST", "/api/v1/system/update", true, b"");
+    assert!(matches!(reply, Reply::UpdatePull(_)), "{reply:?}");
 }
 
 #[test]

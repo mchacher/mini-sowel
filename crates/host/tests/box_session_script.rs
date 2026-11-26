@@ -2034,6 +2034,14 @@ fn update_stack_check(lines: &str) -> (bool, String) {
 }
 
 const STATUSES: &str = "I (5527) solite_firmware::update_check: update check: valid 200, image changed 400, signature changed 400\n";
+/// The pull of a release (spec 039 R10): its status line and its thread's stack line.
+const PULL: &str = "I (5557) solite_firmware::update_check: update pull check: status 200\n";
+
+fn pull_stack(unused: u32) -> String {
+    format!(
+        "I (5557) solite_firmware::job_thread: update-pull: thread stack {unused} of 20480 bytes never used\n"
+    )
+}
 
 #[test]
 fn the_update_check_passes_with_2_kb_unused_and_fails_below_or_on_a_wrong_status() {
@@ -2042,22 +2050,49 @@ fn the_update_check_passes_with_2_kb_unused_and_fails_below_or_on_a_wrong_status
             "I (5527) solite_firmware::job_thread: update: thread stack {unused} of 16384 bytes never used\n"
         )
     };
+    let pull = PULL.to_string() + &pull_stack(9412);
     assert_eq!(
-        update_stack_check(&(stack(5940) + STATUSES)),
+        update_stack_check(&(stack(5940) + STATUSES + &pull)),
         (true, String::new())
     );
-    assert!(update_stack_check(&(stack(2048) + STATUSES)).0);
-    let (ok, reason) = update_stack_check(&(stack(464) + STATUSES));
+    assert!(update_stack_check(&(stack(2048) + STATUSES + &pull)).0);
+    let (ok, reason) = update_stack_check(&(stack(464) + STATUSES + &pull));
     assert!(!ok);
     assert!(reason.contains("left 464 bytes"), "{reason}");
-    let (ok, reason) = update_stack_check(STATUSES);
+    let (ok, reason) = update_stack_check(&(STATUSES.to_string() + &pull));
     assert!(!ok);
     assert!(reason.contains("stack line"), "{reason}");
     let wrong = STATUSES.replace("image changed 400", "image changed 200");
-    let (ok, reason) = update_stack_check(&(stack(5940) + &wrong));
+    let (ok, reason) = update_stack_check(&(stack(5940) + &wrong + &pull));
     assert!(!ok);
     assert!(reason.contains("went wrong"), "{reason}");
-    let (ok, reason) = update_stack_check(&stack(5940));
+    let (ok, reason) = update_stack_check(&(stack(5940) + &pull));
     assert!(!ok);
     assert!(reason.contains("update check's line"), "{reason}");
+}
+
+#[test]
+fn the_pull_check_needs_status_200_and_8_kb_of_its_stack_unused() {
+    let base = |lines: &str| {
+        format!(
+            "I (5527) solite_firmware::job_thread: update: thread stack 5940 of 16384 bytes never used\n{STATUSES}{lines}"
+        )
+    };
+    // At the margin: passes; one byte below: refused with the numbers.
+    assert!(update_stack_check(&base(&(PULL.to_string() + &pull_stack(8192)))).0);
+    let (ok, reason) = update_stack_check(&base(&(PULL.to_string() + &pull_stack(8191))));
+    assert!(!ok);
+    assert!(reason.contains("left 8191 of its 20480 bytes"), "{reason}");
+    let (ok, reason) = update_stack_check(&base(&PULL.replace("status 200", "status 400")));
+    assert!(!ok);
+    assert!(reason.contains("pull check went wrong"), "{reason}");
+    let (ok, reason) = update_stack_check(&base(&pull_stack(9412)));
+    assert!(!ok);
+    assert!(reason.contains("pull check's line"), "{reason}");
+    let (ok, reason) = update_stack_check(&base(PULL));
+    assert!(!ok);
+    assert!(
+        reason.contains("update-pull thread's stack line"),
+        "{reason}"
+    );
 }
