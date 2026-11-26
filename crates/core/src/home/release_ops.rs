@@ -5,12 +5,33 @@ use std::sync::Arc;
 use super::Home;
 use crate::failure::Outcome;
 use crate::settings;
+use crate::update::UpdateStatus;
 use crate::update::release::{DEFAULT_MANIFEST_URL, ReleaseTicket, Releases};
 
 impl Home {
     /// The releases state, shared with the tickets (`GET /system/version` reads its cache).
     pub fn releases(&self) -> Arc<Releases> {
         Arc::clone(&self.releases)
+    }
+
+    /// The program's updates share their status with the home (spec 043), so the restart route
+    /// knows of an installation and of a probation.
+    pub fn set_update_status(&mut self, status: Arc<UpdateStatus>) {
+        self.update_status = status;
+    }
+
+    /// Why a restart now is refused, as the 409's text (spec 043, R1.2): an update received or
+    /// installed, an update check, a backup, or the running image on probation. `None`: an update
+    /// or a restore that waits for its restart does not refuse, the box restarts anyway.
+    pub fn restart_refusal(&self) -> Option<&'static str> {
+        self.update_status
+            .restart_refusal()
+            .or_else(|| self.releases.busy_message())
+            .or_else(|| {
+                (self.backup_state().phase() != crate::backup::Phase::Idle
+                    && !self.backup_state().is_pending())
+                .then_some("Backup already in progress")
+            })
     }
 
     /// The manifest's address: the setting, or the default when unset or empty.

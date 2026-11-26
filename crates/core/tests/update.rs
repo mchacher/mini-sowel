@@ -18,7 +18,8 @@ use solite_core::auth::{Account, Language, PasswordHash};
 use solite_core::devices::Id;
 use solite_core::home::Home;
 use solite_core::update::{
-    CHUNK_BYTES, HEADER_BYTES, Updates, Version, check_header, parse_public_key, signed_bytes,
+    CHUNK_BYTES, HEADER_BYTES, Health, Probation, Updates, Verdict, Version, check_header,
+    parse_public_key, signed_bytes,
 };
 use support::update_fake::FakeAdapter;
 use support::{HOST, PORT, T0, counter};
@@ -652,7 +653,15 @@ fn versions_parse_exactly_three_numbers_and_compare_as_tuples() {
 // ---- The probation ----
 
 fn tick(updates: &Updates, adapter: &mut FakeAdapter, seconds: u64, healthy: bool) {
-    updates.watch(adapter, seconds * 1000, healthy);
+    tick_with(updates, adapter, seconds, health(healthy, healthy, true));
+}
+
+fn tick_with(updates: &Updates, adapter: &mut FakeAdapter, seconds: u64, health: Health) {
+    updates.watch(adapter, seconds * 1000, health);
+}
+
+fn health(engine: bool, api: bool, psram: bool) -> Health {
+    Health { engine, api, psram }
 }
 
 fn pending_adapter() -> FakeAdapter {
@@ -738,6 +747,90 @@ fn the_deadline_wins_over_a_confirmation_that_is_due_later() {
     }
     assert_eq!(adapter.count("roll_back"), 1);
     assert_eq!(adapter.count("confirm"), 0);
+}
+
+#[test]
+fn healthy_with_the_psram_for_60_seconds_confirms() {
+    let (updates, _) = Updates::from_key_text(None);
+    let mut adapter = pending_adapter();
+    for seconds in 0..60 {
+        tick_with(&updates, &mut adapter, seconds, health(true, true, true));
+        assert_eq!(adapter.count("confirm"), 0, "at {seconds} s");
+    }
+    tick_with(&updates, &mut adapter, 60, health(true, true, true));
+    assert_eq!(adapter.count("confirm"), 1);
+    assert_eq!(adapter.count("roll_back"), 0);
+}
+
+#[test]
+fn an_engine_and_an_api_up_without_the_psram_roll_back_at_300_seconds() {
+    let (updates, _) = Updates::from_key_text(None);
+    let mut adapter = pending_adapter();
+    for seconds in 0..=299 {
+        tick_with(&updates, &mut adapter, seconds, health(true, true, false));
+    }
+    assert_eq!(adapter.count("roll_back"), 0);
+    assert_eq!(adapter.count("confirm"), 0);
+    tick_with(&updates, &mut adapter, 300, health(true, true, false));
+    assert_eq!(adapter.count("roll_back"), 1);
+    assert_eq!(adapter.count("confirm"), 0);
+}
+
+#[test]
+fn the_psram_present_with_the_engine_down_is_not_healthy() {
+    assert!(!health(false, true, true).healthy());
+    assert!(!health(true, false, true).healthy());
+    assert!(!health(true, true, false).healthy());
+    assert!(health(true, true, true).healthy());
+    let (updates, _) = Updates::from_key_text(None);
+    let mut adapter = pending_adapter();
+    for seconds in 0..=100 {
+        tick_with(&updates, &mut adapter, seconds, health(false, true, true));
+    }
+    assert_eq!(adapter.count("confirm"), 0);
+}
+
+#[test]
+fn the_psram_missing_after_30_seconds_then_back_starts_the_60_seconds_again() {
+    let (updates, _) = Updates::from_key_text(None);
+    let mut adapter = pending_adapter();
+    for seconds in 0..=30 {
+        tick_with(&updates, &mut adapter, seconds, health(true, true, true));
+    }
+    tick_with(&updates, &mut adapter, 31, health(true, true, false));
+    for seconds in 32..=91 {
+        tick_with(&updates, &mut adapter, seconds, health(true, true, true));
+        assert_eq!(adapter.count("confirm"), 0, "at {seconds} s");
+    }
+    tick_with(&updates, &mut adapter, 92, health(true, true, true));
+    assert_eq!(adapter.count("confirm"), 1);
+}
+
+#[test]
+fn the_reason_of_an_unhealthy_probation_is_reported_once_per_change() {
+    let mut probation = Probation::new(0);
+    let mut reported = Vec::new();
+    for second in 0..300u64 {
+        // No PSRAM for 100 s, then the engine down for 100 s, then healthy, then no PSRAM again.
+        let state = match second {
+            0..100 => health(true, true, false),
+            100..200 => health(false, true, true),
+            200..250 => health(true, true, true),
+            _ => health(true, true, false),
+        };
+        probation.tick(second * 1000, state);
+        if let Some(reason) = probation.reason_changed(state) {
+            reported.push((second, reason));
+        }
+    }
+    assert_eq!(
+        reported,
+        [(0, "no PSRAM"), (100, "engine stopped"), (250, "no PSRAM")]
+    );
+    assert_eq!(
+        probation.tick(300_000, health(true, true, true)),
+        Verdict::RollBack
+    );
 }
 
 #[test]
@@ -1011,4 +1104,176 @@ fn another_route_still_refuses_a_20_kb_json_body() {
         &body,
     ));
     assert_eq!(status, 413);
+}
+
+// ---- The restart route (spec 043) ----
+
+const RESTART: &str = "/api/v1/system/restart";
+
+fn restart(server: &Server, token: &str) -> Reply {
+    server.send("POST", RESTART, Some(token), None, b"")
+}
+
+fn refused_restart(reply: Reply, message: &str) {
+    let (status, body) = whole(reply);
+    assert_eq!((status, body), (409, json!({ "error": message })));
+}
+
+#[test]
+fn a_restart_with_a_session_answers_reply_restart() {
+    let (server, token) = Server::with_token();
+    let reply = restart(&server, &token);
+    assert!(matches!(reply, Reply::Restart), "{reply:?}");
+}
+
+#[test]
+fn a_restart_without_a_session_is_401() {
+    let (server, _) = Server::with_token();
+    let (status, body) = whole(server.send("POST", RESTART, None, None, b""));
+    assert_eq!(
+        (status, body),
+        (401, json!({"error": "Authentication required"}))
+    );
+    let (status, _) = whole(server.send("POST", RESTART, Some(&"0".repeat(32)), None, b""));
+    assert_eq!(status, 401);
+}
+
+#[test]
+fn another_method_on_the_restart_route_is_405() {
+    let (server, token) = Server::with_token();
+    for method in ["GET", "PUT", "DELETE"] {
+        let (status, _) = whole(server.send(method, RESTART, Some(&token), None, b""));
+        assert_eq!(status, 405, "{method}");
+    }
+}
+
+#[test]
+fn a_restart_during_an_update_being_received_is_409_and_goes_through_once_it_ended() {
+    let keys = keys();
+    let updates = Arc::new(updates(&keys));
+    let (server, token) = Server::with_token();
+    server
+        .home
+        .lock()
+        .unwrap()
+        .set_update_status(updates.status());
+    let bytes = file(&keys, newer(), &image(5000));
+    let (waiting, is_waiting) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let first = {
+        let updates = Arc::clone(&updates);
+        let head = bytes[..HEADER_BYTES + 100].to_vec();
+        std::thread::spawn(move || {
+            let mut source = Blocking {
+                head: Cursor::new(head),
+                waiting,
+                release: released,
+            };
+            install_from(&updates, &mut source, &mut FakeAdapter::new())
+        })
+    };
+    is_waiting.recv().unwrap();
+    refused_restart(restart(&server, &token), "Update already in progress");
+    release.send(()).unwrap();
+    first.join().unwrap();
+    assert!(matches!(restart(&server, &token), Reply::Restart));
+}
+
+#[test]
+fn a_restart_during_an_update_check_or_a_pull_is_409_with_its_text() {
+    let (server, token) = Server::with_token();
+    let check = server
+        .home
+        .lock()
+        .unwrap()
+        .release_ticket(true, T0)
+        .unwrap();
+    refused_restart(restart(&server, &token), "Update check already in progress");
+    drop(check);
+    let pull = server
+        .home
+        .lock()
+        .unwrap()
+        .release_ticket(false, T0)
+        .unwrap();
+    refused_restart(restart(&server, &token), "Update already in progress");
+    drop(pull);
+    assert!(matches!(restart(&server, &token), Reply::Restart));
+}
+
+#[test]
+fn a_restart_during_a_backup_is_409_and_waiting_for_a_restore_is_allowed() {
+    let (server, token) = Server::with_token();
+    let export = server.home.lock().unwrap().backup_begin(false).unwrap();
+    refused_restart(restart(&server, &token), "Backup already in progress");
+    drop(export);
+    let restore = server.home.lock().unwrap().backup_begin(true).unwrap();
+    refused_restart(restart(&server, &token), "Backup already in progress");
+    drop(restore);
+    let mut restore = server.home.lock().unwrap().backup_begin(true).unwrap();
+    restore.set_pending();
+    assert!(matches!(restart(&server, &token), Reply::Restart));
+}
+
+#[test]
+fn a_restart_during_a_probation_is_409_and_goes_through_once_confirmed() {
+    let (updates, _) = Updates::from_key_text(None);
+    let (server, token) = Server::with_token();
+    server
+        .home
+        .lock()
+        .unwrap()
+        .set_update_status(updates.status());
+    let mut adapter = pending_adapter();
+    tick(&updates, &mut adapter, 0, true);
+    refused_restart(
+        restart(&server, &token),
+        "The update is being checked, restart in a minute",
+    );
+    for seconds in 1..=60 {
+        tick(&updates, &mut adapter, seconds, true);
+    }
+    assert_eq!(adapter.count("confirm"), 1);
+    assert!(matches!(restart(&server, &token), Reply::Restart));
+}
+
+#[test]
+fn a_restart_while_an_update_is_installed_and_waits_for_its_restart_goes_through() {
+    let keys = keys();
+    let updates = updates(&keys);
+    let (server, token) = Server::with_token();
+    server
+        .home
+        .lock()
+        .unwrap()
+        .set_update_status(updates.status());
+    let mut adapter = FakeAdapter::new();
+    let (status, body) = install(&updates, &file(&keys, newer(), &image(3000)), &mut adapter);
+    assert_eq!(status, 200, "{body}");
+    // The new image is a probation of the next boot, not of this one.
+    assert!(matches!(restart(&server, &token), Reply::Restart));
+}
+
+#[test]
+fn the_plain_handler_does_not_restart() {
+    let (server, token) = Server::with_token();
+    let authorization = format!("Bearer {token}");
+    let mut home = server.home.lock().unwrap();
+    let response = handle(
+        &mut home,
+        &Request {
+            method: "POST",
+            path: RESTART,
+            host: Some(HOST),
+            port: PORT,
+            reach: Reach::Loopback,
+            content_type: None,
+            authorization: Some(&authorization),
+            content_length: Some(0),
+            body: b"",
+        },
+        T0,
+        &mut counter(),
+    );
+    assert_eq!(response.status, 501);
 }

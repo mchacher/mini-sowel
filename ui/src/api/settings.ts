@@ -97,6 +97,14 @@ export interface UpdateResult {
   message: string;
 }
 
+/** Sowel's `POST /system/restart` (spec 043, D79; Sowel's `triggerSystemRestart`): 200 once the box
+ * has accepted; it restarts after. */
+export async function restartBox(): Promise<{ success: boolean; message: string }> {
+  return fetchJSON<{ success: boolean; message: string }>(`${API_BASE}/system/restart`, {
+    method: "POST",
+  });
+}
+
 /** The signed file (`.sup`) as the body, streamed by the browser; the box restarts after a 200. */
 export async function installUpdate(file: File): Promise<UpdateResult> {
   return fetchJSON<UpdateResult>(`${API_BASE}/system/update`, {

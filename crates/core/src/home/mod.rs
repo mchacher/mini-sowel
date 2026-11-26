@@ -34,6 +34,7 @@ use crate::recipes::{RecipeEngine, Settle};
 use crate::settings::Settings;
 use crate::settings::sun::Sunlight;
 use crate::supervisor::Status;
+use crate::update::UpdateStatus;
 use crate::update::release::Releases;
 use crate::zones::aggregate::{ZoneAggregatedData, compute};
 use crate::zones::{NewZone, Zone, ZoneUpdate, Zones};
@@ -151,6 +152,9 @@ pub struct Home {
     releases: Arc<Releases>,
     /// What the supervisor decided at boot, for `GET /system/supervisor` (spec 036): one value.
     supervision: Status,
+    /// The updates' installation and probation, for the restart route (spec 043): the program's
+    /// `Updates` shares its own; idle until it does.
+    update_status: Arc<UpdateStatus>,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -256,6 +260,7 @@ impl Home {
             backup: Arc::new(BackupState::default()),
             releases: Arc::new(Releases::default()),
             supervision: Status::default(),
+            update_status: Arc::new(UpdateStatus::default()),
         }
     }
 

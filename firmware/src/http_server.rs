@@ -14,7 +14,7 @@
 
 use std::ffi::{CStr, CString};
 use std::io::Read;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Instant;
@@ -81,6 +81,8 @@ struct Api {
 }
 
 static API: OnceLock<Api> = OnceLock::new();
+/// Set by the first restart asked through the API (spec 043): one restart, whatever the requests.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
 
 /// Held by the worker whose request runs on the `script` thread: one request at a time.
 static SCRIPT_THREAD: Mutex<()> = Mutex::new(());
@@ -440,6 +442,7 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
             | Reply::Update
             | Reply::UpdatePull(_)
             | Reply::VersionCheck(_)
+            | Reply::Restart
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. },
         )
@@ -549,7 +552,7 @@ impl BodyReader<'_> {
 /// has left (D60).
 fn answer_update(raw: &Raw, length: usize) -> bool {
     let (Some(updates), Some(mut adapter)) = (ota::updates(), ota::adapter()) else {
-        raw.answer(&error_body(503, "Updates are not available"), &[]);
+        raw.answer(&error_body(503, ota::unavailable()), &[]);
         raw.close_after();
         return false;
     };
@@ -583,7 +586,7 @@ fn answer_check(raw: &Raw, ticket: ReleaseTicket) {
 /// body: nothing is left unread, the connection stays open after a refusal.
 fn answer_pull(raw: &Raw, ticket: ReleaseTicket) -> bool {
     let (Some(updates), Some(mut adapter)) = (ota::updates(), ota::adapter()) else {
-        raw.answer(&error_body(503, "Updates are not available"), &[]);
+        raw.answer(&error_body(503, ota::unavailable()), &[]);
         return false;
     };
     let response = ticket.pull(
@@ -863,6 +866,18 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         }
         Reply::Order(_) | Reply::Static(_) => {
             raw.answer(&error_body(500, "Internal error"), &[]);
+        }
+        // The restart (spec 043): Sowel's answer, then as after an update, once whatever the number
+        // of requests: a second one is answered the same and does not start another.
+        Reply::Restart => {
+            raw.answer(
+                &Response {
+                    status: 200,
+                    body: Some(r#"{"success":true,"message":"Restarting"}"#.to_string()),
+                },
+                &[],
+            );
+            restart = !RESTARTING.swap(true, Ordering::SeqCst);
         }
         Reply::VersionCheck(ticket) => {
             let lent = Lent(&raw);

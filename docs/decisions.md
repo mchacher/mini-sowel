@@ -1530,3 +1530,21 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: QIO flash (faster still, but it needs the flash's write-protect and hold pins
   wired as data lines, not checked on the Dongle Max); QuickJS compiled at `-O2` (a larger image,
   more cache misses; not measured); keeping 160 MHz and a slower limit per call.
+
+## D79: A restart route, allowed in safe mode, refused during a probation; the probation checks the PSRAM (spec 043)
+
+- **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
+- **Choice**: `POST /api/v1/system/restart`, the administrator's, Sowel's route name with Solite's values
+  (Sowel restarts its container): Sowel's answer, 200 `{"success": true, "message": "Restarting"}`, then the update's restart path (`restart_after_update`, the boot's cause `asked`). It is
+  one more exception to the safe mode's 503, beside D58's and D65's (`auth/*`, `system/update`,
+  `system/version/check`): restarting is the way out, and the cause `asked` clears the count. It is
+  refused with 409 during an update, a check or a backup (their texts) and during a probation (a reset
+  would make the bootloader roll the update back); allowed when an update or a restore already waits
+  for its restart. The probation's health becomes `{ engine, api, psram }`: an image without its PSRAM
+  is rolled back at 300 s; the OTA thread starts without its chunk buffer so that the probation ticks.
+- **Why**: the person in front of the interface had no way to restart the box; since D77 (PSRAM at
+  80 MHz, `CONFIG_SPIRAM_IGNORE_NOTFOUND`) a box could boot without its PSRAM, be confirmed, and
+  never run the memory budget.
+- **Alternatives**: a restart during a probation that confirms it first (hides a bad image); the
+  restart refused in safe mode (the person would need a USB flash or a power-on to leave it); the
+  PSRAM read once at boot instead of in the probation (a confirmed image is not the probation's case).

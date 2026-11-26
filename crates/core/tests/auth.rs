@@ -137,6 +137,7 @@ impl Server {
             | Reply::Update
             | Reply::UpdatePull(_)
             | Reply::VersionCheck(_)
+            | Reply::Restart
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. } => (202, Value::Null),
         }

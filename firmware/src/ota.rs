@@ -4,9 +4,10 @@
 //! installation runs on an `update` thread started for the request (`job_thread.rs`, D60: the
 //! signature check needs more stack than a worker has), which sends each call through a channel of
 //! one request at a time and waits for the answer; the same
-//! thread ticks `Updates::watch` every second (health: the engine's loop is running and the API
-//! server is listening). A chunk crosses in one 4096-byte buffer in PSRAM, allocated once by that
-//! thread. The logic (header, signature, digest, probation) is the core's, tested on the Mac.
+//! thread ticks `Updates::watch` every second (health: the engine's loop is running, the API
+//! server is listening and the PSRAM is there). A chunk crosses in one 4096-byte buffer in PSRAM,
+//! allocated once by that thread; without PSRAM the thread starts without it, every update call
+//! answers 503 and the probation ticks all the same (spec 043). The logic (header, signature, digest, probation) is the core's, tested on the Mac.
 //!
 //! The update's handle (`esp_ota_begin` ... `esp_ota_end`) is kept on this thread through ESP-IDF's
 //! own functions: `EspOta::initiate_update` returns a value that borrows `EspOta` for as long as
@@ -24,10 +25,11 @@ use esp_idf_svc::sys::{
     MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, esp, esp_ota_abort, esp_ota_begin, esp_ota_end,
     esp_ota_get_next_update_partition, esp_ota_get_running_partition, esp_ota_get_state_partition,
     esp_ota_handle_t, esp_ota_img_states_t, esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY,
-    esp_ota_set_boot_partition, esp_ota_write, esp_partition_t, esp_restart, heap_caps_malloc,
+    esp_ota_set_boot_partition, esp_ota_write, esp_partition_t, esp_restart,
+    heap_caps_get_total_size, heap_caps_malloc,
 };
 use solite_core::devices::lock;
-use solite_core::update::{CHUNK_BYTES, UpdateAdapter, Updates};
+use solite_core::update::{CHUNK_BYTES, Health, UpdateAdapter, Updates};
 
 use crate::radio_engine::{STOP, STOPPED};
 use crate::supervisor;
@@ -54,9 +56,19 @@ pub fn updates() -> Option<&'static Updates> {
     UPDATES.get()
 }
 
+/// Gives the home the updates' status, so the restart route knows of an installation and of a
+/// probation (spec 043).
+pub fn share_status(home: &mut solite_core::home::Home) {
+    if let Some(updates) = updates() {
+        home.set_update_status(updates.status());
+    }
+}
+
 /// An adapter for the `update` thread: every call goes to the OTA thread. `None` when it did not start.
 pub fn adapter() -> Option<RemoteAdapter> {
-    LINK.get().map(|_| RemoteAdapter)
+    LINK.get()
+        .filter(|link| !lock(link.chunk).is_empty())
+        .map(|_| RemoteAdapter)
 }
 
 /// What the `update` thread asks of the OTA thread.
@@ -78,7 +90,18 @@ type Answer = Result<u64, String>;
 /// The `update` thread's side: the requests (one at a time, under the mutex) and the shared buffer.
 struct Link {
     calls: Mutex<(SyncSender<Call>, Receiver<Answer>)>,
+    /// Empty when the PSRAM is missing: no update call is then made (`adapter()` is `None`).
     chunk: &'static Mutex<&'static mut [u8]>,
+}
+
+/// The text of the 503 of an update call the OTA thread cannot serve: no buffer (the PSRAM is
+/// missing, spec 043), or no thread.
+pub fn unavailable() -> &'static str {
+    if LINK.get().is_some() {
+        "No memory for an update"
+    } else {
+        "Updates are not available"
+    }
 }
 
 /// The adapter the `update` thread uses: it holds nothing, the OTA thread does.
@@ -300,8 +323,15 @@ fn chunk_buffer() -> Result<&'static mut [u8], String> {
     Ok(buffer)
 }
 
-fn healthy() -> bool {
-    ENGINE_RUNNING.load(Ordering::SeqCst) && API_LISTENING.load(Ordering::SeqCst)
+/// The probation's reading: the engine's loop, the API server and the PSRAM (D79).
+#[allow(unsafe_code)]
+fn health() -> Health {
+    Health {
+        engine: ENGINE_RUNNING.load(Ordering::SeqCst),
+        api: API_LISTENING.load(Ordering::SeqCst),
+        // SAFETY: reads the size of the PSRAM heap; takes no pointer.
+        psram: unsafe { heap_caps_get_total_size(MALLOC_CAP_SPIRAM) } > 0,
+    }
 }
 
 /// 0 for `ota_0`, 1 for `ota_1` (the host's `boot_slot`); 0 when ESP-IDF cannot say.
@@ -327,17 +357,20 @@ fn thread_body(
     answers: &Sender<Answer>,
     ready: &Sender<Result<&'static Mutex<&'static mut [u8]>, String>>,
 ) {
-    let setup = || -> Result<(Flash, &'static mut [u8]), String> {
-        let ota = EspOta::new().map_err(|e| format!("update: {e}"))?;
-        Ok((Flash { ota, writing: None }, chunk_buffer()?))
-    };
-    let (mut flash, buffer) = match setup() {
-        Ok(parts) => parts,
+    let ota = match EspOta::new() {
+        Ok(ota) => ota,
         Err(e) => {
-            let _ = ready.send(Err(e));
+            let _ = ready.send(Err(format!("update: {e}")));
             return;
         }
     };
+    let mut flash = Flash { ota, writing: None };
+    // Without PSRAM the thread runs on, with an empty buffer: the probation must tick to roll the
+    // image back (spec 043).
+    let buffer = chunk_buffer().unwrap_or_else(|e| {
+        log::warn!("{e}, updates refused");
+        &mut []
+    });
     let chunk: &'static Mutex<&'static mut [u8]> = Box::leak(Box::new(Mutex::new(buffer)));
     if ready.send(Ok(chunk)).is_err() {
         return;
@@ -361,7 +394,7 @@ fn thread_body(
         if ticked.elapsed() >= TICK {
             ticked = Instant::now();
             let now = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
-            updates.watch(&mut flash, now, healthy());
+            updates.watch(&mut flash, now, health());
             // The supervisor's clock, and the safe mode's retry (spec 036).
             supervisor::tick();
         }

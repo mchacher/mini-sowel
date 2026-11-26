@@ -10,8 +10,8 @@ mod install;
 mod probation;
 pub mod release;
 
-pub use install::Updates;
-pub use probation::{Probation, Verdict};
+pub use install::{UpdateStatus, Updates};
+pub use probation::{Health, Probation, Verdict};
 
 use std::fmt;
 

@@ -484,8 +484,8 @@ fn fetch_manifest(
 struct Inner {
     /// One entry, at most about 2.2 KB.
     cache: Option<Checked>,
-    /// A check or a pull holds a ticket.
-    busy: bool,
+    /// The kind of job whose ticket is held (a check, a pull), if any.
+    busy: Option<Kind>,
     /// The start of the last check asked through the API or of a pull's check (monotonic).
     last_api_check_ms: Option<u64>,
     /// The automatic check is due from this monotonic time on.
@@ -504,7 +504,7 @@ impl Default for Releases {
         Releases {
             inner: Mutex::new(Inner {
                 cache: None,
-                busy: false,
+                busy: None,
                 last_api_check_ms: None,
                 next_auto_ms: AUTO_FIRST_AFTER_MS,
             }),
@@ -567,7 +567,7 @@ impl Releases {
             return Err(Failure::new(503, CLOCK_NOT_SET));
         }
         let mut inner = lock(&self.inner);
-        if inner.busy {
+        if inner.busy.is_some() {
             return Err(Failure::new(
                 409,
                 if kind == Kind::Check {
@@ -577,10 +577,22 @@ impl Releases {
                 },
             ));
         }
-        inner.busy = true;
+        inner.busy = Some(kind);
         Ok(ReleaseTicket {
             releases: Arc::clone(self),
             manifest_url: manifest_url.to_string(),
+        })
+    }
+
+    /// What a restart must not interrupt (spec 043): the text of the 409 while a check or a pull
+    /// holds its ticket, else `None`.
+    pub fn busy_message(&self) -> Option<&'static str> {
+        lock(&self.inner).busy.map(|kind| {
+            if kind == Kind::Pull {
+                "Update already in progress"
+            } else {
+                "Update check already in progress"
+            }
         })
     }
 
@@ -648,7 +660,7 @@ pub struct ReleaseTicket {
 
 impl Drop for ReleaseTicket {
     fn drop(&mut self) {
-        lock(&self.releases.inner).busy = false;
+        lock(&self.releases.inner).busy = None;
     }
 }
 

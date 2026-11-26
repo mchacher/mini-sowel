@@ -32,7 +32,7 @@ use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
 use solite_core::update::release::Limits;
-use solite_core::update::{MAX_UPLOAD_BYTES, Updates};
+use solite_core::update::{Health as CoreHealth, MAX_UPLOAD_BYTES, Updates};
 use tiny_http::{Header, Response, Server};
 
 use crate::backup_files::{DataFiles, HostPacing};
@@ -64,10 +64,18 @@ struct Health {
 }
 
 impl Health {
-    fn healthy(&self) -> bool {
-        self.engine.load(Ordering::SeqCst) && self.listening.load(Ordering::SeqCst)
+    /// The probation's reading: the host has no PSRAM to expect, so it always says present.
+    fn read(&self) -> CoreHealth {
+        CoreHealth {
+            engine: self.engine.load(Ordering::SeqCst),
+            api: self.listening.load(Ordering::SeqCst),
+            psram: true,
+        }
     }
 }
+
+/// What the host answers to `POST /system/restart` (spec 043, R1.5): it cannot restart itself.
+const HOST_NO_RESTART: &str = r#"{"error":"The host does not restart itself"}"#;
 
 /// How often the probation is ticked.
 const WATCH_TICK: Duration = Duration::from_secs(1);
@@ -285,6 +293,11 @@ fn answer(
             None,
             None,
         )),
+        Reply::Restart => request.respond(
+            Response::from_string(HOST_NO_RESTART)
+                .with_status_code(501)
+                .with_header(content_type.clone()),
+        ),
         Reply::Order(_)
         | Reply::Static(_)
         | Reply::StaticError(_)
@@ -426,6 +439,10 @@ fn answer_streamed(
             response
         }
         Reply::Whole(response) | Reply::StaticError(response) => response,
+        Reply::Restart => solite_core::api::Response {
+            status: 501,
+            body: Some(HOST_NO_RESTART.to_string()),
+        },
         Reply::List(_) | Reply::Order(_) | Reply::Static(_) => solite_core::api::Response {
             status: 500,
             body: Some(r#"{"error":"Internal error"}"#.to_string()),
@@ -592,6 +609,7 @@ pub fn serve<T: RadioTransport>(
     // ticks about once a second (R5), on a thread of its own that ends with the serve.
     let adapter = FileAdapter::new(data);
     let (updates, start_lines) = start_updates(UPDATE_PUBLIC_KEY, &adapter);
+    lock(&home).set_update_status(updates.status());
     for line in &start_lines {
         println!("{line}");
     }
@@ -614,7 +632,7 @@ pub fn serve<T: RadioTransport>(
             let mut next_auto = 0;
             while !watch_stop.load(Ordering::SeqCst) {
                 let now = monotonic_ms();
-                update.updates.watch(&mut adapter, now, health.healthy());
+                update.updates.watch(&mut adapter, now, health.read());
                 // The automatic check (spec 039, R6): asked about once a minute; a check, when
                 // due, runs on a thread of its own and never installs.
                 if now >= next_auto {

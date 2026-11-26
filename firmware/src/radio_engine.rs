@@ -383,6 +383,7 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Failu
             Arc::new(mono),
         ));
         supervisor::set_supervision(&mut guard);
+        crate::ota::share_status(&mut guard);
         // The scripts built into the image are loaded before the instances start (spec 041 R4.2).
         let script_clock: solite_core::recipes::ScriptClock = Arc::new(mono);
         crate::scripts::load_built_in(&mut guard, &script_clock);
