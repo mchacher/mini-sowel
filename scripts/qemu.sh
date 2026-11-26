@@ -20,6 +20,12 @@
 # R10), its first answer cut after 40 KB and resumed with a `Range` request (spec 040 R6.8): status
 # 200 and at least 1024 bytes of that stack unused, the resume touching an 8 KB stand-in for the
 # TLS handshake (which QEMU cannot run) at its deepest point.
+# The sim image is built with the scripts (`--features sim,scripts`, spec 041): after the `engine:`
+# line it runs the scenario again on three `motion-light-script` instances, a script recursing as deep
+# as its stack allows on the engine thread and on a `script` thread, and logs `recipes: script
+# motion-light-script <KB> KB source; psram ...` (R6.2); the run fails when that line is missing, the
+# three instances' peak passes 75 % of the script memory limit, the internal RAM minimum is under
+# 64 KB, or either stack keeps less than 2 KB unused. The box's image is checked to carry no QuickJS.
 # QEMU is always stopped, also on Ctrl-C.
 # Installs QEMU into firmware/.embuild/ at the first run (a download, like ESP-IDF's).
 set -e
@@ -51,7 +57,8 @@ case "$1" in
   *) fail "usage: sh scripts/qemu.sh [--box]" ;;
 esac
 # Time allowed: the blank partition is formatted, then 12 s of scenario time on a slow emulator.
-if [ "$MODE" = sim ]; then TIMEOUT=240; else TIMEOUT=60; fi
+# The script phase plays the scenario twice more (3 and 8 instances).
+if [ "$MODE" = sim ]; then TIMEOUT=600; else TIMEOUT=60; fi
 
 # QEMU's system libraries on macOS (Homebrew).
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -65,7 +72,7 @@ fi
 
 echo "== Firmware build ($MODE image)"
 if [ "$MODE" = sim ]; then
-  (cd firmware && cargo build --release --features sim --quiet)
+  (cd firmware && cargo build --release --features sim,scripts --quiet)
 else
   (cd firmware && cargo build --release --quiet)
 fi
@@ -83,6 +90,10 @@ if [ -z "$QEMU" ]; then
 fi
 
 fw_find_bootloader "$TARGET_DIR"
+
+# QuickJS is in the sim image (its script build) and not in the box's.
+if [ "$MODE" = sim ]; then WANT_QJS=with; else WANT_QJS=without; fi
+REASON=$(fw_check_quickjs "$TARGET_DIR/solite-firmware" "$MODE" "$WANT_QJS") || fail "$REASON"
 
 WORK=firmware/target/qemu
 mkdir -p "$WORK"
@@ -138,7 +149,10 @@ elapsed=0
 while [ "$elapsed" -lt "$TIMEOUT" ]; do
   broken && show_failure "the firmware panicked or rebooted."
   kill -0 "$QPID" 2>/dev/null || show_failure "QEMU stopped by itself."
-  if ok; then
+  # A script phase that ended in an error never logs its last line: say so now, not at the timeout.
+  [ "$MODE" = sim ] && grep -aqE '^E \([0-9]+\) .*script phase' "$LOG" \
+    && show_failure "the script phase failed: $(grep -aE '^E \([0-9]+\) .*script phase' "$LOG" | tail -n 1)"
+  if ok && { [ "$MODE" != sim ] || grep -aq 'script sizes: motion-light-script' "$LOG"; }; then
     # A short grace period: a reboot right after the banner must not pass.
     sleep 3
     broken && show_failure "the firmware panicked or rebooted."
@@ -157,6 +171,10 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     grep -a 'update pull check: ' "$LOG" | tail -n 1
     grep -a 'update-pull: thread stack ' "$LOG" | tail -n 1
     REASON=$(fw_check_update_stack "$LOG") || show_failure "$REASON"
+    grep -a 'recipes: script ' "$LOG" | tail -n 3
+    grep -a 'script phase: ' "$LOG" | tail -n 2
+    grep -a 'script sizes: ' "$LOG" | tail -n 1
+    REASON=$(fw_check_script_phase "$LOG") || show_failure "$REASON"
     exit 0
   fi
   sleep 1

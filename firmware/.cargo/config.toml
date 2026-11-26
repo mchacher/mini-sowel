@@ -17,3 +17,13 @@ ESP_IDF_VERSION = "v5.5.5"
 # The folder `sdkconfig.defaults` and the other relative ESP-IDF paths are read from: `firmware/`
 # whatever the target folder is (the radio image builds into `target/radio`, spec 021).
 CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+# QuickJS's C sources (script recipes, spec 041, feature `scripts`) are compiled with ESP-IDF's own
+# Xtensa toolchain, which `embuild` installs under `.embuild/` for ESP-IDF v5.5.5 (the version
+# folder below is pinned with it: an ESP-IDF upgrade changes it here). Not espup's compiler: its
+# objects are big-endian. Paths are relative to `firmware/`.
+CC_xtensa_esp32_espidf = { value = ".embuild/espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin/xtensa-esp32-elf-gcc", relative = true }
+CFLAGS_xtensa_esp32_espidf = "-mlongcalls -ffunction-sections -fdata-sections"
+# The headers `bindgen` reads for the target. A flag cannot be made relative by Cargo, so the path
+# is relative to the build script's folder, `vendor/rquickjs-sys` (the vendored crate, fixed place).
+BINDGEN_EXTRA_CLANG_ARGS_xtensa_esp32_espidf = "-I../../firmware/.embuild/espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/xtensa-esp-elf/include"

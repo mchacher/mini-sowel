@@ -1,5 +1,6 @@
 use solite_core::{
-    EngineStats, HeapStats, MemoryStats, PsramStats, engine_line, heap_line, memory_line,
+    EngineStats, HeapStats, MemoryStats, PsramStats, ScriptPhase, engine_line, heap_line,
+    memory_line, script_phase_line, scripts_lines,
 };
 
 #[test]
@@ -157,4 +158,44 @@ fn heap_line_keeps_the_prefix_the_scripts_parse() {
         .take_while(char::is_ascii_digit)
         .collect();
     assert_eq!(minimum, "90");
+}
+
+#[test]
+fn the_scripts_line_shows_calls_time_and_heap_per_script() {
+    let stats = solite_recipe_sdk::RunStats {
+        instances: 3,
+        calls: 4,
+        total_us: 1000,
+        max_us: 700,
+        held: 90 * 1024 + 5,
+        peak: 100 * 1024,
+    };
+    let idle = solite_recipe_sdk::RunStats::default();
+    assert_eq!(
+        scripts_lines(&[
+            ("motion-light-script".to_string(), stats),
+            ("b".to_string(), idle)
+        ]),
+        vec![
+            "scripts: motion-light-script 3 instances, 4 calls, average 250 µs, max 700 µs, heap 90 KB (peak 100 KB)",
+            "scripts: b 0 instances, 0 calls, average 0 µs, max 0 µs, heap 0 KB (peak 0 KB)",
+        ]
+    );
+}
+
+#[test]
+fn the_script_phase_line_is_the_one_qemu_reads() {
+    let phase = ScriptPhase {
+        source: 15 * 1024 + 100,
+        psram_used: 60 * 1024,
+        psram_peak: 70 * 1024,
+        internal_used: 1024,
+        internal_min: 120 * 1024,
+        engine_stack: (6000, 32768),
+        script_stack: (3000, 24576),
+    };
+    assert_eq!(
+        script_phase_line("motion-light-script", &phase),
+        "recipes: script motion-light-script 15 KB source; psram +60 KB (peak +70 KB); internal +1 KB (min 120 KB free); engine stack 6000 of 32768 unused; script thread stack 3000 of 24576 unused"
+    );
 }

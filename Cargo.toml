@@ -1,8 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/host", "crates/sim", "crates/ui-embed"]
+members = [
+  "crates/core",
+  "crates/host",
+  "crates/recipe-sdk",
+  "crates/recipes/motion-light",
+  "crates/sim",
+  "crates/ui-embed",
+]
 # The ESP32 firmware has its own toolchain (Xtensa) and target: built from firmware/.
-exclude = ["firmware"]
+exclude = ["firmware", "vendor/rquickjs-sys"]
 
 [workspace.package]
 version = "0.1.1"
@@ -25,3 +32,12 @@ opt-level = 3
 
 [profile.dev.package.pbkdf2]
 opt-level = 3
+
+# QuickJS (script recipes, spec 041) compiled with optimisation in the debug builds of the tests too.
+[profile.dev.package.rquickjs-sys]
+opt-level = 3
+
+# rquickjs-sys 0.14.0 with the small-object arena off (about 85 KB less per runtime): see
+# vendor/rquickjs-sys/SOLITE.md. The firmware's own workspace patches it too.
+[patch.crates-io]
+rquickjs-sys = { path = "vendor/rquickjs-sys" }

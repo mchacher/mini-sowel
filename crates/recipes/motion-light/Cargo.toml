@@ -1,0 +1,15 @@
+[package]
+name = "solite-recipe-motion-light"
+description = "Sowel's motion-light recipe, written once against the recipe SDK: linked into the core (spec 041)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+solite-recipe-sdk = { path = "../../recipe-sdk" }
+serde_json = "1"

@@ -9,8 +9,18 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Script recipes (spec 041): QuickJS through rquickjs, the loader, the shim and `ScriptRecipe`.
+# Not a default feature: the firmware's measuring and box images do not carry QuickJS. The host
+# program always enables it (its dependency below), so `cargo test --workspace` runs the tests that
+# need it (`required-features`); `cargo test -p solite-core` alone skips them.
+script-recipes = ["dep:rquickjs", "dep:scoped-tls-hkt"]
+
 [dependencies]
 log = "0.4"
+# The recipe contract, and the recipes the core provides itself (spec 041).
+solite-recipe-sdk = { path = "../recipe-sdk" }
+solite-recipe-motion-light = { path = "../recipes/motion-light" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # Password hash (spec 029, D47): PBKDF2-HMAC-SHA256, no default features (no_std-friendly crates).
@@ -22,6 +32,28 @@ chacha20 = { version = "0.10", default-features = false, features = ["cipher"] }
 # Update signatures (spec 032, D52): verification only, without the precomputed tables (code size).
 ed25519-dalek = { version = "3.0", default-features = false }
 
+# QuickJS-ng (about 60 KB per recipe in PSRAM). `parallel`: a runtime that can move between threads
+# and resets its stack limit at each call. The version is pinned: the vendored rquickjs-sys (root
+# Cargo.toml's [patch.crates-io]) is a copy of this very release.
+rquickjs = { version = "=0.14.0", default-features = false, features = ["parallel"], optional = true }
+
+# A borrowed value (the host of one call) reachable from the functions QuickJS calls back, for the
+# time of that call and on that thread: a scoped thread-local, with no `unsafe` of ours (the crate
+# holds it).
+scoped-tls-hkt = { version = "0.1", optional = true }
+
 [dev-dependencies]
 peak_alloc = "0.3"
 solite-sim = { path = "../sim" }
+
+[[test]]
+name = "script_recipes"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "script_parity"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "script_memory"
+required-features = ["script-recipes"]

@@ -210,3 +210,41 @@ stopped, every request that is not a `GET` answers 503 `{"error": "Safe mode: th
 stopped"}`, except the account's routes (`/auth/*`), `POST /api/v1/system/update` and `POST
 /api/v1/system/version/check`. Sowel has no
 such mode.
+
+## Script recipes
+
+Script recipes (spec 041, D73 to D76) follow Sowel's script-recipe draft (`roadmap/ai-script-recipes/spec.md`
+in Sowel's repository: "The idea", "Script API (first cut)", "Rules enforced by the host"), which has no
+code in Sowel yet. They add no route, field or event: a script recipe is served through Sowel's
+recipe routes, with Sowel's `RecipeInfo`, `RecipeSlotDef`, `RecipeInstance` and `RecipeLogEntry`.
+What differs from the draft is the script API's own (this section is prose, not a table the contract
+test reads), each kept by D75 or D74:
+
+- **Added to the draft**: the script's `id` (1 to 64 characters among `a-z`, `0-9`, `-`; the draft
+  has none) and an optional `version` (shown in the start line only); `onMotionReport(fn)`, called
+  with the value and the equipment's id on every motion report of a motion sensor of the zone, so
+  that a safety auto-off can be reset by fresh motion; `cancel(id)` for the timers;
+  `console.log` as `log`; `validate(params, home)` with a second argument, `home.equipment(id)` giving
+  the `name`, `orders` and `data` of an equipment named in the params (the draft's `validate` has
+  `params` only, and no way to check bindings). A Sowel issue proposes `id`, the zone slot rule,
+  `onMotionReport` and `validate(params, home)` for the draft.
+- **Left out**: `mode()` (no modes), the tariff period in `now()`, `energy.claim/release`, history
+  reads, the observation mode, a per-instance order rate limit, `state.alarm` semantics; a script
+  that calls `mode`, `energy` or `history` gets `Not available in Solite: <name>`. Slots of type
+  `text` and `data-key` are refused.
+- **Functions have no source**: QuickJS is built without keeping the source text of functions
+  (`JS_NO_FUNCTION_SOURCE`, D74): `Function.prototype.toString` of a script's function answers
+  `function f() { [native code] }`, where Sowel's engine gives the source.
+- **Synchronous host calls**: `get`, `order` and the others answer at once (a superset of the draft,
+  where they resolve through promises); a promise's `then` still runs after the call.
+- **One runtime per recipe**: the instances of a script recipe share one QuickJS runtime and context
+  (the draft: one per instance), so a script's top-level variables are shared and what belongs to
+  one instance lives inside `start`.
+- **An overrun fails the recipe**: a call over its time, memory or stack stops every instance of the
+  recipe, which comes back after a minute (the draft stops the instance with `state.alarm`).
+- **Validation is the host's**: the texts are Solite's own, `Invalid params: <text>` (Sowel has no
+  generic slot validation: each of its recipes checks itself), then the script's `validate`.
+- **`onZone(alias, fn)`** is called on every `zone.data.changed` of the instance's zone with the
+  aggregate's current value, for `motion`, `luminosity` and `motionSensors`; **`get` and `order`**
+  take a slot name only (never an id), read the data of category `light_state` first for the alias
+  `state`, and send through a `light_toggle` or `toggle_power` binding first, as Sowel's helpers do.

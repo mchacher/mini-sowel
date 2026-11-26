@@ -30,13 +30,25 @@ sim = ["dep:solite-sim", "dep:ed25519-dalek"]
 flash-saves = ["sim"]
 # The radio image (spec 021, decision D32): drives the EFR32 over UART1 and runs the engine on it.
 # Built in its own target folder with `sdkconfig.radio.defaults`; never with `sim`.
-radio = []
+radio = ["scripts"]
+# Script recipes (spec 041): the core's `script-recipes` (QuickJS through rquickjs) with the
+# firmware's PSRAM allocator and the scripts of `recipes/scripts/` built in. The radio image carries
+# it, so does the image QEMU runs (`--features sim,scripts`); the box's own image, the measuring
+# image (`flash-saves`) and plain `sim` do not (`scripts/validate.sh` searches their ELF for
+# QuickJS).
+scripts = ["solite-core/script-recipes", "dep:rquickjs", "dep:serde_json"]
 
 [dependencies]
 solite-core = { path = "../crates/core" }
+# QuickJS-ng. `bindgen`: the bindings are made for the target (the build variables are in
+# `.cargo/config.toml`); `allocator`: a runtime over the firmware's own allocator (PSRAM, D74);
+# `parallel`: as in the core.
+rquickjs = { version = "=0.14.0", default-features = false, features = ["bindgen", "allocator", "parallel"], optional = true }
 solite-sim = { path = "../crates/sim", optional = true }
 esp-idf-svc = "0.53"
 log = "0.4"
+# The QEMU image's script phase reads the realistic home's instances and builds the requests.
+serde_json = { version = "1", optional = true }
 # Signs the throwaway update files of the QEMU image's stack check (`update_check.rs`, D60).
 ed25519-dalek = { version = "3.0", default-features = false, optional = true }
 
@@ -47,6 +59,11 @@ solite-ui-embed = { path = "../crates/ui-embed" }
 
 [lints.rust]
 unsafe_code = "deny"
+
+# rquickjs-sys 0.14.0 with the small-object arena off: `vendor/rquickjs-sys/SOLITE.md`. The root
+# workspace patches it too.
+[patch.crates-io]
+rquickjs-sys = { path = "../vendor/rquickjs-sys" }
 
 # Its own workspace, also when the repository is checked out inside another checkout (an agent's
 # worktree under .claude/worktrees/), where Cargo would otherwise take the outer workspace.

@@ -1,20 +1,43 @@
 //! The state machine of `motion-light`: a port of the recipe's `createInstance` (recipe
 //! `src/index.ts` R:406-924) and of the helpers of Sowel's engine, with every quirk kept (see
 //! `specs/012-motion-light/motion-light-reference.md`, section 4). Timers are deadlines on the
-//! engine's monotonic clock, checked by `tick`; the home is read through `Cx`, orders go to the
-//! home's queue and log lines to `Cx`.
+//! engine's monotonic clock, checked by `tick`; the home is read, orders are sent and lines are
+//! logged through the host in `Cx`.
 
 use serde_json::Value;
+use solite_recipe_sdk::bounds::MAX_LISTEN_DEVICES;
+use solite_recipe_sdk::duration::{format_duration, js_number};
+use solite_recipe_sdk::time::format_iso;
+use solite_recipe_sdk::{
+    Clock, Event, EventValue, Host, IdBytes, Level, ListenEntry, OrderStatus, format_id, parse_id,
+};
 
-use super::info::{ID, NAME};
-use super::params::Params;
+use super::params::{MAX_BUTTONS, Params};
 use super::sources::{MotionSource, is_motion_active, resolve_motion_sources};
-use crate::devices::Id;
-use crate::home::Home;
-use crate::home::events::{Event, EventValue, Interest};
-use crate::orders::{OrderRequest, OrderSource, commands_for};
-use crate::recipes::duration::{format_duration, js_number};
-use crate::recipes::{Cx, Level, Runner, StateKeys};
+
+/// What a call of an instance has: the host to read and command the home, and the clocks. The
+/// lines go to the host's log, in the order they are written.
+pub struct Cx<'a> {
+    pub host: &'a dyn Host,
+    /// The engine's monotonic clock, for timers.
+    pub now: u64,
+    /// The wall clock, for the dates written.
+    pub wall: u64,
+}
+
+impl<'a> Cx<'a> {
+    pub fn new(host: &'a dyn Host, clock: Clock) -> Cx<'a> {
+        Cx {
+            host,
+            now: clock.mono,
+            wall: clock.wall,
+        }
+    }
+
+    fn log(&self, level: Level, message: impl AsRef<str>) {
+        self.host.log(level, message.as_ref());
+    }
+}
 
 /// After the recipe switches the lights off, an `OFF` seen on the light within this long is its
 /// own echo, not a manual change (the recipe's `TURN_OFF_GRACE_MS`).
@@ -68,102 +91,70 @@ fn is_on(value: &EventValue) -> bool {
 
 /// The light's `state` as the home has it now: the data bound with the category `light_state`,
 /// else under the alias `state`; on when `true` or `"ON"` (the engine's `isAnyLightOn`).
-fn light_is_on(home: &Home, light: &Id) -> bool {
-    let Some(item) = home.equipments().get_by_id(light) else {
+fn light_is_on(host: &dyn Host, light: &IdBytes) -> bool {
+    let Some(item) = host.equipment(&format_id(light)) else {
         return false;
     };
-    let by_category = item.data_bindings.iter().find(|b| {
-        home.devices
-            .data_of(&b.device_data_id)
-            .is_some_and(|(_, data)| &*data.category == "light_state")
-    });
+    let by_category = item
+        .data_bindings
+        .iter()
+        .find(|b| b.category.as_deref() == Some("light_state"));
     let binding = by_category.or_else(|| item.data_bindings.iter().find(|b| b.alias == "state"));
-    let Some((_, data)) = binding.and_then(|b| home.devices.data_of(&b.device_data_id)) else {
-        return false;
-    };
-    match &data.value {
-        Value::Bool(b) => *b,
-        Value::String(text) => text.to_uppercase() == "ON",
+    match binding.map(|b| &b.value) {
+        Some(EventValue::Bool(b)) => *b,
+        Some(EventValue::Text(text)) => text.to_uppercase() == "ON",
         _ => false,
     }
 }
 
-fn any_light_on(home: &Home, lights: &[Id]) -> bool {
-    lights.iter().any(|light| light_is_on(home, light))
+fn any_light_on(host: &dyn Host, lights: &[IdBytes]) -> bool {
+    lights.iter().any(|light| light_is_on(host, light))
 }
 
 /// Sends `ON` or `OFF` to every light, through its toggle order binding (the category
 /// `light_toggle` or `toggle_power`, else the alias `state`). Fire and forget: the errors are
 /// only the lights with no such binding, as the engine's `turnOnLights`. A disabled light gets
-/// nothing and says nothing; an order the queue refuses (its bound is full) is dropped.
-fn send(home: &Home, instance: Id, lights: &[Id], on: bool, now: u64) -> Vec<String> {
+/// nothing and says nothing; an order the queue refuses (its bound is full) is dropped by the
+/// host.
+fn send(host: &dyn Host, lights: &[IdBytes], on: bool) -> Vec<String> {
     let value = Value::String(if on { "ON" } else { "OFF" }.into());
     let mut errors = Vec::new();
     for light in lights {
-        let Some(item) = home.equipments().get_by_id(light) else {
+        let light = format_id(light);
+        let Some(item) = host.equipment(&light) else {
             errors.push(format!("{light}: no toggle order binding"));
             continue;
         };
-        let by_category = item.order_bindings.iter().find(|b| {
-            home.devices
-                .order_of(&b.device_order_id)
-                .is_some_and(|(_, order)| {
-                    matches!(
-                        order.category.as_deref(),
-                        Some("light_toggle" | "toggle_power")
-                    )
-                })
-        });
+        let by_category = item
+            .order_bindings
+            .iter()
+            .find(|b| matches!(b.category.as_deref(), Some("light_toggle" | "toggle_power")));
         let binding =
             by_category.or_else(|| item.order_bindings.iter().find(|b| b.alias == "state"));
         let Some(binding) = binding else {
             errors.push(format!("{light}: no toggle order binding"));
             continue;
         };
-        if !item.equipment.enabled {
-            continue;
-        }
-        let Ok(commands) = commands_for(
-            &home.devices,
-            std::slice::from_ref(binding),
-            &binding.alias,
-            &value,
-        ) else {
-            continue;
-        };
-        if commands.is_empty() {
-            continue;
-        }
-        let request = OrderRequest {
-            equipment: item.equipment.id,
-            alias: binding.alias.to_string(),
-            value: value.clone(),
-            source: Some(OrderSource::Recipe {
-                instance_id: instance,
-                recipe_name: NAME,
-                recipe_id: ID,
-            }),
-            commands,
-        };
-        if home.orders().push_unattended(request, now).is_err() {
-            log::warn!("recipe order for {light} dropped: the queue of recipe orders is full");
+        if host.order(&item.id, &binding.id, &value) == OrderStatus::NoBinding {
+            errors.push(format!("{light}: no toggle order binding"));
         }
     }
     errors
 }
 
-/// The root zone's `isDaylight` at `wall` (spec 026 R2.4), from the home's settings: `null` without
-/// a location or before the clock is set, read as night.
-fn root_is_daylight(home: &Home, wall: u64) -> Option<bool> {
-    home.sunlight(wall).is_daylight
+/// The root zone's `isDaylight` (spec 026 R2.4), from the home's settings: `null` without a
+/// location or before the clock is set, read as night.
+fn root_is_daylight(host: &dyn Host) -> Option<bool> {
+    host.sunlight().is_daylight
 }
 
 impl MotionLight {
     /// Starts an instance: reads the lights, then switches them to the recipe's idea of the
-    /// state (`syncLightsOnStart`), whatever they were.
-    pub fn start(params: Params, cx: &mut Cx<'_>) -> MotionLight {
-        let on = any_light_on(cx.home, &params.lights);
-        let sources = resolve_motion_sources(cx.home, &params.zone);
+    /// state (`syncLightsOnStart`), whatever they were. `reading` is the zone's motion and
+    /// luminosity as the start saw them.
+    pub fn start(params: Params, reading: (bool, Option<i64>), cx: &mut Cx<'_>) -> MotionLight {
+        let on = any_light_on(cx.host, &params.lights);
+        let sources = resolve_motion_sources(cx.host, &format_id(&params.zone));
         let mut machine = MotionLight {
             p: params,
             sources,
@@ -176,21 +167,21 @@ impl MotionLight {
             timer_expires_at: None,
             failsafe_expires_at: None,
         };
-        machine.sync_lights_on_start(cx);
+        machine.sync_lights_on_start(reading, cx);
         machine.grace_until = 0;
         machine
     }
 
     fn log(&self, cx: &mut Cx<'_>, level: Level, message: impl Into<String>) {
-        cx.lines.push((level, message.into()));
+        cx.log(level, message.into());
     }
 
     // ---- What the home says ----
 
     fn zone_reading(&self, cx: &Cx<'_>) -> (bool, Option<i64>) {
-        cx.home
-            .zone_reading(&self.p.zone, cx.wall)
-            .unwrap_or((false, None))
+        cx.host
+            .zone_data(&format_id(&self.p.zone))
+            .map_or((false, None), |zone| (zone.motion, zone.luminosity))
     }
 
     fn is_too_bright(&self, lux: Option<i64>) -> bool {
@@ -209,7 +200,7 @@ impl MotionLight {
 
     /// Only the automatic turn-on and the start sync look at the daylight.
     fn is_daytime(&self, cx: &Cx<'_>) -> bool {
-        self.p.disable_when_daylight && root_is_daylight(cx.home, cx.wall) == Some(true)
+        self.p.disable_when_daylight && root_is_daylight(cx.host) == Some(true)
     }
 
     // ---- Timers and state keys ----
@@ -278,7 +269,7 @@ impl MotionLight {
     fn turn_on(&mut self, cx: &mut Cx<'_>) {
         self.lights_on_by_recipe = true;
         self.last_known_light_on = true;
-        let errors = send(cx.home, cx.instance, &self.p.lights, true, cx.now);
+        let errors = send(cx.host, &self.p.lights, true);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -301,7 +292,7 @@ impl MotionLight {
         self.lights_on_by_recipe = false;
         self.last_known_light_on = false;
         self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-        let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
+        let errors = send(cx.host, &self.p.lights, false);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -319,7 +310,7 @@ impl MotionLight {
         self.lights_on_by_recipe = false;
         self.last_known_light_on = false;
         self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-        let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
+        let errors = send(cx.host, &self.p.lights, false);
         if !errors.is_empty() {
             self.log(
                 cx,
@@ -339,8 +330,8 @@ impl MotionLight {
 
     // ---- Start sync ----
 
-    fn sync_lights_on_start(&mut self, cx: &mut Cx<'_>) {
-        let (motion, lux) = self.zone_reading(cx);
+    fn sync_lights_on_start(&mut self, reading: (bool, Option<i64>), cx: &mut Cx<'_>) {
+        let (motion, lux) = reading;
         if motion && !self.is_too_bright(lux) && !self.is_daytime(cx) {
             self.turn_on(cx);
         } else if self.is_daytime(cx) {
@@ -373,7 +364,7 @@ impl MotionLight {
             }
             return;
         }
-        let lights_on = any_light_on(cx.home, &self.p.lights);
+        let lights_on = any_light_on(cx.host, &self.p.lights);
         if lights_on && self.is_bright_enough_to_turn_off(lux) {
             if !self.lights_on_by_recipe {
                 if cx.now < self.grace_until {
@@ -497,11 +488,11 @@ impl MotionLight {
     }
 
     fn on_button_action(&mut self, cx: &mut Cx<'_>) {
-        if any_light_on(cx.home, &self.p.lights) {
+        if any_light_on(cx.host, &self.p.lights) {
             self.lights_on_by_recipe = false;
             self.last_known_light_on = false;
             self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
-            let errors = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
+            let errors = send(cx.host, &self.p.lights, false);
             if !errors.is_empty() {
                 self.log(
                     cx,
@@ -539,12 +530,12 @@ impl MotionLight {
                 self.turn_off(cx, &reason);
             }
             OffKind::OverrideClear => {
-                if any_light_on(cx.home, &self.p.lights) {
+                if any_light_on(cx.host, &self.p.lights) {
                     self.lights_on_by_recipe = false;
                     self.last_known_light_on = false;
                     self.grace_until = cx.now.saturating_add(TURN_OFF_GRACE_MS);
                     // The error list is ignored on this path.
-                    let _ = send(cx.home, cx.instance, &self.p.lights, false, cx.now);
+                    let _ = send(cx.host, &self.p.lights, false);
                 }
                 self.clear_override_mode();
                 self.cancel_failsafe();
@@ -568,49 +559,54 @@ impl MotionLight {
     }
 }
 
-impl Runner for MotionLight {
-    fn on_event(&mut self, event: &Event, cx: &mut Cx<'_>) -> Result<(), String> {
+impl MotionLight {
+    /// An event the instance listens to.
+    pub fn on_event(&mut self, event: &Event, cx: &mut Cx<'_>) {
         match event {
             Event::Zone {
                 zone,
                 motion,
                 luminosity,
-            } if *zone == self.p.zone => self.on_zone_changed(*motion, *luminosity, cx),
+            } if parse_id(zone) == Some(self.p.zone) => {
+                self.on_zone_changed(*motion, *luminosity, cx)
+            }
             Event::Zone { .. } => {}
             Event::Equipment {
                 equipment,
                 alias,
                 value,
             } => {
-                if *alias == "state" && self.p.lights.contains(equipment) {
+                let equipment = parse_id(equipment);
+                if alias == "state" && equipment.is_some_and(|e| self.p.lights.contains(&e)) {
                     self.on_light_changed(value, cx);
                 }
-                if *alias == "action" && self.p.buttons.contains(equipment) {
+                if alias == "action" && equipment.is_some_and(|e| self.p.buttons.contains(&e)) {
                     self.on_button_action(cx);
                 }
             }
             Event::Device { device, key, value } => {
                 if self.p.max_on_ms.is_some()
                     && !self.sources.is_empty()
-                    && self
-                        .sources
-                        .iter()
-                        .any(|(d, k)| d == device && **k == **key)
+                    && parse_id(device).is_some_and(|device| {
+                        self.sources
+                            .iter()
+                            .any(|(d, k)| *d == device && **k == **key)
+                    })
                     && is_motion_active(value)
                 {
                     self.reset_failsafe_timer(cx);
                 }
             }
         }
-        Ok(())
     }
 
-    fn tick(&mut self, cx: &mut Cx<'_>) -> Result<(), String> {
+    /// The time passed: the timers that are due fire.
+    pub fn tick(&mut self, cx: &mut Cx<'_>) {
         loop {
             let off_due = self.off.filter(|t| t.at <= cx.now);
             let failsafe_due = self.failsafe.filter(|at| *at <= cx.now);
             match (off_due, failsafe_due) {
-                (None, None) => return Ok(()),
+                (None, None) => return,
                 (Some(off), Some(at)) if at < off.at => self.fire_failsafe(cx),
                 (Some(off), _) => self.fire_off_timer(off.kind, cx),
                 (None, Some(_)) => self.fire_failsafe(cx),
@@ -618,41 +614,66 @@ impl Runner for MotionLight {
         }
     }
 
-    fn state(&self) -> StateKeys {
-        StateKeys {
-            override_mode: self.override_mode.then_some(true),
-            timer_expires_at: self.timer_expires_at,
-            failsafe_expires_at: self.failsafe_expires_at,
+    /// The state keys, as the JSON object `GET /recipe-instances` serves: only the keys that are
+    /// set, in this order (`overrideMode`, `timerExpiresAt`, `failsafeExpiresAt`). At most about
+    /// 110 bytes, far under the SDK's `MAX_STATE_BYTES`.
+    pub fn state_text(&self) -> String {
+        let mut keys: Vec<String> = Vec::new();
+        if self.override_mode {
+            keys.push("\"overrideMode\":true".to_string());
         }
+        if let Some(at) = self.timer_expires_at {
+            keys.push(format!("\"timerExpiresAt\":\"{}\"", format_iso(at)));
+        }
+        if let Some(at) = self.failsafe_expires_at {
+            keys.push(format!("\"failsafeExpiresAt\":\"{}\"", format_iso(at)));
+        }
+        format!("{{{}}}", keys.join(","))
     }
 
-    fn refresh(&mut self, home: &Home, params: &serde_json::Value) {
-        self.sources = resolve_motion_sources(home, &self.p.zone);
-        if let Some(serde_json::Value::Array(list)) = params.get("buttons") {
+    /// The home changed and the instance is kept: takes again its sources and its buttons,
+    /// without touching its timers or state. No order, no log.
+    pub fn refresh(&mut self, host: &dyn Host, params: &Value) {
+        self.sources = resolve_motion_sources(host, &format_id(&self.p.zone));
+        if let Some(Value::Array(list)) = params.get("buttons") {
             // Bounded as at validation: at most `MAX_BUTTONS`.
             self.p.buttons = list
                 .iter()
-                .filter_map(serde_json::Value::as_str)
-                .filter_map(Id::parse)
-                .take(super::params::MAX_BUTTONS)
+                .filter_map(Value::as_str)
+                .filter_map(parse_id)
+                .take(MAX_BUTTONS)
                 .collect();
         } else {
             self.p.buttons.clear();
         }
     }
 
-    fn listen(&self, interest: &mut Interest) {
-        interest.add_zone(self.p.zone);
+    /// What the instance listens to: its zone, its lights' `state`, its buttons' `action`, and,
+    /// with a failsafe, its motion sources (at most `MAX_LISTEN_DEVICES` of them).
+    pub fn listen(&self) -> Vec<ListenEntry> {
+        let mut listen = vec![ListenEntry::Zone {
+            zone: format_id(&self.p.zone),
+        }];
         for light in &self.p.lights {
-            interest.add_equipment(*light, "state");
+            listen.push(ListenEntry::Equipment {
+                equipment: format_id(light),
+                alias: "state".into(),
+            });
         }
         for button in &self.p.buttons {
-            interest.add_equipment(*button, "action");
+            listen.push(ListenEntry::Equipment {
+                equipment: format_id(button),
+                alias: "action".into(),
+            });
         }
         if self.p.max_on_ms.is_some() {
-            for (device, key) in &self.sources {
-                interest.add_device(*device, key);
+            for (device, key) in self.sources.iter().take(MAX_LISTEN_DEVICES) {
+                listen.push(ListenEntry::Device {
+                    device: format_id(device),
+                    key: key.to_string(),
+                });
             }
         }
+        listen
     }
 }

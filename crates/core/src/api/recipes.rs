@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use super::{Request, Response, error, failure, json, method_not_allowed, no_content};
 use crate::devices::Random;
 use crate::home::Home;
-use crate::recipes::{MAX_LOG_ENTRIES, recipe_info, recipe_infos};
+use crate::recipes::MAX_LOG_ENTRIES;
 
 /// The text of a body that is not what the route takes (Sowel's Fastify says more; the text is
 /// not part of the contract).
@@ -41,9 +41,9 @@ pub fn route(
 ) -> Response {
     let query = request.path.split_once('?').map_or("", |(_, query)| query);
     match (segments, request.method) {
-        (["recipes"], "GET") => json(200, &recipe_infos()),
+        (["recipes"], "GET") => json(200, &home.recipes().recipe_infos()),
         (["recipes"], _) => method_not_allowed(),
-        (["recipes", id], "GET") => match recipe_info(id) {
+        (["recipes", id], "GET") => match home.recipes().recipe_info(id) {
             Some(info) => json(200, &info),
             None => error(404, "Recipe not found"),
         },

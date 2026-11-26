@@ -3,11 +3,8 @@
 //! `Invalid params: <message>`.
 
 use serde_json::Value;
-
-use crate::devices::Id;
-use crate::equipments::EquipmentType;
-use crate::home::Home;
-use crate::recipes::duration::parse_duration;
+use solite_recipe_sdk::duration::parse_duration;
+use solite_recipe_sdk::{Host, IdBytes, format_id, parse_id};
 
 /// Lights, and buttons, an instance can have (spec 012, R8.4).
 pub const MAX_LIGHTS: usize = 16;
@@ -19,9 +16,10 @@ const DEFAULT_TIMEOUT: &str = "10m";
 /// Parameters that passed `validate`, resolved.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Params {
-    pub zone: Id,
-    pub lights: Vec<Id>,
-    pub buttons: Vec<Id>,
+    /// Ids are kept as their bytes (16 each): at most 1 + 16 + 16 per instance.
+    pub zone: IdBytes,
+    pub lights: Vec<IdBytes>,
+    pub buttons: Vec<IdBytes>,
     pub timeout_ms: u64,
     pub lux_threshold: Option<f64>,
     pub max_on_ms: Option<u64>,
@@ -76,13 +74,13 @@ fn strings(list: &[Value]) -> Vec<&str> {
     list.iter().filter_map(Value::as_str).collect()
 }
 
-/// The params text without the buttons that are gone or have no `action` data binding any more,
-/// and the name of each (the id for an equipment that does not exist), once per id. `None` when
-/// every button is fine (or the text is not a JSON object with a `buttons` list).
-pub fn prune_stale_buttons(text: &str, home: &Home) -> Option<(Box<str>, Vec<String>)> {
-    let mut value = serde_json::from_str::<Value>(text).ok()?;
-    let Some(Value::Array(list)) = value.as_object_mut()?.get_mut("buttons") else {
-        return None;
+/// Takes out of the params the buttons that are gone or have no `action` data binding any more,
+/// once per id, and gives the name of each (the id as written for an equipment that does not
+/// exist). Empty when every button is fine (or the params are not an object with a `buttons`
+/// list).
+pub fn prune_stale_buttons(params: &mut Value, host: &dyn Host) -> Vec<String> {
+    let Some(Value::Array(list)) = params.as_object_mut().and_then(|o| o.get_mut("buttons")) else {
+        return Vec::new();
     };
     let mut stale: Vec<(String, String)> = Vec::new();
     let before = list.len();
@@ -90,10 +88,9 @@ pub fn prune_stale_buttons(text: &str, home: &Home) -> Option<(Box<str>, Vec<Str
         let Some(id) = entry.as_str() else {
             return true;
         };
-        let item = Id::parse(id).and_then(|id| home.equipments().get_by_id(&id));
-        let name = match item {
+        let name = match host.equipment(id) {
             Some(item) if item.data_bindings.iter().any(|b| b.alias == "action") => return true,
-            Some(item) => item.equipment.name.to_string(),
+            Some(item) => item.name,
             None => id.to_string(),
         };
         if !stale.iter().any(|(seen, _)| seen == id) {
@@ -102,26 +99,22 @@ pub fn prune_stale_buttons(text: &str, home: &Home) -> Option<(Box<str>, Vec<Str
         false
     });
     if list.len() == before {
-        return None;
+        return Vec::new();
     }
-    // Shorter than the text it came from: it stays under `MAX_PARAMS_BYTES`.
-    let text = serde_json::to_string(&value).ok()?.into_boxed_str();
-    Some((text, stale.into_iter().map(|(_, name)| name).collect()))
+    stale.into_iter().map(|(_, name)| name).collect()
 }
 
-/// Sowel's `validate`, against the home as it is.
-pub fn validate(params: &Value, home: &Home) -> Result<Params, String> {
+/// Sowel's `validate`, against the home as the host shows it.
+pub fn validate(params: &Value, host: &dyn Host) -> Result<Params, String> {
     let get = |key: &str| params.get(key);
     // 1, 2: the zone.
     let zone_text = match get("zone") {
         Some(Value::String(text)) if !text.is_empty() => text.as_str(),
         _ => return Err("Zone parameter is required".into()),
     };
-    let zone = home
-        .zones()
-        .find(zone_text)
-        .map(|z| z.id)
-        .ok_or_else(|| format!("Zone not found: {zone_text}"))?;
+    let zone_id = || format!("Zone not found: {zone_text}");
+    let zone = parse_id(zone_text).ok_or_else(zone_id)?;
+    host.zone_data(&format_id(&zone)).ok_or_else(zone_id)?;
     // 4: the lights; the legacy `light` only when `lights` is not a list.
     let lights: Vec<&str> = match get("lights") {
         Some(Value::Array(list)) => strings(list),
@@ -139,30 +132,29 @@ pub fn validate(params: &Value, home: &Home) -> Result<Params, String> {
     // 5: each light, in order.
     let mut light_ids = Vec::with_capacity(lights.len());
     for text in lights {
-        let item = Id::parse(text)
-            .and_then(|id| home.equipments().get_by_id(&id))
+        let item = host
+            .equipment(text)
             .ok_or_else(|| format!("Light equipment not found: {text}"))?;
-        let equipment = &item.equipment;
-        if equipment.kind != EquipmentType::LightOnoff {
+        if item.kind != "light_onoff" {
             return Err(format!(
                 "Light \"{}\" is type \"{}\" but this recipe requires light_onoff",
-                equipment.name,
-                equipment.kind.as_str()
+                item.name, item.kind
             ));
         }
-        if equipment.zone_id != zone {
+        if parse_id(&item.zone_id) != Some(zone) {
             return Err(format!(
                 "Light \"{}\" does not belong to the selected zone",
-                equipment.name
+                item.name
             ));
         }
         if !item.order_bindings.iter().any(|b| b.alias == "state") {
             return Err(format!(
                 "Light \"{}\" has no \"state\" order binding",
-                equipment.name
+                item.name
             ));
         }
-        light_ids.push(equipment.id);
+        light_ids
+            .push(parse_id(&item.id).ok_or_else(|| format!("Light equipment not found: {text}"))?);
     }
     // 6: the timeout.
     let timeout_value = match get("timeout") {
@@ -192,16 +184,18 @@ pub fn validate(params: &Value, home: &Home) -> Result<Params, String> {
             return Err(format!("At most {MAX_BUTTONS} buttons"));
         }
         for text in buttons {
-            let item = Id::parse(text)
-                .and_then(|id| home.equipments().get_by_id(&id))
+            let item = host
+                .equipment(text)
                 .ok_or_else(|| format!("Button equipment not found: {text}"))?;
             if !item.data_bindings.iter().any(|b| b.alias == "action") {
                 return Err(format!(
                     "Button \"{}\" has no \"action\" data binding",
-                    item.equipment.name
+                    item.name
                 ));
             }
-            button_ids.push(item.equipment.id);
+            button_ids.push(
+                parse_id(&item.id).ok_or_else(|| format!("Button equipment not found: {text}"))?,
+            );
         }
     }
     Ok(Params {

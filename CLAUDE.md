@@ -53,10 +53,8 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 ```
 cd ui && npm ci && cd ../tools/z2m-coverage && npm ci   # once, after a clone (same in tools/e2e, the browser test)
 cargo run -p solite-host                     # the host program (Mac)
-cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle Max's radio
-cargo run -p solite-host -- --radio tcp://<address>:6638 --pair|--listen   # start the network and pair | show the measures
-cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # no dongle
-cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API, interface :8080
+cargo run -p solite-host -- --radio tcp://<address>:6638 [--pair|--listen]   # identify the Dongle Max's radio | start the network and pair | show the measures
+cargo run -p solite-host -- --sim scenarios/garage.json --pair 30|--serve --speed 10 [--recipe-script recipes/scripts/motion-light-script.js]   # no dongle | API, interface :8080 (+ a JavaScript script recipe)
 SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
 SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
@@ -70,9 +68,8 @@ sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, r
 sh scripts/box-session.sh --yes-flash --backup <file> | --api-only <port>  # the box session in one pass (the user types it, D55) | its API checks on the Mac
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
 sh scripts/release.sh <x.y.z> --key-file <file>   # a signed release, locally (the CI's release.yml does it on a tag)
-sh scripts/validate.sh [--fast]                  # the verdict; --fast: quick checks (the pre-commit hook)
+sh scripts/validate.sh [--fast] [--skip-slow] [--only rust|ui|firmware|e2e]  # the verdict; --fast: pre-commit hook; --only: a third (CI jobs), e2e opt-in; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
-sh scripts/validate.sh [--skip-slow] --only rust|ui|firmware|e2e  # a third (CI jobs); e2e: opt-in, no CI; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 ```
 
 `sh scripts/validate.sh` is the verdict: docs, format, lint, types, the Sowel contract, tests, UI size budget, the four

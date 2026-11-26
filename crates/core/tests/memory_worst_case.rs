@@ -5,7 +5,9 @@
 //! allocator, so nothing else of the crate's tests may live in it; its two tests take a lock, so
 //! that the second never runs while the first measures.
 //!
-//! Every `pub const MAX_*` of `crates/core/src`, as `file::NAME`, and how the test reaches it
+//! Every `pub const MAX_*` of `crates/core/src`, as `file::NAME`, and of `crates/recipe-sdk/src`
+//! and `crates/recipes` (spec 041), as `recipe-sdk/src/file::NAME` and
+//! `recipes/<crate>/src/file::NAME`, and how the test reaches it
 //! (`every_memory_bound_is_listed_in_the_header` fails when one is missing from this list):
 //!
 //! - `devices/registry.rs::MAX_DEVICES`: 64 devices; a 65th is refused at the end.
@@ -32,8 +34,43 @@
 //! - `recipes/mod.rs::MAX_LOG_ENTRIES`: 50 entries in each instance's log, by button presses.
 //! - `recipes/mod.rs::MAX_LOG_MESSAGE_BYTES`: the log is measured as it is, then the worst case
 //!   (every entry at 200 bytes) is added, as `memory_ceiling.rs` does.
-//! - `recipes/motion_light/params.rs::MAX_LIGHTS`: 16 lights in each instance.
-//! - `recipes/motion_light/params.rs::MAX_BUTTONS`: 16 buttons in each instance.
+//! - `recipes/mod.rs::MAX_SCRIPT_RECIPES`, `recipes/mod.rs::MAX_INSTANCES_PER_SCRIPT`,
+//!   `recipes/script/limits.rs::MAX_SCRIPT_BYTES`,
+//!   `recipes/script/limits.rs::MAX_TIMERS`, `recipes/script/limits.rs::MAX_LOG_LINES_PER_CALL`,
+//!   `recipes/script/limits.rs::MAX_ALIAS_BYTES`, `recipes/script/limits.rs::MAX_END_LINE_BYTES`
+//!   (the end of a script's call, checked by the engine: aliases of 64 bytes, log lines of 1600),
+//!   `recipes/script/slots.rs::MAX_SLOT_EQUIPMENTS`, `recipes/script/slots.rs::MAX_SLOTS`
+//!   (spec 041, script recipes): the script runtimes (2 of 224 KB on the box, 448 KB under the 512 KB ceiling) are QuickJS's
+//!   own memory, which the counting allocator below does not see (QuickJS allocates through the
+//!   C library), on their own line of the budget. The engine's worst case drives no script (none
+//!   is loaded: its ceiling is unchanged); the script's own worst case is the third test of this
+//!   file (`two_scripts_pushed_to_their_limit_with_eight_instances_each`), which loads
+//!   `MAX_SCRIPT_RECIPES` scripts, each with a ballast that takes it to about 85 % of its limit, and
+//!   starts `MAX_INSTANCES_PER_SCRIPT` instances in each. The Mac's limit is `SYSTEM_MEMORY_LIMIT`,
+//!   twice the box's (64-bit pointers): the line it prints is the Mac's, bounded by 2 times that
+//!   limit; the box's 448 KB, under its 512 KB ceiling, is checked in QEMU. The bounds are
+//!   tested in `script_recipes.rs`.
+//! - `recipes/mod.rs::MAX_CARRIED_EVENTS`: events left for the next turn when scripts ran out of
+//!   time (at most 128, the home's own queue bound); empty while no script is slow, as in this
+//!   state.
+//! - `recipes/motion-light/src/params.rs::MAX_LIGHTS`: 16 lights in each instance (the recipe
+//!   moved out of the core, spec 041).
+//! - `recipes/motion-light/src/params.rs::MAX_BUTTONS`: 16 buttons in each instance.
+//! - `recipe-sdk/src/bounds.rs::MAX_LISTEN_ZONES`, `recipe-sdk/src/bounds.rs::MAX_LISTEN_EQUIPMENTS`,
+//!   `recipe-sdk/src/bounds.rs::MAX_LISTEN_DEVICES` (spec 041): the 16 instances' listen sets, each
+//!   at 1 zone and 32 equipments (16 lights, 16 buttons) and the motion sources of the zone; the
+//!   engine keeps each distinct entry once and 2 bytes per entry in each instance, measured here
+//!   in the live bytes.
+//! - `recipe-sdk/src/bounds.rs::MAX_STATE_BYTES`: the state text each of the 16 instances keeps
+//!   (about 110 bytes with the three keys of `motion-light`), measured in the live bytes.
+//! - `recipe-sdk/src/bounds.rs::MAX_ZONE_EQUIPMENT_IDS`,
+//!   `recipe-sdk/src/bounds.rs::MAX_VALUE_TEXT_BYTES`, `recipe-sdk/src/bounds.rs::MAX_LOG_LINES_PER_CALL`,
+//!   `recipe-sdk/src/bounds.rs::MAX_LOG_LINE_BYTES`: texts that live for one call of a recipe (a view
+//!   of an equipment, the ids of a zone, the lines a call logs); the calls of the worst case's
+//!   instances are in the peak, each bound is tested in `solite-recipe-sdk`.
+//! - `recipe-sdk/src/bounds.rs::MAX_PARAMS_DEPTH`: the nesting of params, checked before they are
+//!   parsed a second time; not memory of its own (the params of 2 KB nested as deep as it allows
+//!   are what `recipe_params_memory.rs` measures).
 //! - `home/events.rs::MAX_EVENTS`: more reports than the queue holds, not handed over (128 kept).
 //! - `home/events.rs::MAX_TEXT_BYTES`: a second queue, held alive, of 128 events whose text is
 //!   cut at 32 bytes (no measure carries a text, so the home's own queue never holds one).
@@ -518,8 +555,8 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         value: json!("ON"),
         source: Some(OrderSource::Recipe {
             instance_id: Id::from_random([2; 16]),
-            recipe_name: "Motion light",
-            recipe_id: "motion-light",
+            recipe_name: "Motion light".into(),
+            recipe_id: "motion-light".into(),
         }),
         commands: (0..16)
             .map(|i| DeviceCommand {
@@ -777,30 +814,44 @@ fn every_memory_bound_is_listed_in_the_header() {
         .take_while(|l| l.starts_with("//!"))
         .collect::<Vec<_>>()
         .join("\n");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    sources(&root, &mut files);
+    // The core's own sources, named from `crates/core/src`; the recipe SDK and the recipes, named
+    // from `crates/` (`recipe-sdk/src/bounds.rs`, `recipes/motion-light/src/params.rs`).
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let roots = [
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        crates.join("recipe-sdk/src"),
+        crates.join("recipes"),
+    ];
     let mut missing = Vec::new();
     let mut found = 0;
-    for file in files {
-        let text = std::fs::read_to_string(&file).unwrap();
-        let relative = file
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        for line in text.lines() {
-            let Some(rest) = line.trim_start().strip_prefix("pub const MAX_") else {
-                continue;
-            };
-            found += 1;
-            let name: String = rest
-                .chars()
-                .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
-                .collect();
-            let entry = format!("`{relative}::MAX_{name}`");
-            if !header.contains(&entry) {
-                missing.push(entry);
+    for root in roots {
+        let base = if root.starts_with(Path::new(env!("CARGO_MANIFEST_DIR")).join("src")) {
+            root.clone()
+        } else {
+            crates.clone()
+        };
+        let mut files = Vec::new();
+        sources(&root, &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let relative = file
+                .strip_prefix(&base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            for line in text.lines() {
+                let Some(rest) = line.trim_start().strip_prefix("pub const MAX_") else {
+                    continue;
+                };
+                found += 1;
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
+                let entry = format!("`{relative}::MAX_{name}`");
+                if !header.contains(&entry) {
+                    missing.push(entry);
+                }
             }
         }
     }
@@ -809,4 +860,111 @@ fn every_memory_bound_is_listed_in_the_header() {
         missing.is_empty(),
         "a `pub const MAX_*` is missing from the header of memory_worst_case.rs: {missing:?}"
     );
+}
+
+/// `MAX_SCRIPT_RECIPES` script recipes pushed to their memory limit, `MAX_INSTANCES_PER_SCRIPT`
+/// instances in each (spec 041, R6.5): their memory, QuickJS's own, on its own line.
+#[cfg(feature = "script-recipes")]
+#[test]
+fn two_scripts_pushed_to_their_limit_with_eight_instances_each() {
+    use solite_core::recipes::native::{NativeHost, RecipeName};
+    use solite_core::recipes::script::{
+        SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes, SystemRuntimes,
+    };
+    use solite_core::recipes::{MAX_INSTANCES_PER_SCRIPT, MAX_SCRIPT_RECIPES, ScriptClock};
+    use solite_recipe_sdk::{Clock, Recipe};
+    use std::sync::Arc;
+
+    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut calls = 0u32;
+    let mut random = move |buffer: &mut [u8]| -> Result<(), String> {
+        calls += 1;
+        buffer.fill(0x5A);
+        buffer[..4].copy_from_slice(&calls.to_be_bytes());
+        Ok(())
+    };
+    // A zone with 16 lights, for the instances.
+    let mut counter = 0u32;
+    let list: Vec<DeviceWithDetails> = (0..16).map(|i| device(i, &mut counter)).collect();
+    let devices = Devices::from_list(list);
+    let device_ids: Vec<String> = devices
+        .list()
+        .iter()
+        .map(|d| d.device.id.to_string())
+        .collect();
+    let mut home = Home::from_devices(devices, T0);
+    let created = handle(
+        &mut home,
+        &request("POST", "/api/v1/zones", br#"{"name":"Garage"}"#),
+        T0,
+        &mut random,
+    );
+    assert_eq!(created.status, 201, "{created:?}");
+    let zone = created_id(&created);
+    let lights: Vec<String> = device_ids
+        .iter()
+        .enumerate()
+        .map(|(i, device)| {
+            let body = json!({
+                "name": format!("Light {i}"), "type": "light_onoff",
+                "zoneId": zone, "deviceIds": [device],
+            })
+            .to_string();
+            let created = handle(
+                &mut home,
+                &request("POST", "/api/v1/equipments", body.as_bytes()),
+                T0,
+                &mut random,
+            );
+            assert_eq!(created.status, 201, "{created:?}");
+            created_id(&created)
+        })
+        .collect();
+
+    let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
+    let clock: ScriptClock = Arc::new(|| 0);
+    let params = json!({"zone": zone, "lights": lights, "timeout": "20s", "maxOnDuration": "5m"});
+    let script = include_str!("../../../recipes/scripts/motion-light-script.js");
+    // What a script of this size holds with its instances, with no ballast.
+    let per_recipe = MAX_INSTANCES_PER_SCRIPT;
+    let names = |k: usize| RecipeName {
+        id: format!("motion-light-script-{k}").into(),
+        name: "Motion Light (script)".into(),
+    };
+    let source = |k: usize, ballast: usize| {
+        let text = script.replace("motion-light-script", &format!("motion-light-script-{k}"));
+        format!("{text}\nvar ballast = \"x\".repeat({ballast});\n")
+    };
+    let started = |k: usize, ballast: usize| -> ScriptRecipe {
+        let (mut recipe, _) = ScriptRecipe::load(&source(k, ballast), &runtimes, &clock).unwrap();
+        let name = names(k);
+        let host = NativeHost::new(&home, Id::ROOT_ZONE, &name, T0, T0);
+        for handle in 0..per_recipe {
+            let clock = Clock { mono: T0, wall: T0 };
+            recipe
+                .start(&host, u32::try_from(handle).unwrap(), &params, clock)
+                .unwrap();
+        }
+        recipe
+    };
+    let bare = started(0, 0).held_bytes();
+    // The ballast takes each runtime to about 85 % of its limit (a runtime that still holds 90 %
+    // after a collection has failed).
+    let target = SYSTEM_MEMORY_LIMIT / 100 * 85;
+    let ballast = target - bare;
+    let recipes: Vec<ScriptRecipe> = (0..MAX_SCRIPT_RECIPES)
+        .map(|k| started(k, ballast))
+        .collect();
+    let instances: usize = recipes.iter().map(ScriptRecipe::instance_count).sum();
+    assert_eq!(instances, MAX_SCRIPT_RECIPES * MAX_INSTANCES_PER_SCRIPT);
+    let held: Vec<usize> = recipes.iter().map(ScriptRecipe::held_bytes).collect();
+    let total: usize = held.iter().sum();
+    println!(
+        "script memory: {MAX_SCRIPT_RECIPES} scripts at their limit, {instances} instances: {held:?}, {total} B in all (the Mac's limit is {SYSTEM_MEMORY_LIMIT} B each, the box's limit 224 KB each, under its 512 KB ceiling)"
+    );
+    for bytes in &held {
+        assert!(*bytes <= SYSTEM_MEMORY_LIMIT / 100 * 90, "{held:?}");
+        assert!(*bytes >= SYSTEM_MEMORY_LIMIT / 100 * 80, "{held:?}");
+    }
+    assert!(total < MAX_SCRIPT_RECIPES * SYSTEM_MEMORY_LIMIT, "{total}");
 }

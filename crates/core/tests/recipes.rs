@@ -262,6 +262,60 @@ fn the_seventeenth_instance_and_params_over_2_kb_are_refused() {
     );
 }
 
+/// Params of about 2 KB whose `deep` key nests lists so that the params are `levels` levels deep
+/// (the params object is the first level): the settings, a filler text, and the nesting.
+fn nested_params(g: &Garage, levels: usize) -> Value {
+    let mut deep = json!([]);
+    for _ in 0..levels.saturating_sub(2) {
+        deep = json!([deep]);
+    }
+    let mut params = json!({"zone": g.zone, "lights": [g.light], "deep": deep});
+    let used = params.to_string().len();
+    params["note"] = json!("x".repeat(1990 - used));
+    assert!(params.to_string().len() > 1900 && params.to_string().len() <= 2048);
+    params
+}
+
+#[test]
+fn params_nested_8_levels_deep_are_accepted_and_9_or_100_are_refused_before_validation() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    let too_deep = (400, "Invalid params: params nested too deeply".to_string());
+    // 8 levels, 2 KB: accepted (created, then changed).
+    let (status, body) = rig.instance(nested_params(&g, 8));
+    assert_eq!(status, 201, "{body}");
+    let id = body["id"].as_str().unwrap().to_string();
+    let (status, _) = rig.put(
+        &format!("{}/{id}", base()),
+        json!({"params": nested_params(&g, 8)}),
+    );
+    assert_eq!(status, 200);
+    // 9 and 100 levels, 2 KB: refused, on a create and on an update, the instance untouched.
+    for levels in [9, 100] {
+        assert_eq!(
+            refused(&mut rig, nested_params(&g, levels)),
+            too_deep,
+            "{levels}"
+        );
+        assert_eq!(
+            rig.refused(
+                "PUT",
+                &format!("{}/{id}", base()),
+                &json!({"params": nested_params(&g, levels)}).to_string()
+            ),
+            too_deep,
+            "{levels}"
+        );
+    }
+    let (_, list) = rig.get(&base());
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    // The depth comes before the recipe's own checks: params with no zone at all say it too.
+    assert_eq!(
+        refused(&mut rig, json!({"deep": nested_params(&g, 10)})),
+        too_deep
+    );
+}
+
 fn refused(rig: &mut Rig, params: Value) -> (u16, String) {
     let (status, body) = rig.instance(params);
     (status, body["error"].as_str().unwrap_or("").to_string())

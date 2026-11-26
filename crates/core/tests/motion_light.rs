@@ -7,10 +7,11 @@ mod support;
 
 use mem_storage::MemStorage;
 use serde_json::{Value, json};
+use solite_core::devices::Id;
 use solite_core::home::Home;
-use solite_core::home::events::EventValue;
 use solite_core::radio::zcl::Command;
-use solite_core::recipes::motion_light::{info, is_motion_active, resolve_motion_sources};
+use solite_core::recipes::native::{NativeHost, RecipeName};
+use solite_recipe_motion_light::resolve_motion_sources;
 use support::*;
 
 const SECOND: u64 = 1000;
@@ -18,49 +19,27 @@ const SECOND: u64 = 1000;
 // ---- Definition, motion sources ----
 
 #[test]
-fn the_recipe_info_is_the_json_of_the_reference() {
-    let expected: Value = serde_json::from_str(include_str!("recipe_info.json")).unwrap();
-    assert_eq!(info(), expected);
+fn the_recipe_list_is_the_json_of_the_reference() {
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../recipes/motion-light/tests/recipe_info.json"
+    ))
+    .unwrap();
     let mut rig = Rig::new();
     let (status, list) = rig.get("/api/v1/recipes");
     assert_eq!(status, 200);
     assert_eq!(list, json!([expected.clone()]));
+    let (status, one) = rig.get("/api/v1/recipes/motion-light");
+    assert_eq!((status, one), (200, expected));
 }
 
-#[test]
-fn motion_is_a_true_a_non_zero_number_or_one_of_five_words() {
-    let yes = [
-        EventValue::Bool(true),
-        EventValue::Number(1.0),
-        EventValue::Number(5.0),
-        EventValue::Text("true".into()),
-        EventValue::Text("TRUE".into()),
-        EventValue::Text("on".into()),
-        EventValue::Text("On".into()),
-        EventValue::Text("1".into()),
-        EventValue::Text("occupied".into()),
-        EventValue::Text("detected".into()),
-        EventValue::Text(" detected ".into()),
-    ];
-    for value in yes {
-        assert!(is_motion_active(&value), "{value:?}");
-    }
-    let no = [
-        EventValue::Bool(false),
-        EventValue::Number(0.0),
-        EventValue::Text("false".into()),
-        EventValue::Text("off".into()),
-        EventValue::Text("0".into()),
-        EventValue::Text("clear".into()),
-        EventValue::Text("".into()),
-        EventValue::Null,
-    ];
-    for value in no {
-        assert!(!is_motion_active(&value), "{value:?}");
-    }
-    // A JSON value is cut and converted the same way.
-    assert!(is_motion_active(&EventValue::from_json(&json!("Occupied"))));
-    assert!(!is_motion_active(&EventValue::from_json(&json!(null))));
+/// The motion sources of a zone, as `motion-light` resolves them through the home's host.
+fn sources_of(rig: &Rig, zone: &str) -> Vec<solite_recipe_motion_light::MotionSource> {
+    let recipe = RecipeName {
+        id: "motion-light".into(),
+        name: "Motion Light".into(),
+    };
+    let host = NativeHost::new(&rig.home, Id::ROOT_ZONE, &recipe, rig.now, rig.now);
+    resolve_motion_sources(&host, zone)
 }
 
 #[test]
@@ -71,8 +50,7 @@ fn a_motion_source_is_a_device_and_a_key_once_and_two_devices_are_two_sources() 
     // Two equipments on the same sensor: the same (device, key).
     rig.equipment("Again", "sensor", &g.zone, &[&g.motion_device]);
     rig.equipment("Other", "sensor", &g.zone, &[&second]);
-    let zone = solite_core::devices::Id::parse(&g.zone).unwrap();
-    let sources = resolve_motion_sources(&rig.home, &zone);
+    let sources = sources_of(&rig, &g.zone);
     assert_eq!(sources.len(), 2);
     let keys: Vec<&str> = sources.iter().map(|(_, k)| &**k).collect();
     assert_eq!(keys, ["occupancy", "occupancy"]);
@@ -109,8 +87,7 @@ fn the_motion_sources_of_a_zone_include_a_child_zone_and_skip_other_data_and_dis
     // And a second motion sensor in the zone itself: 3 sources in all.
     let more = rig.motion_sensor(0x55);
     rig.equipment("More", "sensor", &g.zone, &[&more]);
-    let zone = solite_core::devices::Id::parse(&g.zone).unwrap();
-    let sources = resolve_motion_sources(&rig.home, &zone);
+    let sources = sources_of(&rig, &g.zone);
     assert_eq!(sources.len(), 3);
 }
 

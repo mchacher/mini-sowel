@@ -211,6 +211,67 @@ fw_check_update_stack() {
   return 0
 }
 
+# QuickJS in an image (spec 041): true when the ELF $1 holds it (`JS_NewRuntime`, which the linker
+# keeps only when something calls it). The symbol table first (ESP-IDF's own `nm`, found beside its
+# compiler); the bytes of the file when no `nm` is there.
+fw_has_quickjs() {
+  ESPRESSIF=${ESPRESSIF:-${SOLITE_ESPRESSIF:-$ROOT/firmware/.embuild/espressif}}
+  nm=$(ls "$ESPRESSIF"/tools/xtensa-esp-elf/*/xtensa-esp-elf/bin/xtensa-esp32-elf-nm 2>/dev/null | tail -n 1)
+  if [ -n "$nm" ]; then
+    "$nm" "$1" 2>/dev/null | grep -q ' JS_NewRuntime'
+  else
+    grep -aq 'JS_NewRuntime' "$1"
+  fi
+}
+
+# The measuring and the box's images carry no QuickJS, the radio image and the QEMU image's script
+# build do: $1 the ELF, $2 the image's name, $3 `with` or `without`. Prints the reason and returns 1
+# when it is not so (a search that finds nothing anywhere would pass for the wrong reason).
+fw_check_quickjs() {
+  if fw_has_quickjs "$1"; then found=with; else found=without; fi
+  [ "$found" = "$3" ] || { echo "the $2 image is $found QuickJS (JS_NewRuntime in its symbols), it must be $3."; return 1; }
+  return 0
+}
+
+# The script phase of the QEMU image (spec 041 R6.2, `firmware/src/script_phase.rs`), $1 the log:
+# the `recipes: script motion-light-script ...` line is there, the internal RAM's minimum is at
+# least INTERNAL_MIN_KB, the engine thread and the `script` thread keep at least SCRIPT_STACK_MARGIN
+# bytes of their stack unused, the depth script called the engine at its deepest on both (and the
+# create on the script thread answered 201), and the three instances' peak (`script sizes:` line, in bytes) is at
+# most 75 % of the script memory limit (SCRIPT_MEMORY_LIMIT in the core). Prints the reason and
+# returns 1 otherwise.
+SCRIPT_STACK_MARGIN=2048
+fw_check_script_phase() {
+  line=$(grep -a 'recipes: script motion-light-script .* KB source; psram' "$1" | tail -n 1)
+  [ -n "$line" ] || { echo "the script phase's line (recipes: script motion-light-script ... KB source; psram ...) is missing."; return 1; }
+  min=$(echo "$line" | sed -n 's/.*internal +[0-9]* KB (min \([0-9]*\) KB free).*/\1/p')
+  [ -n "$min" ] || { echo "cannot read the internal minimum from the script line: $line"; return 1; }
+  [ "$min" -ge "$INTERNAL_MIN_KB" ] || { echo "the internal RAM minimum free is $min KB during the script phase, below the $INTERNAL_MIN_KB KB kept for the network."; return 1; }
+  engine=$(echo "$line" | sed -n 's/.*engine stack \([0-9]*\) of [0-9]* unused.*/\1/p')
+  script=$(echo "$line" | sed -n 's/.*script thread stack \([0-9]*\) of [0-9]* unused.*/\1/p')
+  [ -n "$engine" ] && [ -n "$script" ] || { echo "cannot read the stacks from the script line: $line"; return 1; }
+  [ "$engine" -ge "$SCRIPT_STACK_MARGIN" ] || { echo "the engine thread keeps $engine bytes of its stack unused with a script recursing, below $SCRIPT_STACK_MARGIN."; return 1; }
+  [ "$script" -ge "$SCRIPT_STACK_MARGIN" ] || { echo "the script thread keeps $script bytes of its stack unused, below $SCRIPT_STACK_MARGIN."; return 1; }
+  # The recursion reached the engine at its deepest on both threads, and the router's create on the
+  # `script` thread answered 201: a stack that is only "unused" because the script never got there
+  # would pass the margin for the wrong reason.
+  for who in engine script; do
+    depth_line=$(grep -a "script phase: $who thread, " "$1" | tail -n 1)
+    called=$(echo "$depth_line" | sed -n 's/.*engine called at \([0-9]*\).*/\1/p')
+    [ -n "$called" ] || { echo "cannot read where the depth script called the engine on the $who thread: $depth_line"; return 1; }
+    [ "$called" -gt 0 ] || { echo "the depth script never called the engine at its deepest on the $who thread (engine called at 0)."; return 1; }
+  done
+  post=$(grep -a 'script phase: script thread, POST status' "$1" | tail -n 1 | sed -n 's/.*POST status \([0-9]*\),.*/\1/p')
+  [ "$post" = 201 ] || { echo "the create of the depth script on the script thread answered ${post:-nothing}, not 201."; return 1; }
+  limit=$(sed -n 's/^pub const SCRIPT_MEMORY_LIMIT: usize = \([0-9]*\) \* 1024;/\1/p' "$ROOT/crates/core/src/recipes/script/limits.rs")
+  [ -n "$limit" ] || { echo "cannot read SCRIPT_MEMORY_LIMIT from the core."; return 1; }
+  sizes=$(grep -a 'script sizes: motion-light-script' "$1" | tail -n 1)
+  peak3=$(echo "$sizes" | sed -n 's/.*3 instances [0-9]* B (peak \([0-9]*\) B).*/\1/p')
+  [ -n "$peak3" ] || { echo "cannot read the three instances' peak from the sizes line: $sizes"; return 1; }
+  [ $((peak3 * 100)) -le $((limit * 1024 * 75)) ] || { echo "three motion-light-script instances peak at $peak3 bytes, above 75 % of the $limit KB script memory limit."; return 1; }
+  return 0
+}
+
 # The engine's line against its limits ($1 the log). Prints the reason and returns 1 when a limit
 # is crossed; returns 0 and sets ENGINE when all hold.
 fw_check_engine() {

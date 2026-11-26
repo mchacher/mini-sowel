@@ -38,3 +38,10 @@ CONFIG_FATFS_MAX_LFN=64
 # bootloader, so it reaches the box only through the bootloader that `scripts/box.sh flash` writes.
 # Until the box has been flashed once over USB, no image is put on probation and nothing rolls back.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# Speed (spec 041, script recipes): QuickJS interprets from the flash through the cache, its heap in
+# PSRAM. The CPU at its full 240 MHz (160 by default), the flash and the PSRAM at 80 MHz (40 by
+# default; the ESP32-D0WDR2-V3's PSRAM takes 80 MHz with the flash at 80). The application's PSRAM
+# start-up sets the flash's clock too, so an image installed over the air runs both at 80 MHz (D77).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_SPIRAM_SPEED_80M=y

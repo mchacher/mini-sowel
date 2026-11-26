@@ -499,7 +499,41 @@ fn http_loop(
     }
 }
 
+/// Loads the script recipes of `--recipe-script` into the home, in the order given, and gives the
+/// line to print for each (spec 041, R4.1): `recipes: script <id> <version> from <file> (<KB> KB
+/// of source, <KB> KB in its runtime)`. The error is the reason, with the file's name.
+pub fn load_scripts(home: &mut Home, files: &[PathBuf]) -> Result<Vec<String>, String> {
+    let runtimes: Arc<dyn solite_core::recipes::script::ScriptRuntimes> =
+        Arc::new(solite_core::recipes::script::SystemRuntimes);
+    let mut lines = Vec::new();
+    for file in files {
+        let name = file.display();
+        let source = std::fs::read_to_string(file)
+            .map_err(|e| format!("--recipe-script {name}: cannot read it: {e}"))?;
+        let summary = home
+            .load_script_recipe(&source, Arc::clone(&runtimes), Arc::new(monotonic_ms))
+            .map_err(|reason| format!("--recipe-script {name}: {reason}"))?;
+        lines.push(format!(
+            "recipes: script {} {} from {name} ({:.1} KB of source, {:.1} KB in its runtime)",
+            summary.id,
+            summary.version.as_deref().unwrap_or("-"),
+            summary.source_bytes as f64 / 1024.0,
+            summary.runtime_bytes as f64 / 1024.0,
+        ));
+    }
+    Ok(lines)
+}
+
+/// The same loading into a home of no use, to refuse a bad script before anything starts.
+pub fn check_scripts(files: &[PathBuf]) -> Result<(), String> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    load_scripts(&mut Home::new(0), files).map(|_| ())
+}
+
 /// Runs until Ctrl-C. `Ok(true)` when Ctrl-C stopped it.
+#[allow(clippy::too_many_arguments)]
 pub fn serve<T: RadioTransport>(
     transport: T,
     label: &str,
@@ -507,6 +541,7 @@ pub fn serve<T: RadioTransport>(
     verbose: bool,
     data: &std::path::Path,
     ui: &Path,
+    scripts: &[PathBuf],
     stop: &AtomicBool,
 ) -> Result<bool, String> {
     let store = FileStore::new(data);
@@ -521,6 +556,11 @@ pub fn serve<T: RadioTransport>(
         guard
             .pairing_mut()
             .set_grace_ms(u64::try_from(crate::close_grace().as_millis()).unwrap_or(u64::MAX));
+        // The script recipes are loaded before the instances start, so an instance of one
+        // that was saved starts with the others.
+        for line in load_scripts(&mut guard, scripts)? {
+            println!("{line}");
+        }
         // The recipe instances start once the home is loaded: their start sync queues its
         // orders, which wait for the radio.
         guard.start_recipes(monotonic_ms(), now_ms());

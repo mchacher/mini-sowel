@@ -165,6 +165,9 @@ impl RadioTransport for Link {
         if let Some(line) = self.uart.serial_report(running) {
             log::info!("{line}");
             log::info!("{}", heap_line(&heap_stats()));
+            for line in crate::scripts::lines() {
+                log::info!("{line}");
+            }
         }
         Ok(count)
     }
@@ -380,9 +383,13 @@ fn run(events: Option<&Sender<Event>>, home_sent: &mut bool) -> Result<(), Failu
             Arc::new(mono),
         ));
         supervisor::set_supervision(&mut guard);
+        // The scripts built into the image are loaded before the instances start (spec 041 R4.2).
+        let script_clock: solite_core::recipes::ScriptClock = Arc::new(mono);
+        crate::scripts::load_built_in(&mut guard, &script_clock);
         guard.start_recipes(mono(), wall_ms());
     }
     supervisor::watch_home(&home);
+    crate::scripts::watch_home(&home);
     if let Some(events) = events {
         let hub = lock(&home).live();
         *home_sent = events

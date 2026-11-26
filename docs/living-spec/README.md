@@ -102,7 +102,15 @@ Each of the three programs starts and says which tool it is, with its version:
   stack, standing for the TLS handshake a box runs there and the image, with no network, cannot
   (D68's margin); the signature check after the download is deeper still, so 1024 bytes is what
   is left at the deepest point (8336 unused measured).
-  The measuring image (`flash-saves`) runs the same check at its boot. `sh scripts/validate.sh` runs it. The image
+  After the `engine:` line the image QEMU runs (built with the scripts, never flashed on the box)
+  runs the realistic home's motion scenario again on three `motion-light-script` instances with the
+  same settings, then a script that recurses as deep as its stack allows, calling the engine at its
+  deepest, on the engine thread and on a `script` job thread, and logs `recipes: script
+  motion-light-script <KB> KB source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB
+  free); engine stack <n> of <n> unused; script thread stack <n> of <n> unused`; the run fails when
+  that line is missing, the three instances' peak passes 75 % of a script's memory limit, the
+  internal RAM minimum is under 64 KB, or either stack keeps less than 2 KB unused.
+  The measuring image (`flash-saves`) runs the same check at its boot, without the scripts. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
   application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
   application in the first slot, at the offset the built table gives. Allocations above 4 KB go
@@ -336,7 +344,9 @@ full (64), <address> ignored`. A `devices.json` that cannot be read stops the ho
 `--serve [port]` (8080 by default), with `--radio` or `--sim`, starts the network as `--pair`
 does (it forms one, with its backup, on a radio that has none; the errors and the `network:` line
 are `--pair`'s, before `serving:`), listens, keeps the devices up to date, sends the orders it receives, and serves on `127.0.0.1` only (the box serves in its own section below; the port must also be free on `[::1]`, which a browser tries first for `localhost`: if another program has it, the host says so and exits 1), with Sowel's bearer token (see "Protects the home with a password"; a browser page
-from another site is also refused by a `Host` check, and by an `Origin` check on `/ws`):
+from another site is also refused by a `Host` check, and by an `Origin` check on `/ws`). With
+`--recipe-script <file.js>` (repeatable) it also runs recipes written as scripts (see "Runs script
+recipes"). The routes:
 
 | Route | Answer |
 | ----- | ------ |
@@ -724,8 +734,10 @@ line: `sowel contract: OK (...)`, naming what it was checked against.
 
 ### Runs the motion-light recipe
 
-The host runs Sowel's `motion-light` recipe (the same id, settings, messages and behaviour as
-Sowel's 1.1.2), through Sowel's routes:
+The host and the box run Sowel's `motion-light` recipe (the same id, settings, messages and
+behaviour as Sowel's 1.1.2), through Sowel's routes. It is built in. The host and the box also run
+recipes written as JavaScript scripts (next section), among them `motion-light-script`, a port of
+this recipe:
 
 - **What it does**: when motion is seen in its zone, it switches its lights on (`light_onoff`
   equipments of that zone); after the timeout (`10m` by default) with no motion, it switches them
@@ -773,8 +785,89 @@ Sowel's 1.1.2), through Sowel's routes:
   no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled.
 - **From the interface**: the instances are made, changed, enabled, disabled and deleted, and
   their log read, from a room's page (see "Shows the home in the browser").
-- **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB, 128 events
-  waiting for the recipes.
+- **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB and nested at
+  most 8 levels deep (deeper: `Invalid params: params nested too deeply`), 128 events waiting for
+  the recipes.
+
+### Runs script recipes
+
+A recipe can also be a **script**: one JavaScript text in Sowel's script-recipe format (Sowel's
+`roadmap/ai-script-recipes/spec.md`), run by QuickJS, a small JavaScript engine built into the host
+and the box. To the API it is a recipe like the built-in one: it is listed by `GET /recipes` (after
+the built-in recipes), its instances are made, changed, enabled, disabled and deleted through the
+same routes and from a room's page, with the same log, state and events.
+
+- **Its form**: `recipe({ api: 1, id, name, description, slots, icon?, i18n?, version?, validate?,
+  start })`, called once. `api` must be 1; `id` is 1 to 64 lower-case letters, digits and `-`, not a
+  built-in recipe's. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
+  `boolean`, `select`), written as an object by slot id; the slot `zone` is added first when missing.
+  The settings are checked by the program from the slots before the script runs (`Invalid params:
+  <slot> is required`, `... must be a number between <min> and <max>`, `...: invalid duration`,
+  `... must be one of ...`, `...: equipment not found`, `...: <name> is not a <type>`, `...: <name>
+  is not in the zone`, `...: at most 16 equipments`), then by the script's own `validate` if it has
+  one.
+- **What a script may do**: `on(slot, alias, fn)` when a data of an equipment of a slot is updated;
+  `onZone(alias, fn)` at each change of its zone's aggregate (`motion`, `luminosity`,
+  `motionSensors`); `onMotionReport(fn)` at each report of a motion sensor of the zone, which
+  Sowel's draft does not have; `get(slot, alias)`; `order(slot, alias, value)`, to every enabled
+  equipment of the slot, answering the ones refused; timers `after` (at least 100 ms), `every` (at
+  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (time, sun);
+  `state.set/get/delete` (at most 512 bytes, served as the instance's `state`); `log`, `log.warn`,
+  `log.error`, `console.log` (at most 20 lines per call). It names equipments only through its
+  slots: a call with another name answers `Unknown slot`, and a script has no way to reach an
+  equipment the user did not put in its settings. Instances of the same script recipe share its
+  runtime and its handles, so they can reach each other: the isolation is between recipes (each has
+  its own runtime) and from the equipments outside an instance's settings. An `equipment` or `zone`
+  slot cannot have a default (`Script recipe invalid: slot <id>: a default is not allowed for type
+  <type>`). A function of a script has no source text: `Function.prototype.toString` answers
+  `[native code]` (a difference from Sowel). `mode`, `energy` and
+  `history` answer `Not available in Solite`. Its top-level variables are shared by all its
+  instances; what belongs to one instance lives inside `start`.
+- **Where scripts come from**: on the Mac, `solite-host ... --serve --recipe-script <file.js>`, up to
+  2 times, loads each script before the instances start and prints `recipes: script <id> <version>
+  from <file> (<KB> KB of source, <KB> KB in its runtime)`; a file that is missing or refused
+  (`Script recipe invalid: <reason>`), a third script, or the flag without `--serve` stop the host
+  with exit status 2. The box's radio image carries the scripts of `recipes/scripts/` and loads them
+  at start. A script is not downloaded or signed yet.
+- **`motion-light-script`**: the port of `motion-light` with the same slots and behaviour, the
+  safety auto-off reset at each motion report. It differs from the built-in recipe in its validation
+  texts, in what it does when a button loses its `action` binding (the instance is disabled, where
+  the built-in one drops the button), in the legacy `light` key it does not read, and in the reason
+  texts of a refused order.
+- **Bounds**: 2 scripts of at most 16 KB, at most 8 instances of each (a ninth is refused: 400 `Too
+  many instances of <recipe id> (max 8)`; on restore the ninth and later fail to restore with that
+  text and stay stopped); each runs in its own QuickJS runtime of at most 224 KB on the box (448 KB
+  on the Mac, whose pointers are twice as large), shared by its instances; loading a script stops
+  after 1000 ms (`Script recipe invalid: the script took more than 1000 ms when loaded`); a call
+  into a script stops after 200 ms, its stack at 16 KB; no event or timer goes to a script once
+  300 ms of a turn of the engine's loop are spent on scripts (the one under way finishes: one call
+  per instance, or per equipment holding a reporting motion sensor, each of at most 200 ms), the rest
+  waiting for the next turn (the built-in recipes get each event at
+  once whatever the scripts spent); a failed script's restart, one recipe per turn, counts in those
+  300 ms, and its load may take up to its 1000 ms limit (that turn is longer). A call that leaves
+  the runtime over 85 % of its memory limit, or 32 KB more than the last collection left, is
+  followed by a garbage collection. The engine checks the end of each call (the state is a JSON
+  object of at most 512 bytes, at most 16 timers, aliases of at most 64 bytes, at most 21 log lines):
+  a script that makes it otherwise fails the recipe. A ninth instance never runs, whichever way it
+  is started (a restart after a failure leaves it stopped, `Failed to restart: Too many instances
+  of <recipe id> (max 8)`). On the box the scripts' memory is in PSRAM and every call into a script
+  runs on a stack in internal RAM (the engine thread, or the `script` thread, made at boot, for
+  the API's requests that change something, but the account's routes `/api/v1/auth/*`, which stay on the worker).
+- **When a script fails** (a call that throws): `Script error: <message>` in the instance's log, and
+  the instance runs on (`Failed to start: Script error: ...` if it was the start); a throw inside a
+  promise's `then` that no `catch` handled is `Script error: <message>` too, and a stack overflow
+  there fails the recipe. **When a script
+  recipe fails** (a call over its time, its memory or its stack): its running instances stop with
+  `Script recipe failed: <reason>` and the events `recipe.instance.stopped` and
+  `recipe.instance.error`; they stay enabled and are not written, the rest runs on, and a settle
+  leaves them alone. A minute later the recipe is started again with its enabled instances (`Script
+  recipe restarted (<n> of 3 in 24 h)`), at most 3 times in 24 hours; then it waits for `POST
+  .../enable` on one of its instances, a create or change of one, or a restart, which start all its
+  enabled instances (a recipe that fails again at once answers 500 `Script recipe failed:
+  <reason>`).
+- **On the box**: the radio image logs `recipes: script <id> ...` at start and, with each `heap:`
+  line, `scripts: <id> <n> instances, <n> calls, average <µs> µs, max <µs> µs, heap <KB> KB (peak
+  <KB> KB)`.
 
 ### Shows the home in the browser
 
@@ -1630,7 +1723,9 @@ recipe instances with full logs, a live client with a full queue, the largest an
 In the emulated ESP32 it stays under 350 KB for the realistic home with the fixture scenario
 playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
 fills them). The same image pulls a release from an in-memory fetch adapter on a thread of 20 KB
-and must leave 8 KB of that stack unused, the room for the TLS handshake the box runs. It stays
+and must leave 8 KB of that stack unused, the room for the TLS handshake the box runs. Script
+recipes have a ceiling of their own, 512 KB for the 2 of them at their limit (224 KB each), counted beside the
+engine's in both the realistic home and the worst case. It stays
 under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
 equipments of 16 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
@@ -1649,7 +1744,8 @@ measures, measured on the Mac. It shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
 wiring and its risks.
 
-No mode exists in the tool, and `motion-light` is its only recipe; the host keeps the devices,
+No mode exists in the tool; `motion-light` is its only built-in recipe, beside the script
+recipes; the host keeps the devices,
 zones, equipments, recipe instances, the account and the network backup, makes and restores the full backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
@@ -1694,3 +1790,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 035 | The full backup: one password-protected file with the home, the Zigbee network and the Wi-Fi settings, streamed both ways, checked whole before a restore replaces the home at the next start; the radio forms the restored network; a Backup card |
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
+| 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |

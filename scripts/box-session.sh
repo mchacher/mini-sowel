@@ -32,7 +32,7 @@
 # the repository), SOLITE_SESSION_{CLOCK,BOOT,CONFIRM,ROLLBACK,RATE}_WAIT and SOLITE_SESSION_POLL
 # (seconds).
 #
-# `--group auth|home|update|reset|permit` is how the script calls itself inside `box.sh saves` (and
+# `--group auth|home|update|reset|permit|script` is how the script calls itself inside `box.sh saves` (and
 # how the tests call one group): it runs one group against SOLITE_BOX_ADDRESS, with the run folder
 # in SOLITE_SESSION_DIR. `permit` only closes the pairing window (before measure-api.sh, B6). The
 # groups read SOLITE_SESSION_API_ONLY (set by --api-only: the target is the Mac host, so the
@@ -833,6 +833,171 @@ group_permit() {
   check 0 "pairing closed" OK
 }
 
+# ---- script recipe (spec 041, R7) ----
+
+# The garage's `motion-light` instance, from the list of instances on the standard input: its id,
+# then the body that creates a `motion-light-script` instance with the same zone, lights, buttons
+# and lux settings and the timeout $1; the first light's id last. Nothing when there is none.
+SCRIPT_COPY_PY=$(cat <<'PY'
+import sys, json
+timeout = sys.argv[1]
+for instance in json.load(sys.stdin):
+    if instance.get("recipeId") != "motion-light" or not instance.get("enabled", True):
+        continue
+    params = instance.get("params") or {}
+    copy = {k: params[k] for k in ("zone", "lights", "buttons", "luxThreshold", "disableWhenDaylight") if k in params}
+    copy["timeout"] = timeout
+    lights = params.get("lights") or []
+    print(instance["id"])
+    print(json.dumps({"recipeId": "motion-light-script", "params": copy}))
+    print(lights[0] if lights else "")
+    break
+PY
+)
+
+# on, off or unknown: the light of an equipment (the file $1 holds its JSON): a data of category
+# `light_state` first, else the alias `state`, as the script reads it.
+LIGHT_PY=$(cat <<'PY'
+import sys, json
+try:
+    equipment = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    print("unknown")
+    sys.exit(0)
+bindings = equipment.get("dataBindings") or []
+chosen = [b for b in bindings if b.get("category") == "light_state"] or [b for b in bindings if b.get("alias") == "state"]
+if not chosen:
+    print("unknown")
+else:
+    value = chosen[0].get("value")
+    print("on" if value is True or str(value).upper() == "ON" else "off" if value is not None else "unknown")
+PY
+)
+
+light_state() {
+  http GET "/equipments/$1" -H "@$AUTH_FILE"
+  if [ "$CODE" != 200 ]; then printf unknown; return; fi
+  python3 -c "$LIGHT_PY" "$TMP/body"
+}
+
+# Puts the garage back as it was, always (also after a failure or a signal): the script instance
+# deleted, the `motion-light` instance enabled again. A fresh login first: the access token may
+# have expired during the wait.
+script_cleanup() {
+  [ -n "${SCRIPT_INSTANCE:-}${GARAGE_DISABLED:-}" ] || return 0
+  relogin || :
+  _left=
+  if [ -n "${SCRIPT_INSTANCE:-}" ]; then
+    http DELETE "/recipe-instances/$SCRIPT_INSTANCE" -H "@$AUTH_FILE"
+    case "$CODE" in 200 | 204) SCRIPT_INSTANCE= ;; *) _left="the script instance $SCRIPT_INSTANCE was not deleted ($CODE)" ;; esac
+  fi
+  if [ -n "${GARAGE_DISABLED:-}" ]; then
+    http POST "/recipe-instances/$GARAGE_DISABLED/enable" -H "@$AUTH_FILE" -H "$JSON" -d '{}'
+    case "$CODE" in 200 | 204) GARAGE_DISABLED= ;; *) _left="${_left:+$_left; }motion-light $GARAGE_DISABLED was not enabled again ($CODE)" ;; esac
+  fi
+  if [ -z "$_left" ]; then
+    check 7 "garage put back" OK "script instance deleted, motion-light enabled again"
+  else
+    check 7 "garage put back" KO "$_left"
+  fi
+}
+
+# The person's wave (a seam for the tests: SOLITE_SESSION_WAVE=auto asks nobody).
+ask_wave() {
+  [ "${SOLITE_SESSION_WAVE:-}" != auto ] || return 0
+  (exec </dev/tty) 2>/dev/null || return 1
+  printf '\nbox-session: %s (spec 041): wave at the garage motion sensor now, for a few seconds, then press Enter\n' "$GID" >/dev/tty
+  IFS= read -r _wave </dev/tty || return 1
+}
+
+# Polls the light for at most $2 seconds until it is $1 (on or off); returns 0 when it was.
+wait_light() {
+  _want=$1 _max=$2
+  _t=0
+  while :; do
+    [ "$(light_state "$LIGHT")" != "$_want" ] || return 0
+    [ "$_t" -lt "$_max" ] || return 1
+    sleep "${SOLITE_SESSION_SCRIPT_POLL:-1}"
+    _t=$((_t + ${SOLITE_SESSION_SCRIPT_POLL:-1}))
+  done
+}
+
+group_script() {
+  group_login || return
+  SCRIPT_INSTANCE=
+  GARAGE_DISABLED=
+  # Whatever happens below, the garage is put back (a signal ends the shell through `exit`).
+  trap 'script_cleanup; rm -rf "$TMP"' EXIT
+
+  # 1. The garage's instance, and the script recipe on the box.
+  http GET /recipes -H "@$AUTH_FILE"
+  if [ "$CODE" != 200 ] || ! grep -aq '"id":"motion-light-script"' "$TMP/body"; then
+    check 1 "script recipe on the box" KO "GET /recipes answered $CODE, motion-light-script is not in the list"
+    return
+  fi
+  http GET /recipe-instances -H "@$AUTH_FILE"
+  if [ "$CODE" != 200 ]; then
+    check 1 "garage instance" KO "GET /recipe-instances answered $CODE"
+    return
+  fi
+  _copy=$(python3 -c "$SCRIPT_COPY_PY" "${SOLITE_SESSION_SCRIPT_TIMEOUT:-1m}" <"$TMP/body" 2>/dev/null)
+  GARAGE=$(printf '%s\n' "$_copy" | sed -n 1p)
+  _create=$(printf '%s\n' "$_copy" | sed -n 2p)
+  LIGHT=$(printf '%s\n' "$_copy" | sed -n 3p)
+  if [ -z "$GARAGE" ]; then
+    check 1 "garage instance" skipped "the box has no enabled motion-light instance to copy the settings from"
+    return
+  fi
+  if [ -z "$LIGHT" ]; then
+    check 1 "garage instance" KO "the motion-light instance $GARAGE has no light"
+    return
+  fi
+  check 1 "garage instance" OK "motion-light $GARAGE, light $LIGHT"
+
+  # 2. Its place taken by a script instance with the same settings and a timeout of 1 minute.
+  http POST "/recipe-instances/$GARAGE/disable" -H "@$AUTH_FILE" -H "$JSON" -d '{}'
+  if [ "$CODE" != 200 ] && [ "$CODE" != 204 ]; then
+    check 2 "script instance" KO "disabling motion-light answered $CODE: $(errtext)"
+    return
+  fi
+  GARAGE_DISABLED=$GARAGE
+  printf '%s' "$_create" >"$TMP/create.json"
+  http POST /recipe-instances -H "@$AUTH_FILE" -H "$JSON" --data-binary "@$TMP/create.json"
+  if [ "$CODE" != 201 ]; then
+    check 2 "script instance" KO "creating the motion-light-script instance answered $CODE: $(errtext)"
+    return
+  fi
+  SCRIPT_INSTANCE=$(jget "$TMP/body" id 2>/dev/null) || SCRIPT_INSTANCE=
+  check 2 "script instance" OK "motion-light-script $SCRIPT_INSTANCE, timeout ${SOLITE_SESSION_SCRIPT_TIMEOUT:-1m}"
+
+  # 3. The wave: the light on within 10 s of it, then off within 90 s of the light being seen on (the
+  # instance's timeout is 1 minute from the last motion, which is no later than that moment).
+  if ! ask_wave; then
+    check 3 "light on" KO "no terminal to ask the person at"
+    return
+  fi
+  if wait_light on "${SOLITE_SESSION_ON_WAIT:-10}"; then
+    check 3 "light on" OK "on within ${SOLITE_SESSION_ON_WAIT:-10} s of the wave"
+  else
+    check 3 "light on" KO "the light $LIGHT was not on ${SOLITE_SESSION_ON_WAIT:-10} s after the wave"
+    return
+  fi
+  if wait_light off "${SOLITE_SESSION_OFF_WAIT:-90}"; then
+    check 4 "light off" OK "off within ${SOLITE_SESSION_OFF_WAIT:-90} s of being seen on"
+  else
+    check 4 "light off" KO "the light $LIGHT was still on ${SOLITE_SESSION_OFF_WAIT:-90} s after it was seen on"
+    return
+  fi
+
+  # 4. The box prints its `heap:` and `scripts:` lines every 240 s: the session's serial log, read
+  # by the step once this ends, holds the next ones if the script instance stays that long. The
+  # wait is the whole 240 s and not "at most": `box.sh saves` writes the session's log file only
+  # when the session ends (`keep_log`, an `atexit` of its serial reader), and gives this command
+  # nothing to read it by, so the `scripts:` line cannot be polled from here to stop early.
+  sleep "${SOLITE_SESSION_SCRIPT_WAIT:-240}"
+  check 5 "instance kept for the lines" OK "${SOLITE_SESSION_SCRIPT_WAIT:-240} s"
+}
+
 if [ "${1:-}" = --group ]; then
   GROUP=${2:-}
   case "$GROUP" in
@@ -841,7 +1006,8 @@ if [ "${1:-}" = --group ]; then
     update) GID=B8 ;;
     reset) GID=B10 ;;
     permit) GID=B6 ;;
-    *) echo "box-session: --group takes auth, home, update, reset or permit" >&2; exit 2 ;;
+    script) GID=B11 ;;
+    *) echo "box-session: --group takes auth, home, update, reset, permit or script" >&2; exit 2 ;;
   esac
   GID=${SOLITE_SESSION_ID:-$GID}
   SDIR=${SOLITE_SESSION_DIR:-}
@@ -1498,6 +1664,40 @@ step_b10() {
 HAVE_TTY=false
 (exec </dev/tty) 2>/dev/null && HAVE_TTY=true
 
+# The script recipe on the box (spec 041, R7): a person at the garage's motion sensor. The group
+# swaps the garage's `motion-light` for a `motion-light-script` instance, checks the light goes on
+# and off, and always puts the garage back; this step then reads the serial log of its `saves`
+# session for the `scripts:` line (the instance listed, with calls) and the `heap:` line before it,
+# whose internal RAM minimum must be at least INTERNAL_MIN_KB.
+step_b11() {
+  _name="script recipe (041)"
+  if ! $GESTURES; then report B11 "$_name" skipped "needs a person: --with-gestures"; return; fi
+  if ! $HAVE_TTY && [ "${SOLITE_SESSION_WAVE:-}" != auto ]; then report B11 "$_name" skipped "no terminal"; return; fi
+  precheck B11 "$_name" api w || return
+  account_usable B11 "$_name" || return
+  refresh_password
+  via_saves B11 5 sh "$SELF" --group script
+  if $API_ONLY; then
+    printf 'box-session: B11.6 serial lines: skipped (box only)\n' >>"$SV_OUT"
+  elif [ -z "$SV_LOG" ] || [ ! -f "$SV_LOG" ]; then
+    printf 'box-session: B11.6 serial lines: KO (no serial log)\n' >>"$SV_OUT"
+  else
+    _pair=$(awk '/heap: internal/ { h = $0 } /scripts: motion-light-script [1-9][0-9]* instances/ { print h; print $0 }' "$SV_LOG" | tail -n 2)
+    _h=$(printf '%s\n' "$_pair" | sed -n 1p)
+    _sl=$(printf '%s\n' "$_pair" | sed -n 2p)
+    _min=$(printf '%s' "$_h" | sed -n 's/.*heap: internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')
+    if [ -z "$_sl" ] || [ -z "$_h" ]; then
+      printf 'box-session: B11.6 serial lines: KO (no scripts: line with the script instance in the log, or no heap: line before it)\n' >>"$SV_OUT"
+    elif [ -z "$_min" ] || [ "$_min" -lt "$INTERNAL_MIN_KB" ]; then
+      printf 'box-session: B11.6 serial lines: KO (internal RAM minimum %s KB, below %s KB)\n' "${_min:-unreadable}" "$INTERNAL_MIN_KB" >>"$SV_OUT"
+    else
+      printf 'box-session: B11.6 serial lines: OK (%s; %s)\n' "$(printf '%s' "$_sl" | sed 's/^.*scripts: //')" "$(printf '%s' "$_h" | sed 's/^.*heap: //')" >>"$SV_OUT"
+    fi
+  fi
+  finish_group B11 "$_name" "$SV_OUT" "$SV_RC"
+}
+
+
 # $1 id, $2 spec, $3 what the person does (short), $4 what to look at.
 gesture() {
   if ! $GESTURES; then report "$1" "gesture ($2)" skipped "needs a person: $3"; return; fi
@@ -1543,6 +1743,7 @@ step_b4
 step_b5
 step_b6
 step_b7
+step_b11
 step_b8
 step_b9
 step_b10

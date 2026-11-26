@@ -12,7 +12,6 @@ use serde::Serialize;
 use super::Home;
 use crate::devices::{Id, stored_item};
 use crate::equipments::{EquipmentType, details};
-use crate::recipes::StateKeys;
 
 /// Items written per chunk.
 pub const CHUNK_ITEMS: usize = 4;
@@ -64,7 +63,9 @@ struct WithState<'a> {
     enabled: bool,
     #[serde(with = "crate::devices::iso")]
     created_at: u64,
-    state: StateKeys,
+    /// The state text the recipe wrote, as written.
+    #[serde(with = "crate::recipes::raw_json")]
+    state: &'a str,
 }
 
 /// Counts the bytes written to it and keeps none.
@@ -259,7 +260,7 @@ impl ListCursor {
                         params: &instance.params,
                         enabled: instance.enabled,
                         created_at: instance.created_at,
-                        state: home.recipes().state_of(id).unwrap_or_default(),
+                        state: home.recipes().state_of(id).unwrap_or("{}"),
                     },
                 ),
                 None => return Ok(()),

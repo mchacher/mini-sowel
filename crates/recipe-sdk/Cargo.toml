@@ -1,0 +1,15 @@
+[package]
+name = "solite-recipe-sdk"
+description = "The contract between Solite's engine and a recipe: the Recipe and Host traits, the events, the views and the bounds (spec 041). No dependency on the core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
