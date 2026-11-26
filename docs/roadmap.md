@@ -211,24 +211,29 @@ possible without hardware.
 
 ## Later milestones
 
-One line each, planned when their turn comes, in this order. The letter D is skipped: decisions
-are D1, D2...
+Decided with the user on 2026-11-26 after a comparison with Sowel's base features (recipes
+themselves are a separate subject). Planned when their turn comes, in this order. The letter D is
+skipped: decisions are D1, D2...
 
-- **C. Recipe proposals**: pair a sensor, pick the room, accept the proposal; Sowel's modes
-  (depends on a prototype in the current Sowel).
-- **I. Device recognition beyond the standard clusters**: Zigbee2MQTT definitions export (Tuya
-  datapoint interpreter included), Philips' brand library, hand-written definitions for the
-  common Legrand, Sonoff and Aqara devices, Philips' functions counted per brand first; equipment
-  types with behaviour beyond the eight of D43, zone orders, window contacts; alarm devices beyond motion, contact, leak
-  and smoke (sirens, keypads, CO, vibration).
-- **H. Daily use**: 24 h history (bounded by constants), MQTT export, mini PWA, languages beyond
-  French and English, radio firmware update, recipe logs and state kept across a restart.
-- **F. WebAssembly recipes**: signed `.wasm` recipes run in `wasmi`, signed files updated without
-  restart; a recipe's memory bounded first (about 78 KB each in `wasmi` against 7 KB native).
-- **G. Link with Sowel**: the box's equipments in Sowel (depends on `sowel-plugin-solite`, which
-  first publishes the box's devices, then its equipments and zones once Sowel lets a plugin
-  publish them: Sowel issue, draft ready).
-- Beyond the true north, not planned: Matter bridge; product track (decision D5).
+| Rank | Milestone | Content | Note |
+| ---- | --------- | ------- | ---- |
+| 1 | **F. WebAssembly recipes** | Signed `.wasm` recipes run in `wasmi`, downloaded and updated without restart; a recipe's memory bounded first (about 78 KB each in `wasmi` against 7 KB native) | Raised to first place by the user: recipes outside the firmware are what lets Sowel's recipes be reused |
+| 2 | **I1. Targeted recognition** | Data and order categories for common devices, with their clusters: `action` (buttons: On/Off, Level and Scenes commands), `contact_window` (IAS contact on a window; today every IAS contact is `contact_door`), `power`, `energy`, `current` (Electrical Measurement `0x0B04`, Metering `0x0702`), `shutter_position` with `shutter_move` and `set_shutter_position` (Window Covering `0x0102`), `setpoint` with `set_setpoint` (Thermostat `0x0201`) | Solite knows 15 of Sowel's about 75 categories; the types `button`, `shutter` and `thermostat` exist but nothing feeds them |
+| 3 | **I2. Equipment types without rules** | Binding rules and zone counts of Sowel for `water_heater`, `heater`, `water_valve`, `vmc`, then the others (23 types accepted without rules) | As a real device needs one, not before |
+| 4 | **C1. Minimal modes** | Sowel's modes (day, night, away), their routes and events; no calendar and no triggers at first | Added to the roadmap; a prerequisite of proposals (the rest of C) and of G |
+| 5 | **G. Link with Sowel** | The box's equipments in Sowel (depends on `sowel-plugin-solite`, which first publishes the box's devices, then its equipments and zones once Sowel lets a plugin publish them) | After the modes. The Sowel issue is opened early (draft ready) |
+| 6 | **Monitoring finishes** | `GET /api/v1/health`, a supervisor card in the interface, Sowel's `system.update.available`, `.progress` and `.error` events | Lines of the inbox |
+| 7 | **H. Daily use** | 24 h history (bounded by constants), MQTT export, mini PWA, languages beyond French and English, radio firmware update, recipe logs and state kept across a restart | After the rest |
+| 8 | **Notifications** | Telegram, web push | Not a priority: stays in the inbox until the user says otherwise |
+
+Rest of **C** (pair a sensor, pick the room, accept the proposal) follows C1 and the recipes;
+rest of **I** (Zigbee2MQTT definitions export with the Tuya datapoint interpreter, Philips'
+library, hand-written Legrand, Sonoff and Aqara definitions, alarm devices beyond motion, contact,
+leak and smoke) is planned after I2.
+
+Outside Solite's scope, reached through Sowel with G when at all: energy and the solar arbiter,
+cameras, shared access, several users and MFA, the integrations store, AI recipes and MCP.
+Beyond the true north, not planned: Matter bridge; product track (decision D5).
 
 ## Inbox
 
@@ -493,4 +498,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-26: spec 039 built on the Mac and in QEMU (the user away; nothing tagged, no secret created, the box not touched): the box and the host check a release's `manifest.json` and pull the `.sup` it names (`POST /system/version/check`, an empty `POST /system/update`, `GET /system/version` from the cache), through spec 032's installation; the core follows the redirects and bounds every size and time, the box fetches over TLS with ESP-IDF's common certificate bundle on a thread of 20 KB (D65 to D69); an automatic check, off by default, with the settings `update.manifestUrl` and `update.autoCheck`. J5b's step 2 built; TLS and the real GitHub address are in "Tests to run with the box in hand". Six inbox lines added (the interface's button and notes, resuming a download, a given version, Sowel's update events, `release.sh` and the manifest's size, the default of `update.autoCheck`).
 - 2026-11-26: spec 040 built on the Mac and in QEMU (the user away; nothing tagged, no secret created, the box not touched): J5b's step 3. A key rotation is a bridging release declared by `release/update-key.bridge`, with the next key checked, two secrets in the CI and a procedure and a leaked-key section in `docs/release.md`, its logic proved by a Mac chain test with two host builds (D70); the Settings page's update card checks, links the release notes, updates after a confirmation and polls through the restart, and every save of the page sends the whole settings map (D71); a cut download resumes with a `Range` request, three tries at most (D72), and QEMU's pull check includes one cut and its resume. Two observations of spec 039's box run settled: (a) pinned by a test and logged with the address, (b) not reproduced. Inbox lines resolved and removed: the interface's button and notes, and resuming a cut download. The box checks are in "Tests to run with the box in hand".
 - 2026-11-26: second run on the box (radio image of main with a test update key): the release download of spec 039 works (a version check against a Mac server: 0.1 s, `latest 0.1.1`; a pull with an empty body installed 0.1.1 in 36 s and the box came back on it) and TLS reaches GitHub (certificate validated, redirect followed, 404 as no release exists yet, update-check thread stack 14.7 KB unused of 20 KB, update-pull 9.9 KB unused); the resume of spec 040 works (the server cut the image after 900,000 bytes, the box asked again with a Range request, got 206 and finished: 39 s). Not run on the box: the Settings update card in a browser, the key rotation (needs two test-key images and a USB flash), the first check right after a restart (observation a of spec 040), the internal RAM minimum during a TLS session. The real release feed (tag, secret, key) waits for the author.
-
+- 2026-11-26: priorities after milestone J set with the user, from a comparison of Sowel's base features with Solite's subset (recipes apart): WebAssembly recipes first (F), then targeted recognition (I1), equipment types without rules as devices need them (I2), minimal modes added (C1), the link with Sowel after the modes (G), the monitoring finishes, history and MQTT (H), notifications not a priority. The later milestones are now a ranked table. Inbox lines kept: they are the sources of I2, C1 and the monitoring finishes.
