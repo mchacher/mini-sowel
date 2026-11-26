@@ -23,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   cleanup();
   resetStores();
   vi.restoreAllMocks();
@@ -74,6 +75,8 @@ describe("SettingsPage, Home card", () => {
     expect(field("Latitude").value).toBe("48.8566");
     fireEvent.change(screen.getByLabelText("Timezone"), { target: { value: "Europe/Paris" } });
     fireEvent.click(save()!);
+    // The button reads "Saving..." while the GET then the PUT (saveSettings) run.
+    await waitFor(() => expect(api.count("PUT /api/v1/settings")).toBe(1));
     await waitFor(() => expect(save()).toBeNull());
     expect(api.calls.find((c) => c.key === "PUT /api/v1/settings")!.body).toEqual({
       "home.name": "",
@@ -96,12 +99,13 @@ describe("SettingsPage, Home card", () => {
       },
     );
     expect(api.count("GET /api/v1/system/timezone")).toBe(0);
-    const settingsReads = api.count("GET /api/v1/settings"); // the card's own read
+    const settingsReads = api.count("GET /api/v1/settings"); // the cards' own reads
     fireEvent.input(field("Home name"), { target: { value: "Annex" } });
     fireEvent.click(save()!);
     await waitFor(() => expect(save()).toBeNull());
     await waitFor(() => expect(api.count("GET /api/v1/system/timezone")).toBe(1));
-    expect(api.count("GET /api/v1/settings")).toBe(settingsReads + 1);
+    // saveSettings' read just before the PUT (spec 040, R4.10), and the top bar's read after it.
+    expect(api.count("GET /api/v1/settings")).toBe(settingsReads + 2);
   });
 
   it("shows the host's text when the PUT is refused, Save stays", async () => {
@@ -498,5 +502,389 @@ describe("SettingsPage, Update card", () => {
     expect((busy as HTMLButtonElement).disabled).toBe(true);
     release();
     expect(await screen.findByText("Installed 0.2.0, restarting")).toBeTruthy();
+  });
+});
+
+describe("SettingsPage, Update card, a release (spec 040, R4)", () => {
+  const AVAILABLE = {
+    current: "0.1.0",
+    latest: "0.2.0",
+    updateAvailable: true,
+    releaseUrl: "https://example.test/releases/v0.2.0",
+  };
+  const NEW = { ...AVAILABLE, current: "0.2.0", updateAvailable: false };
+  const VERSIONS = "GET /api/v1/system/version";
+  const PULL = "POST /api/v1/system/update";
+
+  /** What the box answers to a version read: an answer, a refusal, or no answer at all (a throw). */
+  const box: { info: unknown; mode: "up" | "down" | "busy" } = { info: AVAILABLE, mode: "up" };
+  const versionRoute: Route = () => {
+    if (box.mode === "down") throw new TypeError("Failed to fetch");
+    if (box.mode === "busy") return { status: 500, body: { error: "Busy" } };
+    return { body: box.info };
+  };
+
+  beforeEach(() => {
+    box.info = AVAILABLE;
+    box.mode = "up";
+  });
+
+  const open = (routes: Record<string, Route | Route[]> = {}, settings = {}) =>
+    setup(settings, { [VERSIONS]: versionRoute, ...routes });
+  const tick = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  const button = (name: string | RegExp) =>
+    screen.getByRole("button", { name }) as HTMLButtonElement;
+  const confirmUpdate = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: "Update to v0.2.0" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Update" }));
+  };
+  /** The box answers the pull with 200 at once; the polling starts after it. */
+  const startPull = async (routes: Record<string, Route | Route[]> = {}) => {
+    const api = await open({ [PULL]: { body: { message: "ok" } }, ...routes });
+    await screen.findByText("Version 0.2.0 is available");
+    vi.useFakeTimers();
+    await confirmUpdate();
+    await tick(0);
+    return api;
+  };
+
+  it("shows the four states of the version line, the button and the link only when they apply", async () => {
+    box.info = { ...AVAILABLE, latest: null, updateAvailable: false, releaseUrl: null };
+    await open();
+    expect(await screen.findByText("No check since the box started")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Update to/ })).toBeNull();
+    cleanup();
+
+    box.info = AVAILABLE;
+    await open();
+    expect(await screen.findByText("Version 0.2.0 is available")).toBeTruthy();
+    expect(button("Update to v0.2.0")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Release notes" }).getAttribute("href")).toBe(
+      "https://example.test/releases/v0.2.0",
+    );
+    expect(screen.getByRole("link", { name: "Release notes" }).getAttribute("target")).toBe(
+      "_blank",
+    );
+    cleanup();
+
+    box.info = { ...AVAILABLE, releaseUrl: null };
+    await open();
+    await screen.findByText("Version 0.2.0 is available");
+    expect(screen.queryByRole("link", { name: "Release notes" })).toBeNull();
+    cleanup();
+
+    box.info = { ...AVAILABLE, latest: "0.10.0", updateAvailable: false };
+    await open();
+    expect(
+      await screen.findByText(
+        "Version 0.10.0 cannot be installed directly from this version: see its release notes",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Release notes" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Update to/ })).toBeNull();
+    cleanup();
+
+    box.info = { ...AVAILABLE, latest: "0.1.0", updateAvailable: false };
+    await open();
+    expect(await screen.findByText("Up to date (latest 0.1.0)")).toBeTruthy();
+  });
+
+  it("checks: POST, a spinner while it runs, the card refreshed with the answer", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    box.info = { ...AVAILABLE, latest: null, updateAvailable: false, releaseUrl: null };
+    const api = await open({
+      "POST /api/v1/system/version/check": async () => {
+        await gate;
+        return { body: AVAILABLE };
+      },
+    });
+    await screen.findByText("No check since the box started");
+    fireEvent.click(button("Check for updates"));
+    await waitFor(() => expect(button("Check for updates").disabled).toBe(true));
+    expect(document.querySelector(".animate-spin")).toBeTruthy();
+    release();
+    expect(await screen.findByText("Version 0.2.0 is available")).toBeTruthy();
+    expect(api.count("POST /api/v1/system/version/check")).toBe(1);
+    expect(button("Check for updates").disabled).toBe(false);
+  });
+
+  it.each([
+    [429, "Please wait 12s before checking again"],
+    [503, "The clock is not set yet: try again later"],
+    [500, "Update check failed: timeout"],
+    [409, "Update check already in progress"],
+  ])("shows the server's own text for a check refused with %i", async (status, text) => {
+    await open({ "POST /api/v1/system/version/check": { status, body: { error: text } } });
+    fireEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(text)).toBeTruthy();
+  });
+
+  it("opens a confirmation; Cancel sends nothing", async () => {
+    const api = await open();
+    fireEvent.click(await screen.findByRole("button", { name: "Update to v0.2.0" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Update to v0.2.0?")).toBeTruthy();
+    expect(within(dialog).getByText(/You will need to log in again\./)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(api.count(PULL)).toBe(0);
+  });
+
+  it("confirmed: POST with no body, the buttons disabled, the elapsed count advances", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const api = await open({
+      [PULL]: async () => {
+        await gate;
+        return { body: { message: "ok" } };
+      },
+    });
+    await screen.findByText("Version 0.2.0 is available");
+    vi.useFakeTimers();
+    await confirmUpdate();
+    await tick(0);
+    expect(api.calls.find((c) => c.key === PULL)!.body).toBeUndefined();
+    expect(screen.getByText("Downloading and installing… 0 s")).toBeTruthy();
+    expect(button("Check for updates").disabled).toBe(true);
+    expect(button("Update to v0.2.0").disabled).toBe(true);
+    await tick(3000);
+    expect(screen.getByText("Downloading and installing… 3 s")).toBeTruthy();
+    await tick(7000);
+    expect(screen.getByText("Downloading and installing… 10 s")).toBeTruthy();
+    release();
+    await tick(0);
+  });
+
+  it("200, then the polling: two failed polls, then a new version: Now running", async () => {
+    const api = await startPull();
+    expect(screen.getByText("Installed 0.2.0, the box restarts…")).toBeTruthy();
+    const before = api.count(VERSIONS);
+    box.mode = "down";
+    await tick(3000);
+    expect(api.count(VERSIONS)).toBe(before + 1);
+    await tick(3000);
+    expect(api.count(VERSIONS)).toBe(before + 2);
+    box.mode = "up";
+    box.info = NEW;
+    await tick(3000);
+    expect(screen.getByText("Now running 0.2.0")).toBeTruthy();
+    const after = api.count(VERSIONS);
+    await tick(30_000);
+    expect(api.count(VERSIONS)).toBe(after); // the polling stopped
+    expect(button("Check for updates").disabled).toBe(false);
+  });
+
+  it("200, the box never answers for 3 minutes: the reload text, the polling stopped", async () => {
+    const api = await startPull();
+    box.mode = "down";
+    await tick(170_000);
+    expect(screen.queryByText(/not answered/)).toBeNull();
+    await tick(10_000);
+    expect(
+      screen.getByText("The box has not answered for 3 minutes: reload the page"),
+    ).toBeTruthy();
+    const count = api.count(VERSIONS);
+    await tick(60_000);
+    expect(api.count(VERSIONS)).toBe(count);
+  });
+
+  it("200, the same version for 3 minutes: it was not kept", async () => {
+    await startPull();
+    await tick(170_000);
+    expect(screen.queryByText(/was not kept/)).toBeNull();
+    await tick(10_000);
+    expect(
+      screen.getByText(
+        "The box still runs 0.1.0: the new version was not kept (see the box's log)",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("3 minutes: the ending comes from the last poll (answered before, silent at the end)", async () => {
+    await startPull();
+    await tick(100_000); // answered with the same version until here
+    box.mode = "down";
+    await tick(80_000);
+    expect(
+      screen.getByText("The box has not answered for 3 minutes: reload the page"),
+    ).toBeTruthy();
+  });
+
+  it("a dropped connection during the request: waits, then the same version at 11 minutes", async () => {
+    const api = await startPull({
+      [PULL]: () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
+    expect(screen.getByText("The connection was lost; waiting for the box…")).toBeTruthy();
+    await tick(10 * 60_000);
+    expect(screen.queryByText(/did not complete/)).toBeNull();
+    expect(api.count(VERSIONS)).toBeGreaterThan(100);
+    await tick(60_000);
+    expect(screen.getByText("The update did not complete: the box still runs 0.1.0")).toBeTruthy();
+  });
+
+  it("a dropped connection, then a new version: Now running", async () => {
+    await startPull({
+      [PULL]: () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
+    await tick(60_000);
+    box.info = NEW;
+    await tick(3000);
+    expect(screen.getByText("Now running 0.2.0")).toBeTruthy();
+  });
+
+  it("aborts a poll that hangs at 5 s, and never runs two polls at once", async () => {
+    const api = await startPull();
+    const real = vi.mocked(fetch);
+    let open = 0;
+    let most = 0;
+    let aborted = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url !== "/api/v1/system/version") return real(url, init);
+        open++;
+        most = Math.max(most, open);
+        return new Promise((_, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            open--;
+            aborted++;
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        });
+      }),
+    );
+    const before = api.count(VERSIONS);
+    await tick(3000); // a poll starts and hangs
+    expect(open).toBe(1);
+    await tick(4900);
+    expect(aborted).toBe(0);
+    await tick(200);
+    expect(aborted).toBe(1);
+    await tick(3000); // the next one starts 3 s after the previous ended
+    expect(open).toBe(1);
+    await tick(60_000);
+    expect(most).toBe(1);
+    expect(api.count(VERSIONS)).toBe(before);
+  });
+
+  it("stops polling when the card unmounts (the login screen)", async () => {
+    const api = await startPull();
+    await tick(3000);
+    const count = api.count(VERSIONS);
+    cleanup();
+    await tick(60_000);
+    expect(api.count(VERSIONS)).toBe(count);
+  });
+
+  it("disables the upload during a pull, and the pull and the check during an upload", async () => {
+    await startPull();
+    expect((screen.getByLabelText("Update file") as HTMLInputElement).disabled).toBe(true);
+    cleanup();
+    vi.useRealTimers();
+
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await open({
+      [PULL]: async () => {
+        await gate;
+        return { body: { message: "Installed 0.2.0, restarting" } };
+      },
+    });
+    await screen.findByText("Version 0.2.0 is available");
+    fireEvent.change(screen.getByLabelText("Update file"), {
+      target: { files: [new File(["SUP"], "solite.sup")] },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Install" }));
+    await waitFor(() => expect(button("Update to v0.2.0").disabled).toBe(true));
+    expect(button("Check for updates").disabled).toBe(true);
+    release();
+    await screen.findByText("Installed 0.2.0, restarting");
+    expect(button("Check for updates").disabled).toBe(false);
+  });
+
+  it.each([
+    [400, "No update available"],
+    [409, "The running image is not confirmed yet"],
+    [500, "Download failed: connection reset"],
+    [503, "The clock is not set yet: try again later"],
+  ])("shows the server's text for a pull refused with %i, the card back", async (status, text) => {
+    const api = await open({ [PULL]: { status, body: { error: text } } });
+    await screen.findByText("Version 0.2.0 is available");
+    await confirmUpdate();
+    expect(await screen.findByText(text)).toBeTruthy();
+    expect(button("Update to v0.2.0").disabled).toBe(false);
+    expect(button("Check for updates").disabled).toBe(false);
+    expect(api.count(PULL)).toBe(1);
+  });
+
+  it("toggles the automatic check: the whole map is sent with update.autoCheck", async () => {
+    const api = await open(
+      { "PUT /api/v1/settings": { body: { success: true } } },
+      { "home.name": "Annex", "update.manifestUrl": "http://x.test/m.json" },
+    );
+    const box_ = screen.getByLabelText("Check for a new version once a day") as HTMLInputElement;
+    expect(box_.checked).toBe(false);
+    fireEvent.click(box_);
+    await waitFor(() => expect(api.count("PUT /api/v1/settings")).toBe(1));
+    expect(api.calls.find((c) => c.key === "PUT /api/v1/settings")!.body).toEqual({
+      "home.name": "Annex",
+      "update.manifestUrl": "http://x.test/m.json",
+      "update.autoCheck": "true",
+    });
+    await waitFor(() => expect(box_.checked).toBe(true));
+  });
+
+  it("saves the manifest's address with the whole map; an empty one returns to the default", async () => {
+    const api = await open(
+      { "PUT /api/v1/settings": { body: { success: true } } },
+      { "home.name": "Annex", "update.autoCheck": "true" },
+    );
+    fireEvent.input(screen.getByLabelText("Manifest address"), {
+      target: { value: "http://127.0.0.1:9/manifest.json" },
+    });
+    fireEvent.click(button("Save the manifest address"));
+    await waitFor(() => expect(api.count("PUT /api/v1/settings")).toBe(1));
+    expect(api.calls.find((c) => c.key === "PUT /api/v1/settings")!.body).toEqual({
+      "home.name": "Annex",
+      "update.autoCheck": "true",
+      "update.manifestUrl": "http://127.0.0.1:9/manifest.json",
+    });
+  });
+
+  it("shows the server's text when the manifest's address is refused", async () => {
+    await open({
+      "PUT /api/v1/settings": {
+        status: 400,
+        body: { error: "Invalid value for update.manifestUrl" },
+      },
+    });
+    fireEvent.input(screen.getByLabelText("Manifest address"), { target: { value: "nope" } });
+    fireEvent.click(button("Save the manifest address"));
+    expect(await screen.findByText("Invalid value for update.manifestUrl")).toBeTruthy();
+  });
+
+  it("the Home card keeps the update.* keys it did not touch", async () => {
+    const api = await setup(
+      { "update.autoCheck": "true", "update.manifestUrl": "http://x.test/m.json" },
+      { "PUT /api/v1/settings": { body: { success: true } } },
+    );
+    fireEvent.input(field("Home name"), { target: { value: "Annex" } });
+    fireEvent.click(save()!);
+    await waitFor(() => expect(api.count("PUT /api/v1/settings")).toBe(1));
+    const body = api.calls.find((c) => c.key === "PUT /api/v1/settings")!.body as Record<
+      string,
+      string
+    >;
+    expect(body["update.autoCheck"]).toBe("true");
+    expect(body["update.manifestUrl"]).toBe("http://x.test/m.json");
+    expect(body["home.name"]).toBe("Annex");
   });
 });

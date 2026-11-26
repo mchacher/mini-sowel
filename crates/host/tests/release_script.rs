@@ -1200,3 +1200,362 @@ fn a_key_env_name_the_script_uses_itself_reads_the_environment_only() {
     let out = fx.run_with(&args, &[]);
     out.refused("is empty");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A bridging release (spec 040, R1): the old key signs, the image carries the new one
+// ---------------------------------------------------------------------------------------------
+//
+// In these tests the fixture's own key and public key (`signing.key`, `update-key.pub`) are the
+// NEW pair, the one the image carries; `old.key` is the pair the boxes trust today.
+
+impl Fixture {
+    fn bridge_path(&self) -> PathBuf {
+        self.path("tree/release/update-key.bridge")
+    }
+
+    /// Makes the old key and writes the bridge file for `version` naming `previous` (the old
+    /// public key when `None`). Returns the old key's file and public key.
+    fn bridge(&self, version: &str, previous: Option<&str>) -> (PathBuf, String) {
+        let (file, public) = self.keygen("old.key");
+        fs::create_dir_all(self.path("tree/release")).unwrap();
+        fs::write(
+            self.bridge_path(),
+            format!(
+                "# A bridging release.\n\nversion {version}\nprevious {}\n",
+                previous.unwrap_or(&public)
+            ),
+        )
+        .unwrap();
+        (file, public)
+    }
+
+    /// The arguments of a bridge: the old key signs, the fixture's key is the next key.
+    fn bridge_args(&self, old: &Path) -> Vec<String> {
+        let mut args = self.args();
+        let at = args.iter().position(|a| a == "--key-file").unwrap();
+        args[at + 1] = old.to_str().unwrap().to_string();
+        args.extend([
+            "--next-key-file".into(),
+            self.key().to_str().unwrap().into(),
+        ]);
+        args
+    }
+
+    fn verify(&self, sup: &Path, public: &str) -> bool {
+        Command::new(env!("CARGO_BIN_EXE_solite-host"))
+            .arg("--update-verify")
+            .arg(sup)
+            .args(["--public-key", public])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    }
+}
+
+#[test]
+fn a_bridge_is_signed_with_the_old_key_carries_the_new_one_and_says_so() {
+    let fx = Fixture::new();
+    let (old, old_public) = fx.bridge(VERSION, None);
+    let args_file = fx.dir_for_builder_args();
+    let args = fx.bridge_args(&old);
+    let out = fx.run_with(&args, &[("FAKE_ARGS", args_file.to_str().unwrap())]);
+    out.ok();
+    assert_eq!(names(&fx.out()), five_files());
+    let pub8 = &fx.public_hex()[..8];
+    assert!(
+        out.stdout.lines().any(|l| l
+            == format!(
+                "release: key bridge: signed with {}, the image carries {pub8}",
+                &old_public[..8]
+            )),
+        "{}",
+        out.stdout
+    );
+    // The image is built with the new public key, as always.
+    assert!(
+        fs::read_to_string(&args_file)
+            .unwrap()
+            .starts_with(&format!("{VERSION} {} ", fx.public_hex()))
+    );
+    let sup = fx.out().join(format!("solite-{VERSION}.sup"));
+    assert!(
+        fx.verify(&sup, &old_public),
+        "a box before the bridge accepts it"
+    );
+    assert!(
+        !fx.verify(&sup, &fx.public_hex()),
+        "a box that trusts the new key refuses the bridge"
+    );
+    // Neither private key is in a file or a line.
+    for key in [
+        fs::read_to_string(&old).unwrap().trim().to_string(),
+        fx.key_hex(),
+    ] {
+        for name in names(&fx.out()) {
+            assert!(
+                !holds(&fs::read(fx.out().join(&name)).unwrap(), &key),
+                "{name}"
+            );
+        }
+        assert!(!holds(out.all().as_bytes(), &key));
+    }
+    assert_eq!(fx.leftovers("solite-release-"), Vec::<String>::new());
+}
+
+#[test]
+fn a_bridge_reads_both_keys_from_the_environment_and_the_builder_sees_neither() {
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge(VERSION, None);
+    let old_hex = fs::read_to_string(&old).unwrap().trim().to_string();
+    let new_hex = fx.key_hex();
+    let mut args = fx.key_env_args("SOLITE_TEST_OLD");
+    args.extend(["--next-key-env".into(), "SOLITE_TEST_NEW".into()]);
+    let env_out = fx.path("builder-env");
+    let out = fx.run_with(
+        &args,
+        &[
+            ("SOLITE_TEST_OLD", &old_hex),
+            ("SOLITE_TEST_NEW", &new_hex),
+            ("FAKE_ENV_OUT", env_out.to_str().unwrap()),
+        ],
+    );
+    out.ok();
+    assert_eq!(names(&fx.out()), five_files());
+    let seen = fs::read_to_string(&env_out).unwrap();
+    assert!(seen.contains("FAKE_ENV_OUT="), "the env was captured");
+    for text in ["SOLITE_TEST_OLD", "SOLITE_TEST_NEW", &old_hex, &new_hex] {
+        assert!(!holds(seen.as_bytes(), text), "the builder saw {text}");
+    }
+    assert!(!holds(out.all().as_bytes(), &old_hex));
+    assert!(!holds(out.all().as_bytes(), &new_hex));
+    // The same variable for both keys is refused: the second would be empty.
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge(VERSION, None);
+    let mut args = fx.key_env_args("SOLITE_TEST_OLD");
+    args.extend(["--next-key-env".into(), "SOLITE_TEST_OLD".into()]);
+    let old_hex = fs::read_to_string(&old).unwrap().trim().to_string();
+    fx.run_marked(&args, &[("SOLITE_TEST_OLD", &old_hex)])
+        .refused("the next key is missing");
+    nothing_built(&fx, &fx.mark());
+}
+
+#[test]
+fn the_signing_key_being_the_new_key_is_refused_nothing_written() {
+    let fx = Fixture::new();
+    fx.bridge(VERSION, None);
+    // The reverse: the new key signs, the next key is the old one.
+    let mut args = fx.args();
+    let old = fx.path("keys/old.key");
+    args.extend(["--next-key-file".into(), old.to_str().unwrap().into()]);
+    let out = fx.run_marked(&args, &[]);
+    assert_eq!(out.code, 1, "{}", out.all());
+    assert!(
+        out.stderr
+            .contains("the signing key does not match the bridge's previous key"),
+        "{}",
+        out.all()
+    );
+    assert!(!fx.mark().exists() && !fx.out().exists());
+}
+
+#[test]
+fn a_bridge_without_the_next_key_is_refused() {
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge(VERSION, None);
+    let mut args = fx.bridge_args(&old);
+    args.truncate(args.len() - 2);
+    fx.run_marked(&args, &[])
+        .refused("a bridging release needs the next key (--next-key-file or --next-key-env)");
+    nothing_built(&fx, &fx.mark());
+    // An empty or malformed one too.
+    let mut args = fx.bridge_args(&old);
+    let at = args.len() - 1;
+    let bad = fx.path("keys/bad.key");
+    fs::write(&bad, "not a key").unwrap();
+    args[at] = bad.to_str().unwrap().into();
+    fx.run_marked(&args, &[])
+        .refused("the next key is not 64 hexadecimal characters");
+    nothing_built(&fx, &fx.mark());
+    let mut args = fx.bridge_args(&old);
+    args.truncate(args.len() - 2);
+    args.extend(["--next-key-env".into(), "SOLITE_TEST_NEW".into()]);
+    fx.run_marked(&args, &[])
+        .refused("the next key is missing: SOLITE_TEST_NEW is empty");
+    nothing_built(&fx, &fx.mark());
+}
+
+#[test]
+fn a_next_key_that_is_not_the_committed_one_is_refused_nothing_written() {
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge(VERSION, None);
+    // Swapped: the old key as the next key.
+    let mut args = fx.bridge_args(&old);
+    let at = args.len() - 1;
+    args[at] = old.to_str().unwrap().into();
+    // (the signing key and the next key are then the same: refused before the probe)
+    fx.run_marked(&args, &[]).refused("are the same");
+    // A third key.
+    let (third, _) = fx.keygen("third.key");
+    args[at] = third.to_str().unwrap().into();
+    let out = fx.run_marked(&args, &[]);
+    assert_eq!(out.code, 1, "{}", out.all());
+    assert!(
+        out.stderr.contains("the next key does not match"),
+        "{}",
+        out.all()
+    );
+    assert!(!fx.mark().exists() && !fx.out().exists());
+    assert!(!holds(out.all().as_bytes(), &fx.key_hex()));
+}
+
+#[test]
+fn a_bridge_for_another_version_is_refused() {
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge("0.1.0", None);
+    fx.run_marked(&fx.bridge_args(&old), &[]).refused(&format!(
+        "release/update-key.bridge is for 0.1.0, not {VERSION}: a bridge is one release; remove the file after it (docs/release.md)"
+    ));
+    nothing_built(&fx, &fx.mark());
+}
+
+#[test]
+fn a_previous_that_is_the_committed_key_or_not_hex_is_refused() {
+    let fx = Fixture::new();
+    let (old, _) = fx.bridge(VERSION, Some(&Fixture::new().public_hex()));
+    // `previous` equal to the public key file the script was given.
+    fs::write(
+        fx.bridge_path(),
+        format!("version {VERSION}\nprevious {}\n", fx.public_hex()),
+    )
+    .unwrap();
+    fx.run_marked(&fx.bridge_args(&old), &[])
+        .refused("previous is the current public key: nothing to rotate");
+    nothing_built(&fx, &fx.mark());
+    for bad in ["abcd", &"g".repeat(64), &"a".repeat(65)] {
+        fs::write(
+            fx.bridge_path(),
+            format!("version {VERSION}\nprevious {bad}\n"),
+        )
+        .unwrap();
+        fx.run_marked(&fx.bridge_args(&old), &[])
+            .refused("release/update-key.bridge: previous is not 64 hex characters");
+        nothing_built(&fx, &fx.mark());
+    }
+}
+
+#[test]
+fn a_bridge_file_with_a_bad_form_is_refused_with_its_reason() {
+    let fx = Fixture::new();
+    let (old, old_public) = fx.bridge(VERSION, None);
+    for (text, reason) in [
+        (
+            format!("version {VERSION}\nprevious {old_public}\nnext {old_public}\n"),
+            "unknown line: next",
+        ),
+        (
+            format!("version {VERSION}\nversion {VERSION}\nprevious {old_public}\n"),
+            "version given twice",
+        ),
+        (
+            format!("version {VERSION}\nprevious {old_public}\nprevious {old_public}\n"),
+            "previous given twice",
+        ),
+        (format!("previous {old_public}\n"), "version is missing"),
+        (format!("version {VERSION}\n"), "previous is missing"),
+        (
+            format!("version {VERSION} extra\nprevious {old_public}\n"),
+            "version needs one value",
+        ),
+    ] {
+        fs::write(fx.bridge_path(), text).unwrap();
+        fx.run_marked(&fx.bridge_args(&old), &[])
+            .refused(&format!("release/update-key.bridge: {reason}"));
+        nothing_built(&fx, &fx.mark());
+    }
+}
+
+#[test]
+fn comments_blank_lines_crlf_and_extra_spaces_in_the_bridge_file_are_accepted() {
+    let fx = Fixture::new();
+    let (old, old_public) = fx.bridge(VERSION, None);
+    fs::write(
+        fx.bridge_path(),
+        format!("# one\r\n\r\n  version   {VERSION}  \r\n\t# two\r\nprevious\t{old_public}\r\n"),
+    )
+    .unwrap();
+    fx.run_with(&fx.bridge_args(&old), &[]).ok();
+    assert_eq!(names(&fx.out()), five_files());
+}
+
+#[test]
+fn next_key_options_without_a_bridge_file_are_refused() {
+    let fx = Fixture::new();
+    for extra in [
+        vec!["--next-key-file", "/nonexistent/next.key"],
+        vec!["--next-key-env", "SOLITE_TEST_NEW"],
+    ] {
+        let mut args = fx.args();
+        args.extend(extra.iter().map(|a| a.to_string()));
+        fx.run_marked(&args, &[("SOLITE_TEST_NEW", &fx.key_hex())])
+            .refused("--next-key-* is for a bridging release only (release/update-key.bridge)");
+        nothing_built(&fx, &fx.mark());
+    }
+}
+
+#[test]
+fn a_bridge_with_build_only_builds_without_a_key_and_checks_its_version() {
+    let fx = Fixture::new();
+    fx.bridge(VERSION, None);
+    let out = fx.run_with(&fx.build_only_args(), &[]);
+    out.ok();
+    assert_eq!(names(&fx.out()), ["app.bin", "flash.bin"]);
+    assert!(holds(
+        &fs::read(fx.out().join("app.bin")).unwrap(),
+        &fx.public_hex()
+    ));
+    // A wrong version, or a previous equal to the key, is refused before the build.
+    let fx = Fixture::new();
+    fx.bridge("0.1.0", None);
+    fx.run_marked(&fx.build_only_args(), &[])
+        .refused("is for 0.1.0");
+    nothing_built(&fx, &fx.mark());
+    // A next key with --build-only is refused like a key.
+    let fx = Fixture::new();
+    fx.bridge(VERSION, None);
+    let mut args = fx.build_only_args();
+    args.extend(["--next-key-file".into(), fx.key().to_str().unwrap().into()]);
+    fx.run_marked(&args, &[])
+        .refused("--build-only takes no key: the signing is the next step (--prebuilt)");
+    nothing_built(&fx, &fx.mark());
+}
+
+#[test]
+fn a_bridge_is_signed_from_a_prebuilt_folder_and_the_public_key_file_is_the_one_given() {
+    let fx = Fixture::new();
+    let (old, old_public) = fx.bridge(VERSION, None);
+    let dir = fx.prebuilt(&format!("image with {}", fx.public_hex()));
+    let mut args = fx.bridge_args(&old);
+    args.extend(["--prebuilt".into(), dir.to_str().unwrap().into()]);
+    fx.run_with(&args, &[]).ok();
+    let sup = fx.out().join(format!("solite-{VERSION}.sup"));
+    assert!(fx.verify(&sup, &old_public));
+    assert!(!fx.verify(&sup, &fx.public_hex()));
+}
+
+#[test]
+fn the_bridge_file_option_overrides_the_trees_file() {
+    let fx = Fixture::new();
+    let (old, old_public) = fx.bridge(VERSION, None);
+    // The tree's file is removed, another one given by --bridge-file.
+    let elsewhere = fx.path("elsewhere.bridge");
+    fs::rename(fx.bridge_path(), &elsewhere).unwrap();
+    let mut args = fx.bridge_args(&old);
+    args.extend(["--bridge-file".into(), elsewhere.to_str().unwrap().into()]);
+    let out = fx.run_with(&args, &[]);
+    out.ok();
+    assert!(
+        out.stdout
+            .contains(&format!("signed with {}", &old_public[..8]))
+    );
+}

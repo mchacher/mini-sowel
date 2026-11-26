@@ -207,7 +207,8 @@ impl BackupFiles for DataFiles {
     }
 }
 
-/// The monotonic clock and a 10 ms sleep (which lets the idle task feed the watchdog).
+/// The monotonic clock, a 10 ms sleep (which lets the idle task feed the watchdog), and the waits
+/// of a resumed download.
 #[cfg(feature = "radio")]
 pub struct BoxPacing;
 
@@ -220,6 +221,10 @@ impl Pacing for BoxPacing {
 
     fn pause(&mut self) {
         std::thread::sleep(Duration::from_millis(10));
+    }
+
+    fn wait_ms(&mut self, ms: u64) {
+        std::thread::sleep(Duration::from_millis(ms));
     }
 }
 

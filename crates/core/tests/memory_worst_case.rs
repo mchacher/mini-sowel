@@ -71,6 +71,9 @@
 //!   pull at a time (one job, `Releases`' mark), beside the cache's one entry of about 2 KB; both
 //!   are far under the engine's worst case and counted in `docs/memory-budget.md`, not driven
 //!   here (`tests/release.rs` tests each bound); the redirects are a count, not memory.
+//! - `update/release.rs::MAX_ETAG_CHARS` (spec 040): the first answer's `ETag` is kept for a
+//!   resume, at most 256 characters (a longer one is dropped); 256 bytes for the length of a
+//!   pull, no more than the manifest's share, not driven here (`tests/release.rs`).
 //! - `auth/mod.rs::MAX_SESSIONS`, `auth/mod.rs::MAX_ATTEMPTS`: 8 sessions of 72 bytes and 10
 //!   attempt times of 8 bytes, in RAM only (spec 029); about 700 bytes in all, far below the
 //!   rest, so the worst case does not drive them (`tests/auth.rs` tests each bound).

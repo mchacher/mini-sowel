@@ -19,10 +19,14 @@ const RX_BUFFER_BYTES: usize = 4096;
 /// The client's send buffer, in bytes: a request line, two headers and the host.
 const TX_BUFFER_BYTES: usize = 1024;
 
+/// The longest `Content-Range` or `ETag` read from an answer, in characters (bounded: the header
+/// is copied into a `String`).
+const MAX_HEADER_CHARS: usize = 256;
+
 /// The box's `Fetcher`.
 pub struct EspFetcher;
 
-/// The body of a 200: the connection, read to its end.
+/// The body of a 200 or a 206: the connection, read to its end.
 struct Body {
     connection: EspHttpConnection,
 }
@@ -44,8 +48,18 @@ fn io_error(e: EspError) -> io::Error {
     }
 }
 
-impl Fetcher for EspFetcher {
-    fn get(&mut self, url: &str, idle_ms: u64) -> Result<Fetched, String> {
+/// A header's value, kept when it is short enough (a longer one is ignored, as the core ignores
+/// an `ETag` over its bound).
+fn short_header(connection: &EspHttpConnection, name: &str) -> Option<String> {
+    connection
+        .header(name)
+        .filter(|text| text.len() <= MAX_HEADER_CHARS)
+        .map(|text| text.trim().to_string())
+}
+
+impl EspFetcher {
+    /// One GET of `url`, asking `Range: bytes=<from>-` when `from` is given.
+    fn request(url: &str, from: Option<u64>, idle_ms: u64) -> Result<Fetched, String> {
         let configuration = Configuration {
             buffer_size: Some(RX_BUFFER_BYTES),
             buffer_size_tx: Some(TX_BUFFER_BYTES),
@@ -57,18 +71,37 @@ impl Fetcher for EspFetcher {
         let mut connection =
             EspHttpConnection::new(&configuration).map_err(|e| format!("cannot start: {e}"))?;
         let agent = format!("solite/{}", solite_core::VERSION);
-        let headers = [("User-Agent", agent.as_str()), ("Accept", "*/*")];
+        let range = from.map(|from| format!("bytes={from}-"));
+        let mut headers = vec![("User-Agent", agent.as_str()), ("Accept", "*/*")];
+        if let Some(range) = &range {
+            headers.push(("Range", range.as_str()));
+        }
         connection
             .initiate_request(Method::Get, url, &headers)
             .map_err(|e| e.to_string())?;
         connection.initiate_response().map_err(|e| e.to_string())?;
+        let length = || {
+            connection
+                .header("Content-Length")
+                .and_then(|text| text.trim().parse::<u64>().ok())
+        };
         match connection.status() {
             200 => {
-                let length = connection
-                    .header("Content-Length")
-                    .and_then(|text| text.trim().parse::<u64>().ok());
+                let (length, etag) = (length(), short_header(&connection, "ETag"));
                 Ok(Fetched::Body {
                     length,
+                    etag,
+                    body: Box::new(Body { connection }),
+                })
+            }
+            206 => {
+                let length = length();
+                let content_range = short_header(&connection, "Content-Range");
+                let etag = short_header(&connection, "ETag");
+                Ok(Fetched::Partial {
+                    content_range,
+                    length,
+                    etag,
                     body: Box::new(Body { connection }),
                 })
             }
@@ -77,5 +110,15 @@ impl Fetcher for EspFetcher {
             )),
             status => Ok(Fetched::Status(status)),
         }
+    }
+}
+
+impl Fetcher for EspFetcher {
+    fn get(&mut self, url: &str, idle_ms: u64) -> Result<Fetched, String> {
+        EspFetcher::request(url, None, idle_ms)
+    }
+
+    fn get_range(&mut self, url: &str, from: u64, idle_ms: u64) -> Result<Fetched, String> {
+        EspFetcher::request(url, Some(from), idle_ms)
     }
 }

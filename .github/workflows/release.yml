@@ -3,7 +3,8 @@
 # program's cargo build) and the job `publish` makes the GitHub release; run by hand, a dry run
 # with a throwaway key publishes nothing (spec 038, docs/release.md). The signing key is the secret
 # SOLITE_UPDATE_KEY of the GitHub environment `release` (deployment rule: tags v* only), read by
-# the `sign` job only.
+# the `sign` job only. A bridging release (release/update-key.bridge in the tagged tree, spec 040)
+# also reads SOLITE_UPDATE_KEY_PREVIOUS, the old private key, in the same two steps of the same job.
 name: Release
 
 on:
@@ -77,12 +78,18 @@ jobs:
       - name: Refusals, before the host is built
         env:
           SOLITE_UPDATE_KEY: ${{ secrets.SOLITE_UPDATE_KEY }}
+          SOLITE_UPDATE_KEY_PREVIOUS: ${{ secrets.SOLITE_UPDATE_KEY_PREVIOUS }}
         run: |
           if [ -z "$SOLITE_UPDATE_KEY" ]; then
             echo "::error::the secret SOLITE_UPDATE_KEY is not set in the environment release: an unsigned release is never published (see docs/release.md)"
             exit 1
           fi
           unset SOLITE_UPDATE_KEY
+          if [ -f release/update-key.bridge ] && [ -z "$SOLITE_UPDATE_KEY_PREVIOUS" ]; then
+            echo "::error::release/update-key.bridge is present but the secret SOLITE_UPDATE_KEY_PREVIOUS is not set in the environment release: a bridging release is signed with the old key (see docs/release.md)"
+            exit 1
+          fi
+          unset SOLITE_UPDATE_KEY_PREVIOUS
           if [ ! -f release/update-key.pub ]; then
             echo "::error::release/update-key.pub is absent: commit the public key first (see docs/release.md)"
             exit 1
@@ -116,9 +123,17 @@ jobs:
       - name: Sign and check the release
         env:
           SOLITE_UPDATE_KEY: ${{ secrets.SOLITE_UPDATE_KEY }}
+          SOLITE_UPDATE_KEY_PREVIOUS: ${{ secrets.SOLITE_UPDATE_KEY_PREVIOUS }}
         run: |
-          sh scripts/release.sh "${GITHUB_REF_NAME#v}" --key-env SOLITE_UPDATE_KEY \
-            --prebuilt "$RUNNER_TEMP/firmware" --out "$RUNNER_TEMP/release"
+          if [ -f release/update-key.bridge ]; then
+            # A bridging release: the old key signs, the new one is checked against the public key.
+            sh scripts/release.sh "${GITHUB_REF_NAME#v}" --key-env SOLITE_UPDATE_KEY_PREVIOUS \
+              --next-key-env SOLITE_UPDATE_KEY \
+              --prebuilt "$RUNNER_TEMP/firmware" --out "$RUNNER_TEMP/release"
+          else
+            sh scripts/release.sh "${GITHUB_REF_NAME#v}" --key-env SOLITE_UPDATE_KEY \
+              --prebuilt "$RUNNER_TEMP/firmware" --out "$RUNNER_TEMP/release"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,9 +164,25 @@ jobs:
           sed -n 's/^public key: //p' "$RUNNER_TEMP/dry/keygen.txt" > "$RUNNER_TEMP/dry/key.pub"
           echo "Dry run, nothing is published." > "$RUNNER_TEMP/dry/notes.md"
           version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml | head -n 1)
-          sh scripts/release.sh "$version" --key-file "$RUNNER_TEMP/dry/key" \
-            --public-key-file "$RUNNER_TEMP/dry/key.pub" --notes "$RUNNER_TEMP/dry/notes.md" \
-            --out "$RUNNER_TEMP/dry-release"
+          if [ -f release/update-key.bridge ]; then
+            # A merged bridge, dry-run before it is tagged: a second throwaway key is the new one,
+            # the first is the old one, and the bridge file is the dry run's own (no secret read).
+            target/release/solite-host --update-keygen "$RUNNER_TEMP/dry/next-key" > "$RUNNER_TEMP/dry/next-keygen.txt"
+            sed -n 's/^public key: //p' "$RUNNER_TEMP/dry/next-keygen.txt" > "$RUNNER_TEMP/dry/next-key.pub"
+            {
+              echo "version $version"
+              echo "previous $(cat "$RUNNER_TEMP/dry/key.pub")"
+            } > "$RUNNER_TEMP/dry/update-key.bridge"
+            sh scripts/release.sh "$version" --key-file "$RUNNER_TEMP/dry/key" \
+              --next-key-file "$RUNNER_TEMP/dry/next-key" \
+              --public-key-file "$RUNNER_TEMP/dry/next-key.pub" \
+              --bridge-file "$RUNNER_TEMP/dry/update-key.bridge" --notes "$RUNNER_TEMP/dry/notes.md" \
+              --out "$RUNNER_TEMP/dry-release"
+          else
+            sh scripts/release.sh "$version" --key-file "$RUNNER_TEMP/dry/key" \
+              --public-key-file "$RUNNER_TEMP/dry/key.pub" --notes "$RUNNER_TEMP/dry/notes.md" \
+              --out "$RUNNER_TEMP/dry-release"
+          fi
 
       # Only the manifest and the checksums: no flashable image whose key is lost.
       - uses: actions/upload-artifact@v4

@@ -18,7 +18,9 @@ without the user's explicit yes. Talk in the user's language; files in English.
 
 `release/update-key.pub` is committed and `gh secret list --env release` shows
 `SOLITE_UPDATE_KEY`; else stop and point the user at `docs/release.md` (the key, the environment
-`release` with its rule for tags `v*`, the secret: typed by the user, never by Claude).
+`release` with its rule for tags `v*`, the secret: typed by the user, never by Claude). A key
+rotation is a bridging release with a second secret, set just before its tag: `docs/release.md`,
+"Rotating the key".
 
 ## Phase 1: Ready?
 

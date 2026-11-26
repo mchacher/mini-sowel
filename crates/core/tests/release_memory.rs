@@ -62,12 +62,14 @@ impl Fetcher for Source {
         if url == DEFAULT_MANIFEST_URL {
             return Ok(Fetched::Body {
                 length: Some(self.manifest.len() as u64),
+                etag: None,
                 body: Box::new(io::Cursor::new(self.manifest.clone().into_bytes())),
             });
         }
         assert_eq!(url, ASSET);
         Ok(Fetched::Body {
             length: Some((HEADER_BYTES + IMAGE_BYTES) as u64),
+            etag: None,
             body: Box::new(Stream {
                 header: self.header,
                 position: 0,
@@ -84,6 +86,8 @@ impl Pacing for Steady {
     }
 
     fn pause(&mut self) {}
+
+    fn wait_ms(&mut self, _ms: u64) {}
 }
 
 #[test]

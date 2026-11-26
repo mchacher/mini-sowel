@@ -2,7 +2,8 @@
 //! `http://` (a local server) by the standard library: the head parsed with `httparse`, a body
 //! delimited by `Content-Length` or by the connection's end. `https://` through the system's
 //! `curl` program, its output's head parsed the same way. The core checked the URL and follows the
-//! redirects; this only moves the bytes.
+//! redirects; this only moves the bytes. A range request (spec 040 R6) adds `Range: bytes=<n>-`
+//! and a 206 gives its `Content-Range` and `ETag`.
 
 use std::io::{self, Cursor, ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -25,6 +26,8 @@ struct Head {
     location: Option<String>,
     length: Option<u64>,
     chunked: bool,
+    content_range: Option<String>,
+    etag: Option<String>,
 }
 
 /// Parses an answer head from the start of `buffer`: `None` while it is not complete, else the
@@ -43,6 +46,8 @@ fn parse_head(buffer: &[u8]) -> Result<Option<(Head, usize)>, String> {
         location: None,
         length: None,
         chunked: false,
+        content_range: None,
+        etag: None,
     };
     for header in response.headers.iter() {
         let value = String::from_utf8_lossy(header.value).trim().to_string();
@@ -54,6 +59,10 @@ fn parse_head(buffer: &[u8]) -> Result<Option<(Head, usize)>, String> {
                     .parse()
                     .map_err(|_| "invalid answer: Content-Length".to_string())?,
             );
+        } else if header.name.eq_ignore_ascii_case("Content-Range") {
+            head.content_range = Some(value);
+        } else if header.name.eq_ignore_ascii_case("ETag") {
+            head.etag = Some(value);
         } else if header.name.eq_ignore_ascii_case("Transfer-Encoding")
             && value.to_ascii_lowercase().contains("chunked")
         {
@@ -141,17 +150,27 @@ fn fetched<S: Read + 'static>(
         head.length = None;
     }
     match head.status {
-        200 => {
+        200 | 206 => {
             if head.chunked {
                 return Err("chunked answers are not supported over http".to_string());
             }
+            let body = Box::new(Body {
+                prefix: Cursor::new(rest),
+                source,
+                remaining: head.length,
+            });
+            if head.status == 206 {
+                return Ok(Fetched::Partial {
+                    content_range: head.content_range,
+                    length: head.length,
+                    etag: head.etag,
+                    body,
+                });
+            }
             Ok(Fetched::Body {
                 length: head.length,
-                body: Box::new(Body {
-                    prefix: Cursor::new(rest),
-                    source,
-                    remaining: head.length,
-                }),
+                etag: head.etag,
+                body,
             })
         }
         301 | 302 | 303 | 307 | 308 => Ok(Fetched::Redirect(head.location)),
@@ -191,7 +210,7 @@ impl HttpFetcher {
         }
     }
 
-    fn get_http(url: &str, idle_ms: u64) -> Result<Fetched, String> {
+    fn get_http(url: &str, from: Option<u64>, idle_ms: u64) -> Result<Fetched, String> {
         let (authority, path) = split_http(url)?;
         let target = if authority.contains(':') {
             authority.clone()
@@ -215,8 +234,9 @@ impl HttpFetcher {
             .set_read_timeout(Some(idle))
             .and_then(|()| stream.set_write_timeout(Some(idle)))
             .map_err(|e| e.to_string())?;
+        let range = from.map_or(String::new(), |from| format!("Range: bytes={from}-\r\n"));
         let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: solite/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+            "GET {path} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: solite/{}\r\nAccept: */*\r\n{range}Connection: close\r\n\r\n",
             solite_core::VERSION
         );
         stream
@@ -226,30 +246,9 @@ impl HttpFetcher {
         fetched(head, rest, stream, false)
     }
 
-    fn get_https(&self, url: &str, idle_ms: u64) -> Result<Fetched, String> {
-        let idle = seconds(idle_ms).to_string();
+    fn get_https(&self, url: &str, from: Option<u64>, idle_ms: u64) -> Result<Fetched, String> {
         let mut child = Command::new(&self.program)
-            .args([
-                "-q",
-                "-sS",
-                "-i",
-                "-g",
-                "--http1.1",
-                "--proto",
-                "=https",
-                "--max-redirs",
-                "0",
-                "--connect-timeout",
-                &idle,
-                "--speed-limit",
-                "1",
-                "--speed-time",
-                &idle,
-                "-H",
-            ])
-            .arg(format!("User-Agent: solite/{}", solite_core::VERSION))
-            .arg("--")
-            .arg(url)
+            .args(curl_args(url, from, idle_ms))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -286,22 +285,67 @@ impl HttpFetcher {
     }
 }
 
+/// The command line of `curl` for one GET (no redirect followed, the head printed, a range when
+/// `from` is given).
+fn curl_args(url: &str, from: Option<u64>, idle_ms: u64) -> Vec<String> {
+    let idle = seconds(idle_ms).to_string();
+    let mut args: Vec<String> = [
+        "-q",
+        "-sS",
+        "-i",
+        "-g",
+        "--http1.1",
+        "--proto",
+        "=https",
+        "--max-redirs",
+        "0",
+        "--connect-timeout",
+        &idle,
+        "--speed-limit",
+        "1",
+        "--speed-time",
+        &idle,
+        "-H",
+    ]
+    .iter()
+    .map(|arg| (*arg).to_string())
+    .collect();
+    args.push(format!("User-Agent: solite/{}", solite_core::VERSION));
+    if let Some(from) = from {
+        args.push("-H".to_string());
+        args.push(format!("Range: bytes={from}-"));
+    }
+    args.push("--".to_string());
+    args.push(url.to_string());
+    args
+}
+
 impl Default for HttpFetcher {
     fn default() -> Self {
         HttpFetcher::new()
     }
 }
 
-impl Fetcher for HttpFetcher {
-    fn get(&mut self, url: &str, idle_ms: u64) -> Result<Fetched, String> {
+impl HttpFetcher {
+    fn request(&self, url: &str, from: Option<u64>, idle_ms: u64) -> Result<Fetched, String> {
         let is_http = url
             .get(..7)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
         if is_http {
-            HttpFetcher::get_http(url, idle_ms)
+            HttpFetcher::get_http(url, from, idle_ms)
         } else {
-            self.get_https(url, idle_ms)
+            self.get_https(url, from, idle_ms)
         }
+    }
+}
+
+impl Fetcher for HttpFetcher {
+    fn get(&mut self, url: &str, idle_ms: u64) -> Result<Fetched, String> {
+        self.request(url, None, idle_ms)
+    }
+
+    fn get_range(&mut self, url: &str, from: u64, idle_ms: u64) -> Result<Fetched, String> {
+        self.request(url, Some(from), idle_ms)
     }
 }
 
@@ -368,6 +412,19 @@ mod tests {
     use super::*;
     use crate::backup_files::HostPacing;
     use crate::update_files::FileAdapter;
+
+    /// The real clock, but a wait does not sleep (the resumes of these tests wait 2 s and more).
+    struct QuickPacing;
+
+    impl Pacing for QuickPacing {
+        fn now_ms(&mut self) -> u64 {
+            HostPacing.now_ms()
+        }
+
+        fn pause(&mut self) {}
+
+        fn wait_ms(&mut self, _ms: u64) {}
+    }
 
     const T0: u64 = 1_795_252_323_120;
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -493,7 +550,10 @@ mod tests {
     }
 
     fn read_all(fetched: Fetched) -> (Option<u64>, io::Result<Vec<u8>>) {
-        let Fetched::Body { length, mut body } = fetched else {
+        let Fetched::Body {
+            length, mut body, ..
+        } = fetched
+        else {
             panic!("not a body");
         };
         let mut out = Vec::new();
@@ -591,6 +651,105 @@ mod tests {
     }
 
     #[test]
+    fn get_range_sends_the_range_and_parses_a_206_with_its_headers() {
+        let server = TestServer::start();
+        server.route(
+            "/a",
+            Behaviour::Raw(http(
+                "206 Partial Content",
+                &[
+                    "Content-Range: bytes 5-9/10",
+                    "Content-Length: 5",
+                    "ETag: \"abc\"",
+                ],
+                b"world",
+            )),
+        );
+        let fetched = HttpFetcher::new()
+            .get_range(&server.url("/a"), 5, 2000)
+            .unwrap();
+        let request = server.requests.lock().unwrap()[0].clone();
+        assert!(request.contains("\r\nRange: bytes=5-\r\n"), "{request}");
+        let Fetched::Partial {
+            content_range,
+            length,
+            etag,
+            mut body,
+        } = fetched
+        else {
+            panic!("not a partial");
+        };
+        assert_eq!(content_range.as_deref(), Some("bytes 5-9/10"));
+        assert_eq!(length, Some(5));
+        assert_eq!(etag.as_deref(), Some("\"abc\""));
+        let mut text = Vec::new();
+        body.read_to_end(&mut text).unwrap();
+        assert_eq!(text, b"world");
+    }
+
+    #[test]
+    fn a_plain_get_sends_no_range_and_a_200_gives_its_etag() {
+        let server = TestServer::start();
+        server.route(
+            "/a",
+            Behaviour::Raw(http(
+                "200 OK",
+                &["Content-Length: 2", "ETag: W/\"x\""],
+                b"hi",
+            )),
+        );
+        let Fetched::Body { etag, .. } = get(&server, "/a", 2000).unwrap() else {
+            panic!("not a body");
+        };
+        assert_eq!(etag.as_deref(), Some("W/\"x\""));
+        let request = server.requests.lock().unwrap()[0].clone();
+        assert!(!request.to_ascii_lowercase().contains("range"), "{request}");
+    }
+
+    #[test]
+    fn the_curl_command_line_carries_the_range_only_when_asked() {
+        let url = "https://example.com/a.sup";
+        let plain = curl_args(url, None, 30_000);
+        assert!(
+            !plain.iter().any(|arg| arg.starts_with("Range")),
+            "{plain:?}"
+        );
+        assert_eq!(plain.last().map(String::as_str), Some(url));
+        let ranged = curl_args(url, Some(4096), 30_000);
+        let at = ranged
+            .iter()
+            .position(|arg| arg == "Range: bytes=4096-")
+            .expect("the range header");
+        assert_eq!(ranged[at - 1], "-H");
+        // Before the `--` that ends the options, the URL last.
+        assert_eq!(ranged[ranged.len() - 2], "--");
+        assert_eq!(ranged.last().map(String::as_str), Some(url));
+        assert!(ranged.iter().any(|arg| arg == "--max-redirs"));
+    }
+
+    #[test]
+    fn a_captured_curl_head_of_a_206_is_parsed_with_its_range_and_etag() {
+        let captured = b"HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes 100-199/200\r\nETag: \"0xDEADBEEF\"\r\nContent-Length: 100\r\n\r\nabc";
+        let (head, rest) = read_head(&mut Cursor::new(captured.to_vec())).unwrap();
+        assert_eq!(head.status, 206);
+        assert_eq!(head.content_range.as_deref(), Some("bytes 100-199/200"));
+        assert_eq!(head.etag.as_deref(), Some("\"0xDEADBEEF\""));
+        match fetched(head, rest, io::empty(), true).unwrap() {
+            Fetched::Partial {
+                content_range,
+                length,
+                etag,
+                ..
+            } => {
+                assert_eq!(content_range.as_deref(), Some("bytes 100-199/200"));
+                assert_eq!(length, Some(100));
+                assert_eq!(etag.as_deref(), Some("\"0xDEADBEEF\""));
+            }
+            _ => panic!("not a partial"),
+        }
+    }
+
+    #[test]
     fn a_captured_curl_head_is_parsed_after_a_proxys_connection_established() {
         let captured = b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/1.1 302 Found\r\nServer: GitHub.com\r\nLocation: https://release-assets.githubusercontent.com/x?sig=a%2Fb\r\nContent-Length: 0\r\n\r\n";
         let (head, rest) = read_head(&mut Cursor::new(captured.to_vec())).unwrap();
@@ -679,6 +838,7 @@ mod tests {
             .unwrap()
         {
             Fetched::Redirect(_) | Fetched::Status(404) | Fetched::Body { .. } => {}
+            Fetched::Partial { .. } => panic!("a 206 to an unranged request"),
             Fetched::Status(status) => panic!("status {status}"),
         }
     }
@@ -776,7 +936,7 @@ mod tests {
                 &self.updates,
                 &mut HttpFetcher::new(),
                 &mut self.adapter,
-                &mut HostPacing,
+                &mut QuickPacing,
                 check,
                 download,
             );
@@ -838,7 +998,14 @@ mod tests {
             )),
         );
         let answer = rig.quick();
-        assert_eq!(error_of(&answer), (500, "Download failed: connection lost"));
+        // The range request gets the same cut 200: the server does not resume.
+        assert_eq!(
+            error_of(&answer),
+            (
+                500,
+                "Download failed: the server does not resume (200 to a range request)"
+            )
+        );
         rig.untouched();
     }
 
@@ -938,7 +1105,14 @@ mod tests {
         );
         let limits = |idle_ms, total_ms| Limits { idle_ms, total_ms };
         let answer = rig.pull(limits(2000, 10_000), limits(300, 10_000));
-        assert_eq!(error_of(&answer), (500, "Download failed: timed out"));
+        // The idle timeout is a cut: resumed, and the same stalled 200 answers the range request.
+        assert_eq!(
+            error_of(&answer),
+            (
+                500,
+                "Download failed: the server does not resume (200 to a range request)"
+            )
+        );
         rig.untouched();
 
         let mut rig = Rig::new();

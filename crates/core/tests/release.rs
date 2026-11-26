@@ -6,7 +6,7 @@
 mod support;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Cursor, ErrorKind, Read};
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -116,6 +116,14 @@ enum Answer {
         /// Milliseconds the clock moves at each read.
         tick: u64,
     },
+    /// A 206 (to a request that asked a range): the rest of the file, with its headers.
+    Partial {
+        data: Vec<u8>,
+        content_range: Option<String>,
+        length: Option<u64>,
+        etag: Option<String>,
+        end: End,
+    },
     Redirect(Option<String>),
     Status(u16),
     Fail(String),
@@ -148,6 +156,14 @@ struct Script {
     end: End,
     tick: u64,
     clock: Rc<Cell<u64>>,
+    /// Counts the bodies dropped (a connection closed).
+    dropped: Rc<Cell<u32>>,
+}
+
+impl Drop for Script {
+    fn drop(&mut self) {
+        self.dropped.set(self.dropped.get() + 1);
+    }
 }
 
 impl Read for Script {
@@ -169,12 +185,41 @@ struct FakeFetcher {
     answers: HashMap<String, Answer>,
     log: Rc<RefCell<Vec<String>>>,
     clock: Rc<Cell<u64>>,
+    /// The `ETag` of the 200 of these addresses.
+    etags: HashMap<String, String>,
+    /// What a ranged request of an address gets, in order; once empty, the plain answer of
+    /// `answers` (a server that ignores the range).
+    script: HashMap<String, VecDeque<Answer>>,
+    /// Each ranged request: the address, `from`, and the bodies dropped before it was made.
+    range_log: Rc<RefCell<Vec<(String, u64, u32)>>>,
+    dropped: Rc<Cell<u32>>,
 }
 
-impl Fetcher for FakeFetcher {
-    fn get(&mut self, url: &str, _idle_ms: u64) -> Result<Fetched, String> {
-        self.log.borrow_mut().push(url.to_string());
-        match self.answers.get(url).cloned() {
+impl FakeFetcher {
+    fn new(clock: Rc<Cell<u64>>) -> FakeFetcher {
+        FakeFetcher {
+            answers: HashMap::new(),
+            log: Rc::new(RefCell::new(Vec::new())),
+            clock,
+            etags: HashMap::new(),
+            script: HashMap::new(),
+            range_log: Rc::new(RefCell::new(Vec::new())),
+            dropped: Rc::new(Cell::new(0)),
+        }
+    }
+
+    fn script_of(&self, data: Vec<u8>, end: End, tick: u64) -> Box<dyn Read> {
+        Box::new(Script {
+            data: Cursor::new(data),
+            end,
+            tick,
+            clock: Rc::clone(&self.clock),
+            dropped: Rc::clone(&self.dropped),
+        })
+    }
+
+    fn answer(&self, url: &str, answer: Option<Answer>) -> Result<Fetched, String> {
+        match answer {
             None => Ok(Fetched::Status(404)),
             Some(Answer::Fail(message)) => Err(message),
             Some(Answer::Status(status)) => Ok(Fetched::Status(status)),
@@ -186,20 +231,45 @@ impl Fetcher for FakeFetcher {
                 tick,
             }) => Ok(Fetched::Body {
                 length,
-                body: Box::new(Script {
-                    data: Cursor::new(data),
-                    end,
-                    tick,
-                    clock: Rc::clone(&self.clock),
-                }),
+                etag: self.etags.get(url).cloned(),
+                body: self.script_of(data, end, tick),
+            }),
+            Some(Answer::Partial {
+                data,
+                content_range,
+                length,
+                etag,
+                end,
+            }) => Ok(Fetched::Partial {
+                content_range,
+                length,
+                etag,
+                body: self.script_of(data, end, 0),
             }),
         }
+    }
+}
+
+impl Fetcher for FakeFetcher {
+    fn get(&mut self, url: &str, _idle_ms: u64) -> Result<Fetched, String> {
+        self.log.borrow_mut().push(url.to_string());
+        self.answer(url, self.answers.get(url).cloned())
+    }
+
+    fn get_range(&mut self, url: &str, from: u64, _idle_ms: u64) -> Result<Fetched, String> {
+        self.range_log
+            .borrow_mut()
+            .push((url.to_string(), from, self.dropped.get()));
+        let scripted = self.script.get_mut(url).and_then(VecDeque::pop_front);
+        let answer = scripted.or_else(|| self.answers.get(url).cloned());
+        self.answer(url, answer)
     }
 }
 
 struct FakePacing {
     clock: Rc<Cell<u64>>,
     pauses: Rc<Cell<u32>>,
+    waits: Rc<RefCell<Vec<u64>>>,
 }
 
 impl Pacing for FakePacing {
@@ -209,6 +279,12 @@ impl Pacing for FakePacing {
 
     fn pause(&mut self) {
         self.pauses.set(self.pauses.get() + 1);
+    }
+
+    /// A wait moves the fake clock: nothing sleeps.
+    fn wait_ms(&mut self, ms: u64) {
+        self.waits.borrow_mut().push(ms);
+        self.clock.set(self.clock.get() + ms);
     }
 }
 
@@ -235,6 +311,9 @@ struct World {
     fetcher: FakeFetcher,
     clock: Rc<Cell<u64>>,
     pauses: Rc<Cell<u32>>,
+    waits: Rc<RefCell<Vec<u64>>>,
+    /// The download's limits of `pull` (short ones, a test may widen them).
+    download: Limits,
 }
 
 impl World {
@@ -278,13 +357,11 @@ impl World {
             signing,
             updates,
             adapter: FakeAdapter::new(),
-            fetcher: FakeFetcher {
-                answers: HashMap::new(),
-                log: Rc::new(RefCell::new(Vec::new())),
-                clock: Rc::clone(&clock),
-            },
+            fetcher: FakeFetcher::new(Rc::clone(&clock)),
             clock,
             pauses: Rc::new(Cell::new(0)),
+            waits: Rc::new(RefCell::new(Vec::new())),
+            download: DOWNLOAD,
         };
         let login = br#"{"username":"admin","password":"correct horse battery"}"#;
         let reply = world.send(
@@ -340,6 +417,7 @@ impl World {
         let mut pacing = FakePacing {
             clock: Rc::clone(&self.clock),
             pauses: Rc::clone(&self.pauses),
+            waits: Rc::clone(&self.waits),
         };
         let response = match reply {
             Reply::VersionCheck(ticket) => ticket.check(&mut self.fetcher, &mut pacing, CHECK),
@@ -349,7 +427,7 @@ impl World {
                 &mut self.adapter,
                 &mut pacing,
                 CHECK,
-                DOWNLOAD,
+                self.download,
             ),
             Reply::Whole(response) => response,
             other => panic!("unexpected reply {other:?}"),
@@ -379,6 +457,40 @@ impl World {
 
     fn elapse(&self, ms: u64) {
         self.clock.set(self.clock.get() + ms);
+    }
+
+    /// Queues what the next ranged request of `url` gets.
+    fn range(&mut self, url: &str, answer: Answer) {
+        self.fetcher
+            .script
+            .entry(url.to_string())
+            .or_default()
+            .push_back(answer);
+    }
+
+    fn range_log(&self) -> Vec<(String, u64, u32)> {
+        self.fetcher.range_log.borrow().clone()
+    }
+
+    fn waits(&self) -> Vec<u64> {
+        self.waits.borrow().clone()
+    }
+
+    /// A release of `len` image bytes at `ASSET`, its first answer cut after `at` bytes of the
+    /// file (the length announced is the whole file's). Returns the file.
+    fn serve_cut(&mut self, len: usize, at: usize, end: End) -> Vec<u8> {
+        let sup = file(&self.signing, newer(), &image(len));
+        self.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+        self.serve(
+            ASSET,
+            Answer::Body {
+                data: sup[..at].to_vec(),
+                length: Some(sup.len() as u64),
+                end,
+                tick: 0,
+            },
+        );
+        sup
     }
 
     fn serve(&mut self, url: &str, answer: Answer) {
@@ -419,6 +531,30 @@ impl World {
         assert!(!self.adapter.next_boot_is_inactive);
         assert!(!self.adapter.pending);
         assert!(self.adapter.slot.is_empty());
+    }
+}
+
+/// A 206 of `sup` from byte `from`, to the end, with its right headers.
+fn partial(sup: &[u8], from: usize) -> Answer {
+    partial_cut(sup, from, sup.len() - from, End::Eof)
+}
+
+/// A 206 from `from` that announces the rest but carries only `carry` bytes, then `end`.
+fn partial_cut(sup: &[u8], from: usize, carry: usize, end: End) -> Answer {
+    Answer::Partial {
+        data: sup[from..from + carry].to_vec(),
+        content_range: Some(format!("bytes {from}-{}/{}", sup.len() - 1, sup.len())),
+        length: Some((sup.len() - from) as u64),
+        etag: None,
+        end,
+    }
+}
+
+/// The download limits when the waits of three resumes (14 s) must fit.
+fn long_download() -> Limits {
+    Limits {
+        idle_ms: 100,
+        total_ms: 600 * SECOND,
     }
 }
 
@@ -1276,7 +1412,7 @@ fn a_header_that_disagrees_with_the_manifest_is_refused_before_begin() {
 }
 
 #[test]
-fn a_cut_connection_is_a_download_failure_and_the_next_pull_starts_over() {
+fn a_server_that_does_not_resume_fails_the_pull_and_the_next_pull_starts_over() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
     world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
@@ -1289,15 +1425,11 @@ fn a_cut_connection_is_a_download_failure_and_the_next_pull_starts_over() {
             tick: 0,
         },
     );
-    let answer = world.pull();
-    assert_eq!(answer.0, 500, "{}", answer.1);
-    assert!(
-        answer.1["error"]
-            .as_str()
-            .unwrap()
-            .starts_with("Download failed: "),
-        "{}",
-        answer.1
+    // The same cut answer comes back to the range request (a 200): the server does not resume.
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: the server does not resume (200 to a range request)",
     );
     assert_eq!(world.adapter.count("abort"), 1);
     world.untouched();
@@ -1309,18 +1441,27 @@ fn a_cut_connection_is_a_download_failure_and_the_next_pull_starts_over() {
 }
 
 #[test]
-fn a_body_that_ends_early_without_an_error_is_connection_lost() {
+fn a_body_that_ends_early_without_an_error_is_a_cut_too() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
     world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
     world.serve(ASSET, body_no_length(&sup[..5000]));
-    is_error(&world.pull(), 500, "Download failed: connection lost");
+    // The resumed request is answered with the same short 200: nothing to resume from.
+    world.download = Limits {
+        idle_ms: 100,
+        total_ms: 600 * SECOND,
+    };
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: the server does not resume (200 to a range request)",
+    );
     assert_eq!(world.adapter.count("abort"), 1);
     world.untouched();
 }
 
 #[test]
-fn a_read_timeout_is_a_download_failure() {
+fn a_read_timeout_every_time_is_a_download_failure_after_the_resumes() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
     world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
@@ -1333,7 +1474,18 @@ fn a_read_timeout_is_a_download_failure() {
             tick: 0,
         },
     );
-    is_error(&world.pull(), 500, "Download failed: timed out");
+    for _ in 0..3 {
+        world.range(
+            ASSET,
+            partial_cut(&sup, 3000, 0, End::Error(ErrorKind::TimedOut)),
+        );
+    }
+    world.download = long_download();
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: timed out (after 3 resumes)",
+    );
     assert_eq!(world.adapter.count("abort"), 1);
     world.untouched();
 }
@@ -1446,10 +1598,11 @@ fn an_upload_while_a_pull_holds_the_installation_is_409() {
     };
     let status = Rc::new(Cell::new(0));
     let mut intruder = Intruder {
-        inner: FakeFetcher {
-            answers: world.fetcher.answers.clone(),
-            log: Rc::clone(&world.fetcher.log),
-            clock: Rc::clone(&world.clock),
+        inner: {
+            let mut inner = FakeFetcher::new(Rc::clone(&world.clock));
+            inner.answers = world.fetcher.answers.clone();
+            inner.log = Rc::clone(&world.fetcher.log);
+            inner
         },
         updates: &world.updates,
         status: Rc::clone(&status),
@@ -1457,6 +1610,7 @@ fn an_upload_while_a_pull_holds_the_installation_is_409() {
     let mut pacing = FakePacing {
         clock: Rc::clone(&world.clock),
         pauses: Rc::clone(&world.pauses),
+        waits: Rc::clone(&world.waits),
     };
     let response = ticket.pull(
         &world.updates,
@@ -1510,6 +1664,7 @@ impl Read for Checking<'_> {
             let mut pacing = FakePacing {
                 clock: Rc::clone(&self.clock),
                 pauses: Rc::new(Cell::new(0)),
+                waits: Rc::default(),
             };
             self.status
                 .set(ticket.check(self.fetcher, &mut pacing, CHECK).status);
@@ -1545,6 +1700,507 @@ fn the_pull_hands_the_cpu_back_about_every_64_kb() {
     assert_eq!(world.pull().0, 200);
     let pauses = world.pauses.get();
     assert!((5..=7).contains(&pauses), "{pauses} pauses for 400 KB");
+}
+
+// ---- A cut download resumed (spec 040 R6) ----
+
+/// The log lines of this file's tests (warnings and up), to see a resume and a check.
+struct Capture;
+static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if let Ok(mut lines) = LINES.lock() {
+            lines.push(format!("{}: {}", record.level(), record.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn capture_logs() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Info);
+    });
+}
+
+/// The captured lines that hold this text (a number or an address unique to the test).
+fn logged(text: &str) -> Vec<String> {
+    LINES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains(text))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn a_cut_download_resumes_from_the_byte_written_and_installs() {
+    capture_logs();
+    let mut world = World::new();
+    let sup = world.serve_cut(8101, 4000, End::Error(ErrorKind::ConnectionReset));
+    world.range(ASSET, partial(&sup, 4000));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+    assert_eq!(world.adapter.count("begin"), 1);
+    assert_eq!(world.adapter.count("abort"), 0);
+    // One request, asking the rest from the byte read, made after two bodies were dropped (the
+    // manifest's, the cut one); one wait of 2 s on the fake clock.
+    assert_eq!(world.range_log(), vec![(ASSET.to_string(), 4000, 2)]);
+    assert_eq!(world.waits(), vec![2000]);
+    let lines = logged(&format!("download cut at 4000 of {} bytes", sup.len()));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("INFO: update: download cut at"),
+        "{lines:?}"
+    );
+    assert!(lines[0].contains("(scripted), resuming (1/3)"), "{lines:?}");
+}
+
+#[test]
+fn the_cut_body_is_dropped_before_the_new_request() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, partial(&sup, 4000));
+    assert_eq!(world.pull().0, 200);
+    // By the time the ranged request is made, the manifest's body and the cut one are dropped.
+    let log = world.range_log();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].2, 2);
+}
+
+#[test]
+fn two_cuts_are_two_resumes() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 3000, End::Eof);
+    world.range(ASSET, partial_cut(&sup, 3000, 2500, End::Eof));
+    world.range(ASSET, partial(&sup, 5500));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+    let froms: Vec<u64> = world.range_log().iter().map(|(_, from, _)| *from).collect();
+    assert_eq!(froms, vec![3000, 5500]);
+    assert_eq!(world.waits(), vec![2000, 4000]);
+}
+
+#[test]
+fn a_cut_at_byte_zero_of_the_body_asks_from_zero_and_installs() {
+    let mut world = World::new();
+    let sup = world.serve_cut(6000, 0, End::Error(ErrorKind::ConnectionReset));
+    world.range(ASSET, partial(&sup, 0));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.range_log()[0].1, 0);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+}
+
+#[test]
+fn a_cut_inside_the_header_resumes_like_any_other_byte() {
+    let mut world = World::new();
+    let sup = world.serve_cut(6000, 60, End::Eof);
+    world.range(ASSET, partial(&sup, 60));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.range_log()[0].1, 60);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+}
+
+#[test]
+fn a_read_timeout_is_resumed() {
+    let mut world = World::new();
+    let sup = world.serve_cut(6007, 3000, End::Error(ErrorKind::TimedOut));
+    world.range(ASSET, partial(&sup, 3000));
+    capture_logs();
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+    let lines = logged(&format!(
+        "download cut at 3000 of {} bytes (timed out)",
+        sup.len()
+    ));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+}
+
+#[test]
+fn a_200_to_the_range_request_is_a_server_that_does_not_resume() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, body(&sup));
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: the server does not resume (200 to a range request)",
+    );
+    assert_eq!(world.adapter.count("abort"), 1);
+    world.untouched();
+}
+
+#[test]
+fn a_416_is_a_changed_file_and_the_cached_manifest_is_dropped() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, Answer::Status(416));
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: the file changed on the server",
+    );
+    world.untouched();
+    // The next pull reads the manifest again (without the drop, the cache would still be fresh).
+    world.serve(ASSET, body(&sup));
+    world.elapse(2 * MINUTE - 1);
+    let manifests = |world: &World| {
+        world
+            .fetched()
+            .iter()
+            .filter(|url| *url == DEFAULT_MANIFEST_URL)
+            .count()
+    };
+    assert_eq!(manifests(&world), 1);
+    // 2 minutes on the monotonic clock is past the 60 s of the checks and the cache stays
+    // fresh (under 10 minutes): only the drop makes the next pull fetch the manifest.
+    assert_eq!(world.pull().0, 200);
+    assert_eq!(manifests(&world), 2);
+}
+
+#[test]
+fn a_206_that_is_not_the_rest_asked_for_is_a_changed_file() {
+    type Bend = fn(&mut Answer);
+    let bends: [(&str, Bend); 5] = [
+        ("another start", |a| {
+            if let Answer::Partial { content_range, .. } = a {
+                *content_range = Some(content_range.clone().unwrap().replacen("4000", "3999", 1));
+            }
+        }),
+        ("another total", |a| {
+            if let Answer::Partial { content_range, .. } = a {
+                let text = content_range.clone().unwrap();
+                let (head, _) = text.rsplit_once('/').unwrap();
+                *content_range = Some(format!("{head}/99999"));
+            }
+        }),
+        ("a short end", |a| {
+            if let Answer::Partial { content_range, .. } = a {
+                let text = content_range.clone().unwrap();
+                let (head, total) = text.rsplit_once('/').unwrap();
+                let (start, _) = head.split_once('-').unwrap();
+                *content_range = Some(format!("{start}-5000/{total}"));
+            }
+        }),
+        ("no Content-Range", |a| {
+            if let Answer::Partial { content_range, .. } = a {
+                *content_range = None;
+            }
+        }),
+        ("a wrong Content-Length", |a| {
+            if let Answer::Partial { length, .. } = a {
+                *length = length.map(|n| n - 1);
+            }
+        }),
+    ];
+    for (what, bend) in bends {
+        let mut world = World::new();
+        let sup = world.serve_cut(8000, 4000, End::Eof);
+        let mut answer = partial(&sup, 4000);
+        bend(&mut answer);
+        world.range(ASSET, answer);
+        let result = world.pull();
+        assert_eq!(result.0, 500, "{what}: {}", result.1);
+        assert_eq!(
+            result.1["error"], "Download failed: the file changed on the server",
+            "{what}"
+        );
+        assert_eq!(world.adapter.count("abort"), 1, "{what}");
+        world.untouched();
+    }
+}
+
+#[test]
+fn a_changed_etag_between_the_two_answers_is_a_changed_file() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world
+        .fetcher
+        .etags
+        .insert(ASSET.to_string(), "\"v1\"".to_string());
+    let mut answer = partial(&sup, 4000);
+    if let Answer::Partial { etag, .. } = &mut answer {
+        *etag = Some("\"v2\"".to_string());
+    }
+    world.range(ASSET, answer);
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: the file changed on the server",
+    );
+    world.untouched();
+}
+
+#[test]
+fn an_etag_missing_on_one_answer_or_over_256_characters_is_not_compared() {
+    let long = "x".repeat(300);
+    // (first answer, 206): absent on the 206, absent on the first, a long one that differs.
+    let cases: [(Option<&str>, Option<&str>); 3] = [
+        (Some("\"v1\""), None),
+        (None, Some("\"v2\"")),
+        (Some(long.as_str()), Some("\"other\"")),
+    ];
+    for (first, second) in cases {
+        let mut world = World::new();
+        let sup = world.serve_cut(8000, 4000, End::Eof);
+        if let Some(first) = first {
+            world
+                .fetcher
+                .etags
+                .insert(ASSET.to_string(), first.to_string());
+        }
+        let mut answer = partial(&sup, 4000);
+        if let Answer::Partial { etag, .. } = &mut answer {
+            *etag = second.map(str::to_string);
+        }
+        world.range(ASSET, answer);
+        let result = world.pull();
+        assert_eq!(result.0, 200, "{first:?} {second:?}: {}", result.1);
+        assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+    }
+    // The same etag on both answers is accepted too.
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world
+        .fetcher
+        .etags
+        .insert(ASSET.to_string(), "\"v1\"".to_string());
+    let mut answer = partial(&sup, 4000);
+    if let Answer::Partial { etag, .. } = &mut answer {
+        *etag = Some("\"v1\"".to_string());
+    }
+    world.range(ASSET, answer);
+    assert_eq!(world.pull().0, 200);
+}
+
+#[test]
+fn a_changed_file_served_without_an_etag_is_caught_by_the_final_checks() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    // The same length, other bytes after the cut.
+    let mut other = sup.clone();
+    other[4000..]
+        .iter_mut()
+        .for_each(|b| *b = b.wrapping_add(1));
+    world.range(ASSET, partial(&other, 4000));
+    // The signature's image digest is checked before the manifest's file hash: the bytes after
+    // the cut do not match what the header signed.
+    is_error(&world.pull(), 400, "Image does not match its signature");
+    assert_eq!(world.adapter.count("abort"), 1);
+    world.untouched();
+}
+
+#[test]
+fn a_read_error_at_the_full_count_is_the_end_of_the_body() {
+    let mut world = World::new();
+    let sup = file(&world.signing, newer(), &image(5000));
+    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve(
+        ASSET,
+        Answer::Body {
+            data: sup.clone(),
+            length: Some(sup.len() as u64),
+            end: End::Error(ErrorKind::ConnectionReset),
+            tick: 0,
+        },
+    );
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert!(world.range_log().is_empty());
+    assert!(world.waits().is_empty());
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+}
+
+#[test]
+fn a_503_on_the_range_request_counts_as_one_attempt() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, Answer::Status(503));
+    world.range(ASSET, partial(&sup, 4000));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.range_log().len(), 2);
+    assert_eq!(world.waits(), vec![2000, 4000]);
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+}
+
+#[test]
+fn a_resumed_request_that_cannot_connect_counts_as_one_attempt() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, Answer::Fail("connection refused".to_string()));
+    world.range(ASSET, partial(&sup, 4000));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(world.waits(), vec![2000, 4000]);
+}
+
+#[test]
+fn any_other_status_on_the_range_request_fails_at_once() {
+    let mut world = World::new();
+    world.serve_cut(8000, 4000, End::Eof);
+    world.range(ASSET, Answer::Status(403));
+    is_error(
+        &world.pull(),
+        500,
+        &format!("Download failed: {ASSET}: 403"),
+    );
+    assert_eq!(world.range_log().len(), 1);
+    world.untouched();
+}
+
+#[test]
+fn a_redirect_to_plain_http_during_a_resume_fails_at_once() {
+    let mut world = World::new();
+    let sup = file(&world.signing, newer(), &image(8000));
+    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve(ASSET, redirect(STORE));
+    world.serve(
+        STORE,
+        Answer::Body {
+            data: sup[..4000].to_vec(),
+            length: Some(sup.len() as u64),
+            end: End::Eof,
+            tick: 0,
+        },
+    );
+    world.range(ASSET, redirect("http://objects.example.com/plain.sup"));
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: redirect from https to http refused",
+    );
+    assert_eq!(world.range_log().len(), 1);
+    assert_eq!(world.waits(), vec![2000]);
+    world.untouched();
+}
+
+#[test]
+fn a_206_to_the_first_download_request_or_to_the_manifest_is_a_status() {
+    let mut world = World::new();
+    let sup = file(&world.signing, newer(), &image(3000));
+    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve(ASSET, partial(&sup, 0));
+    is_error(
+        &world.pull(),
+        500,
+        &format!("Download failed: {ASSET}: 206"),
+    );
+    world.untouched();
+
+    let mut world = World::new();
+    world.serve(DEFAULT_MANIFEST_URL, partial(&sup, 0));
+    is_error(
+        &world.check(),
+        500,
+        &format!("Update check failed: {DEFAULT_MANIFEST_URL}: 206"),
+    );
+}
+
+#[test]
+fn every_attempt_cut_fails_after_three_resumes_with_waits_of_2_4_and_8_s() {
+    let mut world = World::new();
+    let sup = world.serve_cut(8000, 3000, End::Eof);
+    world.range(ASSET, partial_cut(&sup, 3000, 500, End::Eof));
+    world.range(ASSET, partial_cut(&sup, 3500, 500, End::Eof));
+    world.range(ASSET, partial_cut(&sup, 4000, 500, End::Eof));
+    world.download = long_download();
+    is_error(
+        &world.pull(),
+        500,
+        "Download failed: connection lost (after 3 resumes)",
+    );
+    assert_eq!(world.waits(), vec![2000, 4000, 8000]);
+    let froms: Vec<u64> = world.range_log().iter().map(|(_, from, _)| *from).collect();
+    assert_eq!(froms, vec![3000, 3500, 4000]);
+    assert_eq!(world.adapter.count("abort"), 1);
+    world.untouched();
+    // Nothing is kept across pulls: the next one starts over from byte 0.
+    world.serve(ASSET, body(&sup));
+    world.elapse(2 * MINUTE);
+    assert_eq!(world.pull().0, 200);
+    assert_eq!(world.range_log().len(), 3);
+}
+
+#[test]
+fn the_total_time_wins_over_a_resume() {
+    let mut world = World::new();
+    world.serve_cut(8000, 3000, End::Eof);
+    // The first wait (2 s) is already past a total of 1 s.
+    world.download = Limits {
+        idle_ms: 100,
+        total_ms: SECOND,
+    };
+    is_error(&world.pull(), 500, "Download failed: took longer than 1 s");
+    assert!(world.range_log().is_empty());
+    world.untouched();
+}
+
+#[test]
+fn each_range_request_starts_at_the_image_url_and_follows_its_redirects() {
+    let mut world = World::new();
+    let sup = file(&world.signing, newer(), &image(8000));
+    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve(ASSET, redirect(STORE));
+    world.serve(
+        STORE,
+        Answer::Body {
+            data: sup[..4000].to_vec(),
+            length: Some(sup.len() as u64),
+            end: End::Eof,
+            tick: 0,
+        },
+    );
+    // The resume asks the asset address again (no remembered signed address), then the store.
+    world.range(STORE, partial(&sup, 4000));
+    let answer = world.pull();
+    assert_eq!(answer.0, 200, "{}", answer.1);
+    assert_eq!(
+        world.range_log(),
+        vec![(ASSET.to_string(), 4000, 2), (STORE.to_string(), 4000, 2)]
+    );
+    assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
+}
+
+// ---- Observations from the box (spec 040 R7 a) ----
+
+#[test]
+fn a_fresh_home_has_no_latest_and_a_check_always_reaches_the_fetcher() {
+    capture_logs();
+    let mut world = World::new();
+    let (status, info) = world.version();
+    assert_eq!(status, 200, "{info}");
+    assert!(info["latest"].is_null(), "{info}");
+    // The address is this test's own: the success line names it.
+    let url = "http://192.168.1.77:8081/spec040-observation-a.json";
+    let sup = file(&world.signing, newer(), &image(2000));
+    world.serve(
+        url,
+        body(manifest_for(&sup, "0.2.0", ASSET).to_string().as_bytes()),
+    );
+    world.set_setting("update.manifestUrl", url);
+    assert_eq!(world.check().0, 200);
+    assert_eq!(world.fetched(), vec![url.to_string()]);
+    // The cache is filled: a second check, past the 60 s, still fetches.
+    world.elapse(2 * MINUTE);
+    assert_eq!(world.check().0, 200);
+    assert_eq!(world.fetched(), vec![url.to_string(), url.to_string()]);
+    let lines = logged(&format!(
+        "update: check: latest 0.2.0, running {} ({url})",
+        solite_core::VERSION
+    ));
+    assert_eq!(lines.len(), 2, "{lines:?}");
 }
 
 // ---- The automatic check ----
@@ -1634,6 +2290,7 @@ fn an_automatic_check_fills_the_cache_and_never_writes() {
     let mut pacing = FakePacing {
         clock: Rc::clone(&world.clock),
         pauses: Rc::clone(&world.pauses),
+        waits: Rc::clone(&world.waits),
     };
     ticket.check_auto(&mut world.fetcher, &mut pacing, CHECK);
     let (_, info) = world.version();
@@ -1651,6 +2308,7 @@ fn a_failed_automatic_check_does_not_count_for_the_api_interval() {
     let mut pacing = FakePacing {
         clock: Rc::clone(&world.clock),
         pauses: Rc::clone(&world.pauses),
+        waits: Rc::clone(&world.waits),
     };
     ticket.check_auto(&mut world.fetcher, &mut pacing, CHECK);
     world.serve_release(newer(), 2000);

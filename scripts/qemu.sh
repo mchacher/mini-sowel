@@ -17,8 +17,9 @@
 # The sim image also runs an update's whole installation on the thread the radio image runs it on
 # (D60): its three statuses must be right and at least 2 KB of that thread's stack stay unused; and
 # one pull of a release from an in-memory fetcher on an `update-pull` thread of 20 KB (spec 039
-# R10): status 200 and at least 8 KB of that stack unused (the room left for the TLS handshake,
-# which QEMU cannot run).
+# R10), its first answer cut after 40 KB and resumed with a `Range` request (spec 040 R6.8): status
+# 200 and at least 1024 bytes of that stack unused, the resume touching an 8 KB stand-in for the
+# TLS handshake (which QEMU cannot run) at its deepest point.
 # QEMU is always stopped, also on Ctrl-C.
 # Installs QEMU into firmware/.embuild/ at the first run (a download, like ESP-IDF's).
 set -e

@@ -183,7 +183,7 @@ fw_check_radio() {
 # thread left at least UPDATE_STACK_MARGIN bytes of its stack unused, for the frames the box adds
 # (the request's body reader and answer); and the pull's (see below). Prints the reason and returns 1 otherwise.
 UPDATE_STACK_MARGIN=2048
-PULL_STACK_MARGIN=8192
+PULL_STACK_MARGIN=1024
 fw_check_update_stack() {
   check=$(grep -a 'update check: ' "$1" | tail -n 1)
   [ -n "$check" ] || { echo "the update check's line (update check: ...) is missing."; return 1; }
@@ -193,17 +193,21 @@ fw_check_update_stack() {
     | sed -E 's/update: thread stack ([0-9]+) .*/\1/')
   [ -n "$unused" ] || { echo "the update thread's stack line (update: thread stack ...) is missing."; return 1; }
   [ "$unused" -ge "$UPDATE_STACK_MARGIN" ] || { echo "the update thread left $unused bytes of its stack unused, below the $UPDATE_STACK_MARGIN bytes kept for the box's request frames (D60)."; return 1; }
-  # The pull of a release (spec 039 R10): one pull from an in-memory fetcher on an `update-pull`
-  # thread, status 200, and at least PULL_STACK_MARGIN of its 20480 bytes unused: the room the TLS
-  # handshake needs, which QEMU cannot run.
+  # The pull of a release (spec 039 R10, spec 040 R6.8): one pull from an in-memory fetcher on an
+  # `update-pull` thread, its first answer cut after 40 KB and resumed with a `Range` request,
+  # status 200, and at least PULL_STACK_MARGIN of its 20480 bytes unused. The resume touches an
+  # 8 KB stand-in for the TLS handshake (which QEMU cannot run) at its deepest point, so this one
+  # rule replaces the 8192 bytes unused of the pull without a resume (D68).
   pull=$(grep -a 'update pull check: ' "$1" | tail -n 1)
   [ -n "$pull" ] || { echo "the pull check's line (update pull check: ...) is missing."; return 1; }
   echo "$pull" | grep -qF 'status 200' \
     || { echo "the pull check went wrong: ${pull#*update pull check: }"; return 1; }
+  echo "$pull" | grep -qF 'resumes 1' \
+    || { echo "the pull check did not resume its cut download once: ${pull#*update pull check: }"; return 1; }
   pull_unused=$(grep -aoE 'update-pull: thread stack [0-9]+ of [0-9]+ bytes never used' "$1" | tail -n 1 \
     | sed -E 's/update-pull: thread stack ([0-9]+) .*/\1/')
   [ -n "$pull_unused" ] || { echo "the update-pull thread's stack line (update-pull: thread stack ...) is missing."; return 1; }
-  [ "$pull_unused" -ge "$PULL_STACK_MARGIN" ] || { echo "the update-pull thread left $pull_unused of its 20480 bytes unused, below the $PULL_STACK_MARGIN bytes kept for the TLS handshake (spec 039 R10, D68)."; return 1; }
+  [ "$pull_unused" -ge "$PULL_STACK_MARGIN" ] || { echo "the update-pull thread left $pull_unused of its 20480 bytes unused, below the $PULL_STACK_MARGIN bytes kept after the resume's 8 KB handshake stand-in (spec 040 R6.8, D68)."; return 1; }
   return 0
 }
 
