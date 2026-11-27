@@ -167,15 +167,15 @@ listed in the plan with its reason.
   Never an edit of the old ones.
 
 ## Acceptance criteria
-- [ ] `cargo tree -p solite-core` shows no `solite-recipe-motion-light`; the radio image is smaller
+- [x] `cargo tree -p solite-core` shows no `solite-recipe-motion-light`; the radio image is smaller
       (figure in the memory budget).
-- [ ] `GET /recipes/motion-light` gives the pinned bytes of Sowel 1.1.2 (or the named difference).
-- [ ] Each refused setting of R3 answers Sowel's text (tested).
-- [ ] A saved home with 3 native instances: stopped with `Recipe not found: motion-light`, then
+- [x] `GET /recipes/motion-light` gives the pinned bytes of Sowel 1.1.2 (or the named difference).
+- [x] Each refused setting of R3 answers Sowel's text (tested).
+- [x] A saved home with 3 native instances: stopped with `Recipe not found: motion-light`, then
       running after the script is installed, settings unchanged (Mac test and Mac demo).
-- [ ] Every scenario of the former parity suite passes on the script.
-- [ ] validate green, QEMU included, its memory gate measured with the 3 instances running.
-- [ ] Box: the garage runs `motion-light` 1.1.2 from a signed file and still runs after B11.
+- [x] Every scenario of the former parity suite passes on the script.
+- [x] validate green, QEMU included, its memory gate measured with the 3 instances running.
+- [x] Box: the garage runs `motion-light` 1.1.2 from a signed file and still runs after B11.
 
 ## Edge cases
 - A ninth `motion-light` instance, any zone: refused (R5).
@@ -201,6 +201,20 @@ divergences were.
   the recipe key and uploaded (the catalogue `mchacher/solite-recipes`, the user's to create,
   publishes `motion-light` 1.1.2 and drops `motion-light-script` when it exists); the garage's
   instance runs; B11 green.
+
+### Result (2026-11-27)
+- Mac, `firmware/fixtures` realistic home (3 `motion-light` instances): without `--recipe-script`,
+  `GET /recipes` is `[]`, the three instances stay `enabled` with their settings, each log says
+  `Failed to restore: Recipe not found: motion-light`, and the zone page shows the rows dimmed,
+  "Recette non installée", the switch off and disabled (seen by the user). Restarted with
+  `--recipe-script recipes/scripts/motion-light.js`: `motion-light` 1.1.2 loaded, the three
+  instances running (`Motion detected — 16 light(s) turned on`), their settings byte for byte the
+  saved ones. A new instance without a zone: 400 `Invalid params: Zone parameter is required`.
+  The 16 `queue of recipe orders is full` warnings at the start are the known ones
+  (`docs/memory-budget.md`, orders at the start).
+- Box (Dongle Max, the user's garage): `motion-light` 1.1.2 installed from a file signed with the
+  recipe key, the garage's instance running on it; the Plugins page of Administration; an
+  uninstall deleting the instances, their number shown in its confirmation; B11 green.
 
 ## Decided by the user (2026-11-27)
 1. The id is `motion-light`, Sowel's.

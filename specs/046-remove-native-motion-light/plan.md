@@ -13,7 +13,7 @@
 - [x] 7. Mac launchers, demo-garage, e2e, box-session B11 and its tests, firmware.sh, qemu.sh.
 - [x] 8. Docs "no longer true"; the image size and the scripts' line in the memory budget.
 - [x] 8b. R10: a row without its recipe (switch off and disabled, label, Delete), en/fr, living spec.
-- [ ] 9. validate; code review; the box check with the user (recipe key, flash, signed 1.1.2).
+- [x] 9. validate; code review; the box check with the user (recipe key, flash, signed 1.1.2).
 
 ## Tests dropped (filled at step 3)
 | Test | Reason |
