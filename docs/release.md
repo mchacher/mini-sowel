@@ -17,7 +17,8 @@ A release holds `solite-<version>.sup` (the signed update file a running box ins
 2. Commit the public key: its 64 hex characters and a newline in `release/update-key.pub`, on a
    branch, through a pull request (it is not a secret; the file makes a release reproducible from
    its tag).
-3. Keep the private key: an entry in a password manager and an offline copy (an encrypted volume).
+3. Keep the private key: an entry in a password manager and an offline copy, the encrypted archive
+   of the private repository `mchacher/solite-ops` (D82, below).
    A lost key means a box can only be updated by a USB flash.
 
 ## The recipe key, once (spec 042, D78)
@@ -40,6 +41,15 @@ this repository).
 4. Keep the private key as the signing key's: a password manager and an offline copy. A recipe key
    that leaks is replaced by a firmware that carries the new public key, and the scripts are signed
    again (the rotation's design is a line of the roadmap's inbox).
+
+## The encrypted copy of the secrets (D82)
+
+The two private keys, the box's password and its Wi-Fi settings are kept as one archive encrypted
+with `gpg` in the private repository `mchacher/solite-ops`; its passphrase is in the operator's
+password manager only. On a new computer: clone it beside this repository and follow its README,
+which restores `~/keys/` and `~/.config/solite/` with their files in mode 600. A change of a key or
+of the box's password is followed by an update of the archive (the same README). The release CI
+does not read it.
 
 ## The GitHub environment and its secrets (typed by the user)
 
