@@ -101,15 +101,15 @@ D65, grows by one), refused during a probation.
 
 ## Acceptance criteria
 
-- [ ] Core: `POST /system/restart` answers `Reply::Restart`; 401 without a session; 409 with each text
+- [x] Core: `POST /system/restart` answers `Reply::Restart`; 401 without a session; 409 with each text
       of R1.2; allowed in safe mode while other `POST`s get 503; allowed when an update or a restore
       waits for its restart.
-- [ ] Host: 501 with its text.
-- [ ] Probation: rolls back without PSRAM, confirms with it; the reason logged once (core tests with a
+- [x] Host: 501 with its text.
+- [x] Probation: rolls back without PSRAM, confirms with it; the reason logged once (core tests with a
       fake clock).
-- [ ] The Restart card asks, calls, waits, reloads on an answer or a 401, says so after 90 s, shows a
+- [x] The Restart card asks, calls, waits, reloads on an answer or a 401, says so after 90 s, shows a
       409 (UI tests, French and English).
-- [ ] `sh scripts/validate.sh` green; the route in `docs/sowel-subset.md`; D79 written.
+- [x] `sh scripts/validate.sh` green; the route in `docs/sowel-subset.md`; D79 written.
 - [ ] Box (with the user, their flash): the button restarts the box, the boot's cause reads `asked`.
 
 ## Edge cases
