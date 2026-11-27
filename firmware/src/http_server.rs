@@ -277,8 +277,8 @@ impl Raw {
         }
     }
 
-    /// Reads body bytes: their number, or ESP-IDF's error (`HTTPD_SOCK_ERR_TIMEOUT` after 5 s
-    /// without a byte).
+    /// Reads body bytes: their number, or ESP-IDF's error (`HTTPD_SOCK_ERR_TIMEOUT` after
+    /// `HTTPD_RECV_WAIT_SECS` without a byte).
     #[allow(unsafe_code)]
     fn receive(&self, buffer: &mut [u8]) -> i32 {
         // SAFETY: the request is valid; ESP-IDF writes at most `buffer.len()` bytes into it.
