@@ -67,7 +67,7 @@ describe("ZoneRecipesSection", () => {
     expect(screen.queryByTitle("Add a recipe")).toBeNull();
     expect(screen.getByText("No recipe is installed")).toBeTruthy();
     const link = screen.getByRole("link", { name: "Open the recipe store" });
-    expect(link.getAttribute("href")).toBe("#/settings");
+    expect(link.getAttribute("href")).toBe("#/plugins");
   });
 
   it("no recipe installed and no instance: only the store hint, count 0", () => {

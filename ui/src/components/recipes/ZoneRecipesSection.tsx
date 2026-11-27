@@ -91,7 +91,7 @@ export function ZoneRecipesSection({
           <div className="flex items-center justify-center gap-2 px-4 py-3 text-caption text-text-tertiary">
             <span>{t("recipes.noneInstalled")}</span>
             <a
-              href="#/settings"
+              href="#/plugins"
               className="text-primary hover:text-primary-hover transition-colors duration-150"
             >
               {t("recipes.openStore")}

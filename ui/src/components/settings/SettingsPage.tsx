@@ -29,7 +29,6 @@ import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
 import { compareVersions } from "../../lib/version";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_LABEL, Modal } from "../ui/Modal";
-import { RecipesCard } from "./RecipesCard";
 import { ResourcesCard } from "./ResourcesCard";
 import { RestartCard } from "./RestartCard";
 
@@ -103,7 +102,6 @@ export function SettingsPage() {
         <UpdateSection />
         <RestartCard />
         <ResourcesCard />
-        <RecipesCard />
         <FactoryResetSection />
       </div>
     </div>

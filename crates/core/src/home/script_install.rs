@@ -56,7 +56,7 @@ impl Home {
                 return Err(Failure::new(409, "Backup already in progress"));
             }
         }
-        if let Some(failure) = self.internal_refusal() {
+        if let Some(failure) = self.internal_refusal(!matches!(op, Op::Uninstall { .. })) {
             return Err(failure);
         }
         if op == Op::Refresh {

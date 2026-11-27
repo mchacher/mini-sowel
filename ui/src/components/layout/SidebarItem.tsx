@@ -1,6 +1,7 @@
 // Ported from Sowel ui/src/components/layout/SidebarItem.tsx (Sowel commit 5da84dc1, UI 1.87.0),
 // classes unchanged. Changes (spec 019): a hash link instead of `NavLink` (Solite has no router),
-// `active` always given by the caller, no collapsed mode, no badge.
+// `active` always given by the caller, no collapsed mode; the `badge` is kept (spec 042: the Plugins
+// entry's update count).
 import type { ReactNode } from "react";
 
 interface SidebarItemProps {
@@ -8,6 +9,8 @@ interface SidebarItemProps {
   label: string;
   icon: ReactNode;
   active: boolean;
+  /** Trailing element shown on the right (a count). */
+  badge?: ReactNode;
   onClick?: () => void;
 }
 
@@ -20,7 +23,7 @@ function itemClasses(isActive: boolean): string {
   return `${base} ${state}`;
 }
 
-export function SidebarItem({ to, label, icon, active, onClick }: SidebarItemProps) {
+export function SidebarItem({ to, label, icon, active, badge, onClick }: SidebarItemProps) {
   return (
     <a
       href={to}
@@ -34,6 +37,7 @@ export function SidebarItem({ to, label, icon, active, onClick }: SidebarItemPro
     >
       <span className="flex-shrink-0 relative">{icon}</span>
       <span className="text-small font-medium truncate">{label}</span>
+      {badge !== undefined && <span className="ml-auto flex-shrink-0">{badge}</span>}
     </a>
   );
 }

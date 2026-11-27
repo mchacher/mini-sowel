@@ -961,7 +961,8 @@ same routes and from a room's page, with the same log, state and events.
   (224 KB), is at least 512 KB (409 `Not enough memory for <id>: <n> KB free, <m> KB needed`;
   checked at install, update and start); before a recipe job or a refresh starts its thread, the
   largest block of internal RAM must hold the thread's 20 KB and 16 KB for the TLS session (503
-  `Not enough internal memory: largest free block <n> KB, <m> KB needed`). The Mac reads no memory:
+  `Not enough internal memory: largest free block <n> KB, <m> KB needed`); an uninstall opens no
+  TLS session and frees memory, so it needs only the thread's 20 KB. The Mac reads no memory:
   its admission always passes.
 - **Where it runs on the box**: the download, the checks, the write and the removal run on a
   `recipe` thread whose stack is in internal RAM (the flash is never touched from a task whose
@@ -1014,8 +1015,8 @@ script given by `--recipe-script`; a refused file has `held` 0. The Mac answers 
 figures are never read by the request (a worker's stack is in PSRAM and must not touch the flash):
 they are read at start and after each write or removal, by the thread that did it, and kept.
 Settings has a "Resources" card (the two memories as a bar each, with the lowest free and the PSRAM
-reserve marked, the storage, a row per script recipe) and a "Recipes" card (see "Shows the home in
-the browser").
+reserve marked, the storage, a row per script recipe); the Plugins page of Administration lists
+the recipes (see "Shows the home in the browser").
 
 ### Shows the home in the browser
 
@@ -1045,7 +1046,7 @@ copy embedded in the radio image at build time.
   token and reconnects.
 - **Sidebar**: on a phone, behind the top bar's menu button, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
-  Topology, Discovery, Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
+  Topology, Discovery, Plugins (with the count of installed recipes the catalogue has newer, as a badge), Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments. The Solite mark is in the sidebar and the drawer, not in the phone's top bar.
 - **Top bar**: on every page of the home, the home's name (the Settings' name, "Home" when none, a
   grey placeholder while it loads) and where you are (the room's path, or the administration
@@ -1075,7 +1076,7 @@ copy embedded in the radio image at build time.
   and Delete (confirmed). "No recipe in <room>" and an "Add a recipe" link when the room has none. With no recipe installed on the host the panel
   has no "+", still shows the instances of the room (named by their recipe id, stopped, with
   `Recipe not found` in their journal, deletable), and says "No recipe is installed" under them,
-  with a link to the Recipes card of Settings.
+  with a link to the Plugins page of Administration.
   **The form** is built from the recipe's slots, in their order, each with its name (`*` when
   required) and description: the zone is the room; an equipment list is a checkbox per equipment
   of the room of the slot's type; a duration is a number of minutes ("min"), sent as `"<n>m"`; a
@@ -1219,14 +1220,20 @@ copy embedded in the radio image at build time.
   `error` (danger token) under it; after a success, "The box restarts; reload the page in a
   minute." The upload is disabled during a pull or a check, and they are during an upload. The file
   goes as the body, `Content-Type: application/octet-stream`, with the bearer token. French and English labels.
-  The **Resources** card and the **Recipes** card (Settings, after the Restart card): the first
-  shows `GET /api/v1/system/resources` (the internal RAM and the PSRAM as a bar each, with the
+  The **Resources** card (Settings, after the Restart card) shows `GET /api/v1/system/resources` (the internal RAM and the PSRAM as a bar each, with the
   lowest free and the PSRAM reserve marked, the storage used, one row per script recipe with its
   version, source, memory held against its limit, instances and call times; a row hidden when its
-  figure is `null`); the second lists the catalogue with Install, Update and Remove, the refused
-  files with their reason and Remove, the error of the last read and an "Upload a signed recipe"
-  button (the file goes as `application/octet-stream`); it asks the refresh when it opens and
-  shows the list held when that answers 429. French and English.
+  figure is `null`). French and English.
+  The **Plugins** page (`#/plugins`, Administration, after Discovery; Sowel's page cut to script
+  recipes, with no category filter): two tabs with their counts, **Installed** (each installed
+  recipe with its name and version, Update when the catalogue holds a newer one, Remove; the
+  files refused at start with their reason, and the installed files the catalogue does not list,
+  with Remove) and **Store** (the catalogue, with Install, or the "Installed" mark and Update; a
+  recipe the program provides itself marked "Provided by Solite" with no button; the error of the
+  last read), a search field over the id, name and description of the tab shown, and an "Upload a
+  signed recipe" button (the file goes as `application/octet-stream`). It asks the refresh when it
+  opens and shows the list held when that answers 429; the server's own words show for a refusal.
+  French and English.
   The **Restart** card (after the Firmware update card): a "Restart" button, a confirmation ("Restart
   the box? It is back in about a minute."; Cancel sends nothing), then `POST /api/v1/system/restart`
   and a message while the box is away; the page polls `GET /api/v1/system/version` every 2 s (never
@@ -1994,7 +2001,7 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
 | 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |
-| 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Recipes card; the script leaves the radio image |
+| 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Plugins page; the script leaves the radio image |
 | 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |
 | 044 | Tighter bounds: 8 data a device, 8 data and 8 order bindings an equipment, 20 log lines a recipe instance; a home stored with the old bounds is cut at load, logged once |
 | 046 | The native `motion-light` recipe removed: no recipe is built in, `motion-light` is Sowel's 1.1.2 as a script recipe (Sowel's id, info and validation texts, at most 8 instances), the memory ceilings measure scripts, the Mac launchers pass `--recipe-script` |

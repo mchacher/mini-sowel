@@ -311,6 +311,7 @@ describe("App", () => {
     ["#/equipments", "Equipments", "Equipments"],
     ["#/devices", "Devices", "Devices"],
     ["#/discovery/solite", "Discovery", "Discovery"],
+    ["#/plugins", "Plugins", "Plugins"],
     ["#/settings", "Settings", "Settings"],
   ])(
     "shows the page at %s with its sidebar entry marked and no room",
@@ -381,16 +382,16 @@ describe("App", () => {
     },
   );
 
-  it("lists Devices, Equipments, Topology, Discovery and Settings in this order in the section", async () => {
+  it("lists Devices, Equipments, Topology, Discovery, Plugins and Settings in this order in the section", async () => {
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     await screen.findByRole("heading", { level: 1, name: "House" });
     fireEvent.click(within(nav()).getByRole("button", { name: "Administration" }));
     expect(
       within(nav())
         .getAllByRole("link")
-        .slice(-5)
+        .slice(-6)
         .map((l) => l.textContent),
-    ).toEqual(["Devices", "Equipments", "Topology", "Discovery", "Settings"]);
+    ).toEqual(["Devices", "Equipments", "Topology", "Discovery", "Plugins", "Settings"]);
     fireEvent.click(within(nav()).getByText("Topology"));
     expect(window.location.hash).toBe("#/zones");
   });
@@ -398,7 +399,7 @@ describe("App", () => {
   it("has no loose Devices, Equipments or Topology entry under the rooms", async () => {
     await boot({ zones: tree(), equipments: [light("l", "House light", "house", false)] });
     await screen.findByRole("heading", { level: 1, name: "House" });
-    for (const name of ["Devices", "Equipments", "Topology", "Discovery", "Settings"]) {
+    for (const name of ["Devices", "Equipments", "Topology", "Discovery", "Plugins", "Settings"]) {
       expect(within(nav()).queryByRole("link", { name })).toBeNull();
     }
   });

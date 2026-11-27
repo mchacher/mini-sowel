@@ -2506,7 +2506,7 @@ fn the_internal_ram_must_hold_the_job_thread_and_its_tls_session_else_503_with_t
     world.serve(&[("a", "1.0.0", &a)]);
     let needed = FETCH_STACK_BYTES + RECIPE_INTERNAL_MARGIN;
     world.probe.set(needed - 1, 1_500_000);
-    for answer in [world.install_id("a"), world.refresh(), world.uninstall("a")] {
+    for answer in [world.install_id("a"), world.refresh()] {
         assert_eq!(answer.0, 503, "{}", answer.1);
         assert_eq!(
             error_of(&answer),
@@ -2520,6 +2520,32 @@ fn the_internal_ram_must_hold_the_job_thread_and_its_tls_session_else_503_with_t
     assert!(world.fetch.log.is_empty());
     world.probe.set(needed, 1_500_000);
     assert_eq!(world.refresh().0, 200);
+}
+
+#[test]
+fn an_uninstall_needs_only_its_threads_stack_of_internal_ram() {
+    let mut world = World::new();
+    world.probe.set(64 * 1024, 1_500_000);
+    world.installed("a", "1.0.0");
+    // Between the stack and the stack plus the TLS margin: a download would be refused, the
+    // removal goes through.
+    world.probe.set(FETCH_STACK_BYTES, 1_500_000);
+    assert_eq!(world.install_id("b").0, 503);
+    assert_eq!(world.uninstall("a").0, 204);
+    world.probe.set(64 * 1024, 1_500_000);
+    world.installed("a", "1.0.0");
+    // Under the stack: refused, with the 20 KB figure.
+    world.probe.set(FETCH_STACK_BYTES - 1, 1_500_000);
+    let answer = world.uninstall("a");
+    assert_eq!(answer.0, 503, "{}", answer.1);
+    assert_eq!(
+        error_of(&answer),
+        format!(
+            "Not enough internal memory: largest free block {} KB, {} KB needed",
+            (FETCH_STACK_BYTES - 1) / 1024,
+            FETCH_STACK_BYTES / 1024
+        )
+    );
 }
 
 /// The world of the update's memory tests: runtimes that take 200 KB of the PSRAM while held, and

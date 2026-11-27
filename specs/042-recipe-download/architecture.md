@@ -83,7 +83,7 @@ own mutex, set and cleared with the mark: `claim` reads it and the recipe job's 
 | `scripts/validate.sh`, `scripts/lib/firmware.sh`, `scripts/qemu.sh` | the radio image's ELF must not carry `id: "motion-light-script"` (beside `fw_check_quickjs`, `validate.sh:137`, `lib/firmware.sh:230`); the `recipe: thread stack` line read, failing under 2048 bytes |
 | `scripts/release.sh`, `.github/workflows/release.yml`, `scripts/box-session.sh` | `SOLITE_RECIPE_PUBLIC_KEY` wherever `SOLITE_UPDATE_PUBLIC_KEY` is (`release.sh:537`, `box-session.sh:1323, 1347`); `release.sh` and the workflow refuse without `release/recipe-key.pub`; the session's `--recipe-file` and B11 (`box-session.sh:925-999, 1668-1697`); the F2 group of R7 comes with the box run (plan step 13) |
 | `crates/host/tests/box_session_script.rs` | B11 with and without `--recipe-file` (the F2 group's tests come with the group, plan step 13) |
-| `ui/src/components/settings/` | `ResourcesCard.tsx`, `RecipesCard.tsx` (new files: `SettingsPage.tsx` is 32 KB), their tests; `ui/src/api/` |
+| `ui/src/components/settings/` | `ResourcesCard.tsx` (new file: `SettingsPage.tsx` is 32 KB), its test; `ui/src/components/plugins/PluginsPage.tsx` (the recipes, R5.4, which replaced a `RecipesCard.tsx`), `ui/src/components/layout/useRecipeUpdates.ts` (the sidebar badge); `ui/src/api/` |
 | `release/recipe-key.pub` (the user's), `release/README.md` | the public half; how the key is made and kept |
 | `docs/` | as the spec's living spec delta |
 

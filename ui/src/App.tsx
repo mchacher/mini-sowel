@@ -9,6 +9,7 @@ import { adminPageFromHash, detailIdFromHash } from "./components/layout/admin-n
 import { DeviceDetailPage } from "./components/devices/DeviceDetailPage";
 import { EquipmentDetailPage } from "./components/equipments/EquipmentDetailPage";
 import { EquipmentsPage } from "./components/equipments/EquipmentsPage";
+import { PluginsPage } from "./components/plugins/PluginsPage";
 import { SettingsPage } from "./components/settings/SettingsPage";
 import { ZonesPage } from "./components/zones/ZonesPage";
 import { useTranslation } from "react-i18next";
@@ -140,6 +141,8 @@ function Home() {
             <ZonesPage />
           ) : page === "discovery" ? (
             <DiscoveryPage hash={hash} />
+          ) : page === "plugins" ? (
+            <PluginsPage />
           ) : page === "settings" ? (
             <SettingsPage />
           ) : zone ? (

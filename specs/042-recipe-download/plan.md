@@ -28,6 +28,7 @@
       `box_session_script.rs` (the F2 group of R7 is not part of this step: it is built with
       step 13, with the user)
 - [x] 11. Interface: the Resources and Recipes cards
+- [x] 11b. Revised after the box demo (2026-11-27): the Plugins page of Administration replaces the Recipes card (R5.4); an uninstall needs only its thread's stack (R4.2)
 - [x] 12. Docs: living spec, sowel-subset, D78, memory budget, architecture, roadmap, design system
 - [ ] 13. Box run with the user (R7): the F2 group of `box-session.sh` and its tests in
       `box_session_script.rs` built first, with the user; the user's real recipe key made and its
@@ -97,7 +98,9 @@
 | release | `release.sh` without `release/recipe-key.pub` | Refuses, with the reason |
 | session | B11 without the recipe on the box, with and without `--recipe-file` | Installs then runs; skipped `not installed: --recipe-file` |
 | ui | The Resources card with a fake answer; no memory figures | Bars and rows; the bars hidden |
-| ui | The Recipes card: install, update, remove, upload, a refused file, an error; the 429 at opening | The calls made; the messages shown; the held list |
+| ui | The Plugins page: Installed and Store tabs, install, update, remove, upload, a refused file, an error, search; the 429 at opening; the sidebar entry and its update badge | The calls made; the messages shown; the held list; the badge count |
+| core | An uninstall with the largest internal block between `FETCH_STACK_BYTES` and `FETCH_STACK_BYTES + RECIPE_INTERNAL_MARGIN` | Passes (204), where an install answers 503 |
+| core | An uninstall with the largest block under `FETCH_STACK_BYTES` | 503 with the 20 KB figure |
 | flash | Install, update, uninstall on the box (`box.sh saves`) | One write each, none at boot |
 | box | R7: two recipes, eight instances, an update | Internal RAM minimum at least 64 KB |
 
