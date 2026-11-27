@@ -5,7 +5,7 @@
 - [x] 2. Catalog, measures, scale read, reporting.
 - [x] 3. Simulator plug and scenario.
 - [x] 4. Tests; validate.
-- [ ] 5. Review.
+- [x] 5. Review.
 
 Not applicable: API (the data go through the existing routes), interface (the device page shows
 any data).

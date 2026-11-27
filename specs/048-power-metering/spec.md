@@ -59,14 +59,14 @@ already takes them: the stale delays of `power`, `energy`, `current`
 - The roadmap's I1 note "Solite knows 15 of Sowel's about 75 categories" → 18.
 
 ## Acceptance criteria
-- [ ] A simulated plug paired: `power`, `energy`, `current` in Sowel's categories and units, with
+- [x] A simulated plug paired: `power`, `energy`, `current` in Sowel's categories and units, with
       the scale applied (tested).
-- [ ] A report before the scale is read publishes nothing (tested).
-- [ ] Divisor 0 or absent counts as 1 (tested).
-- [ ] A device with both clusters has one `power` (tested).
-- [ ] Sowel contract: the three categories are words of the catalog, which `sowel_contract.rs`
+- [x] A report before the scale is read publishes nothing (tested).
+- [x] Divisor 0 or absent counts as 1 (tested).
+- [x] A device with both clusters has one `power` (tested).
+- [x] Sowel contract: the three categories are words of the catalog, which `sowel_contract.rs`
       checks against Sowel's `DataCategory` (no assertion of its own needed).
-- [ ] validate green.
+- [x] validate green.
 
 ## Edge cases
 - Divisor 0: counts as 1. Negative power (int16, export): kept, as Sowel.
@@ -80,3 +80,6 @@ already takes them: the stale delays of `power`, `energy`, `current`
 ## How the user will check it
 A `--sim` scenario with a plug (`scenarios/plug.json`): the device page shows power, energy and
 current; on the box, with a real plug when the user has one.
+
+### Result (2026-11-27)
+`validate --skip-slow` green; the simulated plug's power, energy and current with the scale applied. Code review (Sonnet): the Metering-only plug's demand was not configured (fixed), and the int24 type code was 0x2B, an int32 (fixed to 0x2A). Not run with a real plug: the user has none on the box yet.

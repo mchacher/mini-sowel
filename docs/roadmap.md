@@ -537,3 +537,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-27: spec 047 done: the sidebar's Administration block and Log out pinned at the bottom of the column, as in Sowel (the inbox line placed and done).
 - 2026-11-27: spec 045 built (D83): the `script` thread's 32 KB stack in PSRAM, the `recipe` thread made once at start (an install needs a 16 KB internal block, not 36 KB), a flash call from a PSRAM stack refused in `storage.rs`; the box check (2 recipes, 8 instances of each, 5 uninstall-install cycles) pending.
 - 2026-11-27: spec 045 done (D83): the box's `script` thread's stack in PSRAM, the `recipe` thread made once; on the box, two recipes of 8 instances and 5 install cycles, internal RAM at least 64.6 KB, every install accepted.
+- 2026-11-27: spec 048 done (I1, first part): `power`, `energy`, `current` of a metering plug, their scale read once; buttons, shutters, thermostats and `contact_window` remain in I1.
