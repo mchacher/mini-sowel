@@ -88,8 +88,8 @@ impl Event {
 }
 
 /// What the running instances listen to. Bounded by what exists: a zone per instance, at most 32
-/// equipments (16 lights, 16 buttons) per instance, and the motion sources, which are device data
-/// (at most 64 devices of 16 data, each pair once).
+/// equipments (16 lights, 16 buttons: the slots' own bound) per instance, and the motion sources,
+/// which are device data (at most 64 devices of 8 data, each pair once).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Interest {
     zones: Vec<Id>,

@@ -32,7 +32,7 @@ pub(crate) use view::{Index, status_with};
 pub const MAX_EQUIPMENTS: usize = 64;
 /// Data bindings of one equipment, and order bindings of one equipment; one past it is refused
 /// (400), or skipped when the equipment is created from devices.
-pub const MAX_BINDINGS: usize = 16;
+pub const MAX_BINDINGS: usize = 8;
 /// The longest alias, in characters (Sowel sets none).
 pub const MAX_ALIAS_CHARS: usize = 32;
 
@@ -349,10 +349,12 @@ impl Equipments {
         Equipments::default()
     }
 
-    /// The equipments read from storage, at most `MAX_EQUIPMENTS`, each with at most
-    /// `MAX_BINDINGS` bindings of each kind and one binding per alias. The consistency with the
-    /// zones and the devices is the home's (`Home::from_parts`).
-    pub fn from_list(mut list: Vec<StoredEquipment>) -> Self {
+    /// The equipments read from storage, at most `MAX_EQUIPMENTS`. Their bindings are **not** cut
+    /// here: `Home::from_parts`, the only caller, first drops the dangling ones, then keeps the
+    /// first `MAX_BINDINGS` of each kind and one binding per alias, so a valid binding is never
+    /// lost to a dropped one. Crate-only so that no other path holds the bindings uncut. Memory:
+    /// the lists read are bounded by the file's size and cut right after.
+    pub(crate) fn from_list(mut list: Vec<StoredEquipment>) -> Self {
         list.truncate(MAX_EQUIPMENTS);
         // The optional fields past their bounds are dropped, in the file's order.
         let mut used = 0;
@@ -360,10 +362,6 @@ impl Equipments {
             if let Some(extras) = item.equipment.extras.take() {
                 item.equipment.extras = extras.bounded(&item.equipment.name, &mut used);
             }
-            item.data_bindings.truncate(MAX_BINDINGS);
-            item.order_bindings.truncate(MAX_BINDINGS);
-            item.data_bindings.shrink_to_fit();
-            item.order_bindings.shrink_to_fit();
         }
         list.shrink_to_fit();
         Equipments { items: list }

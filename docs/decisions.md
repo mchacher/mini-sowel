@@ -1548,3 +1548,26 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: a restart during a probation that confirms it first (hides a bad image); the
   restart refused in safe mode (the person would need a USB flash or a power-on to leave it); the
   PSRAM read once at boot instead of in the probation (a confirmed image is not the probation's case).
+
+## D80: Tighter bounds: 8 data a device, 8 + 8 bindings an equipment, 20 log lines an instance (spec 044)
+
+- **Date**: 2026-11-27
+- **Choice**: `devices::MAX_DATA` 16 to 8, `equipments::MAX_BINDINGS` 16 to 8 (8 data and 8 order
+  bindings; the interface's own bound too), `recipes::MAX_LOG_ENTRIES` 50 to 20. Unchanged: 4 orders
+  a device, 2 KB of params an instance, 200 bytes a log message, the counts of devices, equipments,
+  zones and instances. A home stored with the old bounds is cut at load and the cut is logged once
+  per device or equipment: a device keeps its first 8 data; an equipment first loses its dangling
+  bindings (data or order gone, alias taken), then keeps its first 8 valid ones of each kind, and is
+  written once. The "more than 8 data, <key> not added" line is logged once per device and key, for the last 16 such pairs remembered (a pair forgotten past them, or a device deleted, is said again). A
+  value a Sowel equipment holds beyond these bounds cannot be held by the box as is (a difference of
+  value, beside D13, D14).
+- **Why**: the worst case (every bound at its maximum) measured 1,042,032 bytes against the 1 MiB
+  ceiling, 6.5 KB of room, and went over once on a loaded Mac; the coming features (I1, the modes,
+  the history) add to it. A real device has 3 to 8 data and a light 1 to 4 bindings of each kind;
+  the last 20 lines say what a recipe did. The worst case falls to 676 KB, measured on the Mac (693,067 bytes, every log entry at 200 bytes). The richest device
+  of today's catalog, an IAS motion multi-sensor, has exactly 8 data (occupancy, temperature,
+  humidity, illuminance, battery, voltage, tamper, battery low): its margin is zero, accepted.
+- **Alternatives**: params 2 KB to 1 KB (about 16 KB gained, but `motion-light` would have been cut
+  to 8 lights and 8 buttons and the script recipes' list slots to 8: refused, params stay at 2 KB);
+  raising the 1 MiB ceiling (the PSRAM is shared with the radio's and the script recipes' shares);
+  a bound of 12 (about half the gain).

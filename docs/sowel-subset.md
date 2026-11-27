@@ -170,7 +170,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53, D56, D58, D65 to D67, D79).
+D44, D47 to D49, D53, D56, D58, D65 to D67, D79, D80).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |

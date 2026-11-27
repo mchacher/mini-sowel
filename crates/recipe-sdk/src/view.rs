@@ -73,8 +73,8 @@ mod tests {
     /// The size one view stays under (the largest the engine builds is about 4 KB).
     const MAX_TEXT_BYTES: usize = 8 * 1024;
 
-    /// The largest view the core allows: 16 data bindings with the longest keys, aliases,
-    /// categories and values, and 16 order bindings with the longest names.
+    /// The largest view the core allows: 8 data bindings with the longest keys, aliases,
+    /// categories and values, and 8 order bindings with the longest names.
     #[test]
     fn the_largest_equipment_view_at_the_cores_bounds_fits_one_text() {
         let id = "00000000-0000-4000-8000-000000000001".to_string();
@@ -84,7 +84,7 @@ mod tests {
             kind: "electric_vehicle".into(),
             enabled: true,
             zone_id: id.clone(),
-            data_bindings: (0..16)
+            data_bindings: (0..8)
                 .map(|_| DataBindingView {
                     id: id.clone(),
                     alias: "a".repeat(32),
@@ -94,7 +94,7 @@ mod tests {
                     value: EventValue::Text("v".repeat(MAX_VALUE_TEXT_BYTES)),
                 })
                 .collect(),
-            order_bindings: (0..16)
+            order_bindings: (0..8)
                 .map(|_| OrderBindingView {
                     id: id.clone(),
                     alias: "a".repeat(32),

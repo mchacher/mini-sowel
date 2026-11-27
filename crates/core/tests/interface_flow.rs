@@ -195,7 +195,7 @@ fn an_equipment_with_no_device_or_a_deleted_one_has_no_binding() {
 }
 
 #[test]
-fn bindings_stop_at_16_of_each_kind_and_65_device_ids_are_refused() {
+fn bindings_stop_at_8_of_each_kind_and_65_device_ids_are_refused() {
     let mut rig = Rig::new();
     // A device holds at most 4 orders: five devices give 20 data keys and 20 order keys.
     let mut ids = Vec::new();
@@ -223,8 +223,8 @@ fn bindings_stop_at_16_of_each_kind_and_65_device_ids_are_refused() {
         json!({"name": "Big", "type": "sensor", "zoneId": garage, "deviceIds": ids}),
     );
     assert_eq!(status, 201, "{body}");
-    assert_eq!(body["dataBindings"].as_array().unwrap().len(), 16);
-    assert_eq!(body["orderBindings"].as_array().unwrap().len(), 16);
+    assert_eq!(body["dataBindings"].as_array().unwrap().len(), 8);
+    assert_eq!(body["orderBindings"].as_array().unwrap().len(), 8);
     let many: Vec<String> = (0..65).map(|_| UNKNOWN.to_string()).collect();
     assert_eq!(
         rig.refused(
@@ -512,42 +512,42 @@ fn twenty_and_twenty(rig: &mut Rig) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn the_largest_creation_is_33_requests_one_after_another_all_answered_201() {
+fn the_largest_creation_is_17_requests_one_after_another_all_answered_201() {
     let mut rig = Rig::new();
     let (data, orders) = twenty_and_twenty(&mut rig);
     let room = zone(&mut rig, "Z", ROOT);
     let thermostat = create(&mut rig, "Thermostat", "thermostat", &room);
     let mut answers = 1;
-    for (i, id) in data.iter().take(16).enumerate() {
+    for (i, id) in data.iter().take(8).enumerate() {
         let (status, body) = bind_data(&mut rig, &thermostat, id, &format!("d{i}"));
         assert_eq!(status, 201, "data {i}: {body}");
         answers += 1;
     }
-    for (i, id) in orders.iter().take(16).enumerate() {
+    for (i, id) in orders.iter().take(8).enumerate() {
         let (status, body) = bind_order(&mut rig, &thermostat, id, &format!("o{i}"));
         assert_eq!(status, 201, "order {i}: {body}");
         answers += 1;
     }
-    assert_eq!(answers, 33);
+    assert_eq!(answers, 17);
     let (_, equipment) = rig.get(&format!("/api/v1/equipments/{thermostat}"));
-    assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 16);
-    assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 16);
-    // A 17th of either kind is refused: the plan never sends one.
+    assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 8);
+    assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 8);
+    // A 9th of either kind is refused: the plan never sends one.
     assert_eq!(
         rig.refused(
             "POST",
             &format!("/api/v1/equipments/{thermostat}/data-bindings"),
-            &json!({"deviceDataId": data[16], "alias": "d16"}).to_string()
+            &json!({"deviceDataId": data[8], "alias": "d8"}).to_string()
         ),
-        (400, "Too many bindings (16)".to_string())
+        (400, "Too many bindings (8)".to_string())
     );
     assert_eq!(
         rig.refused(
             "POST",
             &format!("/api/v1/equipments/{thermostat}/order-bindings"),
-            &json!({"deviceOrderId": orders[16], "alias": "o16"}).to_string()
+            &json!({"deviceOrderId": orders[8], "alias": "o8"}).to_string()
         ),
-        (400, "Too many bindings (16)".to_string())
+        (400, "Too many bindings (8)".to_string())
     );
 }
 

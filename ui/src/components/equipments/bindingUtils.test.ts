@@ -129,12 +129,12 @@ describe("computeBindingPlan", () => {
     }
   });
 
-  it("keeps 16 data of 18 for six TH01 in one sensor, and counts the 18", () => {
-    const six = Array.from({ length: 6 }, (_, i) => fixtures.th01(`th${i}`));
-    const plan = computeBindingPlan(six, "sensor");
-    expect(plan).toHaveLength(16);
-    expect(plan[15].alias).toBe("temperature_6");
-    expect(countPlanned(six, "sensor")).toEqual({ data: 18, orders: 0 });
+  it("keeps 8 data of 9 for three TH01 in one sensor, and counts the 9", () => {
+    const three = Array.from({ length: 3 }, (_, i) => fixtures.th01(`th${i}`));
+    const plan = computeBindingPlan(three, "sensor");
+    expect(plan).toHaveLength(8);
+    expect(plan[6].alias).toBe("temperature_3");
+    expect(countPlanned(three, "sensor")).toEqual({ data: 9, orders: 0 });
   });
 
   it("leaves out an alias past 32 characters, and does not let it take the name", () => {
@@ -144,13 +144,14 @@ describe("computeBindingPlan", () => {
     expect(plan.map((b) => b.alias)).toEqual([key]);
   });
 
-  it("numbers 30-character aliases up to the limit of 32", () => {
+  it("numbers 30-character aliases, within 32 characters, up to the 8 an equipment may bind", () => {
     const key = "k".repeat(30);
     const devices = Array.from({ length: 11 }, (_, i) =>
       deviceWithData(`d${i}`, `D${i}`, [[key, "temperature"]]),
     );
     const aliases = computeBindingPlan(devices, "sensor").map((b) => b.alias);
-    expect(aliases).toHaveLength(9);
+    expect(aliases).toHaveLength(8);
+    expect(aliases[7]).toBe(`${key}_8`);
     expect(aliases.slice(0, 3)).toEqual([key, `${key}_2`, `${key}_3`]);
   });
 
@@ -257,14 +258,14 @@ describe("computeMissingBindings (spec 030, R6)", () => {
     expect(missing[0].sourceId).toBe("ms-battery");
   });
 
-  it("offers no data past the 16 an equipment may bind, the bound ones counted", () => {
-    const bound = Array.from({ length: 16 }, (_, i) =>
+  it("offers no data past the 8 an equipment may bind, the bound ones counted", () => {
+    const bound = Array.from({ length: 8 }, (_, i) =>
       dataBinding(`x${i}`, "generic", 1, { deviceDataId: `other-${i}` }),
     );
     expect(computeMissingBindings([fixtures.th01()], "sensor", bound, [])).toEqual([]);
-    expect(
-      computeMissingBindings([fixtures.th01()], "sensor", bound.slice(0, 14), []),
-    ).toHaveLength(2);
+    expect(computeMissingBindings([fixtures.th01()], "sensor", bound.slice(0, 6), [])).toHaveLength(
+      2,
+    );
   });
 
   it("offers nothing for a type without binding rules", () => {

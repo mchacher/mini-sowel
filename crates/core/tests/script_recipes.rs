@@ -1263,11 +1263,12 @@ fn twenty_one_lines_in_one_call_keep_twenty_and_a_warning_and_a_long_line_is_cut
     let (mut rig, g) = loaded(CASES);
     let id = case(&mut rig, &g, "log21");
     let messages = rig.messages(&id);
-    // "Instance created", 20 lines, one warning.
-    assert_eq!(messages.len(), 22, "{messages:?}");
-    assert_eq!(messages[1], "line 1");
-    assert_eq!(messages[20], "line 20");
-    assert_eq!(messages[21], "Log lines dropped");
+    // "Instance created", 20 lines and one warning are 22 lines; the log keeps the last 20
+    // (`MAX_LOG_ENTRIES`): the creation and "line 1" are gone.
+    assert_eq!(messages.len(), 20, "{messages:?}");
+    assert_eq!(messages[0], "line 2");
+    assert_eq!(messages[18], "line 20");
+    assert_eq!(messages[19], "Log lines dropped");
     let (_, log) = rig.get(&format!("/api/v1/recipe-instances/{id}/log"));
     assert_eq!(log[0]["level"], "warn");
     let id = case(&mut rig, &g, "log300");

@@ -20,10 +20,10 @@ pub const MAX_PARAMS_DEPTH: usize = 8;
 /// ids of 36 characters, about 3 KB of text.
 pub const MAX_ZONE_EQUIPMENT_IDS: usize = 64;
 /// A text value in an event or a view is cut at this many bytes (the core's events cut theirs
-/// the same way). Worst case: 32 bytes in each of the 16 data bindings of a view (512 bytes).
+/// the same way). Worst case: 32 bytes in each of the 8 data bindings of a view (256 bytes).
 pub const MAX_VALUE_TEXT_BYTES: usize = 32;
 /// Log lines taken from one call. Worst case: 50 lines of `MAX_LOG_LINE_BYTES`, about 10 KB, taken
-/// into the instance's log of 50 entries.
+/// into the instance's log of 20 entries (the older lines go first).
 pub const MAX_LOG_LINES_PER_CALL: usize = 50;
 /// A log line is cut at this many bytes. Worst case: 200 bytes per line.
 pub const MAX_LOG_LINE_BYTES: usize = 200;

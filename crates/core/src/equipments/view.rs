@@ -19,7 +19,7 @@ pub(crate) fn resolve<'a>(
     devices.data_of(&binding.device_data_id)
 }
 
-/// Every data of every device by id, built once (at most 64 devices x 16 data), so that finding
+/// Every data of every device by id, built once (at most 64 devices x 8 data), so that finding
 /// the data behind a binding is a hash lookup, not a walk through all the devices.
 pub(crate) struct Index<'a>(HashMap<Id, (&'a Device, &'a DeviceData)>);
 

@@ -164,7 +164,7 @@ export const en: Messages = {
   "equipments.form.selectZone": "Select a zone...",
   "equipments.form.deviceInstruction": "Select the devices to bind.",
   "equipments.form.nextDevices": "Next: Select devices",
-  "equipments.form.tooManyBindings": "These devices give {{count}} values; only 16 are bound",
+  "equipments.form.tooManyBindings": "These devices give {{count}} values; only 8 are bound",
   "equipments.type.light_onoff": "Light (On/Off)",
   "equipments.type.light_dimmable": "Light (Dimmable)",
   "equipments.type.light_color": "Light (Color)",
@@ -548,7 +548,7 @@ export const fr: Messages = {
   "equipments.form.deviceInstruction": "Sélectionnez les appareils à lier.",
   "equipments.form.nextDevices": "Suivant : Sélectionner les appareils",
   "equipments.form.tooManyBindings":
-    "Ces appareils donnent {{count}} valeurs ; seules 16 sont liées",
+    "Ces appareils donnent {{count}} valeurs ; seules 8 sont liées",
   "equipments.type.light_onoff": "Lumière (marche/arrêt)",
   "equipments.type.light_dimmable": "Lumière (Dimmable)",
   "equipments.type.light_color": "Lumière (Couleur)",

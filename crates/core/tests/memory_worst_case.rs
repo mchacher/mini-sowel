@@ -11,7 +11,7 @@
 //! (`every_memory_bound_is_listed_in_the_header` fails when one is missing from this list):
 //!
 //! - `devices/registry.rs::MAX_DEVICES`: 64 devices; a 65th is refused at the end.
-//! - `devices/registry.rs::MAX_DATA`: 16 data on each device, keys of 32 characters.
+//! - `devices/registry.rs::MAX_DATA`: 8 data on each device, keys of 32 characters.
 //! - `devices/registry.rs::MAX_ORDERS`: 4 orders on each device.
 //! - `devices/registry.rs::MAX_NAME_CHARS`: device names of 64 characters.
 //! - `zones/mod.rs::MAX_ZONES`: root plus 31 zones through the API; a 33rd is refused.
@@ -19,8 +19,9 @@
 //! - `zones/mod.rs::MAX_ICON_CHARS`: zone icons of 32 characters.
 //! - `zones/mod.rs::MAX_DESCRIPTION_CHARS`: zone descriptions of 500 characters.
 //! - `equipments/mod.rs::MAX_EQUIPMENTS`: 64 equipments through the API; a 65th is refused.
-//! - `equipments/mod.rs::MAX_BINDINGS`: 16 data and 16 order bindings on 32 equipments, from 4
-//!   devices each; the 16 data bindings are bound on all 64.
+//! - `equipments/mod.rs::MAX_BINDINGS`: 8 data and 8 order bindings on 32 equipments, from 4
+//!   devices each (which hold more, 32 data and 16 orders, so the bound is what cuts); the 8 data
+//!   bindings are bound on all 64.
 //! - `equipments/mod.rs::MAX_ALIAS_CHARS`: aliases of 32 characters (the device keys), more
 //!   distinct ones than the table that shares aliases holds, so none is shared.
 //! - `equipments/extras.rs::MAX_EXTRAS_BYTES`, `equipments/extras.rs::MAX_EXTRAS_TOTAL_BYTES`,
@@ -31,7 +32,7 @@
 //! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances of `motion-light`; a 17th is refused.
 //! - `recipes/mod.rs::MAX_PARAMS_BYTES`: params of 2 KB each (nested padding, as
 //!   `recipe_params_memory.rs`); the API refuses more, so this is the largest accepted size.
-//! - `recipes/mod.rs::MAX_LOG_ENTRIES`: 50 entries in each instance's log, by button presses.
+//! - `recipes/mod.rs::MAX_LOG_ENTRIES`: 20 entries in each instance's log, by button presses.
 //! - `recipes/mod.rs::MAX_LOG_MESSAGE_BYTES`: the log is measured as it is, then the worst case
 //!   (every entry at 200 bytes) is added, as `memory_ceiling.rs` does.
 //! - `recipes/mod.rs::MAX_SCRIPT_RECIPES`, `recipes/mod.rs::MAX_INSTANCES_PER_SCRIPT`,
@@ -147,7 +148,8 @@ use solite_core::devices::{
     MAX_DEVICES, MAX_ORDERS, PowerSource, Route, ValueType,
 };
 use solite_core::equipments::{
-    Alias, Extras, Field, MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, MAX_ID_CHARS, Piece, RawObject,
+    Alias, Extras, Field, MAX_BINDINGS, MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, MAX_ID_CHARS,
+    Piece, RawObject,
 };
 use solite_core::home::events::{Event, EventQueue, EventValue, MAX_EVENTS, MAX_TEXT_BYTES};
 use solite_core::home::{Home, ListCursor};
@@ -158,7 +160,7 @@ use solite_core::orders::{
 use solite_core::radio::measures::{Measure, Value as MeasureValue};
 use solite_core::radio::zcl::Command;
 use solite_core::radio::{MeasureEvent, Sender};
-use solite_core::recipes::MAX_INSTANCES;
+use solite_core::recipes::{MAX_INSTANCES, MAX_LOG_ENTRIES};
 use solite_core::settings::MAX_HOME_NAME_CHARS;
 use solite_core::zones::MAX_ZONES;
 
@@ -222,9 +224,8 @@ fn device(index: usize, counter: &mut u32) -> DeviceWithDetails {
             };
             // The last data of each light (devices 0 to 15, those with a `state` order) is a
             // colour: Zigbee2MQTT's object with its four fields, the largest value the radio can
-            // give a data (spec 031). A colour object costs 632 bytes (one B-tree node); on all 64
-            // devices the worst case would read 1045 KB, over the ceiling, and only a light has a
-            // Color Control cluster.
+            // give a data (spec 031). A colour object costs 632 bytes (one B-tree node); only a
+            // light has a Color Control cluster, so only the 16 lights hold one.
             let colour = rank == MAX_DATA - 1 && index < 16;
             DeviceData {
                 id: id(counter),
@@ -332,7 +333,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     let base = ALLOCATOR.current_usage();
     ALLOCATOR.reset_peak_usage();
 
-    // Devices: 64, each with 16 data and 4 orders.
+    // Devices: 64, each with 8 data and 4 orders.
     let mut counter = 0u32;
     let list: Vec<DeviceWithDetails> = (0..MAX_DEVICES).map(|i| device(i, &mut counter)).collect();
     let devices = Devices::from_list(list);
@@ -365,7 +366,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert_eq!(home.zones().list().len(), MAX_ZONES);
 
     // Equipments: 64. 0 to 15 are the lights (one device each, in the first zone), 16 to 31 the
-    // buttons (one device each), 32 to 63 bind four devices each, so 16 order bindings.
+    // buttons (one device each), 32 to 63 bind four devices each, so 16 order candidates, 8 bound.
     for i in 0..MAX_EQUIPMENTS_API {
         let (kind, zone, devices): (&str, &String, Vec<&String>) = if i < 16 {
             ("light_onoff", &zone_ids[0], vec![&device_ids[i]])
@@ -399,12 +400,12 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         home.equipments()
             .list()
             .iter()
-            .all(|e| e.data_bindings.len() == 16)
+            .all(|e| e.data_bindings.len() == MAX_BINDINGS)
     );
     assert!(
         home.equipments().list()[32..]
             .iter()
-            .all(|e| e.order_bindings.len() == 16)
+            .all(|e| e.order_bindings.len() == MAX_BINDINGS)
     );
     let equipment_ids: Vec<String> = home
         .equipments()
@@ -628,14 +629,14 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     fill_queues(&mut home);
     let (queued_events, queued_bytes) = hub.queued(clients[0]);
 
-    // The logs: 50 entries each; the worst case (every entry 200 bytes) is added to the peak.
+    // The logs: `MAX_LOG_ENTRIES` entries each; the worst case (every entry 200 bytes) is added to the peak.
     let mut log_bytes = 0usize;
     for instance in &instance_ids {
-        let log = home.recipes().log(instance, 50);
-        assert_eq!(log.len(), 50);
+        let log = home.recipes().log(instance, MAX_LOG_ENTRIES);
+        assert_eq!(log.len(), MAX_LOG_ENTRIES);
         log_bytes += log.iter().map(|e| e.message.len() + 56).sum::<usize>();
     }
-    let worst_log_bytes: usize = MAX_INSTANCES * 50 * (200 + 56);
+    let worst_log_bytes: usize = MAX_INSTANCES * MAX_LOG_ENTRIES * (200 + 56);
 
     // The long lists are streamed, one chunk alive at a time; the others are whole, one at a
     // time.

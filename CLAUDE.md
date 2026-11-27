@@ -56,7 +56,7 @@ cargo run -p solite-host                     # the host program (Mac)
 cargo run -p solite-host -- --radio tcp://<address>:6638 [--pair|--listen]   # identify the Dongle Max's radio | start the network and pair | show the measures
 cargo run -p solite-host -- --sim scenarios/garage.json --pair 30|--serve --speed 10 [--recipe-script recipes/scripts/motion-light-script.js]   # no dongle | API, interface :8080 (+ a JavaScript script recipe)
 SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
-SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 33 requests of an equipment with 16 + 16 bindings (Mac sim; box: once per milestone)
+SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 17 requests of an equipment with 8 + 8 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)
 cargo test --workspace [-- --include-ignored]     # Rust tests (core, host); the ignored ones are the slow ones
 cargo test -p solite-core --test banner; cd ui && npx vitest run src/App.test.tsx   # one Rust, one UI test file

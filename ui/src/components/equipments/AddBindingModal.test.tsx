@@ -103,13 +103,13 @@ describe("AddBindingModal (spec 030, R4)", () => {
 
   it("shows the host's refusal and stays open", async () => {
     const onAdd = vi.fn(async () => {
-      throw new ApiError(400, "Too many data bindings (16)");
+      throw new ApiError(400, "Too many data bindings (8)");
     });
     const { onClose } = setup({ onAdd });
     await pickDevice("ZBMINIR2");
     fireEvent.click(screen.getByRole("button", { name: /state/ }));
     fireEvent.click(add());
-    expect(await screen.findByText("Too many data bindings (16)")).toBeTruthy();
+    expect(await screen.findByText("Too many data bindings (8)")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
     expect(add().disabled).toBe(false);
   });

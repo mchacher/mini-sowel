@@ -329,7 +329,7 @@ fn the_65th_device_the_17th_data_and_the_5th_order_are_not_added() {
         .unwrap();
     assert!(again.is_empty());
 
-    // One device holding 16 data and 4 orders: a 17th data and a 5th order are not added.
+    // One device holding 8 data and 4 orders: a 9th data and a 5th order are not added.
     let mut one = Devices::new();
     one.reporting_configured(EUI, &[0x0402, 0x0006], T0, &mut random)
         .unwrap();
@@ -1686,4 +1686,162 @@ fn at_most_four_pings_a_second_the_others_a_second_later() {
     let mut lasts: Vec<u8> = first.iter().chain(&next).map(|t| t.eui64[7]).collect();
     lasts.sort_unstable();
     assert_eq!(lasts, [1, 2, 3, 4, 5, 6]);
+}
+
+// ---- Spec 044: 8 data a device ----
+
+// The log lines of the tests of this file, to see a warning (the device's name or address is
+// unique to its test).
+struct Capture;
+static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+impl log::Log for Capture {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if let Ok(mut lines) = LINES.lock() {
+            lines.push(format!("{}: {}", record.level(), record.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn capture_warnings() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = log::set_logger(&Capture);
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+}
+
+/// The warnings that name this text.
+fn warnings_about(text: &str) -> Vec<String> {
+    LINES
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.starts_with("WARN") && line.contains(text))
+        .cloned()
+        .collect()
+}
+
+/// A device of `count` data of its own keys (`extra0`...), as a file can hold it.
+fn device_of_data(count: usize, name: &str) -> Vec<DeviceWithDetails> {
+    let mut random = counter();
+    let mut one = Devices::new();
+    one.reporting_configured(eui(0xC9), &[0x0402], T0, &mut random)
+        .unwrap();
+    let mut list = one.snapshot();
+    let data = list[0].data[0].clone();
+    list[0].device.name = name.into();
+    list[0].data.clear();
+    for i in 0..count {
+        let mut more = data.clone();
+        more.key = format!("extra{i}").into();
+        list[0].data.push(more);
+    }
+    list
+}
+
+#[test]
+fn a_ninth_data_is_not_added_and_said_once_per_device_and_key() {
+    capture_warnings();
+    let mut random = counter();
+    let address = eui(0xC8);
+    let mut list = device_of_data(MAX_DATA, "Full device");
+    list[0].device.source_device_id = "0x00124b00123456c8".into();
+    let mut full = Devices::from_list(list);
+    // Two frames that each carry the same two keys.
+    for _ in 0..2 {
+        full.reporting_configured(address, &[0x0402, 0x0405], T0, &mut random)
+            .unwrap();
+    }
+    let item = &full.list()[0];
+    assert_eq!(item.data.len(), MAX_DATA);
+    assert!(!item.data.iter().any(|d| d.key == "temperature"));
+    let said = warnings_about("0x00124b00123456c8: more than 8 data");
+    assert_eq!(said.len(), 2, "once per key, not per frame: {said:?}");
+    assert!(said.iter().any(|l| l.ends_with("temperature not added")));
+    assert!(said.iter().any(|l| l.ends_with("humidity not added")));
+}
+
+#[test]
+fn the_ias_motion_multi_sensor_has_exactly_its_eight_data() {
+    let mut random = counter();
+    let mut devices = Devices::new();
+    for event in [
+        PairingEvent::Identified {
+            eui64: EUI,
+            manufacturer: Some("eWeLink".into()),
+            model: Some("MS01".into()),
+        },
+        PairingEvent::ReportingConfigured {
+            eui64: EUI,
+            ok: vec![0x0001, 0x0402, 0x0405, 0x0400],
+            failed: vec![],
+            no_descriptor: false,
+            enrollment: Some(Enrollment {
+                zone_type: Some(0x000D),
+                outcome: EnrollmentOutcome::Enrolled,
+            }),
+        },
+        // The tamper and the low battery bits, set for the first time.
+        PairingEvent::Measures(MeasureEvent {
+            sender: Sender::Eui64(EUI),
+            endpoint: 1,
+            measures: from_zone_status(0x000D),
+        }),
+    ] {
+        devices.apply(&event, T0, &mut random).unwrap();
+    }
+    let mut found = keys(&devices.list()[0]);
+    found.sort_unstable();
+    assert_eq!(
+        found,
+        [
+            "battery",
+            "battery_low",
+            "humidity",
+            "illuminance",
+            "occupancy",
+            "tamper",
+            "temperature",
+            "voltage"
+        ]
+    );
+    assert_eq!(devices.list()[0].data.len(), MAX_DATA);
+}
+
+#[test]
+fn a_stored_device_with_twelve_data_keeps_its_first_eight_and_says_so_once() {
+    capture_warnings();
+    let mut list = device_of_data(12, "Twelve data device");
+    let first_eight: Vec<String> = list[0].data[..8]
+        .iter()
+        .map(|d| d.key.to_string())
+        .collect();
+    let other = device_of_data(3, "Three data device");
+    list.push({
+        let mut d = other[0].clone();
+        d.device.id = solite_core::devices::Id::from_random([0x77; 16]);
+        d
+    });
+    let devices = Devices::from_list(list);
+    let kept: Vec<String> = devices.list()[0]
+        .data
+        .iter()
+        .map(|d| d.key.to_string())
+        .collect();
+    assert_eq!(kept, first_eight, "the file's order");
+    assert_eq!(
+        devices.list()[1].data.len(),
+        3,
+        "the other device is unchanged"
+    );
+    assert_eq!(
+        warnings_about("Twelve data device"),
+        ["WARN: devices: Twelve data device: 12 data, 4 not kept (at most 8)"]
+    );
+    assert!(warnings_about("Three data device").is_empty());
 }

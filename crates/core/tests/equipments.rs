@@ -6,7 +6,9 @@ mod support;
 
 use serde_json::{Value, json};
 use solite_core::devices::{Devices, ValueType, format_iso};
-use solite_core::equipments::{EquipmentType, MAX_BINDINGS, is_stale, parse_list, stale_window_ms};
+use solite_core::equipments::{
+    Alias, EquipmentType, MAX_BINDINGS, is_stale, parse_list, stale_window_ms,
+};
 use solite_core::home::Home;
 use support::*;
 
@@ -621,10 +623,10 @@ fn many_data(device: u8, name: &str, from: usize, count: usize) -> Value {
 }
 
 #[test]
-fn auto_binding_stops_at_16_bindings_and_skips_the_rest() {
+fn auto_binding_stops_at_8_bindings_and_skips_the_rest() {
     let mut rig = Rig::new();
-    let a = many_data(1, "A", 0, 16);
-    let b = many_data(2, "B", 16, 4);
+    let a = many_data(1, "A", 0, 8);
+    let b = many_data(2, "B", 8, 4);
     let (a_id, b_id) = (device_json_id(&a), device_json_id(&b));
     rig.add_devices(vec![a, b]);
     let zone = rig.zone("Z");
@@ -640,15 +642,15 @@ fn auto_binding_stops_at_16_bindings_and_skips_the_rest() {
             .unwrap()
             .iter()
             .all(|b| b["deviceId"] == a_id.as_str()),
-        "the 17th to 20th were skipped, not an error"
+        "the 9th to 12th were skipped, not an error"
     );
 }
 
 #[test]
-fn an_explicit_17th_binding_is_refused_for_data_and_for_orders() {
+fn an_explicit_9th_binding_is_refused_for_data_and_for_orders() {
     let mut rig = Rig::new();
-    let a = many_data(1, "A", 0, 16);
-    let b = many_data(2, "B", 16, 2);
+    let a = many_data(1, "A", 0, 8);
+    let b = many_data(2, "B", 8, 2);
     let (a_id, b_data) = (device_json_id(&a), data_id(&b, 0));
     rig.add_devices(vec![a, b]);
     let relay = rig.relay(3);
@@ -659,7 +661,7 @@ fn an_explicit_17th_binding_is_refused_for_data_and_for_orders() {
             .as_array()
             .unwrap()
             .len(),
-        16
+        8
     );
     assert_eq!(
         rig.refused(
@@ -667,11 +669,11 @@ fn an_explicit_17th_binding_is_refused_for_data_and_for_orders() {
             &format!("/api/v1/equipments/{id}/data-bindings"),
             &json!({"deviceDataId": b_data, "alias": "extra"}).to_string()
         ),
-        (400, "Too many bindings (16)".to_string())
+        (400, "Too many bindings (8)".to_string())
     );
-    // Order bindings have their own 16: 16 aliases of the same order, then the 17th.
+    // Order bindings have their own 8: 8 aliases of the same order, then the 9th.
     let order = order_id_of(&mut rig, &relay);
-    for i in 0..16 {
+    for i in 0..8 {
         let (status, _) = rig.post(
             &format!("/api/v1/equipments/{id}/order-bindings"),
             json!({"deviceOrderId": order, "alias": format!("o{i}")}),
@@ -682,9 +684,9 @@ fn an_explicit_17th_binding_is_refused_for_data_and_for_orders() {
         rig.refused(
             "POST",
             &format!("/api/v1/equipments/{id}/order-bindings"),
-            &json!({"deviceOrderId": order, "alias": "o16"}).to_string()
+            &json!({"deviceOrderId": order, "alias": "o8"}).to_string()
         ),
-        (400, "Too many bindings (16)".to_string())
+        (400, "Too many bindings (8)".to_string())
     );
     // A removed binding makes room.
     let (_, details) = rig.get(&format!("/api/v1/equipments/{id}"));
@@ -1249,6 +1251,128 @@ fn a_file_with_duplicate_aliases_ids_or_too_many_bindings_is_made_to_fit() {
     );
     assert_eq!(home.equipments().list().len(), 1);
     assert_eq!(home.equipments().list()[0].data_bindings.len(), 4);
+    assert!(home.changes().1);
+}
+
+/// The home loaded from these files, as the engine loads them at start.
+fn load(
+    rig: &Rig,
+    devices: Vec<solite_core::devices::DeviceWithDetails>,
+    equipments: Vec<solite_core::equipments::StoredEquipment>,
+) -> Home {
+    Home::from_parts(
+        Devices::from_list(devices),
+        rig.home.zones().list().to_vec(),
+        equipments,
+        T0,
+    )
+}
+
+fn random_id(seed: u8) -> solite_core::devices::Id {
+    solite_core::devices::Id::from_random([seed; 16])
+}
+
+#[test]
+fn a_binding_to_the_tenth_data_of_a_stored_device_is_dropped_with_the_data() {
+    let (mut rig, zone, th, _, _) = garage();
+    rig.equipment("Climate", "sensor", &zone, &[&th]);
+    let mut devices = rig.home.devices.snapshot();
+    // The device as an old file held it: 12 data (the first four are its own).
+    let template = devices[0].data[0].clone();
+    for i in 4..12u8 {
+        let mut more = template.clone();
+        more.id = random_id(0xD0 + i);
+        more.key = format!("extra{i}").into();
+        devices[0].data.push(more);
+    }
+    let mut equipments = rig.home.equipments().list().to_vec();
+    let mut tenth = equipments[0].data_bindings[0].clone();
+    tenth.id = random_id(0xE0);
+    tenth.device_data_id = devices[0].data[9].id;
+    tenth.alias = Alias::new("tenth");
+    equipments[0].data_bindings.push(tenth);
+    let home = load(&rig, devices, equipments);
+    let aliases: Vec<&str> = home.equipments().list()[0]
+        .data_bindings
+        .iter()
+        .map(|b| &*b.alias)
+        .collect();
+    assert_eq!(aliases.len(), 4, "{aliases:?}");
+    assert!(!aliases.contains(&"tenth"));
+}
+
+#[test]
+fn ten_data_bindings_one_dangling_keep_the_first_eight_valid_say_so_once_and_mark_a_write() {
+    capture_warnings();
+    let (mut rig, zone, th, _, _) = garage();
+    rig.equipment("Ten bindings", "sensor", &zone, &[&th]);
+    let devices = rig.home.devices.snapshot();
+    let mut equipments = rig.home.equipments().list().to_vec();
+    let original = equipments[0].data_bindings.clone();
+    assert_eq!(original.len(), 4);
+    // The file: a dangling binding first, the four own ones, then five more (aliases c1 to c5).
+    let mut file = Vec::new();
+    let mut dangling = original[0].clone();
+    dangling.id = random_id(0xF0);
+    dangling.device_data_id = random_id(0xF1);
+    dangling.alias = Alias::new("gone");
+    file.push(dangling);
+    file.extend(original.iter().cloned());
+    for i in 1..=5u8 {
+        let mut more = original[0].clone();
+        more.id = random_id(0xA0 + i);
+        more.alias = Alias::new(&format!("c{i}"));
+        file.push(more);
+    }
+    assert_eq!(file.len(), 10);
+    equipments[0].data_bindings = file;
+    let home = load(&rig, devices, equipments);
+    let kept: Vec<&str> = home.equipments().list()[0]
+        .data_bindings
+        .iter()
+        .map(|b| &*b.alias)
+        .collect();
+    assert_eq!(kept.len(), 8, "{kept:?}");
+    assert!(!kept.contains(&"gone"));
+    // The dangling one went first: c4 survives (a cut before the pruning would have lost it).
+    assert!(kept.contains(&"c4") && !kept.contains(&"c5"), "{kept:?}");
+    assert_eq!(
+        warnings_about("Ten bindings"),
+        ["WARN: equipments: Ten bindings: 9 data bindings, 1 not kept (at most 8)"]
+    );
+    assert!(home.changes().1, "the equipments are to be written");
+}
+
+#[test]
+fn nine_valid_order_bindings_keep_the_first_eight_and_say_so_once() {
+    capture_warnings();
+    let (mut rig, zone, _, _, relay) = garage();
+    rig.equipment("Nine orders", "light_onoff", &zone, &[&relay]);
+    let devices = rig.home.devices.snapshot();
+    let mut equipments = rig.home.equipments().list().to_vec();
+    let first = equipments[0].order_bindings[0].clone();
+    for i in 1..=8u8 {
+        let mut more = first.clone();
+        more.id = random_id(0xB0 + i);
+        more.alias = Alias::new(&format!("o{i}"));
+        equipments[0].order_bindings.push(more);
+    }
+    assert_eq!(equipments[0].order_bindings.len(), 9);
+    let home = load(&rig, devices, equipments);
+    let kept: Vec<&str> = home.equipments().list()[0]
+        .order_bindings
+        .iter()
+        .map(|b| &*b.alias)
+        .collect();
+    assert_eq!(kept.len(), 8);
+    assert!(
+        !kept.contains(&"o8"),
+        "the ninth, in the file's order, is cut"
+    );
+    assert_eq!(
+        warnings_about("Nine orders"),
+        ["WARN: equipments: Nine orders: 9 order bindings, 1 not kept (at most 8)"]
+    );
     assert!(home.changes().1);
 }
 

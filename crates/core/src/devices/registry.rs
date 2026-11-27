@@ -23,7 +23,7 @@ use crate::radio::{
 /// Devices kept; one past it is not added.
 pub const MAX_DEVICES: usize = 64;
 /// Data of one device; one past it is not added.
-pub const MAX_DATA: usize = 16;
+pub const MAX_DATA: usize = 8;
 /// Orders of one device; one past it is not added.
 pub const MAX_ORDERS: usize = 4;
 /// Announces remembered for devices not identified yet; the oldest is dropped past this.
@@ -31,6 +31,9 @@ const MAX_ANNOUNCES: usize = 16;
 /// Devices refused for lack of room, remembered to say so once each; the oldest is dropped past
 /// this.
 const MAX_REFUSED: usize = 16;
+/// (device, key) pairs of data refused for lack of room, remembered to say so once each; the
+/// oldest is dropped past this.
+const MAX_FULL_SAID: usize = 16;
 /// Deleted devices remembered (see `Devices::deleted`); the oldest is dropped past it.
 const MAX_DELETED: usize = 16;
 /// A mains device silent this long is offline, in milliseconds (Zigbee2MQTT's availability).
@@ -97,6 +100,9 @@ pub struct Devices {
     announces: Vec<([u8; 8], u8)>,
     /// At most `MAX_REFUSED`.
     refused: Vec<[u8; 8]>,
+    /// (device, key) of the data refused for lack of room already logged. At most
+    /// `MAX_FULL_SAID`; in RAM only.
+    full_said: Vec<(Box<str>, &'static str)>,
     /// Devices deleted, so a setup still running for one does not bring it back; a new
     /// identification clears it. At most `MAX_DELETED`.
     deleted: Vec<Box<str>>,
@@ -124,6 +130,14 @@ impl Devices {
     pub fn from_list(mut list: Vec<DeviceWithDetails>) -> Self {
         list.truncate(MAX_DEVICES);
         for item in &mut list {
+            if item.data.len() > MAX_DATA {
+                log::warn!(
+                    "devices: {}: {} data, {} not kept (at most {MAX_DATA})",
+                    item.device.name,
+                    item.data.len(),
+                    item.data.len() - MAX_DATA
+                );
+            }
             item.data.truncate(MAX_DATA);
             item.orders.truncate(MAX_ORDERS);
             // Memory: what was read has no spare room.
@@ -491,11 +505,18 @@ impl Devices {
             return Ok(false);
         }
         if item.data.len() >= MAX_DATA {
-            log::warn!(
-                "{}: more than {MAX_DATA} data, {} not added",
-                item.device.source_device_id,
-                spec.key
-            );
+            let id = &item.device.source_device_id;
+            if !self
+                .full_said
+                .iter()
+                .any(|(d, k)| **d == **id && *k == spec.key)
+            {
+                log::warn!("{id}: more than {MAX_DATA} data, {} not added", spec.key);
+                if self.full_said.len() >= MAX_FULL_SAID {
+                    self.full_said.remove(0);
+                }
+                self.full_said.push((id.clone(), spec.key));
+            }
             return Ok(false);
         }
         let data = DeviceData {
@@ -902,6 +923,9 @@ impl Devices {
             return false;
         };
         let removed = self.items.remove(index);
+        // A device paired again over the bound is said again.
+        self.full_said
+            .retain(|(d, _)| **d != *removed.device.source_device_id);
         if self.deleted.len() >= MAX_DELETED {
             self.deleted.remove(0);
         }
