@@ -308,6 +308,7 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-26 | Sowel's `system.update.*` events for the progress of a check and a pull (the answer waits for the end today) | spec 039 |
 | 2026-11-26 | `scripts/release.sh` refuses a manifest over 12 KB (the box reads at most 16 KB, spec 038's notes are not bounded) | spec 039 |
 | 2026-11-26 | Revisit the default of `update.autoCheck` (off, D67) once the TLS session's memory is measured on the box | spec 039 |
+| 2026-11-27 | **Administration at the bottom left, as in Sowel** (a small increment): the sidebar's Administration block leaves the scrolling list (`ui/src/components/layout/Sidebar.tsx:111`) and sits at its bottom under a border, outside the scroll, as Sowel's (`ui/src/components/layout/Sidebar.tsx:259` of the Sowel repository: `border-t border-border-light py-2 px-2`) | User, 2026-11-27 |
 
 ## Sowel issues to open
 
