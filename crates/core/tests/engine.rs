@@ -20,7 +20,7 @@ use solite_core::engine::{
 use solite_core::home::{Home, Phase};
 use solite_core::radio::{NetworkSettings, Radio, RadioTransport, TransportError};
 use solite_sim::{DeviceReport, FakeClock, Kind, Ncp, SimDevice, SimTransport};
-use support::{PIR, RELAY, Rig, T0, eui, motion};
+use support::{HOUR, MINUTE, PIR, RELAY, Rig, T0, eui, motion};
 
 /// The simulated radio, and a way for the test to stop the loop from inside the radio: `done` is
 /// asked after every read.
@@ -1279,5 +1279,88 @@ fn the_loop_feeds_the_watchdog_at_each_turn() {
         "{} feeds for {} turns",
         feeds.get(),
         turns.get()
+    );
+}
+
+// ---- A quiet mains device is pinged before it is called offline (fix 2026-11-27) ----
+
+/// The ZBMINIR2 relay of the box session: mains powered, last heard at `seen_at`.
+fn relay_home(seen_at: u64) -> Home {
+    let mut devices = solite_core::devices::Devices::new();
+    let mut random = scripted();
+    // Capability 0x8E: a router, mains powered, receiving when idle.
+    devices.announced(eui(RELAY), 0x8E, seen_at);
+    devices
+        .identified(
+            eui(RELAY),
+            Some("SONOFF"),
+            Some("ZBMINIR2"),
+            seen_at,
+            &mut random,
+        )
+        .unwrap();
+    devices
+        .reporting_configured(eui(RELAY), &[0x0006], seen_at, &mut random)
+        .unwrap();
+    Home::from_devices(devices, seen_at)
+}
+
+/// The relay already in the network (as after a restart of the box), quiet on its own.
+fn joined_relay() -> SimDevice {
+    let mut relay = device(Kind::Relay, RELAY, 0x7A00).in_network();
+    relay.reports_on_resume = false;
+    relay
+}
+
+fn relay_status(window: &Window) -> solite_core::devices::DeviceStatus {
+    lock(&window.home).devices.list()[0].device.status
+}
+
+#[test]
+fn a_quiet_mains_device_that_answers_the_ping_stays_online() {
+    // The relay keeps its state for an hour: it sends nothing on its own (its On/Off is reported
+    // at most every 3600 s), as the spots' relay did on the box on 2026-11-27.
+    let mut window = Window::on(serving_bench(vec![joined_relay()]), relay_home(T0));
+    let (hub, client) = listen_to_devices(&window.home);
+    window.run(25 * MINUTE, &[]);
+    assert_eq!(
+        relay_status(&window),
+        solite_core::devices::DeviceStatus::Online
+    );
+    assert!(
+        !status_events(&hub, client).contains(&"offline".to_string()),
+        "never seen offline"
+    );
+}
+
+#[test]
+fn a_quiet_mains_device_that_does_not_answer_goes_offline_after_ten_minutes() {
+    let mut relay = joined_relay();
+    relay.silent = true;
+    relay.ignore_reads = u32::MAX;
+    let mut window = Window::on(serving_bench(vec![relay]), relay_home(T0));
+    window.run(9 * MINUTE + 50_000, &[]);
+    assert_eq!(
+        relay_status(&window),
+        solite_core::devices::DeviceStatus::Online
+    );
+    window.run(10 * MINUTE + 10_000, &[]);
+    assert_eq!(
+        relay_status(&window),
+        solite_core::devices::DeviceStatus::Offline
+    );
+}
+
+#[test]
+fn an_offline_mains_device_that_answers_the_ping_comes_back_online() {
+    // Last heard two hours before the boot: offline at the first turn, back once it answers.
+    let mut window = Window::on(
+        serving_bench(vec![joined_relay()]),
+        relay_home(T0 - 2 * HOUR),
+    );
+    window.run(MINUTE, &[]);
+    assert_eq!(
+        relay_status(&window),
+        solite_core::devices::DeviceStatus::Online
     );
 }

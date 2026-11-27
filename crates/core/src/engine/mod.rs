@@ -107,7 +107,7 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
         let routes = radio.take_routes();
         let now = (clocks.now)();
         let busy = radio.busy_devices();
-        {
+        let pings = {
             let mut guard = lock(home);
             // The clock first: a date taken while it was not set moves before anything reads it.
             guard.observe_wall(now);
@@ -142,6 +142,17 @@ pub fn run<T: RadioTransport, C: FnMut() -> u64, S: Storage>(
             // The recipes get the events of this batch (and of the API's edits since the last
             // turn), then the timers that are due fire. Their orders join the queue below.
             guard.run_recipes((clocks.monotonic)(), now);
+            guard.devices.due_pings(now)
+        };
+        // A quiet mains device is pinged before it is called offline; the answer comes through
+        // the polls as any message. Best effort: a ping that fails is logged, the loop goes on
+        // (a dead radio link is caught by the next poll).
+        for target in pings {
+            match radio.ping(target) {
+                Ok(true) => {}
+                Ok(false) => log::debug!("ping: no address for a device"),
+                Err(e) => log::warn!("ping: {e}"),
+            }
         }
         // After the measures: the answer of an order (and the state it makes the device read
         // back) comes through the same polls.

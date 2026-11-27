@@ -329,10 +329,10 @@ when the light went on and off, both lines are read, and the internal RAM minimu
 - [x] `sh scripts/qemu.sh` prints the `recipes: script` line and passes its gates; the measuring image
       and the box's own image have no QuickJS (checked by a symbol search); the figures of R6 are in
       `docs/memory-budget.md`.
-- [ ] The box check of R7 is run by the user after their flash; its result is written in this spec.
+- [x] The box check of R7 is run by the user after their flash; its result is written in this spec.
       Met in two halves ("Result on the box"): the wave and the light in the first pass, the
-      internal RAM over 64 KB in the second, without a person; a wave on the final image is left
-      (roadmap inbox).
+      internal RAM over 64 KB in the second, without a person; the wave on the final image was
+      made by the user on 2026-11-27.
 - [x] Decisions D73 to D77 written; `sh scripts/validate.sh` green.
 
 ## Edge cases
@@ -414,3 +414,7 @@ light) and a SONOFF SNZB-03PR2 motion sensor, both paired that day, in the user'
      (this time includes the check after each call, the memory read and the collector, which the
      first pass's did not: the gain is larger than the figures show);
    - one flash write since boot.
+4. **The wave on the final image** (2026-11-27, the user in the garage): the light went on with the
+   wave and off after the delay. The relay showed `offline` while it worked: it reports its state
+   once an hour at most, and the box called a mains device offline after 10 minutes of silence
+   without pinging it (fixed in `fix/mains-device-ping`).

@@ -8,6 +8,8 @@ use std::fmt;
 pub const PROFILE_HOME_AUTOMATION: u16 = 0x0104;
 /// The Basic cluster.
 pub const CLUSTER_BASIC: u16 = 0x0000;
+/// The Basic cluster's ZCL version: what a ping reads.
+pub const ATTRIBUTE_ZCL_VERSION: u16 = 0x0000;
 /// Basic cluster attribute: manufacturer name.
 pub const ATTRIBUTE_MANUFACTURER_NAME: u16 = 0x0004;
 /// Basic cluster attribute: model identifier.

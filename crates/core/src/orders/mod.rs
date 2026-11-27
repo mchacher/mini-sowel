@@ -11,6 +11,7 @@ pub use queue::{
     Busy, Clock, DEADLINE_MS, MAX_ORDERS, MAX_UNATTENDED, OrderQueue, OrderReply, OrderResult,
     OrderWait, Queued,
 };
+pub(crate) use resolve::{DEFAULT_ENDPOINT, parse_eui64};
 pub use resolve::{commands_for, prepare};
 pub use runner::OrderRunner;
 
