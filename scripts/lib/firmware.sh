@@ -233,6 +233,34 @@ fw_check_quickjs() {
   return 0
 }
 
+# No image but the QEMU script build carries a script (spec 042 R3.10): $1 the ELF, $2 the image's
+# name, $3 `with` or `without` the id `id: "motion-light-script"` of the script's source. The QEMU
+# image reads that source for its own phase, so it is the positive control of the search (a search
+# that finds nothing anywhere would pass for the wrong reason). Prints the reason and returns 1
+# when it is not so.
+fw_check_script_source() {
+  if grep -aqF 'id: "motion-light-script"' "$1"; then found=with; else found=without; fi
+  [ "$found" = "$3" ] || { echo "the $2 image is $found the source of motion-light-script (id: \"motion-light-script\" in its ELF), it must be $3: no script is built into an image."; return 1; }
+  return 0
+}
+
+# The install step of the QEMU image's script phase (spec 042, `firmware/src/script_phase.rs`), $1
+# the log: `script phase: install 201, boot load ok, uninstall 204` is there, and every `recipe:
+# thread stack <n> of 20480 bytes never used` line (one per job) keeps at least RECIPE_STACK_MARGIN
+# bytes unused. Prints the reason and returns 1 otherwise.
+RECIPE_STACK_MARGIN=2048
+fw_check_recipe_install() {
+  step=$(grep -a 'script phase: install ' "$1" | tail -n 1)
+  [ -n "$step" ] || { echo "the install step's line (script phase: install ...) is missing."; return 1; }
+  echo "$step" | grep -qF 'install 201, boot load ok, uninstall 204' \
+    || { echo "the install step went wrong: ${step#*script phase: }"; return 1; }
+  lines=$(grep -aoE 'recipe: thread stack [0-9]+ of 20480 bytes never used' "$1")
+  [ -n "$lines" ] || { echo "the recipe thread's stack line (recipe: thread stack ...) is missing."; return 1; }
+  least=$(echo "$lines" | sed -E 's/recipe: thread stack ([0-9]+) .*/\1/' | sort -n | head -n 1)
+  [ "$least" -ge "$RECIPE_STACK_MARGIN" ] || { echo "the recipe thread left $least of its 20480 bytes unused, below the $RECIPE_STACK_MARGIN bytes kept."; return 1; }
+  return 0
+}
+
 # The script phase of the QEMU image (spec 041 R6.2, `firmware/src/script_phase.rs`), $1 the log:
 # the `recipes: script motion-light-script ...` line is there, the internal RAM's minimum is at
 # least INTERNAL_MIN_KB, the engine thread and the `script` thread keep at least SCRIPT_STACK_MARGIN

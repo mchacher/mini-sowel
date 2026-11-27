@@ -322,7 +322,17 @@ impl ScriptRecipe {
         runtimes: &Arc<dyn ScriptRuntimes>,
         clock: &ScriptClock,
     ) -> Result<(ScriptRecipe, super::ScriptSummary), String> {
-        super::load::load(source, runtimes, clock)
+        super::load::load(source, runtimes, clock, super::load::Rules::BUILT_IN)
+    }
+
+    /// The same under the rules of an installed script (spec 042 R1.3, R1.4): an id of 1 to 32
+    /// characters and a `version` that is `x.y.z`.
+    pub fn load_installed(
+        source: &str,
+        runtimes: &Arc<dyn ScriptRuntimes>,
+        clock: &ScriptClock,
+    ) -> Result<(ScriptRecipe, super::ScriptSummary), String> {
+        super::load::load(source, runtimes, clock, super::load::Rules::INSTALLED)
     }
 
     /// The bytes QuickJS holds for this recipe now.

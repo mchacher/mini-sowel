@@ -140,6 +140,114 @@ impl Storage for FileStore {
     fn locate(&self, name: &str) -> String {
         self.dir.join(name).display().to_string()
     }
+
+    fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        let path = self.dir.join(name);
+        recover(&path)?;
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: cannot read: {e}", path.display())),
+        }
+    }
+
+    fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let path = self.dir.join(name);
+        let cannot = |e: std::io::Error| format!("{}: cannot write: {e}", path.display());
+        if let Some(folder) = path.parent() {
+            fs::create_dir_all(folder).map_err(cannot)?;
+        }
+        let temporary = with_suffix(&path, ".tmp");
+        (|| -> std::io::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&temporary)?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &path)
+        })()
+        .map_err(cannot)
+    }
+
+    fn remove(&self, name: &str) -> Result<(), String> {
+        let path = self.dir.join(name);
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("{}: cannot remove: {e}", path.display())),
+        }
+    }
+
+    fn list(&self, folder: &str) -> Result<Vec<String>, String> {
+        let path = self.dir.join(folder);
+        // A lone `<name>.new` is a save a power cut interrupted: promoted to `<name>` first.
+        for name in file_names(&path)? {
+            if let Some(base) = name.strip_suffix(".new") {
+                recover(&path.join(base))?;
+            }
+        }
+        let mut names = file_names(&path)?;
+        names.retain(|name| !name.ends_with(".tmp") && !name.ends_with(".new"));
+        names.sort();
+        Ok(names)
+    }
+
+    fn usage(&self) -> Result<(u64, Option<u64>), String> {
+        // The Mac's folder has no size of its own: what its files use.
+        let mut used = 0u64;
+        let mut folders = vec![self.dir.clone()];
+        while let Some(folder) = folders.pop() {
+            let Ok(entries) = fs::read_dir(&folder) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                match entry.metadata() {
+                    Ok(meta) if meta.is_dir() => folders.push(entry.path()),
+                    Ok(meta) => used += meta.len(),
+                    Err(_) => {}
+                }
+            }
+        }
+        Ok((used, None))
+    }
+}
+
+/// The names of the entries of a folder; a folder that does not exist has none.
+fn file_names(path: &Path) -> Result<Vec<String>, String> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("{}: cannot list: {e}", path.display())),
+    };
+    Ok(entries
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect())
+}
+
+/// `path` and `suffix`: `a.srs` and `.tmp` make `a.srs.tmp`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Finishes a save a power cut interrupted (see `recover_interrupted_save`).
+fn recover(path: &Path) -> Result<(), String> {
+    engine::recover_interrupted_save(
+        path,
+        &with_suffix(path, ".new"),
+        &with_suffix(path, ".tmp"),
+        Path::exists,
+        |from, to| fs::rename(from, to),
+        |file| fs::remove_file(file),
+    )
+    .map(|_| ())
+    .map_err(|e| format!("{}: cannot recover: {e}", path.display()))
 }
 
 impl DeviceStore for FileStore {

@@ -451,9 +451,30 @@ fn fetch_manifest(
     limits: Limits,
     pacing: &mut dyn Pacing,
 ) -> Result<Checked, String> {
+    let text = fetch_text(
+        fetcher,
+        url,
+        limits,
+        pacing,
+        MAX_MANIFEST_BYTES,
+        "Manifest too large",
+    )?;
+    parse_manifest(&text, pacing.now_ms())
+}
+
+/// Fetches the bytes at `url` (R3's rules, `limits`), at most `max` of them: past it, `too_large`
+/// is the reason. Also reads the recipe catalogue (spec 042).
+pub(crate) fn fetch_text(
+    fetcher: &mut dyn Fetcher,
+    url: &str,
+    limits: Limits,
+    pacing: &mut dyn Pacing,
+    max: usize,
+    too_large: &str,
+) -> Result<Vec<u8>, String> {
     let started = pacing.now_ms();
     let (_, _, mut body) = fetch(fetcher, url, limits, pacing, started)?;
-    // Bound: the manifest's limit plus the one byte that shows it is too long.
+    // Bound: the limit plus the one byte that shows it is too long.
     let mut text: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 1024];
     loop {
@@ -471,11 +492,90 @@ fn fetch_manifest(
             break;
         }
         text.extend_from_slice(&chunk[..count]);
-        if text.len() > MAX_MANIFEST_BYTES {
-            return Err("Manifest too large".to_string());
+        if text.len() > max {
+            return Err(too_large.to_string());
         }
     }
-    parse_manifest(&text, pacing.now_ms())
+    Ok(text)
+}
+
+/// Why `download_file` gave no file.
+#[cfg_attr(not(feature = "script-recipes"), allow(dead_code))]
+pub(crate) enum FileError {
+    /// The network or the server failed (the reason).
+    Failed(String),
+    /// What came is not what the catalogue says (size or SHA-256).
+    Differs(&'static str),
+}
+
+/// Downloads a file of a known `size` and SHA-256 whole into memory (spec 042 R3.2): the update's
+/// download, resumed as D72 says, at most three times, its total time bounded by `limits`.
+#[cfg_attr(not(feature = "script-recipes"), allow(dead_code))]
+pub(crate) fn download_file(
+    fetcher: &mut dyn Fetcher,
+    url: &str,
+    size: u64,
+    sha256: [u8; 32],
+    limits: Limits,
+    pacing: &mut dyn Pacing,
+) -> Result<Vec<u8>, FileError> {
+    let started = pacing.now_ms();
+    let (length, etag, body) =
+        fetch(fetcher, url, limits, pacing, started).map_err(FileError::Failed)?;
+    if length.is_some_and(|length| length != size) {
+        return Err(FileError::Differs(
+            "Download size differs from the catalogue",
+        ));
+    }
+    let audit = Rc::new(RefCell::new(Audit {
+        count: 0,
+        hash: Sha256::new(),
+        failure: None,
+        changed: false,
+    }));
+    let mut reader = Download {
+        body,
+        audit: Rc::clone(&audit),
+        size,
+        limits,
+        started,
+        since_pause: 0,
+        fetcher,
+        url: url.to_string(),
+        etag: etag.filter(|etag| etag.len() <= MAX_ETAG_CHARS),
+        resumes: 0,
+        pacing,
+    };
+    // Bound: the catalogue's `size` (at most 16 KB), plus the one byte that shows a longer body.
+    let mut data: Vec<u8> = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
+    let mut chunk = [0u8; 1024];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => data.extend_from_slice(&chunk[..count]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => {
+                let reason = audit
+                    .borrow()
+                    .failure
+                    .clone()
+                    .unwrap_or_else(|| io_reason(&e));
+                return Err(FileError::Failed(reason));
+            }
+        }
+    }
+    let audit = audit.borrow();
+    if audit.count != size {
+        return Err(FileError::Differs(
+            "Download size differs from the catalogue",
+        ));
+    }
+    if audit.hash.clone().finalize().as_slice() != sha256 {
+        return Err(FileError::Differs(
+            "Download SHA-256 differs from the catalogue",
+        ));
+    }
+    Ok(data)
 }
 
 // ---- The state: the cache, one job at a time ----
@@ -488,6 +588,8 @@ struct Inner {
     busy: Option<Kind>,
     /// The start of the last check asked through the API or of a pull's check (monotonic).
     last_api_check_ms: Option<u64>,
+    /// The start of the last catalogue refresh (wall clock), spec 042 R2.4.
+    last_catalogue_ms: Option<u64>,
     /// The automatic check is due from this monotonic time on.
     next_auto_ms: u64,
 }
@@ -506,6 +608,7 @@ impl Default for Releases {
                 cache: None,
                 busy: None,
                 last_api_check_ms: None,
+                last_catalogue_ms: None,
                 next_auto_ms: AUTO_FIRST_AFTER_MS,
             }),
         }
@@ -530,6 +633,17 @@ enum Kind {
     Pull,
     /// The automatic check.
     Auto,
+    /// An install, an update or an uninstall of a script recipe (spec 042).
+    Recipe,
+    /// A read of the recipe catalogue (spec 042).
+    Catalogue,
+}
+
+/// What a recipe job or a refresh is (spec 042 R3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipeKind {
+    Job,
+    Refresh,
 }
 
 impl Releases {
@@ -587,13 +701,52 @@ impl Releases {
     /// What a restart must not interrupt (spec 043): the text of the 409 while a check or a pull
     /// holds its ticket, else `None`.
     pub fn busy_message(&self) -> Option<&'static str> {
-        lock(&self.inner).busy.map(|kind| {
-            if kind == Kind::Pull {
-                "Update already in progress"
-            } else {
-                "Update check already in progress"
-            }
+        lock(&self.inner).busy.map(message_of)
+    }
+
+    /// The text of the 409 of a backup, a restore or a factory reset while a recipe job (not a
+    /// refresh) runs, else `None` (spec 042 R3.1).
+    pub fn recipe_job_message(&self) -> Option<&'static str> {
+        (lock(&self.inner).busy == Some(Kind::Recipe)).then_some(message_of(Kind::Recipe))
+    }
+
+    /// The right to run one recipe job or one refresh (spec 042 R3.1): 409 with the text of what
+    /// runs while any job holds the session. Ends when the mark is dropped.
+    pub fn begin_recipe(self: &Arc<Self>, kind: RecipeKind) -> Outcome<RecipeMark> {
+        let mut inner = lock(&self.inner);
+        if let Some(busy) = inner.busy {
+            return Err(Failure::new(409, message_of(busy)));
+        }
+        inner.busy = Some(match kind {
+            RecipeKind::Job => Kind::Recipe,
+            RecipeKind::Refresh => Kind::Catalogue,
+        });
+        Ok(RecipeMark {
+            releases: Arc::clone(self),
+            status: None,
         })
+    }
+
+    /// 429 while a refresh was started less than `MIN_CHECK_INTERVAL_MS` ago (`now` is the wall
+    /// clock); the start is not noted (`note_refresh`).
+    pub fn pace_refresh(&self, now: u64) -> Result<(), Refusal> {
+        let inner = lock(&self.inner);
+        if let Some(last) = inner.last_catalogue_ms {
+            let next = last.saturating_add(MIN_CHECK_INTERVAL_MS);
+            if now < next {
+                let seconds = (next - now).div_ceil(1000);
+                return Err(Refusal::new(
+                    429,
+                    format!("Please wait {seconds}s before refreshing again"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A refresh starts at `now` (wall clock).
+    pub fn note_refresh(&self, now: u64) {
+        lock(&self.inner).last_catalogue_ms = Some(now);
     }
 
     /// For `POST /system/version/check` (R2).
@@ -648,6 +801,41 @@ impl Releases {
     /// ask is a minute after `mono_ms`, not 24 hours.
     pub fn postpone_auto(&self, mono_ms: u64) {
         lock(&self.inner).next_auto_ms = mono_ms.saturating_add(AUTO_RETRY_MS);
+    }
+}
+
+/// The text of the 409 for what holds the session.
+fn message_of(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Pull => "Update already in progress",
+        Kind::Check | Kind::Auto => "Update check already in progress",
+        Kind::Recipe => "Recipe install already in progress",
+        Kind::Catalogue => "Recipe catalogue refresh already in progress",
+    }
+}
+
+/// The right to run one recipe job or one refresh (spec 042). Dropping it ends the job, and the
+/// recipe flag of the update status with it.
+#[derive(Debug)]
+pub struct RecipeMark {
+    releases: Arc<Releases>,
+    status: Option<Arc<crate::update::UpdateStatus>>,
+}
+
+impl RecipeMark {
+    /// Sets the update status's recipe flag, ended with the mark.
+    pub fn with_status(mut self, status: Arc<crate::update::UpdateStatus>) -> Self {
+        self.status = Some(status);
+        self
+    }
+}
+
+impl Drop for RecipeMark {
+    fn drop(&mut self) {
+        if let Some(status) = &self.status {
+            status.end_recipe_job();
+        }
+        lock(&self.releases.inner).busy = None;
     }
 }
 

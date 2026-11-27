@@ -101,9 +101,19 @@
 //!   multiplies.
 //! - `live/session.rs::MAX_INCOMING_BYTES`: a client's incoming frame, 1 KB, inside the 2 KB read
 //!   buffer counted with `live/mod.rs::MAX_QUEUED_BYTES`.
-//! - `settings/mod.rs::MAX_HOME_NAME_CHARS`, `settings/mod.rs::MAX_MANIFEST_URL_CHARS`: the eight
+//! - `settings/mod.rs::MAX_HOME_NAME_CHARS`, `settings/mod.rs::MAX_MANIFEST_URL_CHARS`: the nine
 //!   settings at their longest (a name of 64 characters, numbers at the length of their pattern,
-//!   a manifest address of 512 characters), `settings.json` written.
+//!   a manifest address and a catalogue address of 512 characters), `settings.json` written.
+//! - `recipes/install/catalogue.rs::MAX_CATALOGUE_BYTES`, `recipes/install/catalogue.rs::MAX_ENTRIES`,
+//!   `recipes/install/catalogue.rs::MAX_ENTRY_URL_CHARS`, `recipes/install/file.rs::MAX_FILE_BYTES`,
+//!   `recipes/install/file.rs::MAX_SOURCE_BYTES`, `recipes/install/mod.rs::MAX_REFUSED`,
+//!   `recipes/script/load.rs::MAX_INSTALLED_ID_CHARS` (spec 042, installed script recipes): the
+//!   catalogue is read whole (32 KB) and held as 32 entries of at most that many bytes; a recipe
+//!   job holds the signed file (16 KB) and its source (16 KB) for the length of the job, one job
+//!   at a time (`Releases`' mark); the refused files are 8 names and reasons. By arithmetic, not
+//!   driven here (`tests/recipe_install.rs` tests each bound): `INSTALL_ESTIMATE_BYTES`, added to
+//!   the peak, rounded up to 128 KB (they sit in PSRAM, beside the engine's, and the two scripts'
+//!   runtimes on their own line).
 //! - `update/release.rs::MAX_MANIFEST_BYTES`, `update/release.rs::MAX_URL_CHARS`,
 //!   `update/release.rs::MAX_REDIRECTS` (spec 039): a manifest of 16 KB is held by one check or
 //!   pull at a time (one job, `Releases`' mark), beside the cache's one entry of about 2 KB; both
@@ -182,6 +192,10 @@ const HTTP_WORKERS: usize = 4;
 /// 64 activities, 32 answered, 32 ignored) about 15 KB; the commands (8 in flight, 16 results, 16
 /// reads, 64 routes) about 5 KB. Rounded up to 48 KB.
 const RADIO_ESTIMATE_BYTES: usize = 48 * 1024;
+/// The recipe installs (spec 042), by arithmetic: the catalogue's 32 KB body while it is parsed and
+/// its 32 entries held (about 48 KB), one job's signed file and source (32 KB), the refused
+/// files' names and reasons (under 2 KB). Rounded up to 128 KB.
+const INSTALL_ESTIMATE_BYTES: usize = 128 * 1024;
 
 fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
     Request {
@@ -723,7 +737,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     );
 
     let measured = ALLOCATOR.peak_usage().saturating_sub(base);
-    let peak = measured + RADIO_ESTIMATE_BYTES.saturating_sub(radio.len());
+    let peak = measured + RADIO_ESTIMATE_BYTES.saturating_sub(radio.len()) + INSTALL_ESTIMATE_BYTES;
     let worst = peak + worst_log_bytes.saturating_sub(log_bytes);
 
     // One past each collection's bound: refused, and the peak does not grow.

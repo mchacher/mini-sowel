@@ -137,4 +137,4 @@ a menu button that opens the sidebar as a drawer (Sowel's pattern; Sowel switche
   buttons, `strokeWidth={1.5}` as in Sowel; ported files keep Sowel's sizes.
 - **Updating from Sowel**: copy the files of the two tables under Source again from a newer Sowel
   commit, compare each with the commit in its header, apply the cuts listed again, update the
-  commits and dates, and check the budget (first load 77.9 KB gzip after spec 040).
+  commits and dates, and check the budget (first load 77.9 KB gzip after spec 040, 81.2 KB after spec 042: the Resources and Recipes cards of Settings add 1.8 KB gzip).

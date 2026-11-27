@@ -306,7 +306,7 @@ One pass (D39), the user present, after their yes to flash (D6, their own `--yes
 - "Shows the home in the browser": the Resources and Recipes cards.
 - "Publishing a release": the image carries the recipe key; `release.sh` and the release workflow
   refuse to build without `release/recipe-key.pub`.
-- "Runs a box session in one command": B11 with `--recipe-file`; the F2 group (R7).
+- "Runs a box session in one command": B11 with `--recipe-file` (the F2 group of R7 is built with the box run, plan step 13).
 - "Stays within a memory budget": the `recipe` thread and the internal RAM rule.
 - New section "Shows its resources": the route and the card.
 - History: spec 042's row.

@@ -46,7 +46,7 @@ step touches the flash from a PSRAM stack.
 | Recipe key | 32-byte Ed25519 public key | built in (`SOLITE_RECIPE_PUBLIC_KEY`), `release/recipe-key.pub` |
 | Setting | `recipes.catalogue`, a URL of at most 512 characters | `settings.json` (an older release ignores the key: D54 holds) |
 | Storage figures | used, total | the home, read at boot and after each write or removal |
-| Files to remove | at most `MAX_SCRIPT_RECIPES` + 1 names | the home, for the saver (factory reset) |
+| Files to remove | at most `MAX_SCRIPT_RECIPES` + `MAX_REFUSED` (10) names | the home, for the saver (factory reset) |
 
 ## The one-job mark (R3.1)
 
@@ -81,8 +81,8 @@ own mutex, set and cleared with the mark: `claim` reads it and the recipe job's 
 | `firmware/src/http_server.rs`, `job_thread.rs`, `memory.rs` | `Reply::RecipeJob` and `Reply::CatalogueRefresh` on a `recipe` thread (`FETCH_STACK_BYTES`); the probe over `heap_caps_*` |
 | `firmware/Cargo.toml` | the feature `scripts`' comment (no script built in) |
 | `scripts/validate.sh`, `scripts/lib/firmware.sh`, `scripts/qemu.sh` | the radio image's ELF must not carry `id: "motion-light-script"` (beside `fw_check_quickjs`, `validate.sh:137`, `lib/firmware.sh:230`); the `recipe: thread stack` line read, failing under 2048 bytes |
-| `scripts/release.sh`, `.github/workflows/release.yml`, `scripts/box-session.sh` | `SOLITE_RECIPE_PUBLIC_KEY` wherever `SOLITE_UPDATE_PUBLIC_KEY` is (`release.sh:537`, `box-session.sh:1323, 1347`); `release.sh` and the workflow refuse without `release/recipe-key.pub`; the session's `--recipe-file`, B11 (`box-session.sh:925-999, 1668-1697`) and the F2 group |
-| `crates/host/tests/box_session_script.rs` | B11 with and without `--recipe-file`; the F2 group |
+| `scripts/release.sh`, `.github/workflows/release.yml`, `scripts/box-session.sh` | `SOLITE_RECIPE_PUBLIC_KEY` wherever `SOLITE_UPDATE_PUBLIC_KEY` is (`release.sh:537`, `box-session.sh:1323, 1347`); `release.sh` and the workflow refuse without `release/recipe-key.pub`; the session's `--recipe-file` and B11 (`box-session.sh:925-999, 1668-1697`); the F2 group of R7 comes with the box run (plan step 13) |
+| `crates/host/tests/box_session_script.rs` | B11 with and without `--recipe-file` (the F2 group's tests come with the group, plan step 13) |
 | `ui/src/components/settings/` | `ResourcesCard.tsx`, `RecipesCard.tsx` (new files: `SettingsPage.tsx` is 32 KB), their tests; `ui/src/api/` |
 | `release/recipe-key.pub` (the user's), `release/README.md` | the public half; how the key is made and kept |
 | `docs/` | as the spec's living spec delta |

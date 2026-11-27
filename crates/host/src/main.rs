@@ -37,7 +37,9 @@ const USAGE: &str = "usage: solite-host [--radio tcp://<address>:<port> | \
 [--recipe-script <file.js>]...] [--data <dir>] | \
 --update-keygen <file> | \
 --update-sign <image> --version <x.y.z> --key <file> --out <file> | \
---update-verify <file> --public-key <64 hex>";
+--update-verify <file> --public-key <64 hex> | \
+--recipe-sign <file.js> --key <file> --out <file.srs> | \
+--recipe-verify <file.srs> [--public-key <64 hex>]";
 /// Pairing time when `--pair` has no number.
 const DEFAULT_PAIR_SECONDS: u8 = 180;
 /// Port of `--serve` when it has no number.
@@ -107,6 +109,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     let (mut sign_image, mut sign_version, mut sign_key, mut sign_out) = (None, None, None, None);
     // `--update-verify` and its public key.
     let (mut verify_file, mut verify_key) = (None, None);
+    // `--recipe-sign` (with `--key` and `--out`) and `--recipe-verify` (spec 042 R1.6).
+    let (mut recipe_sign, mut recipe_verify) = (None, None);
     let mut speed_given = false;
     let mut rest = args.iter().peekable();
     while let Some(flag) = rest.next() {
@@ -180,11 +184,40 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--update-sign" => sign_image = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--update-verify" => verify_file = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--recipe-sign" => recipe_sign = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
+            "--recipe-verify" => {
+                recipe_verify = Some(PathBuf::from(rest.next().ok_or_else(usage)?));
+            }
             "--public-key" => verify_key = Some(rest.next().ok_or_else(usage)?.clone()),
             "--version" => sign_version = Some(rest.next().ok_or_else(usage)?.clone()),
             "--key" => sign_key = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             "--out" => sign_out = Some(PathBuf::from(rest.next().ok_or_else(usage)?)),
             _ => return Err(usage()),
+        }
+    }
+    if let Some(script) = recipe_sign.take() {
+        // `--recipe-sign` takes `--key` and `--out`, and neither `--version` nor `--update-sign`.
+        let (Some(key), Some(out)) = (sign_key.take(), sign_out.take()) else {
+            return Err(usage());
+        };
+        if sign_image.is_some() || sign_version.is_some() || recipe_verify.is_some() {
+            return Err(usage());
+        }
+        let command = update_cli::Command::RecipeSign { script, key, out };
+        if parsed.update.replace(command).is_some() {
+            return Err(usage());
+        }
+    }
+    if let Some(file) = recipe_verify.take() {
+        if verify_file.is_some() {
+            return Err(usage());
+        }
+        let command = update_cli::Command::RecipeVerify {
+            file,
+            public_key: verify_key.take(),
+        };
+        if parsed.update.replace(command).is_some() {
+            return Err(usage());
         }
     }
     let sign_given = [
@@ -468,9 +501,9 @@ fn main() -> ExitCode {
     if let Some(command) = &args.update {
         return match update_cli::run(command) {
             Ok(()) => ExitCode::SUCCESS,
-            Err(message) => {
+            Err((status, message)) => {
                 eprintln!("{message}");
-                ExitCode::from(2)
+                ExitCode::from(status)
             }
         };
     }

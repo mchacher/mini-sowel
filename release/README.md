@@ -8,4 +8,10 @@ What a release is signed and built with, apart from the secret.
   (`SOLITE_UPDATE_PUBLIC_KEY`) and checks the signature against it, and the release workflow
   refuses to run without it. It is not a secret. The private key is never in this repository.
 
-How to make the key and where it lives: [docs/release.md](../docs/release.md).
+- `recipe-key.pub`: the Ed25519 **public** key that signs the script recipes (spec 042), a second
+  key, never the update key's: its public half is committed here the same way, compiled into the
+  radio image (`SOLITE_RECIPE_PUBLIC_KEY`), and `scripts/release.sh` and the release workflow refuse
+  to build without it. The private half is on the maintainer's computer and in the secret of the
+  recipes' repository, never in this repository.
+
+How to make the keys and where they live: [docs/release.md](../docs/release.md).

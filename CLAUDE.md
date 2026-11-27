@@ -67,7 +67,7 @@ sh scripts/box.sh saves --budget <n> -- <command>  # one test on the box, saves 
 sh scripts/box.sh pair                           # opens Zigbee pairing 180 s, resets the box: the user runs it
 sh scripts/box-session.sh --yes-flash --backup <file> | --api-only <port>  # the box session in one pass (the user types it, D55) | its API checks on the Mac
 . "$HOME/export-esp.sh" && cd firmware && cargo build --release [--features sim]   # ESP32 firmware (radio image: README)
-sh scripts/release.sh <x.y.z> --key-file <file>   # a signed release, locally (the CI's release.yml does it on a tag)
+sh scripts/release.sh <x.y.z> --key-file <file>   # a signed release, locally (the CI's release.yml does it on a tag; needs release/recipe-key.pub; script recipes: `solite-host --recipe-sign|--recipe-verify`)
 sh scripts/validate.sh [--fast] [--skip-slow] [--only rust|ui|firmware|e2e]  # the verdict; --fast: pre-commit hook; --only: a third (CI jobs), e2e opt-in; --skip-slow: no slow test, no QEMU (PR CI; nightly: full)
 sh scripts/quiet.sh <command>                    # ALWAYS for long output: log file, one verdict line
 ```

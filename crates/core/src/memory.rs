@@ -184,3 +184,88 @@ pub fn script_phase_line(id: &str, phase: &ScriptPhase) -> String {
         phase.script_stack.1,
     )
 }
+
+// ---- What the recipe installs read (spec 042 R4, R5) ----
+
+/// The memory as the platform reads it now, with the lowest each memory has been since boot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryReading {
+    pub stats: MemoryStats,
+    /// The lowest internal RAM free since boot.
+    pub internal_min: usize,
+    /// The lowest PSRAM free since boot.
+    pub psram_min: usize,
+}
+
+/// Reads the heap for the admission of a recipe install (R4.4): the firmware reads ESP-IDF's, the
+/// host reads none (its admission always passes), a test gives its own figures.
+pub trait MemoryProbe: Send + Sync {
+    /// `None`: this platform reads no memory.
+    fn read(&self) -> Option<MemoryReading>;
+}
+
+/// The probe of a platform that reads no memory (the Mac).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoProbe;
+
+impl MemoryProbe for NoProbe {
+    fn read(&self) -> Option<MemoryReading> {
+        None
+    }
+}
+
+/// The internal RAM of `GET /system/resources`, in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InternalResources {
+    pub free: usize,
+    pub min_free: usize,
+    pub largest_block: usize,
+}
+
+/// The PSRAM of `GET /system/resources`, in bytes; `reserve` is what an install leaves free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PsramResources {
+    pub free: usize,
+    pub min_free: usize,
+    pub total: usize,
+    pub reserve: usize,
+}
+
+/// The storage of `GET /system/resources`, in bytes: what the files use, and the partition's size
+/// when the platform knows it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+pub struct StorageResources {
+    pub used: u64,
+    pub total: Option<u64>,
+}
+
+/// One script recipe of `GET /system/resources`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptResources {
+    pub id: String,
+    pub version: Option<String>,
+    /// `builtIn` (given by `--recipe-script`) or `installed`.
+    pub source: &'static str,
+    /// `ready`, `failed` or `refused`.
+    pub state: &'static str,
+    pub reason: Option<String>,
+    pub held: usize,
+    pub limit: usize,
+    pub instances: usize,
+    pub calls: u64,
+    pub average_us: u64,
+    pub max_us: u64,
+}
+
+/// The answer of `GET /api/v1/system/resources` (a Solite route).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resources {
+    pub internal: Option<InternalResources>,
+    pub psram: Option<PsramResources>,
+    pub storage: StorageResources,
+    pub scripts: Vec<ScriptResources>,
+}

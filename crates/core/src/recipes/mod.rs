@@ -10,6 +10,7 @@
 //! events and the time (`turn`, or `handle` and `tick`), a recipe's orders go to the home's queue,
 //! its timers are deadlines checked on each turn.
 
+pub mod install;
 pub mod native;
 #[cfg(feature = "script-recipes")]
 pub mod script;
@@ -126,9 +127,28 @@ const NO_STATE: &str = "{}";
 /// Makes a script recipe's runtime again from its source: a new recipe, or the reason it cannot.
 pub type Rebuild = Box<dyn FnMut() -> Result<Box<dyn Recipe + Send>, String> + Send>;
 
+/// Where a script recipe comes from (spec 042 R2.3): given by `--recipe-script` (the Mac's
+/// developer flag), or installed from a signed file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptSource {
+    BuiltIn,
+    /// A signed file kept in the data folder, at this version (the header's).
+    Installed {
+        version: crate::update::Version,
+    },
+}
+
 /// What a script recipe has that a built-in one has not: its definition (kept while its runtime is
 /// dropped), how to make the runtime again, and whether it runs.
+#[cfg_attr(not(feature = "script-recipes"), allow(dead_code))]
 struct ScriptMeta {
+    source: ScriptSource,
+    /// The script's text, shared with `rebuild`: an update that does not load puts it back.
+    text: Arc<str>,
+    /// The memory limit of its runtime, in bytes (shown by `GET /system/resources`).
+    limit: usize,
+    /// The `version` the script declares, if any (shown by `GET /system/resources`).
+    declared: Option<String>,
     /// The `RecipeInfo` as JSON text, parsed when asked for: one block, not a tree of small ones
     /// (the box's internal RAM, spec 041).
     info: String,
@@ -146,6 +166,15 @@ struct ScriptMeta {
 struct Failed {
     since: u64,
     reason: String,
+}
+
+/// What `add_script` keeps of where a script came from.
+#[cfg(feature = "script-recipes")]
+pub(crate) struct ScriptOrigin {
+    pub source: ScriptSource,
+    pub text: Arc<str>,
+    pub limit: usize,
+    pub declared: Option<String>,
 }
 
 /// A recipe the engine provides: linked into the core (a built-in recipe) or a script recipe, both
@@ -1138,6 +1167,7 @@ impl RecipeEngine {
         recipe: Box<dyn Recipe + Send>,
         rebuild: Rebuild,
         clock: ScriptClock,
+        origin: ScriptOrigin,
     ) -> Result<(), String> {
         let info = recipe.info();
         let names = Native::names_of(&info);
@@ -1158,6 +1188,10 @@ impl RecipeEngine {
             names,
             recipe: Some(recipe),
             script: Some(ScriptMeta {
+                source: origin.source,
+                text: origin.text,
+                limit: origin.limit,
+                declared: origin.declared,
                 info: info.to_string(),
                 rebuild,
                 failed: None,
@@ -2062,6 +2096,15 @@ mod tests {
     }
 
     /// An engine with the test recipes after the built-in one (indexes 1 and 2).
+    fn test_origin() -> ScriptOrigin {
+        ScriptOrigin {
+            source: ScriptSource::BuiltIn,
+            text: Arc::from(""),
+            limit: 0,
+            declared: None,
+        }
+    }
+
     fn engine_with(recipes: Vec<Box<dyn Recipe + Send>>) -> RecipeEngine {
         let mut engine = RecipeEngine::new();
         engine.natives.extend(recipes.into_iter().map(Native::new));
@@ -2166,6 +2209,7 @@ mod tests {
                 Box::new(recipe),
                 Box::new(|| Err("no".to_string())),
                 script_clock,
+                test_origin(),
             )
             .unwrap();
         engine.slots.push(slot(1, "counting", Some(1)));
@@ -2258,6 +2302,7 @@ mod tests {
                         }) as Box<dyn Recipe + Send>)
                     }),
                     clock.clone(),
+                    test_origin(),
                 )
                 .unwrap();
         }

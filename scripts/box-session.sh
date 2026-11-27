@@ -884,7 +884,7 @@ light_state() {
 # deleted, the `motion-light` instance enabled again. A fresh login first: the access token may
 # have expired during the wait.
 script_cleanup() {
-  [ -n "${SCRIPT_INSTANCE:-}${GARAGE_DISABLED:-}" ] || return 0
+  [ -n "${SCRIPT_INSTANCE:-}${GARAGE_DISABLED:-}${RECIPE_UPLOADED:-}" ] || return 0
   relogin || :
   _left=
   if [ -n "${SCRIPT_INSTANCE:-}" ]; then
@@ -895,8 +895,13 @@ script_cleanup() {
     http POST "/recipe-instances/$GARAGE_DISABLED/enable" -H "@$AUTH_FILE" -H "$JSON" -d '{}'
     case "$CODE" in 200 | 204) GARAGE_DISABLED= ;; *) _left="${_left:+$_left; }motion-light $GARAGE_DISABLED was not enabled again ($CODE)" ;; esac
   fi
+  # The recipe this run uploaded (spec 042 R7.6) goes again: the box is left as it was found.
+  if [ -n "${RECIPE_UPLOADED:-}" ]; then
+    http POST /recipes/motion-light-script/uninstall -H "@$AUTH_FILE"
+    case "$CODE" in 200 | 204) RECIPE_UPLOADED= ;; *) _left="${_left:+$_left; }motion-light-script was not uninstalled ($CODE)" ;; esac
+  fi
   if [ -z "$_left" ]; then
-    check 7 "garage put back" OK "script instance deleted, motion-light enabled again"
+    check 7 "garage put back" OK "script instance deleted, motion-light enabled again${SOLITE_SESSION_RECIPE_FILE:+, uploaded recipe uninstalled}"
   else
     check 7 "garage put back" KO "$_left"
   fi
@@ -926,14 +931,34 @@ group_script() {
   group_login || return
   SCRIPT_INSTANCE=
   GARAGE_DISABLED=
+  RECIPE_UPLOADED=
   # Whatever happens below, the garage is put back (a signal ends the shell through `exit`).
   trap 'script_cleanup; rm -rf "$TMP"' EXIT
 
-  # 1. The garage's instance, and the script recipe on the box.
+  # 1. The garage's instance, and the script recipe on the box: since spec 042 no script is built
+  # in, so it is installed, or, with `--recipe-file <file.srs>` (a signed file), uploaded for this
+  # run and uninstalled at its end; without it the group says so and stops.
   http GET /recipes -H "@$AUTH_FILE"
-  if [ "$CODE" != 200 ] || ! grep -aq '"id":"motion-light-script"' "$TMP/body"; then
-    check 1 "script recipe on the box" KO "GET /recipes answered $CODE, motion-light-script is not in the list"
+  if [ "$CODE" != 200 ]; then
+    check 1 "script recipe on the box" KO "GET /recipes answered $CODE"
     return
+  fi
+  if ! grep -aq '"id":"motion-light-script"' "$TMP/body"; then
+    if [ -z "${SOLITE_SESSION_RECIPE_FILE:-}" ]; then
+      check 1 "script recipe on the box" skipped "not installed: --recipe-file"
+      return
+    fi
+    if [ ! -f "$SOLITE_SESSION_RECIPE_FILE" ]; then
+      check 1 "script recipe on the box" KO "the recipe file $SOLITE_SESSION_RECIPE_FILE does not exist"
+      return
+    fi
+    http POST /recipes/install -H "@$AUTH_FILE" -H "Content-Type: application/octet-stream" --data-binary "@$SOLITE_SESSION_RECIPE_FILE"
+    if [ "$CODE" != 201 ]; then
+      check 1 "script recipe on the box" KO "uploading $SOLITE_SESSION_RECIPE_FILE answered $CODE: $(errtext)"
+      return
+    fi
+    RECIPE_UPLOADED=1
+    check 1 "script recipe on the box" OK "uploaded from $SOLITE_SESSION_RECIPE_FILE"
   fi
   http GET /recipe-instances -H "@$AUTH_FILE"
   if [ "$CODE" != 200 ]; then
@@ -1038,7 +1063,7 @@ fi
 # ---------------------------------------------------------------------------------------------
 
 usage() {
-  echo "usage: sh scripts/box-session.sh [--yes-flash] [--backup <file>] [--factory-reset] [--with-gestures] [--port <device>] [--address <address>[:<port>]]" >&2
+  echo "usage: sh scripts/box-session.sh [--yes-flash] [--backup <file>] [--factory-reset] [--with-gestures] [--recipe-file <file.srs>] [--port <device>] [--address <address>[:<port>]]" >&2
   echo "       sh scripts/box-session.sh --api-only <address>[:<port>] [--factory-reset]" >&2
   [ -z "${1:-}" ] || echo "box-session: $1" >&2
   exit 2
@@ -1048,6 +1073,7 @@ YES_FLASH=false
 BACKUP=${SOLITE_BOX_BACKUP:-}
 FACTORY_RESET=false
 GESTURES=false
+RECIPE_FILE=${SOLITE_SESSION_RECIPE_FILE:-}
 PORT=
 ADDRESS_OPT=${SOLITE_BOX_ADDRESS:-}
 API_ONLY=false
@@ -1058,12 +1084,21 @@ while [ $# -gt 0 ]; do
     --backup) [ $# -ge 2 ] || usage "--backup needs a file"; BACKUP=$2; shift 2 ;;
     --factory-reset) FACTORY_RESET=true; shift ;;
     --with-gestures) GESTURES=true; shift ;;
+    --recipe-file) [ $# -ge 2 ] || usage "--recipe-file needs a file"; RECIPE_FILE=$2; shift 2 ;;
     --port) [ $# -ge 2 ] || usage "--port needs a device"; PORT=$2; shift 2 ;;
     --address) [ $# -ge 2 ] || usage "--address needs an address"; ADDRESS_OPT=$2; shift 2 ;;
     --api-only) [ $# -ge 2 ] || usage "--api-only needs an address"; API_ONLY=true; API_ADDR=$2; shift 2 ;;
     *) usage "unknown option $1" ;;
   esac
 done
+if [ -n "$RECIPE_FILE" ]; then
+  case "$RECIPE_FILE" in /*) ;; *) RECIPE_FILE=$CALLER_DIR/$RECIPE_FILE ;; esac
+  [ -f "$RECIPE_FILE" ] || usage "recipe file not found: $RECIPE_FILE"
+  SOLITE_SESSION_RECIPE_FILE=$RECIPE_FILE
+  export SOLITE_SESSION_RECIPE_FILE
+else
+  unset SOLITE_SESSION_RECIPE_FILE
+fi
 $API_ONLY && $YES_FLASH && usage "--yes-flash cannot go with --api-only"
 if $FACTORY_RESET && ! $YES_FLASH && ! $API_ONLY; then
   usage "--factory-reset needs --yes-flash or --api-only"
@@ -1310,6 +1345,15 @@ set_version() {
   return 1
 }
 
+# Exports the recipe key's public half (spec 042 R1.5) to the build when `release/recipe-key.pub`
+# exists (the user makes it; this repository never holds the private half): the image then installs
+# recipes signed with it, and a build without the file answers every install with 503.
+recipe_key_env() {
+  _rk=$(tr -d ' \t\r\n' <"$ROOT/release/recipe-key.pub" 2>/dev/null) || _rk=
+  [ -z "$_rk" ] || export SOLITE_RECIPE_PUBLIC_KEY=$_rk
+  return 0
+}
+
 # The script's own builder (spec 033 R5.3): $1 base|next|rollback, $2 the version, $3 the public key
 # in hex, $4 the application image to write. Prints why it failed.
 own_builder() {
@@ -1320,6 +1364,7 @@ own_builder() {
     (
       . "$HOME/export-esp.sh"
       cd "$ROOT/firmware" || exit 1
+      recipe_key_env
       SOLITE_UPDATE_PUBLIC_KEY=$_key CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
         cargo build --release --features radio || exit 1
       fw_find_tools
@@ -1344,6 +1389,7 @@ own_builder() {
   (
     . "$HOME/export-esp.sh"
     cd "$_tree/firmware" || exit 1
+    recipe_key_env
     SOLITE_UPDATE_PUBLIC_KEY=$_key SOLITE_UI_DIST=$ROOT/ui/dist CARGO_TARGET_DIR=$SROOT/target \
       ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" cargo build --release --features radio || exit 1
     fw_find_tools
@@ -1677,7 +1723,9 @@ step_b11() {
   account_usable B11 "$_name" || return
   refresh_password
   via_saves B11 5 sh "$SELF" --group script
-  if $API_ONLY; then
+  if grep -aq 'box-session: B11.1 .*: skipped (not installed: --recipe-file)' "$SV_OUT" 2>/dev/null; then
+    printf 'box-session: B11.6 serial lines: skipped (not installed: --recipe-file)\n' >>"$SV_OUT"
+  elif $API_ONLY; then
     printf 'box-session: B11.6 serial lines: skipped (box only)\n' >>"$SV_OUT"
   elif [ -z "$SV_LOG" ] || [ ! -f "$SV_LOG" ]; then
     printf 'box-session: B11.6 serial lines: KO (no serial log)\n' >>"$SV_OUT"

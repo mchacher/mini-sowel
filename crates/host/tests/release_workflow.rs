@@ -465,3 +465,28 @@ fn the_build_jobs_use_the_composite_action_and_the_release_script() {
             .all(|l| !l.contains("release.sh"))
     );
 }
+
+#[test]
+fn the_firmware_and_sign_jobs_refuse_a_tag_without_the_recipe_keys_public_file_and_the_dry_run_makes_its_own()
+ {
+    // Spec 042 R1.5: the image carries the recipe key's public half; no release without it.
+    let text = read(WORKFLOW);
+    for name in ["firmware", "sign"] {
+        let body = job(&text, name).join("\n");
+        let refusal = body.find("release/recipe-key.pub").unwrap();
+        assert!(
+            body.contains("::error::release/recipe-key.pub is absent"),
+            "{name}"
+        );
+        assert!(
+            refusal < body.find("cargo build").unwrap_or(usize::MAX),
+            "{name}"
+        );
+    }
+    let dry = job(&text, "dry-run").join("\n");
+    assert!(dry.contains("--update-keygen \"$RUNNER_TEMP/dry/recipe-key\""));
+    assert!(dry.contains("--recipe-key-file \"$RUNNER_TEMP/dry/recipe-key.pub\""));
+    // The committed file is never read by the dry run, and the private half is never a secret here.
+    assert!(!dry.contains("release/recipe-key.pub"));
+    assert!(!text.contains("SOLITE_RECIPE_KEY"));
+}

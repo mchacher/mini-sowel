@@ -87,6 +87,50 @@ pub trait Storage {
 
     /// Where a file is, for the messages (a path on the Mac).
     fn locate(&self, name: &str) -> String;
+
+    // The binary files of the installed script recipes (spec 042): `scripts/<id>.srs`. A storage
+    // that keeps none (the defaults) refuses them.
+
+    /// The bytes of a file, `None` when it is missing; as `read`, a lone `<name>.new` left by a
+    /// cut save is promoted first.
+    fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        let _ = name;
+        Err("this storage keeps no binary file".to_string())
+    }
+
+    /// Replaces a file with `bytes` by the same atomic save as `write` (D15).
+    fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let _ = (name, bytes);
+        Err("this storage keeps no binary file".to_string())
+    }
+
+    /// Removes a file; a file already missing is removed too.
+    fn remove(&self, name: &str) -> Result<(), String> {
+        let _ = name;
+        Err("this storage keeps no binary file".to_string())
+    }
+
+    /// The names of the files in a folder, sorted (a `.tmp` is ignored, a lone `.new` promoted to
+    /// its name first, see `recover_interrupted_save`); no such folder is no file.
+    fn list(&self, folder: &str) -> Result<Vec<String>, String> {
+        let _ = folder;
+        Ok(Vec::new())
+    }
+
+    /// What the files use and, when the platform knows it, the partition's size, in bytes.
+    fn usage(&self) -> Result<(u64, Option<u64>), String> {
+        Ok((0, None))
+    }
+}
+
+/// The folder of the installed script recipes, under the data folder.
+pub const SCRIPTS_DIR: &str = "scripts";
+/// The extension of a signed script file.
+pub const SCRIPT_EXTENSION: &str = ".srs";
+
+/// `scripts/<id>.srs`.
+pub fn script_file(id: &str) -> String {
+    format!("{SCRIPTS_DIR}/{id}{SCRIPT_EXTENSION}")
 }
 
 /// The name a file is written under while its content is being written: `name` and `.tmp`. A

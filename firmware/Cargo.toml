@@ -31,11 +31,12 @@ flash-saves = ["sim"]
 # The radio image (spec 021, decision D32): drives the EFR32 over UART1 and runs the engine on it.
 # Built in its own target folder with `sdkconfig.radio.defaults`; never with `sim`.
 radio = ["scripts"]
-# Script recipes (spec 041): the core's `script-recipes` (QuickJS through rquickjs) with the
-# firmware's PSRAM allocator and the scripts of `recipes/scripts/` built in. The radio image carries
-# it, so does the image QEMU runs (`--features sim,scripts`); the box's own image, the measuring
-# image (`flash-saves`) and plain `sim` do not (`scripts/validate.sh` searches their ELF for
-# QuickJS).
+# Script recipes (spec 041, 042): the core's `script-recipes` (QuickJS through rquickjs) with the
+# firmware's PSRAM allocator. No script is built into any image: the box's scripts are installed
+# (spec 042); the image QEMU runs (`--features sim,scripts`) reads `recipes/scripts/motion-light-script.js`
+# for its own measures. The radio image carries it, so does the image QEMU runs; the box's own image,
+# the measuring image (`flash-saves`) and plain `sim` do not (`scripts/validate.sh` searches their
+# ELF for QuickJS, and the radio image's for the script's id).
 scripts = ["solite-core/script-recipes", "dep:rquickjs", "dep:serde_json"]
 
 [dependencies]

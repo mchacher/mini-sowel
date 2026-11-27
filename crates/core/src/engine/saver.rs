@@ -93,6 +93,8 @@ pub struct Saver<S: Storage> {
     devices_only: bool,
     /// Not before this time are the zones and equipments tried again after a failure.
     retry_at: u64,
+    /// The same for the removal of the script files a factory reset asked (spec 042 R3.9).
+    removal_retry_at: u64,
     /// Where a write failure is shown; the log until the caller gives its own.
     sink: Box<dyn FnMut(&str)>,
     /// While it answers `false`, nothing is written but on stop (the box's clock wait, spec 023
@@ -119,6 +121,7 @@ impl<S: Storage> Saver<S> {
             policy: WritePolicy::new(now),
             devices_only: false,
             retry_at: 0,
+            removal_retry_at: 0,
             sink: Box::new(|message| log::warn!("{message}")),
             gate: None,
             control: None,
@@ -208,6 +211,14 @@ impl<S: Storage> Saver<S> {
             return Ok(());
         }
         let (written, failed, skipped) = self.write_due(home, now, forced, stopping)?;
+        let removed = !self.devices_only && self.remove_files(home, now, forced);
+        // The storage figures are read here, on the engine thread, never by an API worker, and
+        // kept (spec 042 R5.2).
+        if (written > 0 || removed)
+            && let Ok((used, total)) = self.store.usage()
+        {
+            lock(home).set_storage_figures(used, total);
+        }
         // The wait ends with the writes (a change made while they ran waits its own delay). While
         // a failed file waits for its retry the wait stays over, so the retry comes at its own
         // time, never later (and a change meanwhile is written at the next turn).
@@ -228,7 +239,8 @@ impl<S: Storage> Saver<S> {
         let (zones, equipments) = home.changes();
         home.devices.changes().0
             || (!self.devices_only
-                && (zones
+                && (home.has_removals()
+                    || zones
                     || equipments
                     || home.recipes_changed()
                     || home.settings_changed()
@@ -331,6 +343,31 @@ impl<S: Storage> Saver<S> {
             }
         }
         Ok((written, failed, skipped))
+    }
+
+    /// Removes the files a factory reset asked for (the installed script recipes'), at most one try
+    /// a minute after a failure; true when one was removed.
+    fn remove_files(&mut self, home: &Mutex<Home>, now: u64, forced: bool) -> bool {
+        if !(forced || now >= self.removal_retry_at) || !lock(home).has_removals() {
+            return false;
+        }
+        let names = lock(home).take_removals();
+        let (mut removed, mut failed) = (false, Vec::new());
+        for name in names {
+            self.feed();
+            match self.store.remove(&name) {
+                Ok(()) => removed = true,
+                Err(message) => {
+                    (self.sink)(&format!("recipes: {name}: cannot remove: {message}"));
+                    failed.push(name);
+                }
+            }
+        }
+        if !failed.is_empty() {
+            self.removal_retry_at = now + RETRY_MS;
+            lock(home).restore_removals(failed);
+        }
+        removed
     }
 
     fn write(

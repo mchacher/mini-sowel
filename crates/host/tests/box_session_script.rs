@@ -2350,6 +2350,13 @@ struct ScriptBox {
     garage_enabled: bool,
     script: Option<String>,
     looks: u32,
+    /// `motion-light-script` was installed by an upload (spec 042 R7.6), and the body it came with.
+    installed: bool,
+    uploaded: Option<Vec<u8>>,
+    /// The content type of the upload.
+    upload_type: Option<String>,
+    /// The status the upload answers (201 by default).
+    upload_status: Option<u16>,
 }
 
 fn script_fake(
@@ -2368,8 +2375,29 @@ fn script_fake(
             ("POST", "/api/v1/integrations/solite/permit-join") => {
                 (202, r#"{"permitJoin":false,"remaining":0}"#.into())
             }
+            ("POST", "/api/v1/recipes/install") => {
+                st.uploaded = Some(r.body.clone());
+                st.upload_type = r.header("content-type").map(str::to_string);
+                match st.upload_status {
+                    Some(status) if status != 201 => (
+                        status,
+                        r#"{"error":"Recipe installs are not configured"}"#.into(),
+                    ),
+                    _ => {
+                        st.installed = true;
+                        (
+                            201,
+                            r#"{"id":"motion-light-script","version":"1.0.0"}"#.into(),
+                        )
+                    }
+                }
+            }
+            ("POST", "/api/v1/recipes/motion-light-script/uninstall") => {
+                st.installed = false;
+                (204, String::new())
+            }
             ("GET", "/api/v1/recipes") => {
-                let script = if has_recipe {
+                let script = if has_recipe || st.installed {
                     r#",{"id":"motion-light-script","name":"Motion light (script)"}"#
                 } else {
                     ""
@@ -2557,14 +2585,11 @@ fn a_script_instance_the_box_refuses_leaves_motion_light_enabled() {
 fn no_script_recipe_or_no_garage_instance_changes_nothing() {
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::Follows, true, false, state.clone()), &[]);
-    assert_eq!(out.code, 1, "{}", out.text);
-    assert!(
-        out.ko("B11.1")
-            .contains("motion-light-script is not in the list"),
-        "{}",
-        out.text
-    );
+    // Spec 042: no script is built in; without a file to upload the group says so and changes nothing.
+    assert_eq!(out.code, 0, "{}", out.text);
+    out.skipped("B11.1", "not installed: --recipe-file");
     assert!(state.lock().unwrap().garage_enabled);
+    assert!(!state.lock().unwrap().calls.join("\n").contains("disable"));
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::Follows, false, true, state.clone()), &[]);
     assert_eq!(out.code, 0, "{}", out.text);
@@ -2586,4 +2611,206 @@ fn the_step_is_skipped_without_the_gestures_or_a_terminal() {
     out.skipped("B11", "needs a person: --with-gestures");
     let out = session.run(&["--with-gestures"], Tty::None);
     out.skipped("B11", "no terminal");
+}
+
+/// A signed recipe file of the tests: any bytes, the fake box does not read them.
+fn recipe_file(dir: &Path) -> PathBuf {
+    let file = dir.join("motion-light-script.srs");
+    fs::write(
+        &file,
+        b"SOLITERS and some bytes the fake box never reads\x00\x01\x02",
+    )
+    .unwrap();
+    file
+}
+
+#[test]
+fn a_recipe_file_is_uploaded_when_the_recipe_is_not_installed_and_uninstalled_at_the_end() {
+    let dir = TempDir::new("recipe-file");
+    let file = recipe_file(dir.path());
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(
+        script_fake(Light::Follows, true, false, state.clone()),
+        &[("SOLITE_SESSION_RECIPE_FILE", file.to_str().unwrap())],
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+    out.ok("B11.1");
+    out.ok("B11.4");
+    out.ok("B11.7");
+    let st = state.lock().unwrap();
+    assert_eq!(st.uploaded.as_deref(), Some(&fs::read(&file).unwrap()[..]));
+    assert_eq!(st.upload_type.as_deref(), Some("application/octet-stream"));
+    assert!(!st.installed, "uninstalled at the end");
+    assert!(st.garage_enabled);
+    let calls = st.calls.join("\n");
+    assert!(
+        calls.contains("POST /api/v1/recipes/motion-light-script/uninstall"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn a_recipe_already_installed_is_neither_uploaded_nor_uninstalled() {
+    let dir = TempDir::new("recipe-file");
+    let file = recipe_file(dir.path());
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(
+        script_fake(Light::Follows, true, true, state.clone()),
+        &[("SOLITE_SESSION_RECIPE_FILE", file.to_str().unwrap())],
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+    let st = state.lock().unwrap();
+    assert!(st.uploaded.is_none());
+    assert!(!st.calls.join("\n").contains("uninstall"));
+}
+
+#[test]
+fn a_recipe_file_the_box_refuses_or_that_is_missing_is_ko_and_nothing_is_changed() {
+    let dir = TempDir::new("recipe-file");
+    let file = recipe_file(dir.path());
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    state.lock().unwrap().upload_status = Some(503);
+    let (out, _dir) = script_group(
+        script_fake(Light::Follows, true, false, state.clone()),
+        &[("SOLITE_SESSION_RECIPE_FILE", file.to_str().unwrap())],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(
+        out.ko("B11.1")
+            .contains("answered 503: Recipe installs are not configured"),
+        "{}",
+        out.text
+    );
+    assert!(state.lock().unwrap().garage_enabled);
+    assert!(!state.lock().unwrap().calls.join("\n").contains("uninstall"));
+    // A file that is not there.
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(
+        script_fake(Light::Follows, true, false, state),
+        &[("SOLITE_SESSION_RECIPE_FILE", "/nonexistent/recipe.srs")],
+    );
+    assert_eq!(out.code, 1, "{}", out.text);
+    assert!(out.ko("B11.1").contains("does not exist"), "{}", out.text);
+}
+
+#[test]
+fn the_recipe_file_option_must_name_a_file() {
+    let session = Session::new();
+    let out = session.run(&["--recipe-file", "/nonexistent/recipe.srs"], Tty::None);
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(out.text.contains("recipe file not found"), "{}", out.text);
+    let out = session.run(&["--recipe-file"], Tty::None);
+    assert_eq!(out.code, 2, "{}", out.text);
+    assert!(
+        out.text.contains("--recipe-file needs a file"),
+        "{}",
+        out.text
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The recipe install step of the QEMU image and the search for the script's source (spec 042)
+// ---------------------------------------------------------------------------------------------
+
+/// `fw_check_recipe_install` on a log made of `lines`: its exit status and what it printed.
+fn recipe_install_check(lines: &str) -> (bool, String) {
+    let dir = TempDir::new("recipe-install");
+    let log = dir.path().join("serial.log");
+    fs::write(&log, lines).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(r#"ROOT=$(cd "$3" && pwd); . "$1"; fw_check_recipe_install "$2""#)
+        .arg("sh")
+        .arg(FIRMWARE_LIB)
+        .arg(&log)
+        .arg(ROOT_DIR)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    )
+}
+
+fn install_lines(step: &str, unused: &[u32]) -> String {
+    let mut text =
+        format!("I (7000) solite_firmware::simulated::script_phase: script phase: {step}\n");
+    for n in unused {
+        text.push_str(&format!(
+            "I (7100) solite_firmware::job_thread: recipe: thread stack {n} of 20480 bytes never used\n"
+        ));
+    }
+    text
+}
+
+#[test]
+fn the_install_step_needs_its_line_its_statuses_and_a_recipe_thread_stack_of_2048_unused() {
+    let step = "install 201, boot load ok, uninstall 204";
+    let (ok, reason) = recipe_install_check(&install_lines(step, &[6000, 5200]));
+    assert!(ok, "{reason}");
+    // Exactly the margin passes, one byte under fails, whichever of the jobs it was.
+    assert!(recipe_install_check(&install_lines(step, &[2048, 9000])).0);
+    let (ok, reason) = recipe_install_check(&install_lines(step, &[9000, 2047]));
+    assert!(!ok);
+    assert!(
+        reason.contains("left 2047 of its 20480 bytes unused"),
+        "{reason}"
+    );
+    // No `recipe: thread stack` line, no step line, a step that went wrong.
+    let (ok, reason) = recipe_install_check(&install_lines(step, &[]));
+    assert!(!ok);
+    assert!(reason.contains("recipe: thread stack"), "{reason}");
+    let (ok, reason) = recipe_install_check("I (1) nothing here\n");
+    assert!(!ok);
+    assert!(reason.contains("install step's line"), "{reason}");
+    let (ok, reason) = recipe_install_check(&install_lines(
+        "install 409, boot load ok, uninstall 204",
+        &[6000],
+    ));
+    assert!(!ok);
+    assert!(reason.contains("the install step went wrong"), "{reason}");
+    let (ok, _) = recipe_install_check(&install_lines(
+        "install 201, boot load failed, uninstall 204",
+        &[6000],
+    ));
+    assert!(!ok);
+}
+
+/// `fw_check_script_source` on an ELF made of `bytes`, which must be `with` or `without` it.
+fn script_source_check(bytes: &[u8], want: &str) -> (bool, String) {
+    let dir = TempDir::new("script-source");
+    let elf = dir.path().join("firmware.elf");
+    fs::write(&elf, bytes).unwrap();
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(r#". "$1"; fw_check_script_source "$2" radio "$3""#)
+        .arg("sh")
+        .arg(FIRMWARE_LIB)
+        .arg(&elf)
+        .arg(want)
+        .output()
+        .unwrap();
+    (
+        output.status.success(),
+        String::from_utf8_lossy(&output.stdout).trim().to_string(),
+    )
+}
+
+#[test]
+fn an_image_that_carries_the_scripts_source_is_refused_where_there_must_be_none_and_the_other_way_round()
+ {
+    let with =
+        b"\x7fELF....recipe({ api: 1, id: \"motion-light-script\", version: \"1.0.0\" })....";
+    let without = b"\x7fELF....recipe nothing of the kind....";
+    assert!(script_source_check(without, "without").0);
+    assert!(script_source_check(with, "with").0);
+    let (ok, reason) = script_source_check(with, "without");
+    assert!(!ok);
+    assert!(
+        reason.contains("the radio image is with the source of motion-light-script"),
+        "{reason}"
+    );
+    let (ok, reason) = script_source_check(without, "with");
+    assert!(!ok);
+    assert!(reason.contains("without the source"), "{reason}");
 }

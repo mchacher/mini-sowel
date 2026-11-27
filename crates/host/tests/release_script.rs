@@ -41,7 +41,7 @@ if [ -n "${FAKE_FAIL:-}" ]; then
   echo "the fake build broke"
   exit 1
 fi
-printf 'fake application image for %s, key %s' "$1" "$2" >"$3/app.bin"
+printf 'fake application image for %s, key %s, recipe key %s' "$1" "$2" "${SOLITE_RECIPE_PUBLIC_KEY:-none}" >"$3/app.bin"
 printf 'fake full flash image' >"$3/flash.bin"
 "#;
 
@@ -69,6 +69,9 @@ impl Fixture {
         let (key, public) = fixture.keygen("signing.key");
         assert_eq!(key, fixture.key());
         fs::write(fixture.public(), format!("{public}\n")).unwrap();
+        // The recipe key's public half (spec 042 R1.5): another key.
+        let (_, recipe_public) = fixture.keygen("recipe.key");
+        fs::write(fixture.recipe_public(), format!("{recipe_public}\n")).unwrap();
         fixture
     }
 
@@ -83,6 +86,9 @@ impl Fixture {
     }
     fn public(&self) -> PathBuf {
         self.path("keys/update-key.pub")
+    }
+    fn recipe_public(&self) -> PathBuf {
+        self.path("keys/recipe-key.pub")
     }
     fn out(&self) -> PathBuf {
         self.path("out")
@@ -132,6 +138,12 @@ impl Fixture {
     fn key_hex(&self) -> String {
         fs::read_to_string(self.key()).unwrap().trim().to_string()
     }
+    fn recipe_public_hex(&self) -> String {
+        fs::read_to_string(self.recipe_public())
+            .unwrap()
+            .trim()
+            .to_string()
+    }
     fn public_hex(&self) -> String {
         fs::read_to_string(self.public())
             .unwrap()
@@ -164,6 +176,8 @@ impl Fixture {
             self.key().to_str().unwrap(),
             "--public-key-file",
             self.public().to_str().unwrap(),
+            "--recipe-key-file",
+            self.recipe_public().to_str().unwrap(),
             "--out",
             self.out().to_str().unwrap(),
         ]
@@ -463,8 +477,9 @@ fn the_sup_is_accepted_by_update_verify_and_holds_the_built_image() {
     assert_eq!(
         &bytes[128..],
         format!(
-            "fake application image for {VERSION}, key {}",
-            fx.public_hex()
+            "fake application image for {VERSION}, key {}, recipe key {}",
+            fx.public_hex(),
+            fx.recipe_public_hex()
         )
         .as_bytes()
     );
@@ -662,6 +677,51 @@ fn a_missing_or_malformed_public_key_file_is_refused_naming_it() {
         assert!(out.stderr.contains("docs/release.md"), "{}", out.all());
         nothing_built(&fx, &fx.mark());
     }
+}
+
+#[test]
+fn a_release_without_the_recipe_keys_public_file_is_refused_before_the_build() {
+    // Spec 042 R1.5: no release until the recipe key is made and its public key committed.
+    let fx = Fixture::new();
+    fs::remove_file(fx.recipe_public()).unwrap();
+    let out = fx.run_marked(&fx.args(), &[]);
+    out.refused(fx.recipe_public().to_str().unwrap());
+    assert!(
+        out.stderr.contains("no release until the recipe key"),
+        "{}",
+        out.all()
+    );
+    nothing_built(&fx, &fx.mark());
+    // A build-only run needs it as well: the image carries the key.
+    let mut args = fx.args();
+    let at = args.iter().position(|a| a == "--key-file").unwrap();
+    args.drain(at..at + 2);
+    args.push("--build-only".into());
+    fx.run_marked(&args, &[])
+        .refused(fx.recipe_public().to_str().unwrap());
+    nothing_built(&fx, &fx.mark());
+    // Malformed: refused naming the file.
+    for bad in [&"ab".repeat(31)[..], "zz".repeat(32).as_str(), ""] {
+        fs::write(fx.recipe_public(), format!("{bad}\n")).unwrap();
+        let out = fx.run_marked(&fx.args(), &[]);
+        out.refused(fx.recipe_public().to_str().unwrap());
+        nothing_built(&fx, &fx.mark());
+    }
+}
+
+#[test]
+fn the_builder_is_given_the_recipe_keys_public_half_in_its_environment() {
+    let fx = Fixture::new();
+    let env_out = fx.path("env.txt");
+    let out = fx.run_with(&fx.args(), &[("FAKE_ENV_OUT", env_out.to_str().unwrap())]);
+    out.ok();
+    let seen = fs::read_to_string(&env_out).unwrap();
+    let recipe_public = fs::read_to_string(fx.recipe_public()).unwrap();
+    assert!(
+        seen.lines()
+            .any(|l| l == format!("SOLITE_RECIPE_PUBLIC_KEY={}", recipe_public.trim())),
+        "{seen}"
+    );
 }
 
 #[test]
@@ -1003,6 +1063,8 @@ impl Fixture {
             "--build-only",
             "--public-key-file",
             self.public().to_str().unwrap(),
+            "--recipe-key-file",
+            self.recipe_public().to_str().unwrap(),
             "--out",
             self.out().to_str().unwrap(),
         ]
@@ -1045,6 +1107,10 @@ fn build_only_writes_the_two_files_without_a_key_and_signs_nothing() {
     );
     let app = fs::read(fx.out().join("app.bin")).unwrap();
     assert!(holds(&app, &fx.public_hex()), "the image carries the key");
+    assert!(
+        holds(&app, &fx.recipe_public_hex()),
+        "the image carries the recipe key"
+    );
     assert_eq!(fx.leftovers("solite-release-"), Vec::<String>::new());
 }
 
@@ -1098,7 +1164,11 @@ fn build_only_keeps_the_checks_that_need_no_key() {
 #[test]
 fn a_prebuilt_folder_is_signed_instead_of_building() {
     let fx = Fixture::new();
-    let app = format!("an image that carries {}", fx.public_hex());
+    let app = format!(
+        "an image that carries {} {}",
+        fx.public_hex(),
+        fx.recipe_public_hex()
+    );
     let dir = fx.prebuilt(&app);
     let out = fx.run_prebuilt(&dir);
     out.ok();
@@ -1136,7 +1206,11 @@ fn a_prebuilt_image_without_the_public_key_is_refused() {
 #[test]
 fn a_prebuilt_folder_missing_a_file_or_not_there_is_refused() {
     let fx = Fixture::new();
-    let dir = fx.prebuilt(&format!("carries {}", fx.public_hex()));
+    let dir = fx.prebuilt(&format!(
+        "carries {} {}",
+        fx.public_hex(),
+        fx.recipe_public_hex()
+    ));
     fs::remove_file(dir.join("flash.bin")).unwrap();
     fx.run_prebuilt(&dir).refused("has no flash.bin");
     nothing_built(&fx, &fx.mark());
@@ -1162,7 +1236,11 @@ fn an_image_with_no_application_descriptor_is_refused_when_the_builder_is_not_th
         ),
     )
     .unwrap();
-    let dir = fx.prebuilt(&format!("carries {}", fx.public_hex()));
+    let dir = fx.prebuilt(&format!(
+        "carries {} {}",
+        fx.public_hex(),
+        fx.recipe_public_hex()
+    ));
     let mut args = fx.args();
     args.extend(["--prebuilt".to_string(), dir.to_str().unwrap().to_string()]);
     let mut command = fx.command(&args.iter().map(String::as_str).collect::<Vec<_>>());
@@ -1534,7 +1612,11 @@ fn a_bridge_with_build_only_builds_without_a_key_and_checks_its_version() {
 fn a_bridge_is_signed_from_a_prebuilt_folder_and_the_public_key_file_is_the_one_given() {
     let fx = Fixture::new();
     let (old, old_public) = fx.bridge(VERSION, None);
-    let dir = fx.prebuilt(&format!("image with {}", fx.public_hex()));
+    let dir = fx.prebuilt(&format!(
+        "image with {} {}",
+        fx.public_hex(),
+        fx.recipe_public_hex()
+    ));
     let mut args = fx.bridge_args(&old);
     args.extend(["--prebuilt".into(), dir.to_str().unwrap().into()]);
     fx.run_with(&args, &[]).ok();

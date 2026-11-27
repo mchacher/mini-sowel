@@ -1,6 +1,8 @@
 //! `--update-keygen` and `--update-sign` (spec 032, R7): the signing side of the update file, in
 //! the host only (the core verifies). A refusal is a message and exit 2, with nothing written.
 //! `--update-verify` (spec 038, R4) checks a signed file as the box does, installing nothing.
+//! `--recipe-sign` and `--recipe-verify` (spec 042, R1.6) do the same for a script recipe's signed
+//! file (`.srs`), with the recipe key: a key pair is made with `--update-keygen`.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -8,6 +10,8 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use ed25519_dalek::{Signer, SigningKey};
+use solite_core::recipes::install::{describe_script, file as recipe_file};
+use solite_core::recipes::script::{ScriptRuntimes, SystemRuntimes};
 use solite_core::update::{
     HEADER_BYTES, SLOT_BYTES, Version, check_header, image_digest, parse_public_key, signed_bytes,
 };
@@ -28,10 +32,25 @@ pub enum Command {
     },
     /// `--update-verify <file> --public-key <64 hex>`.
     Verify { file: PathBuf, public_key: String },
+    /// `--recipe-sign <file.js> --key <file> --out <file.srs>`.
+    RecipeSign {
+        script: PathBuf,
+        key: PathBuf,
+        out: PathBuf,
+    },
+    /// `--recipe-verify <file.srs> [--public-key <64 hex>]`: the key of the build without one.
+    RecipeVerify {
+        file: PathBuf,
+        public_key: Option<String>,
+    },
 }
 
-/// Runs a command, printing its result lines; the error is the line to print before exit 2.
-pub fn run(command: &Command) -> Result<(), String> {
+/// The recipe key of this build (spec 042 R1.5).
+const RECIPE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_RECIPE_PUBLIC_KEY");
+
+/// Runs a command, printing its result lines; the error is the exit status and the line to print
+/// before it: 2 for a refusal, 1 for `--recipe-verify` finding the file wrong.
+pub fn run(command: &Command) -> Result<(), (u8, String)> {
     match command {
         Command::Keygen(file) => keygen(file),
         Command::Sign {
@@ -41,7 +60,12 @@ pub fn run(command: &Command) -> Result<(), String> {
             out,
         } => sign(image, version, key, out),
         Command::Verify { file, public_key } => verify(file, public_key),
+        Command::RecipeSign { script, key, out } => recipe_sign(script, key, out),
+        Command::RecipeVerify { file, public_key } => {
+            return recipe_verify(file, public_key.as_deref());
+        }
     }
+    .map_err(|message| (2, message))
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -230,6 +254,115 @@ fn verify(file: &Path, public_key: &str) -> Result<(), String> {
         file.display(),
         checked.version,
         image.len(),
+        &hex(&key.to_bytes())[..8]
+    );
+    Ok(())
+}
+
+// ---- Script recipes (spec 042 R1.6) ----
+
+/// The runtimes the tools load a script with: the Mac's own.
+fn runtimes() -> std::sync::Arc<dyn ScriptRuntimes> {
+    std::sync::Arc::new(SystemRuntimes)
+}
+
+fn clock() -> solite_core::recipes::ScriptClock {
+    std::sync::Arc::new(crate::serve::monotonic_ms)
+}
+
+/// Signs a script: its id and version are read from the script itself (it is loaded under the
+/// rules of an installed script, so a script with no `x.y.z` version is refused).
+fn recipe_sign(script: &Path, key_path: &Path, out_path: &Path) -> Result<(), String> {
+    let key_text = fs::read_to_string(key_path)
+        .map_err(|e| format!("recipe-sign: cannot read {}: {e}", key_path.display()))?;
+    let seed = unhex32(key_text.trim()).ok_or_else(|| {
+        format!(
+            "recipe-sign: {} is not a key file (64 hexadecimal characters)",
+            key_path.display()
+        )
+    })?;
+    let source = fs::read_to_string(script)
+        .map_err(|e| format!("recipe-sign: cannot read {}: {e}", script.display()))?;
+    if source.len() > recipe_file::MAX_SOURCE_BYTES {
+        return Err(format!(
+            "recipe-sign: {} is {} bytes, a signed recipe holds at most {}",
+            script.display(),
+            source.len(),
+            recipe_file::MAX_SOURCE_BYTES
+        ));
+    }
+    let summary = describe_script(&source, &runtimes(), &clock())
+        .map_err(|reason| format!("recipe-sign: {}: {reason}", script.display()))?;
+    let version = summary
+        .version
+        .as_deref()
+        .and_then(Version::parse)
+        .ok_or_else(|| {
+            format!(
+                "recipe-sign: {} declares no x.y.z version",
+                script.display()
+            )
+        })?;
+    if out_path.symlink_metadata().is_ok() {
+        return Err(format!(
+            "recipe-sign: {} exists, nothing is overwritten",
+            out_path.display()
+        ));
+    }
+    let signing = SigningKey::from_bytes(&seed);
+    let length =
+        u32::try_from(source.len()).map_err(|_| "recipe-sign: script too large".to_string())?;
+    let signed =
+        recipe_file::signed_bytes(version, length, &recipe_file::digest(source.as_bytes()));
+    let mut file = Vec::with_capacity(HEADER_BYTES + source.len());
+    file.extend_from_slice(&signed);
+    file.extend_from_slice(&signing.sign(&signed).to_bytes());
+    file.extend_from_slice(source.as_bytes());
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out_path)
+        .map_err(|e| format!("recipe-sign: cannot create {}: {e}", out_path.display()))?;
+    out.write_all(&file)
+        .and_then(|()| out.sync_all())
+        .map_err(|e| {
+            let _ = fs::remove_file(out_path);
+            format!("recipe-sign: cannot write {}: {e}", out_path.display())
+        })?;
+    println!(
+        "signed: {}, {} {version}, {} bytes, key {}",
+        out_path.display(),
+        summary.id,
+        file.len(),
+        &hex(&signing.verifying_key().to_bytes())[..8]
+    );
+    Ok(())
+}
+
+/// Checks a signed script as the box does (R1.2 and R1.3 with the recipe key), installing nothing:
+/// exit 1 with the reason when it is refused, 2 when the check cannot be made.
+fn recipe_verify(file: &Path, public_key: Option<&str>) -> Result<(), (u8, String)> {
+    let usage = |reason: String| (2, format!("recipe-verify: {reason}"));
+    let refuse = |reason: String| (1, format!("recipe-verify: {reason}"));
+    let text = public_key.or(RECIPE_PUBLIC_KEY).ok_or_else(|| {
+        usage("this build has no recipe key: give --public-key <64 hex>".to_string())
+    })?;
+    let key = parse_public_key(text).ok_or_else(|| {
+        usage("the public key is not 64 hexadecimal characters of an Ed25519 public key".into())
+    })?;
+    let bytes =
+        fs::read(file).map_err(|e| usage(format!("cannot read {}: {e}", file.display())))?;
+    let signed = recipe_file::check(&bytes, &key).map_err(refuse)?;
+    let summary = describe_script(&signed.source, &runtimes(), &clock()).map_err(refuse)?;
+    if summary.version.as_deref().and_then(Version::parse) != Some(signed.version) {
+        return Err(refuse("version differs from the signed one".to_string()));
+    }
+    println!(
+        "verified: {}, {} {}, {} bytes, key {}",
+        file.display(),
+        summary.id,
+        signed.version,
+        bytes.len(),
         &hex(&key.to_bytes())[..8]
     );
     Ok(())

@@ -5,10 +5,15 @@
 # tag; the maintainer can run it by hand too.
 #
 #   sh scripts/release.sh <version> (--key-file <path> | --key-env <NAME>) [--prebuilt <folder>]
-#                         [--public-key-file <path>] [--out <folder>] [--notes <file>]
-#                         [--min-version <x.y.z>] [--repo <owner/name>]
-#   sh scripts/release.sh <version> --build-only [--public-key-file <path>] [--out <folder>]
-#                         [--notes <file>]
+#                         [--public-key-file <path>] [--recipe-key-file <path>] [--out <folder>]
+#                         [--notes <file>] [--min-version <x.y.z>] [--repo <owner/name>]
+#   sh scripts/release.sh <version> --build-only [--public-key-file <path>]
+#                         [--recipe-key-file <path>] [--out <folder>] [--notes <file>]
+#
+# The image carries two public keys (spec 042 R1.5): the update key's (release/update-key.pub) and
+# the recipe key's (release/recipe-key.pub, whose private half signs the script recipes and is never
+# here). The script refuses to build without the second: no release until the recipe key is made,
+# since a release that cannot install a recipe has no use for none.
 #
 # A bridging release (spec 040, docs/release.md) is declared by release/update-key.bridge in the
 # tree: the image carries the new public key, the file is signed with the old private key
@@ -82,6 +87,7 @@ NEXT_KEY_FILE=
 NEXT_KEY_ENV=
 BRIDGE_FILE=
 PUB_FILE=
+RECIPE_PUB_FILE=
 PREBUILT=
 BUILD_ONLY=false
 OUT=
@@ -93,7 +99,7 @@ BAD_USAGE=
 while [ $# -gt 0 ]; do
   case "$1" in
     --build-only) BUILD_ONLY=true; shift ;;
-    --key-file | --key-env | --next-key-file | --next-key-env | --bridge-file | --public-key-file | --prebuilt | --out | --notes | --min-version | --repo)
+    --key-file | --key-env | --next-key-file | --next-key-env | --bridge-file | --public-key-file | --recipe-key-file | --prebuilt | --out | --notes | --min-version | --repo)
       if [ $# -lt 2 ]; then BAD_USAGE="$1 needs a value"; break; fi
       case "$1" in
         --key-file) KEY_FILE=$2 ;;
@@ -102,6 +108,7 @@ while [ $# -gt 0 ]; do
         --next-key-env) NEXT_KEY_ENV=$2 ;;
         --bridge-file) BRIDGE_FILE=$2 ;;
         --public-key-file) PUB_FILE=$2 ;;
+        --recipe-key-file) RECIPE_PUB_FILE=$2 ;;
         --prebuilt) PREBUILT=$2 ;;
         --out) OUT=$2 ;;
         --notes) NOTES_FILE=$2 ;;
@@ -286,9 +293,9 @@ fail1() {
 
 [ -z "$BAD_USAGE" ] || {
   echo "release: $BAD_USAGE" >&2
-  echo "usage: sh scripts/release.sh <version> (--key-file <path> | --key-env <NAME>) [--prebuilt <folder>] [--public-key-file <path>] [--out <folder>] [--notes <file>] [--min-version <x.y.z>] [--repo <owner/name>]" >&2
+  echo "usage: sh scripts/release.sh <version> (--key-file <path> | --key-env <NAME>) [--prebuilt <folder>] [--public-key-file <path>] [--recipe-key-file <path>] [--out <folder>] [--notes <file>] [--min-version <x.y.z>] [--repo <owner/name>]" >&2
   echo "                             [--next-key-file <path> | --next-key-env <NAME>] [--bridge-file <path>]   (a bridging release)" >&2
-  echo "       sh scripts/release.sh <version> --build-only [--public-key-file <path>] [--out <folder>] [--notes <file>]" >&2
+  echo "       sh scripts/release.sh <version> --build-only [--public-key-file <path>] [--recipe-key-file <path>] [--out <folder>] [--notes <file>]" >&2
   exit 2
 }
 [ -n "$VERSION" ] || refuse "usage: sh scripts/release.sh <version> (--key-file <path> | --key-env <NAME> | --build-only) ..."
@@ -339,6 +346,14 @@ PUB_FILE=${PUB_FILE:-$ROOT/release/update-key.pub}
 PUB=$(trim_hex "$(cat "$PUB_FILE")")
 [ -n "$PUB" ] || refuse "the public key file $PUB_FILE is not 64 hexadecimal characters (docs/release.md)"
 PUB8=$(printf '%s' "$PUB" | cut -c1-8)
+
+# Spec 042 R1.5: the recipe key's public half. No release without it.
+RECIPE_PUB_FILE=${RECIPE_PUB_FILE:-$ROOT/release/recipe-key.pub}
+[ -f "$RECIPE_PUB_FILE" ] || refuse "the recipe key's public file $RECIPE_PUB_FILE is missing: no release until the recipe key is made and its public key committed (docs/release.md)"
+RECIPE_PUB=$(trim_hex "$(cat "$RECIPE_PUB_FILE")")
+[ -n "$RECIPE_PUB" ] || refuse "the recipe key's public file $RECIPE_PUB_FILE is not 64 hexadecimal characters (docs/release.md)"
+# Public, so exported: the builder (the test seam's too) reads it where the real one reads the file.
+export SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB
 
 # Spec 040 R1.1 to R1.3: a bridging release is declared by a file in the tree; every check of it
 # is here, before the build (the keys' probes follow, once the host program is there).
@@ -464,6 +479,10 @@ if [ -n "$PREBUILT" ]; then
     echo "release: the prebuilt image does not carry $PUB_FILE's key" >&2
     exit 1
   }
+  grep -aqF "$RECIPE_PUB" "$PREBUILT/app.bin" || {
+    echo "release: the prebuilt image does not carry $RECIPE_PUB_FILE's key" >&2
+    exit 1
+  }
   echo "release: prebuilt image from $PREBUILT"
 fi
 
@@ -534,7 +553,7 @@ own_builder() {
   (
     . "$HOME/export-esp.sh"
     cd "$ROOT/firmware" || exit 1
-    SOLITE_UPDATE_PUBLIC_KEY=$_k CARGO_TARGET_DIR=target/release-radio \
+    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=target/release-radio \
       ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
       cargo build --release --features radio || exit 1
     _image_dir=$ROOT/firmware/target/release-radio/xtensa-esp32-espidf/release
@@ -543,6 +562,7 @@ own_builder() {
     grep -aqF 'radio: uart ' "$_elf" || fw_fail "the build is not the radio image (feature radio)."
     grep -aqF 'solite-ui ' "$_elf" || fw_fail "the radio build has no embedded interface (no solite-ui marker)."
     grep -aqF "$_k" "$_elf" || fw_fail "the prebuilt image does not carry $PUB_FILE's key"
+    grep -aqF "$RECIPE_PUB" "$_elf" || fw_fail "the prebuilt image does not carry $RECIPE_PUB_FILE's key"
     grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' "$_image_dir"/build/esp-idf-sys-*/out/sdkconfig \
       || fw_fail "the radio build was not made with sdkconfig.radio.defaults (CONFIG_UART_ISR_IN_IRAM=y is not in its sdkconfig)."
     fw_find_tools

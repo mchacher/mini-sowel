@@ -4,32 +4,34 @@
 
 - [x] 0. The user's review of the spec and answers to its open questions (answered 2026-11-27,
       ten decisions in the spec)
-- [ ] 1. The signed file: header, checks, the key as a value; the `x.y.z` version and the reserved
+- [x] 1. The signed file: header, checks, the key as a value; the `x.y.z` version and the reserved
       ids in spec 041's load; `--recipe-sign`, `--recipe-verify`
-- [ ] 2. `Storage`: `read_bytes`, `write_bytes`, `remove`, `list`, `usage` (host, firmware, fake,
+- [x] 2. `Storage`: `read_bytes`, `write_bytes`, `remove`, `list`, `usage` (host, firmware, fake,
       `scripts/` made at mount); the engine's `replace_script`, `remove_script`, `ScriptMeta.source`
-- [ ] 3. R3.1's mark: the kinds `Recipe` and `Catalogue` in `Releases`, `UpdateStatus`'s recipe flag,
+- [x] 3. R3.1's mark: the kinds `Recipe` and `Catalogue` in `Releases`, `UpdateStatus`'s recipe flag,
       the backup route, the restart and the factory reset reading it
-- [ ] 4. Install, update, uninstall, the boot load before `start_all` (refused files, a lone
+- [x] 4. Install, update, uninstall, the boot load before `start_all` (refused files, a lone
       `.new`), the safe mode, the factory reset through the saver; R4.1 and R4.2 with `MemoryProbe`
-- [ ] 5. The catalogue, the setting `recipes.catalogue`, the store and refresh routes, the download
-- [ ] 6. `GET /system/resources`; the storage figures kept; the firmware's probe
-- [ ] 7. The firmware: the `recipe` thread (`Reply::RecipeJob`, `Reply::CatalogueRefresh`); the boot
+- [x] 5. The catalogue, the setting `recipes.catalogue`, the store and refresh routes, the download
+- [x] 6. `GET /system/resources`; the storage figures kept; the firmware's probe
+- [x] 7. The firmware: the `recipe` thread (`Reply::RecipeJob`, `Reply::CatalogueRefresh`); the boot
       load replacing `load_built_in` (`radio_engine.rs:387-389`); `build.rs`'s listing,
       `SCRIPT_FILES`, `load_built_in` and `built_in` removed; the script phase `include_str!`s the
       file
-- [ ] 8. The QEMU step: a file signed at boot with a throwaway key installed through an in-memory
+- [x] 8. The QEMU step: a file signed at boot with a throwaway key installed through an in-memory
       fetcher on the `recipe` thread, loaded again as at boot; `qemu.sh` and `lib/firmware.sh`
       read its `recipe: thread stack` line; `validate.sh` checks the radio image carries no script
-- [ ] 9. The keys: `SOLITE_RECIPE_PUBLIC_KEY` in `firmware/build.rs`, the host, `release.sh`,
+- [x] 9. The keys: `SOLITE_RECIPE_PUBLIC_KEY` in `firmware/build.rs`, the host, `release.sh`,
       `release.yml`, `box-session.sh`; `release.sh` and the workflow refuse without
       `release/recipe-key.pub`; `release/README.md`, `docs/release.md`
-- [ ] 10. The box session: `--recipe-file`, B11 installing or skipping, the F2 group (R7), their
-      tests in `box_session_script.rs`
-- [ ] 11. Interface: the Resources and Recipes cards
-- [ ] 12. Docs: living spec, sowel-subset, D78, memory budget, architecture, roadmap, design system
-- [ ] 13. Box run with the user (R7): the user's real recipe key made and its public half committed
-      before it; the internal RAM minimum read with two recipes and eight instances; the flash
+- [x] 10. The box session: `--recipe-file`, B11 installing or skipping, with their tests in
+      `box_session_script.rs` (the F2 group of R7 is not part of this step: it is built with
+      step 13, with the user)
+- [x] 11. Interface: the Resources and Recipes cards
+- [x] 12. Docs: living spec, sowel-subset, D78, memory budget, architecture, roadmap, design system
+- [ ] 13. Box run with the user (R7): the F2 group of `box-session.sh` and its tests in
+      `box_session_script.rs` built first, with the user; the user's real recipe key made and its
+      public half committed before the run; the internal RAM minimum read with two recipes and eight instances; the flash
       writes counted
 
 ## Test plan

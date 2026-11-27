@@ -70,9 +70,31 @@ fn shim() -> String {
         .replace("@CLOCK_SET@", &CLOCK_SET_AFTER_MS.to_string())
 }
 
-/// The id of a script recipe: 1 to 64 characters among `a-z`, `0-9` and `-`.
-fn valid_id(id: &str) -> bool {
-    (1..=64).contains(&id.len())
+/// The ids no script may have (spec 042 R1.4): `/recipes/store` and `/recipes/install` sit beside
+/// Sowel's `/recipes/:recipeId`.
+pub const RESERVED_IDS: [&str; 2] = ["store", "install"];
+
+/// The longest id of an installed script (R1.4): its file is `scripts/<id>.srs`, and the FAT's
+/// names stay under 64 characters.
+pub const MAX_INSTALLED_ID_CHARS: usize = 32;
+
+/// What a script is held to: the rules of an installed script (spec 042 R1.3, R1.4) are stricter
+/// than those of a script given by `--recipe-script`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rules {
+    /// An id of 1 to 32 characters and a version that is `x.y.z` (three numbers of 0 to 65535).
+    pub installed: bool,
+}
+
+impl Rules {
+    pub const BUILT_IN: Rules = Rules { installed: false };
+    pub const INSTALLED: Rules = Rules { installed: true };
+}
+
+/// The id of a script recipe: 1 to 64 characters among `a-z`, `0-9` and `-`, 1 to 32 when
+/// installed.
+fn valid_id(id: &str, longest: usize) -> bool {
+    (1..=longest).contains(&id.len())
         && id
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -92,6 +114,7 @@ pub fn load(
     source: &str,
     runtimes: &Arc<dyn ScriptRuntimes>,
     clock: &ScriptClock,
+    rules: Rules,
 ) -> Result<(ScriptRecipe, ScriptSummary), String> {
     if source.trim().is_empty() {
         return Err("empty".to_string());
@@ -161,7 +184,7 @@ pub fn load(
     let declared = loaded?;
     let declared: Declared =
         serde_json::from_str(&declared).map_err(|e| format!("bad definition: {e}"))?;
-    let (info, summary_id, version, defs, has_validate) = check(declared)?;
+    let (info, summary_id, version, defs, has_validate) = check(declared, rules)?;
     let runtime_bytes = limits::held(&rt, &held);
     let summary = ScriptSummary {
         id: summary_id,
@@ -193,7 +216,7 @@ type Checked = (
 );
 
 /// Checks what the script declared and builds the `RecipeInfo`.
-fn check(declared: Declared) -> Result<Checked, String> {
+fn check(declared: Declared, rules: Rules) -> Result<Checked, String> {
     match declared.count {
         0 => return Err("no recipe() call".to_string()),
         1 => {}
@@ -202,18 +225,35 @@ fn check(declared: Declared) -> Result<Checked, String> {
     if declared.api.as_ref().and_then(Value::as_u64) != Some(1) {
         return Err("api must be 1".to_string());
     }
+    let longest = if rules.installed {
+        MAX_INSTALLED_ID_CHARS
+    } else {
+        64
+    };
     let id = match declared.id.as_ref().and_then(Value::as_str) {
-        Some(id) if valid_id(id) => id.to_string(),
+        Some(id) if valid_id(id, longest) => id.to_string(),
         _ => {
-            return Err("id must be 1 to 64 characters among a-z, 0-9 and -".to_string());
+            return Err(format!(
+                "id must be 1 to {longest} characters among a-z, 0-9 and -"
+            ));
         }
     };
+    if RESERVED_IDS.contains(&id.as_str()) {
+        return Err(format!("id {id} is reserved"));
+    }
     let name = match declared.name.as_ref().and_then(Value::as_str) {
         Some(name) if !name.is_empty() => name.to_string(),
         _ => return Err("name is required".to_string()),
     };
     let description = text(&declared.description, "description")?.unwrap_or_default();
     let version = text(&declared.version, "version")?;
+    if rules.installed
+        && version
+            .as_deref()
+            .is_none_or(|v| crate::update::Version::parse(v).is_none())
+    {
+        return Err("version must be x.y.z".to_string());
+    }
     let icon = text(&declared.icon, "icon")?;
     if !matches!(
         declared.i18n,

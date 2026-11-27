@@ -43,6 +43,8 @@ pub fn route(
     match (segments, request.method) {
         (["recipes"], "GET") => json(200, &home.recipes().recipe_infos()),
         (["recipes"], _) => method_not_allowed(),
+        (["recipes", "store"], "GET") => json(200, &home.recipe_store()),
+        (["recipes", "store"], _) => method_not_allowed(),
         (["recipes", id], "GET") => match home.recipes().recipe_info(id) {
             Some(info) => json(200, &info),
             None => error(404, "Recipe not found"),
