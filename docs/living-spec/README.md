@@ -1046,7 +1046,7 @@ copy embedded in the radio image at build time.
   first-start screen. `/ws` offers `bearer.none` and `bearer.<access>`; a close 4001 refreshes the
   token and reconnects.
 - **Sidebar**: on a phone, behind the top bar's menu button, in a drawer that closes when a room is
-  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
+  picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, which scrolls alone, then, pinned at the bottom of the column under a line, the Administration section: Devices, Equipments,
   Topology, Discovery, Plugins (with the count of installed recipes the catalogue has newer, as a badge), Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments. The Solite mark is in the sidebar and the drawer, not in the phone's top bar.
 - **Top bar**: on every page of the home, the home's name (the Settings' name, "Home" when none, a
