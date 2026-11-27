@@ -139,7 +139,7 @@ fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
 }
 
 /// The address `0x` and 16 hexadecimal digits, most significant byte first.
-fn parse_eui64(text: &str) -> Option<[u8; 8]> {
+pub(crate) fn parse_eui64(text: &str) -> Option<[u8; 8]> {
     let digits = text.strip_prefix("0x")?;
     if digits.len() != 16 || !digits.is_ascii() {
         return None;
@@ -152,7 +152,7 @@ fn parse_eui64(text: &str) -> Option<[u8; 8]> {
 }
 
 /// Endpoint of a device whose frames have not told it.
-const DEFAULT_ENDPOINT: u8 = 1;
+pub(crate) const DEFAULT_ENDPOINT: u8 = 1;
 
 /// The commands of the devices behind these order bindings (all under `alias`), one per device
 /// that still exists: Sowel sends an order to every binding of the alias, and skips a device that

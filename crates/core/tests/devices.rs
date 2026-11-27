@@ -1606,3 +1606,84 @@ fn seventy_devices_in_the_file_are_cut_to_64_by_from_list() {
     assert_eq!(list.len(), 70);
     assert_eq!(Devices::from_list(list).list().len(), MAX_DEVICES);
 }
+
+// ---- Pings of the quiet mains devices (fix 2026-11-27) ----
+
+/// Devices paired at `T0`: one per (last byte of the address, capability byte).
+fn paired(list: &[(u8, u8)]) -> Devices {
+    let mut devices = Devices::new();
+    // One random source for all: each device gets its own id.
+    let mut random = counter();
+    for (last, capability) in list {
+        let mut address = EUI;
+        address[7] = *last;
+        devices.announced(address, *capability, T0);
+        devices
+            .identified(address, None, Some("ZBMINIR2"), T0, &mut random)
+            .unwrap();
+    }
+    devices
+}
+
+#[test]
+fn a_mains_device_is_pinged_after_nine_minutes_of_silence_then_again_at_its_times() {
+    let mut devices = paired(&[(0x01, 0x8E)]);
+    assert!(devices.due_pings(T0 + 8 * MINUTE).is_empty());
+    let first = devices.due_pings(T0 + 9 * MINUTE);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].eui64[7], 0x01);
+    assert_eq!(first[0].endpoint, 1, "endpoint 1 until a frame tells it");
+    // Not twice in the same turn, nor before the retry.
+    assert!(devices.due_pings(T0 + 9 * MINUTE + 29_000).is_empty());
+    assert_eq!(devices.due_pings(T0 + 9 * MINUTE + 30_000).len(), 1);
+    // After two pings with no answer, one every 10 minutes.
+    assert!(devices.due_pings(T0 + 15 * MINUTE).is_empty());
+    assert_eq!(devices.due_pings(T0 + 19 * MINUTE + 30_000).len(), 1);
+    assert!(devices.due_pings(T0 + 20 * MINUTE).is_empty());
+}
+
+#[test]
+fn a_device_heard_is_pinged_again_only_after_a_new_silence() {
+    let mut address = EUI;
+    address[7] = 0x01;
+    let mut devices = paired(&[(0x01, 0x8E)]);
+    assert_eq!(devices.due_pings(T0 + 9 * MINUTE).len(), 1);
+    devices.seen(Sender::Eui64(address), T0 + 9 * MINUTE + 100);
+    assert_eq!(devices.list()[0].device.status, DeviceStatus::Online);
+    assert!(devices.due_pings(T0 + 17 * MINUTE).is_empty());
+    assert_eq!(devices.due_pings(T0 + 18 * MINUTE + 100).len(), 1);
+}
+
+#[test]
+fn battery_unknown_and_never_heard_devices_are_not_pinged() {
+    // 0x80: battery; no announce: unknown power.
+    let mut devices = paired(&[(0x01, 0x80)]);
+    let mut address = EUI;
+    address[7] = 0x02;
+    devices
+        .identified(address, None, Some("TH01"), T0, &mut counter())
+        .unwrap();
+    assert!(devices.due_pings(T0 + 2 * HOUR).is_empty());
+    let mut list = paired(&[(0x03, 0x8E)]).snapshot();
+    list[0].device.last_seen = None;
+    let mut never = Devices::from_list(list);
+    assert!(never.due_pings(T0 + 2 * HOUR).is_empty());
+}
+
+#[test]
+fn at_most_four_pings_a_second_the_others_a_second_later() {
+    let list: Vec<(u8, u8)> = (1..=6).map(|last| (last, 0x8E)).collect();
+    let mut devices = paired(&list);
+    let at = T0 + 9 * MINUTE;
+    let first = devices.due_pings(at);
+    assert_eq!(first.len(), 4);
+    assert!(
+        devices.due_pings(at + 50).is_empty(),
+        "not in the same second"
+    );
+    let next = devices.due_pings(at + 1000);
+    assert_eq!(next.len(), 2);
+    let mut lasts: Vec<u8> = first.iter().chain(&next).map(|t| t.eui64[7]).collect();
+    lasts.sort_unstable();
+    assert_eq!(lasts, [1, 2, 3, 4, 5, 6]);
+}

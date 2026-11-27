@@ -308,7 +308,12 @@ A paired device becomes a Sowel device (`Device` of Sowel's `types.ts`): `id` (U
 `manufacturer` and `model` as sent, `ieeeAddress` and `sourceDeviceId` (`0x` + 16 lowercase hex
 digits), `source` and `integrationId` `solite`, `zoneId` (`null`; an API client may set it, nothing reads it), `powerSource` (`mains`,
 `battery` or `unknown`, from the device's announce), `status` (`online`; `offline` after 10
-minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message),
+minutes of silence for a mains device, 25 hours otherwise; `unknown` before any message). As
+Zigbee2MQTT's availability does, a mains device silent for 9 minutes is pinged (its Basic
+cluster's ZCL version read), again 30 s later, then every 10 minutes while it stays silent: any
+answer is a message, so a relay that keeps its state (it reports it once an hour at most) stays
+online, and an offline one comes back once it answers; at most 4 pings a second.
+The other fields:
 `lastSeen`, `createdAt`, `updatedAt` (ISO 8601 with milliseconds). A date taken before the box's
 clock is set (the box starts in 1970) is moved forward by the clock's jump when the clock is set
 (`lastSeen`, `createdAt`, `updatedAt`, the data's `lastUpdated` and the `lastChanged` of the

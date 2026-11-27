@@ -13,9 +13,11 @@ use super::model::{
 };
 use crate::home::CLOCK_SET_AFTER_MS;
 use crate::live::{EngineEvent, LiveHandle, Topic};
+use crate::orders::{DEFAULT_ENDPOINT, parse_eui64};
 use crate::radio::measures::Value as MeasureValue;
 use crate::radio::{
-    Activity, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent, RouteUpdate, Sender,
+    Activity, CommandTarget, Enrollment, EnrollmentOutcome, MeasureEvent, PairingEvent,
+    RouteUpdate, Sender,
 };
 
 /// Devices kept; one past it is not added.
@@ -35,6 +37,20 @@ const MAX_DELETED: usize = 16;
 const MAINS_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// A battery device, or one of unknown power, silent this long is offline.
 const BATTERY_TIMEOUT_MS: u64 = 25 * 60 * 60 * 1000;
+/// A mains device silent this long is pinged, a minute before `MAINS_TIMEOUT_MS`: Zigbee2MQTT's
+/// availability pings a mains device before calling it offline, and a relay that keeps its state
+/// reports it once an hour at most (`radio::measures::REPORTING`).
+const PING_AFTER_MS: u64 = MAINS_TIMEOUT_MS - 60 * 1000;
+/// A ping with no answer is sent again this long after, `PINGS_BEFORE_OFFLINE` times in all;
+/// then one every `MAINS_TIMEOUT_MS` while the device stays silent, so it comes back online
+/// once it answers.
+const PING_RETRY_MS: u64 = 30 * 1000;
+const PINGS_BEFORE_OFFLINE: u8 = 2;
+/// Pings handed to the radio at once at most, and the time between two such batches: a turn
+/// of the loop lasts about 50 ms, so after a restart 64 quiet devices are pinged over 16 s, not
+/// in one burst the radio may refuse.
+const MAX_PINGS_PER_BATCH: usize = 4;
+const PING_BATCH_MS: u64 = 1000;
 /// Bit 2 of the announce's capability byte: mains powered.
 const CAPABILITY_MAINS: u8 = 0x04;
 /// The longest device name, in characters.
@@ -86,6 +102,11 @@ pub struct Devices {
     deleted: Vec<Box<str>>,
     /// Where `device.status_changed` goes (spec 013), when the host listens.
     live: Option<LiveHandle>,
+    /// The pings of the mains devices silent since `PING_AFTER_MS`: (device, last ping, pings
+    /// since the device was last heard). At most one per device (`MAX_DEVICES`); in RAM only.
+    pings: Vec<(Id, u64, u8)>,
+    /// When the last batch of pings was handed to the radio.
+    last_ping_batch: Option<u64>,
 }
 
 impl Devices {
@@ -526,6 +547,65 @@ impl Devices {
     fn mark_seen(&mut self, index: usize, now: u64) {
         self.items[index].device.last_seen = Some(now);
         self.values = true;
+        let id = self.items[index].device.id;
+        self.pings.retain(|(p, _, _)| *p != id);
+    }
+
+    /// The mains devices to ping now (Zigbee2MQTT's availability): silent for `PING_AFTER_MS`,
+    /// never pinged since, or last pinged `PING_RETRY_MS` ago (the first `PINGS_BEFORE_OFFLINE`
+    /// pings) or `MAINS_TIMEOUT_MS` ago (the next ones). At most `MAX_PINGS_PER_BATCH`, one
+    /// batch every `PING_BATCH_MS`. A device that answers is heard, which clears its pings; one
+    /// never heard (`lastSeen` null) is not pinged.
+    pub fn due_pings(&mut self, now: u64) -> Vec<CommandTarget> {
+        if self
+            .last_ping_batch
+            .is_some_and(|at| now.saturating_sub(at) < PING_BATCH_MS && now >= at)
+        {
+            return Vec::new();
+        }
+        let ids: Vec<Id> = self.items.iter().map(|d| d.device.id).collect();
+        self.pings.retain(|(id, _, _)| ids.contains(id));
+        let mut due = Vec::new();
+        for item in &self.items {
+            if due.len() >= MAX_PINGS_PER_BATCH {
+                break;
+            }
+            let device = &item.device;
+            let Some(seen) = device.last_seen else {
+                continue;
+            };
+            if device.power_source != PowerSource::Mains || now.saturating_sub(seen) < PING_AFTER_MS
+            {
+                continue;
+            }
+            let Some(eui64) = parse_eui64(&device.source_device_id) else {
+                continue;
+            };
+            match self.pings.iter_mut().find(|(id, _, _)| *id == device.id) {
+                None => self.pings.push((device.id, now, 1)),
+                Some((_, at, count)) => {
+                    let wait = if *count < PINGS_BEFORE_OFFLINE {
+                        PING_RETRY_MS
+                    } else {
+                        MAINS_TIMEOUT_MS
+                    };
+                    if now.saturating_sub(*at) < wait {
+                        continue;
+                    }
+                    *at = now;
+                    *count = count.saturating_add(1);
+                }
+            }
+            due.push(CommandTarget {
+                eui64,
+                nwk: item.route.nwk,
+                endpoint: item.route.endpoint.unwrap_or(DEFAULT_ENDPOINT),
+            });
+        }
+        if !due.is_empty() {
+            self.last_ping_batch = Some(now);
+        }
+        due
     }
 
     /// The device announced itself: its power source, from the capability byte. Remembered for

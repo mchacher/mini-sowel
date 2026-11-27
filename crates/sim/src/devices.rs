@@ -466,6 +466,13 @@ impl SimDevice {
         self
     }
 
+    /// The device is in the network already, as after a restart of the host: it answers what is
+    /// sent to it without joining again.
+    pub fn in_network(mut self) -> Self {
+        self.joined = true;
+        self
+    }
+
     /// The next transaction number of a frame the device sends.
     pub(crate) fn next_tsn(&mut self) -> u8 {
         self.tsn = self.tsn.wrapping_add(1);

@@ -209,6 +209,27 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         Ok(handle)
     }
 
+    /// Pings a device (Zigbee2MQTT's availability): reads its ZCL version (Basic cluster), queued
+    /// with the state reads and sent by the next poll. Any answer is a message from it, so the
+    /// registry hears it; none, and it goes offline at its time. False when no address is known.
+    pub fn ping(&mut self, target: CommandTarget) -> Result<bool, RadioError> {
+        let Some(nwk) = self.command_address(&target)? else {
+            return Ok(false);
+        };
+        // The answer is told apart by its sender's node address, which the registry gave.
+        self.pairing.remember_address(nwk, target.eui64);
+        let mut attributes = [0; MAX_READ_ATTRIBUTES];
+        attributes[0] = zcl::ATTRIBUTE_ZCL_VERSION;
+        self.commands.push_read(StateRead {
+            nwk,
+            endpoint: target.endpoint,
+            cluster: zcl::CLUSTER_BASIC,
+            attributes,
+            count: 1,
+        });
+        Ok(true)
+    }
+
     /// Commands sent and not finished.
     pub fn commands_in_flight(&self) -> usize {
         self.commands.in_flight.len()
