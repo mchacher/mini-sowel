@@ -171,7 +171,7 @@ listed in the plan with its reason.
 - A box holding `motion-light-script` 1.0.0 (F2's file) and `motion-light` 1.1.2: two recipes (the
   limit, `MAX_SCRIPT_RECIPES` = 2); a third install is refused `Too many script recipes (at most
   2)`; the user uninstalls `motion-light-script`.
-- `GET /recipes` empty: the zone page's recipe section shows no recipe and points to the store card
+- `GET /recipes` empty: the zone page's recipe section shows no recipe and points to the Plugins page of Administration
   (UI test).
 - On the Mac, `--recipe-script` and an installed file of the same id: the file refused at boot (R1).
 
