@@ -1,6 +1,9 @@
 //! Reading measures from the standard clusters: bytes in, measures out.
 
-use solite_core::radio::measures::{Measure, REPORTING, Value, cluster_name, decode};
+use solite_core::radio::measures::{
+    Measure, REPORTING, Ratio, Scale, Value, cluster_name, decode, from_records_scaled,
+};
+use solite_core::radio::zcl::AttributeRecord;
 
 const TEMPERATURE: u16 = 0x0402;
 const HUMIDITY: u16 = 0x0405;
@@ -215,8 +218,8 @@ fn the_colour_measures_are_shown_with_their_unit() {
 }
 
 #[test]
-fn the_reporting_setup_has_nine_entries_with_colour_after_level_and_before_power() {
-    assert_eq!(REPORTING.len(), 9);
+fn the_reporting_setup_has_eleven_entries_with_colour_after_level_and_before_power() {
+    assert_eq!(REPORTING.len(), 11);
     let clusters: Vec<u16> = REPORTING.iter().map(|r| r.cluster).collect();
     let position = |cluster| clusters.iter().position(|c| *c == cluster).unwrap();
     assert_eq!(position(COLOR), position(LEVEL) + 1);
@@ -228,4 +231,193 @@ fn the_reporting_setup_has_nine_entries_with_colour_after_level_and_before_power
         .collect();
     assert_eq!(attributes, vec![0x0007, 0x0003, 0x0004]);
     assert_eq!(cluster_name(COLOR), "light_color");
+}
+
+// Spec 048: power, energy and current, with the scale of the device.
+
+const ELECTRICAL: u16 = 0x0B04;
+const METERING: u16 = 0x0702;
+
+fn record(attribute: u16, data_type: u8, value: &[u8]) -> AttributeRecord {
+    AttributeRecord {
+        attribute,
+        data_type,
+        value: value.to_vec(),
+    }
+}
+
+fn ratio(multiplier: u32, divisor: u32) -> Ratio {
+    Ratio {
+        multiplier,
+        divisor,
+    }
+}
+
+fn electrical(power: Ratio, current: Ratio) -> Scale {
+    Scale {
+        electrical: Some((power, current)),
+        metering: None,
+    }
+}
+
+fn metering(ratio: Ratio) -> Scale {
+    Scale {
+        electrical: None,
+        metering: Some(ratio),
+    }
+}
+
+/// The only measure of the records, as (name, number, unit).
+fn scaled(
+    cluster: u16,
+    records: &[AttributeRecord],
+    scale: &Scale,
+) -> (&'static str, f64, &'static str) {
+    let (measures, missing) = from_records_scaled(cluster, records, scale);
+    assert!(!missing);
+    assert_eq!(measures.len(), 1, "{measures:?}");
+    number(Some(measures[0]))
+}
+
+#[test]
+fn active_power_1234_with_divisor_10_is_123_w() {
+    let records = [record(0x050B, 0x29, &1234i16.to_le_bytes())];
+    let scale = electrical(ratio(1, 10), ratio(1, 1));
+    assert_eq!(scaled(ELECTRICAL, &records, &scale), ("power", 123.0, "W"));
+}
+
+#[test]
+fn a_negative_active_power_is_kept() {
+    let records = [record(0x050B, 0x29, &(-500i16).to_le_bytes())];
+    let scale = electrical(ratio(1, 10), ratio(1, 1));
+    assert_eq!(scaled(ELECTRICAL, &records, &scale), ("power", -50.0, "W"));
+}
+
+#[test]
+fn rms_current_523_with_divisor_1000_is_0_52_a() {
+    let records = [record(0x0508, 0x21, &523u16.to_le_bytes())];
+    let scale = electrical(ratio(1, 1), ratio(1, 1000));
+    assert_eq!(scaled(ELECTRICAL, &records, &scale), ("current", 0.52, "A"));
+}
+
+#[test]
+fn summation_123456_with_divisor_1000_is_123_46_kwh() {
+    let records = [record(0x0000, 0x25, &123_456u64.to_le_bytes()[..6])];
+    let scale = metering(ratio(1, 1000));
+    assert_eq!(
+        scaled(METERING, &records, &scale),
+        ("energy", 123.46, "kWh")
+    );
+}
+
+#[test]
+fn instantaneous_demand_of_a_metering_only_plug_is_power_in_w() {
+    // 1500 with divisor 1000: 1.5 kW.
+    let records = [record(0x0400, 0x2A, &[0xDC, 0x05, 0x00])];
+    let scale = metering(ratio(1, 1000));
+    assert_eq!(scaled(METERING, &records, &scale), ("power", 1500.0, "W"));
+}
+
+#[test]
+fn the_demand_is_left_out_when_the_device_has_electrical_measurement() {
+    let records = [record(0x0400, 0x2A, &[0xDC, 0x05, 0x00])];
+    let scale = Scale {
+        electrical: Some((ratio(1, 1), ratio(1, 1))),
+        metering: Some(ratio(1, 1000)),
+    };
+    let (measures, missing) = from_records_scaled(METERING, &records, &scale);
+    assert!(measures.is_empty() && !missing);
+}
+
+#[test]
+fn a_report_before_the_scale_is_known_publishes_nothing_and_asks_for_it() {
+    let records = [
+        record(0x050B, 0x29, &1234i16.to_le_bytes()),
+        record(0x0508, 0x21, &523u16.to_le_bytes()),
+    ];
+    let (measures, missing) = from_records_scaled(ELECTRICAL, &records, &Scale::default());
+    assert!(measures.is_empty());
+    assert!(missing);
+    let energy = [record(0x0000, 0x25, &1u64.to_le_bytes()[..6])];
+    let (measures, missing) = from_records_scaled(METERING, &energy, &Scale::default());
+    assert!(measures.is_empty() && missing);
+}
+
+#[test]
+fn a_divisor_of_zero_or_absent_counts_as_one() {
+    // Read answer with a divisor of 0 and a multiplier absent for the power, nothing for the
+    // current.
+    let mut scale = Scale::default();
+    scale.absorb(
+        ELECTRICAL,
+        &[record(0x0605, 0x21, &0u16.to_le_bytes())],
+        true,
+    );
+    assert_eq!(scale.electrical, Some((ratio(1, 1), ratio(1, 1))));
+    let records = [record(0x050B, 0x29, &1234i16.to_le_bytes())];
+    assert_eq!(scaled(ELECTRICAL, &records, &scale), ("power", 1234.0, "W"));
+    // The answer is an answer even with no attribute at all (all unsupported).
+    let mut metering_scale = Scale::default();
+    metering_scale.absorb(METERING, &[], true);
+    assert_eq!(metering_scale.metering, Some(ratio(1, 1)));
+}
+
+#[test]
+fn the_scale_is_read_from_an_answer_and_a_report_only_updates_a_known_one() {
+    let mut scale = Scale::default();
+    // A report of the scale attributes before any answer is not taken.
+    scale.absorb(
+        ELECTRICAL,
+        &[record(0x0605, 0x21, &10u16.to_le_bytes())],
+        false,
+    );
+    assert_eq!(scale.electrical, None);
+    scale.absorb(
+        METERING,
+        &[
+            record(0x0301, 0x22, &[2, 0, 0]),
+            record(0x0302, 0x22, &[0xE8, 0x03, 0]),
+        ],
+        true,
+    );
+    assert_eq!(scale.metering, Some(ratio(2, 1000)));
+    scale.absorb(METERING, &[record(0x0302, 0x22, &[100, 0, 0])], false);
+    assert_eq!(scale.metering, Some(ratio(2, 100)));
+}
+
+#[test]
+fn the_electrical_clusters_set_up_their_reporting_as_the_spec_says() {
+    let find = |cluster| REPORTING.iter().find(|r| r.cluster == cluster).unwrap();
+    let electrical = find(ELECTRICAL);
+    let attributes: Vec<_> = electrical
+        .attributes
+        .iter()
+        .map(|a| (a.attribute, a.min_interval, a.max_interval, a.change))
+        .collect();
+    assert_eq!(
+        attributes,
+        vec![(0x050B, 10, 300, Some(1)), (0x0508, 10, 300, Some(1))]
+    );
+    let summation = &find(METERING).attributes[0];
+    assert_eq!(
+        (
+            summation.attribute,
+            summation.min_interval,
+            summation.max_interval
+        ),
+        (0x0000, 60, 600)
+    );
+}
+
+#[test]
+fn a_metering_plug_is_asked_to_report_its_demand_as_int24() {
+    // Without it, a plug with Metering only would never send its power (spec 048 R1, R3).
+    let metering = solite_core::radio::measures::reporting_cluster(0x0702).expect("metering");
+    let demand = metering
+        .attributes
+        .iter()
+        .find(|r| r.attribute == 0x0400)
+        .expect("InstantaneousDemand is configured");
+    assert_eq!(demand.data_type, 0x2A, "int24 is 0x2A in the ZCL");
+    assert!(metering.attributes.iter().any(|r| r.attribute == 0x0000));
 }

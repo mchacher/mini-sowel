@@ -19,6 +19,8 @@ const TYPE_BITMAP16: u8 = 0x19;
 const TYPE_UINT8: u8 = 0x20;
 const TYPE_UINT16: u8 = 0x21;
 const TYPE_INT16: u8 = 0x29;
+const TYPE_UINT48: u8 = 0x25;
+const TYPE_INT24: u8 = 0x2A; // ZCL: int8 0x28, int16 0x29, int24 0x2A, int32 0x2B
 
 const CLUSTER_POWER: u16 = 0x0001;
 const CLUSTER_ON_OFF: u16 = 0x0006;
@@ -29,6 +31,111 @@ const CLUSTER_PRESSURE: u16 = 0x0403;
 const CLUSTER_TEMPERATURE: u16 = 0x0402;
 const CLUSTER_HUMIDITY: u16 = 0x0405;
 const CLUSTER_OCCUPANCY: u16 = 0x0406;
+/// Metering (energy, demand).
+pub const CLUSTER_METERING: u16 = 0x0702;
+/// Electrical Measurement (active power, current).
+pub const CLUSTER_ELECTRICAL: u16 = 0x0B04;
+
+const ATTR_RMS_CURRENT: u16 = 0x0508;
+const ATTR_ACTIVE_POWER: u16 = 0x050B;
+const ATTR_AC_CURRENT_MULTIPLIER: u16 = 0x0602;
+const ATTR_AC_CURRENT_DIVISOR: u16 = 0x0603;
+const ATTR_AC_POWER_MULTIPLIER: u16 = 0x0604;
+const ATTR_AC_POWER_DIVISOR: u16 = 0x0605;
+const ATTR_SUMMATION_DELIVERED: u16 = 0x0000;
+const ATTR_SUMMATION_MULTIPLIER: u16 = 0x0301;
+const ATTR_SUMMATION_DIVISOR: u16 = 0x0302;
+const ATTR_INSTANTANEOUS_DEMAND: u16 = 0x0400;
+
+/// The attributes to read to know the scale of a cluster (`None`: the cluster has none). At most
+/// four, the size of one state read.
+pub fn scale_attributes(cluster: u16) -> Option<&'static [u16]> {
+    match cluster {
+        CLUSTER_ELECTRICAL => Some(&[
+            ATTR_AC_POWER_MULTIPLIER,
+            ATTR_AC_POWER_DIVISOR,
+            ATTR_AC_CURRENT_MULTIPLIER,
+            ATTR_AC_CURRENT_DIVISOR,
+        ]),
+        CLUSTER_METERING => Some(&[ATTR_SUMMATION_MULTIPLIER, ATTR_SUMMATION_DIVISOR]),
+        _ => None,
+    }
+}
+
+/// A multiplier and a divisor, each at least 1 (a divisor of 0 or absent counts as 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Ratio {
+    pub multiplier: u32,
+    pub divisor: u32,
+}
+
+impl Ratio {
+    const ONE: Ratio = Ratio {
+        multiplier: 1,
+        divisor: 1,
+    };
+
+    fn apply(self, raw: f64) -> f64 {
+        raw * f64::from(self.multiplier) / f64::from(self.divisor)
+    }
+}
+
+/// The scales of one device (spec 048): two ratios for Electrical Measurement, one for Metering.
+/// A cluster's scale is `None` until it is read: its values are not published before.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Scale {
+    /// (power, current).
+    pub electrical: Option<(Ratio, Ratio)>,
+    pub metering: Option<Ratio>,
+}
+
+/// The unsigned value of a 1 to 4 byte attribute (the types of the scale attributes).
+fn unsigned(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 4 {
+        return None;
+    }
+    Some(
+        bytes
+            .iter()
+            .rev()
+            .fold(0u32, |a, b| (a << 8) | u32::from(*b)),
+    )
+}
+
+impl Scale {
+    /// Takes the scale attributes of `records` of a cluster. `answered`: the records are a Read
+    /// Attributes Response, so the scale is known even when it carries none of them (absent
+    /// attributes count as 1); a report only updates a scale already known.
+    pub fn absorb(&mut self, cluster: u16, records: &[AttributeRecord], answered: bool) {
+        let get = |attribute: u16| {
+            records
+                .iter()
+                .find(|r| r.attribute == attribute)
+                .and_then(|r| unsigned(&r.value))
+        };
+        let ratio = |old: Ratio, multiplier: u16, divisor: u16| Ratio {
+            multiplier: get(multiplier).filter(|m| *m > 0).unwrap_or(old.multiplier),
+            divisor: get(divisor).filter(|d| *d > 0).unwrap_or(old.divisor),
+        };
+        match cluster {
+            CLUSTER_ELECTRICAL if answered || self.electrical.is_some() => {
+                let (power, current) = self.electrical.unwrap_or((Ratio::ONE, Ratio::ONE));
+                self.electrical = Some((
+                    ratio(power, ATTR_AC_POWER_MULTIPLIER, ATTR_AC_POWER_DIVISOR),
+                    ratio(current, ATTR_AC_CURRENT_MULTIPLIER, ATTR_AC_CURRENT_DIVISOR),
+                ));
+            }
+            CLUSTER_METERING if answered || self.metering.is_some() => {
+                self.metering = Some(ratio(
+                    self.metering.unwrap_or(Ratio::ONE),
+                    ATTR_SUMMATION_MULTIPLIER,
+                    ATTR_SUMMATION_DIVISOR,
+                ));
+            }
+            _ => {}
+        }
+    }
+}
 
 /// What a measure is worth.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -192,6 +299,83 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
     }
 }
 
+/// A measure of the electrical clusters, with the device's scale; `Err(())` when the scale of the
+/// cluster is not known yet (the value is dropped, the next report carries it), `Ok(None)` for
+/// anything else that is no measure.
+fn decode_scaled(
+    cluster: u16,
+    record: &AttributeRecord,
+    scale: &Scale,
+) -> Result<Option<Measure>, ()> {
+    let bytes = record.value.as_slice();
+    let signed = |width: usize| -> Option<i64> {
+        let raw = i64::from(unsigned(bytes.get(..width)?)?);
+        let bits = width * 8;
+        Some(if raw >> (bits - 1) != 0 {
+            raw - (1 << bits)
+        } else {
+            raw
+        })
+    };
+    Ok(match (cluster, record.attribute, record.data_type) {
+        (CLUSTER_ELECTRICAL, ATTR_ACTIVE_POWER, TYPE_INT16) => {
+            let (power, _) = scale.electrical.ok_or(())?;
+            signed(2)
+                .filter(|raw| *raw != i64::from(i16::MIN))
+                .and_then(|raw| number("power", power.apply(raw as f64).round(), "W"))
+        }
+        (CLUSTER_ELECTRICAL, ATTR_RMS_CURRENT, TYPE_UINT16) => {
+            let (_, current) = scale.electrical.ok_or(())?;
+            bytes
+                .get(..2)
+                .and_then(unsigned)
+                .filter(|raw| *raw != u32::from(u16::MAX))
+                .and_then(|raw| number("current", round2(current.apply(f64::from(raw))), "A"))
+        }
+        (CLUSTER_METERING, ATTR_SUMMATION_DELIVERED, TYPE_UINT48) => {
+            let ratio = scale.metering.ok_or(())?;
+            let raw = bytes
+                .get(..6)
+                .map(|b| b.iter().rev().fold(0u64, |a, x| (a << 8) | u64::from(*x)));
+            raw.and_then(|raw| number("energy", round2(ratio.apply(raw as f64)), "kWh"))
+        }
+        // kW times the ratio, shown in W; not read when the device has Electrical Measurement.
+        (CLUSTER_METERING, ATTR_INSTANTANEOUS_DEMAND, TYPE_INT24) if scale.electrical.is_none() => {
+            let ratio = scale.metering.ok_or(())?;
+            signed(3)
+                .and_then(|raw| number("power", (ratio.apply(raw as f64) * 1000.0).round(), "W"))
+        }
+        _ => None,
+    })
+}
+
+fn round2(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+/// The measures of the electrical clusters (`0x0B04`, `0x0702`) of one frame, with the device's
+/// scale, and whether a value was dropped because its scale is not known yet (the caller then
+/// reads the scale). At most `MAX_MEASURES_PER_FRAME`.
+pub fn from_records_scaled(
+    cluster: u16,
+    records: &[AttributeRecord],
+    scale: &Scale,
+) -> (Vec<Measure>, bool) {
+    let mut missing = false;
+    let measures = records
+        .iter()
+        .filter_map(|r| match decode_scaled(cluster, r, scale) {
+            Ok(measure) => measure,
+            Err(()) => {
+                missing = true;
+                None
+            }
+        })
+        .take(MAX_MEASURES_PER_FRAME)
+        .collect();
+    (measures, missing)
+}
+
 /// The measures of the records of one frame, for the cluster it came on: at most
 /// `MAX_MEASURES_PER_FRAME`. The zone status attribute of the IAS Zone cluster, which some
 /// devices report instead of sending notifications, reads as a notification does.
@@ -252,9 +436,9 @@ const fn record(
 }
 
 /// The clusters set up on pairing, in the order they are set up: a sleepy device is awake for a
-/// few seconds only, so the measures that matter most come first. Nine entries: the bound of
+/// few seconds only, so the measures that matter most come first. Eleven entries: the bound of
 /// the setup's work per device.
-pub const REPORTING: [ReportingCluster; 9] = [
+pub const REPORTING: [ReportingCluster; 11] = [
     ReportingCluster {
         cluster: CLUSTER_TEMPERATURE,
         name: "temperature",
@@ -305,6 +489,24 @@ pub const REPORTING: [ReportingCluster; 9] = [
         attributes: &[
             record(0x0021, TYPE_UINT8, 3600, 62_000, Some(2)),
             record(0x0020, TYPE_UINT8, 3600, 62_000, Some(1)),
+        ],
+    },
+    ReportingCluster {
+        cluster: CLUSTER_ELECTRICAL,
+        name: "power",
+        attributes: &[
+            record(ATTR_ACTIVE_POWER, TYPE_INT16, 10, 300, Some(1)),
+            record(ATTR_RMS_CURRENT, TYPE_UINT16, 10, 300, Some(1)),
+        ],
+    },
+    ReportingCluster {
+        cluster: CLUSTER_METERING,
+        name: "energy",
+        attributes: &[
+            record(ATTR_SUMMATION_DELIVERED, TYPE_UINT48, 60, 600, Some(1)),
+            // The power of a plug with Metering only (spec 048 R1); a plug with Electrical
+            // Measurement takes its power from `0x0B04` and this one is not published.
+            record(ATTR_INSTANTANEOUS_DEMAND, TYPE_INT24, 10, 300, Some(1)),
         ],
     },
 ];

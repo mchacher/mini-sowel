@@ -264,3 +264,45 @@ fn the_shipped_color_light_scenario_shows_its_reporting_and_its_colour() {
         "{lines:?}"
     );
 }
+
+#[test]
+fn a_plug_is_a_test_plg01_mains_device_with_the_electrical_clusters() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scenarios/plug.json"
+    ))
+    .unwrap();
+    let mut s = sim(&text, None, 1);
+    s.start().unwrap();
+    {
+        let ncp = s.ncp.borrow();
+        assert!(ncp.devices[0].input_clusters.contains(&0x0B04));
+        assert!(ncp.devices[0].input_clusters.contains(&0x0702));
+        assert_eq!(ncp.devices[0].capability, 0x8C, "mains powered");
+    }
+    let events = s.pair(30);
+    assert_eq!(
+        identified(&events),
+        vec![(Some("TEST".to_string()), Some("PLG01".to_string()))]
+    );
+}
+
+#[test]
+fn the_shipped_plug_scenario_gives_power_current_and_energy_with_the_scale_applied() {
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scenarios/plug.json"
+    ))
+    .unwrap();
+    let mut s = sim(&text, None, 1);
+    s.start().unwrap();
+    let events = s.pair(150);
+    let lines = measure_lines(&events);
+    let has = |end: &str| lines.iter().any(|l| l.ends_with(end));
+    // 1205 tenths of a watt, 520 mA, 12340 Wh.
+    assert!(has("power 121 W"), "{lines:?}");
+    assert!(has("current 0.52 A"), "{lines:?}");
+    assert!(has("energy 12.34 kWh"), "{lines:?}");
+    assert!(has("power 1150 W"), "{lines:?}");
+    assert!(has("current 5.02 A"), "{lines:?}");
+}

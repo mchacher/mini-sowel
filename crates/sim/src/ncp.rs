@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use solite_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
-    AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, SimDevice,
-    battery_report, color_raw, color_temp_report, color_xy_report, humidity_report, level_report,
-    on_off_report, temperature_report, zone_notification,
+    AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, PLUG_SCALE,
+    SimDevice, battery_report, color_raw, color_temp_report, color_xy_report, electrical_report,
+    humidity_report, level_report, metering_report, on_off_report, temperature_report,
+    zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -445,6 +446,19 @@ impl Ncp {
                     let tsn = device.next_tsn();
                     frames.push((0x0300, color_xy_report(tsn, device.color_x, device.color_y)));
                 }
+            }
+            if (report.power.is_some() || report.current.is_some())
+                && (device.reports_attribute(0x0B04, 0x050B)
+                    || device.reports_attribute(0x0B04, 0x0508))
+            {
+                let tsn = device.next_tsn();
+                frames.push((0x0B04, electrical_report(tsn, report.power, report.current)));
+            }
+            if let Some(energy) = report.energy
+                && device.reports_attribute(0x0702, 0x0000)
+            {
+                let tsn = device.next_tsn();
+                frames.push((0x0702, metering_report(tsn, energy)));
             }
             if let Some(alarm) = report.motion
                 && device.enrolled
@@ -1073,9 +1087,12 @@ impl Ncp {
                 self.dirty = true;
             }
         } else if sent.profile == 0x0104
-            && matches!(device.kind, Kind::Relay | Kind::Dimmer | Kind::ColorLight)
+            && matches!(
+                device.kind,
+                Kind::Relay | Kind::Dimmer | Kind::ColorLight | Kind::Plug
+            )
             && device.input_clusters.contains(&sent.cluster)
-            && matches!(sent.cluster, 0x0006 | 0x0008 | 0x0300)
+            && matches!(sent.cluster, 0x0006 | 0x0008 | 0x0300 | 0x0702 | 0x0B04)
             && match control & 0x03 {
                 // On/Off: Off (0), On (1), Toggle (2); Level Control: Move to Level with On/Off;
                 // Color Control: Move to Hue and Saturation (6), Move to Color (7), Move to Color
@@ -1127,6 +1144,26 @@ impl Ncp {
                         }
                         (0x0300, 0x0001) => {
                             frame.extend_from_slice(&[0x00, 0x20, device.saturation]);
+                        }
+                        // The scale of a plug (spec 048).
+                        (0x0B04, 0x0602..=0x0605) => {
+                            let value = match attribute {
+                                0x0602 => PLUG_SCALE.2,
+                                0x0603 => PLUG_SCALE.3,
+                                0x0604 => PLUG_SCALE.0,
+                                _ => PLUG_SCALE.1,
+                            };
+                            frame.extend_from_slice(&[0x00, 0x21]);
+                            frame.extend_from_slice(&value.to_le_bytes());
+                        }
+                        (0x0702, 0x0301 | 0x0302) => {
+                            let value = if attribute == 0x0301 {
+                                PLUG_SCALE.4
+                            } else {
+                                PLUG_SCALE.5
+                            };
+                            frame.extend_from_slice(&[0x00, 0x22]);
+                            frame.extend_from_slice(&value.to_le_bytes()[..3]);
                         }
                         _ => frame.push(0x86),
                     }
@@ -1575,6 +1612,7 @@ fn configured_attributes(mut records: &[u8]) -> Vec<u16> {
         let change = match records[3] {
             0x20 => 1,
             0x21 | 0x29 => 2,
+            0x25 => 6,
             _ => 0,
         };
         records = records.get(8 + change..).unwrap_or(&[]);

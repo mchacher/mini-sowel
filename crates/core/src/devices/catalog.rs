@@ -76,6 +76,9 @@ const COLOR: DataSpec = DataSpec {
 };
 const BATTERY: DataSpec = number("battery", "battery", Some("%"));
 const VOLTAGE: DataSpec = number("voltage", "voltage", Some("mV"));
+const POWER: DataSpec = number("power", "power", Some("W"));
+const ENERGY: DataSpec = number("energy", "energy", Some("kWh"));
+const CURRENT: DataSpec = number("current", "current", Some("A"));
 
 const STATE_ORDER: OrderSpec = OrderSpec {
     key: "state",
@@ -126,6 +129,9 @@ pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
         0x0008 => &[BRIGHTNESS],
         0x0300 => &[COLOR_TEMP, COLOR],
         0x0001 => &[BATTERY, VOLTAGE],
+        // A device with both clusters gets one `power` (the registry keeps the first of a key).
+        0x0B04 => &[POWER, CURRENT],
+        0x0702 => &[POWER, ENERGY],
         _ => &[],
     }
 }
@@ -201,6 +207,9 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
         "light_color_temp" => "color_temp",
         "battery" => "battery",
         "voltage" => "voltage",
+        "power" => "power",
+        "energy" => "energy",
+        "current" => "current",
         "tamper" => "tamper",
         "battery_low" => "battery_low",
         _ => return None,
@@ -209,7 +218,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
 
 /// Where a data key comes in the table of spec 008 (R2): the order data are listed in.
 pub fn data_rank(key: &str) -> usize {
-    const ORDER: [&str; 16] = [
+    const ORDER: [&str; 19] = [
         "temperature",
         "humidity",
         "pressure",
@@ -224,6 +233,9 @@ pub fn data_rank(key: &str) -> usize {
         "color",
         "battery",
         "voltage",
+        "power",
+        "energy",
+        "current",
         "tamper",
         "battery_low",
     ];
@@ -263,6 +275,9 @@ static WORDS: &[&str] = &[
     "color",
     "battery",
     "voltage",
+    "power",
+    "energy",
+    "current",
     // Data categories.
     "luminosity",
     "motion",
@@ -279,6 +294,9 @@ static WORDS: &[&str] = &[
     "lx",
     "mired",
     "mV",
+    "W",
+    "kWh",
+    "A",
     // Order categories.
     "light_toggle",
     "set_brightness",
