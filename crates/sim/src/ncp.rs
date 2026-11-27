@@ -8,9 +8,9 @@ use solite_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, PLUG_SCALE,
-    SimDevice, battery_report, color_raw, color_temp_report, color_xy_report, electrical_report,
-    humidity_report, level_report, metering_report, on_off_report, temperature_report,
-    zone_notification,
+    SimDevice, battery_report, button_command, color_raw, color_temp_report, color_xy_report,
+    electrical_report, humidity_report, level_report, metering_report, on_off_report,
+    temperature_report, zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -445,6 +445,14 @@ impl Ncp {
                 {
                     let tsn = device.next_tsn();
                     frames.push((0x0300, color_xy_report(tsn, device.color_x, device.color_y)));
+                }
+            }
+            if let Some(name) = &report.action
+                && device.bound
+            {
+                let tsn = device.next_tsn();
+                if let Some((cluster, frame)) = button_command(tsn, name) {
+                    frames.push((cluster, frame));
                 }
             }
             if (report.power.is_some() || report.current.is_some())
@@ -972,8 +980,15 @@ impl Ncp {
             for cluster in &device.input_clusters {
                 descriptor.extend_from_slice(&cluster.to_le_bytes());
             }
-            descriptor.push(1);
-            descriptor.extend_from_slice(&0x0019u16.to_le_bytes());
+            if device.output_clusters.is_empty() {
+                descriptor.push(1);
+                descriptor.extend_from_slice(&0x0019u16.to_le_bytes());
+            } else {
+                descriptor.push(device.output_clusters.len() as u8);
+                for cluster in &device.output_clusters {
+                    descriptor.extend_from_slice(&cluster.to_le_bytes());
+                }
+            }
             let mut payload = vec![tsn, 0x00];
             payload.extend_from_slice(&device.nwk.to_le_bytes());
             payload.push(descriptor.len() as u8);

@@ -2343,6 +2343,74 @@ fn a_move_to_color_acknowledged_is_read_back_in_one_request_and_gives_one_colour
     );
 }
 
+// ---- A remote's commands (spec 049) ----
+
+use solite_core::radio::measures::REMOTE_ACTION;
+use solite_sim::DeviceReport;
+
+fn remote() -> SimDevice {
+    let mut device = SimDevice::of_kind(
+        Kind::Button,
+        [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
+        None,
+        None,
+    );
+    device.nwk = 0x5C3D;
+    device.auto_join = true;
+    device.sleepy_ms = None;
+    device
+}
+
+#[test]
+fn a_remotes_output_clusters_are_bound_and_never_configured() {
+    let (h, events) = paired(remote());
+    // Its battery (an input cluster, configured), then On/Off and Level, bound only; its data
+    // are the battery's and its `action`.
+    assert_eq!(bound_clusters(&h), vec![POWER, 0x0006, 0x0008]);
+    assert_eq!(
+        reporting(&events),
+        vec![(vec![POWER, REMOTE_ACTION], vec![], false)]
+    );
+    assert!(sends_on(&h, 0x0104, 0x0006).is_empty());
+    assert!(sends_on(&h, 0x0104, 0x0008).is_empty());
+}
+
+#[test]
+fn a_light_that_also_sends_commands_has_its_output_clusters_left_unbound() {
+    let mut device = remote();
+    device.input_clusters = vec![0x0000, 0x0003, 0x0006];
+    device.output_clusters = vec![0x0006, 0x0008];
+    let (h, events) = paired(device);
+    // Its input On/Off is set up as a light's; its outputs are not bound.
+    assert_eq!(bound_clusters(&h), vec![0x0006]);
+    assert_eq!(reporting(&events), vec![(vec![0x0006], vec![], false)]);
+}
+
+#[test]
+fn a_remotes_presses_are_two_measure_events_when_equal_and_get_a_default_response() {
+    let (mut h, _) = paired(remote());
+    for _ in 0..2 {
+        let sent = h.ncp.borrow_mut().device_report(
+            0,
+            &DeviceReport {
+                action: Some("toggle".to_string()),
+                ..DeviceReport::default()
+            },
+        );
+        assert!(sent);
+    }
+    let events = poll_for(&mut h, 2_000);
+    let actions: Vec<String> = measure_events(&events)
+        .iter()
+        .flat_map(|e| e.measures.iter().map(ToString::to_string))
+        .collect();
+    assert_eq!(actions, vec!["action toggle", "action toggle"]);
+    // The frames asked for a Default Response (command 0x0B), sent on the cluster they came on.
+    let answers = sends_on(&h, 0x0104, 0x0006);
+    assert_eq!(answers.len(), 2);
+    assert!(answers.iter().all(|m| m.message[2] == 0x0B));
+}
+
 // Spec 048: the scale of the electrical clusters.
 
 fn plug() -> SimDevice {

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::devices::{DeviceReport, Kind};
+use crate::devices::{DeviceReport, Kind, button_command};
 use crate::ncp::MAX_DEVICES;
 
 /// The largest scenario file, in bytes (checked before it is read).
@@ -113,6 +113,8 @@ struct RawEvent {
     light_state: Option<Value>,
     color_temp: Option<Value>,
     color: Option<Value>,
+    #[serde(rename = "action")]
+    press: Option<Value>,
     power: Option<Value>,
     current: Option<Value>,
     energy: Option<Value>,
@@ -287,7 +289,7 @@ fn devices_of(values: Vec<Value>) -> Result<Vec<DeviceSpec>, String> {
         let kind_text = required_text(spec.kind, &format!("{prefix}kind"))?;
         let kind = Kind::from_name(&kind_text).ok_or_else(|| {
             format!(
-                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light or plug)"
+                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light, button or plug)"
             )
         })?;
         let eui_path = format!("{prefix}eui64");
@@ -317,6 +319,7 @@ fn allows(kind: Kind, field: &str) -> bool {
         Kind::Relay | Kind::Dimmer => field == "light_state",
         Kind::Plug => matches!(field, "light_state" | "power" | "current" | "energy"),
         Kind::ColorLight => matches!(field, "light_state" | "color_temp" | "color"),
+        Kind::Button => field == "action",
     }
 }
 
@@ -369,6 +372,7 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
         ("light_state", spec.light_state),
         ("color_temp", spec.color_temp),
         ("color", spec.color),
+        ("action", spec.press),
         ("power", spec.power),
         ("current", spec.current),
         ("energy", spec.energy),
@@ -426,6 +430,19 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
                         );
                     }
                     "color" => report.color = Some(color_of(&value, &path)?),
+                    "action" => {
+                        report.action = Some(
+                            value
+                                .as_str()
+                                .filter(|name| button_command(0, name).is_some())
+                                .map(str::to_string)
+                                .ok_or_else(|| {
+                                    format!(
+                                        "{path}: must be on, off, toggle, brightness_move_up or brightness_move_down"
+                                    )
+                                })?,
+                        );
+                    }
                     "power" => report.power = Some(number_in(&value, -3000.0, 3000.0, &path)?),
                     "current" => report.current = Some(number_in(&value, 0.0, 60.0, &path)?),
                     "energy" => report.energy = Some(number_in(&value, 0.0, 1_000_000.0, &path)?),

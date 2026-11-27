@@ -173,6 +173,26 @@ impl Rig {
         self.device(last)
     }
 
+    /// A remote (a button), battery powered, with its `action` data (spec 049).
+    pub fn remote(&mut self, last: u8) -> String {
+        let e = eui(last);
+        self.home.devices.announced(e, 0x80, self.now);
+        self.home
+            .devices
+            .identified(e, Some("TEST"), Some("BTN01"), self.now, &mut *self.random)
+            .unwrap();
+        self.home
+            .devices
+            .reporting_configured(
+                e,
+                &[solite_core::radio::measures::REMOTE_ACTION],
+                self.now,
+                &mut *self.random,
+            )
+            .unwrap();
+        self.device(last)
+    }
+
     /// An occupancy sensor, battery powered.
     pub fn motion_sensor(&mut self, last: u8) -> String {
         let e = eui(last);
@@ -248,6 +268,11 @@ fn event(last: u8, kind: &'static str, value: Value, unit: &'static str) -> Meas
             device_value: None,
         }],
     }
+}
+
+/// A remote's command received.
+pub fn action(last: u8, command: solite_core::radio::zcl::Action) -> MeasureEvent {
+    event(last, "action", Value::Action(command), "")
 }
 
 pub fn luminosity(last: u8, value: f64) -> MeasureEvent {

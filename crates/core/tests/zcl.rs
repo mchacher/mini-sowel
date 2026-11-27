@@ -89,7 +89,7 @@ fn temperatures(frame: &[u8]) -> Vec<f64> {
         .into_iter()
         .map(|m| match m.value {
             Value::Number(n) => n,
-            Value::Bool(_) => panic!("{m:?}"),
+            Value::Bool(_) | Value::Action(_) => panic!("{m:?}"),
         })
         .collect()
 }
@@ -373,10 +373,15 @@ fn the_default_response_status_follows_the_kind_of_command() {
         default_response(0x0000, &[0x00, 0x21, 0x00, 0x00, 0x00]),
         Some(vec![0x18, 0x21, 0x0B, 0x00, 0x82])
     );
-    // A cluster-specific command sent to us (a toggle of the on/off cluster).
+    // A cluster-specific command sent to us that the coordinator does not decode (on/off 0x41).
+    assert_eq!(
+        default_response(0x0006, &[0x01, 0x22, 0x41]),
+        Some(vec![0x18, 0x22, 0x0B, 0x41, 0x81])
+    );
+    // A remote's toggle, decoded into `action` (spec 049): success.
     assert_eq!(
         default_response(0x0006, &[0x01, 0x22, 0x02]),
-        Some(vec![0x18, 0x22, 0x0B, 0x02, 0x81])
+        Some(vec![0x18, 0x22, 0x0B, 0x02, 0x00])
     );
     // A cluster-specific notification from the device: success.
     assert_eq!(
@@ -602,4 +607,101 @@ fn move_to_hue_and_saturation_is_01_tsn_06_then_hue_saturation_and_zeros() {
     );
     assert_eq!(command.cluster(), 0x0300);
     assert_eq!(command.id(), 0x06);
+}
+
+// ---- A remote's commands (spec 049) ----
+
+/// A command a remote sends: cluster-specific, client to server.
+fn remote_frame(command: u8, payload: &[u8]) -> Vec<u8> {
+    let mut frame = vec![0x01, 0x07, command];
+    frame.extend_from_slice(payload);
+    frame
+}
+
+#[test]
+fn every_command_of_the_table_gives_its_action_name() {
+    let table: [(u16, u8, &[u8], &str); 14] = [
+        (0x0006, 0x00, &[], "off"),
+        (0x0006, 0x01, &[], "on"),
+        (0x0006, 0x02, &[], "toggle"),
+        (0x0006, 0x40, &[0x00, 0x00], "off"),
+        (0x0006, 0x42, &[0x00, 0x32, 0x00, 0x00, 0x00], "on"),
+        (0x0008, 0x01, &[0x00, 0x32], "brightness_move_up"),
+        (0x0008, 0x05, &[0x01, 0x32], "brightness_move_down"),
+        (
+            0x0008,
+            0x02,
+            &[0x00, 0x20, 0x05, 0x00],
+            "brightness_step_up",
+        ),
+        (
+            0x0008,
+            0x06,
+            &[0x01, 0x20, 0x05, 0x00],
+            "brightness_step_down",
+        ),
+        (0x0008, 0x03, &[], "brightness_stop"),
+        (0x0008, 0x07, &[], "brightness_stop"),
+        (0x0005, 0x05, &[0x00, 0x00, 0x03], "recall_3"),
+        (0x0005, 0x05, &[0x01, 0x00, 0xFF], "recall_255"),
+        (0x0005, 0x05, &[0x00, 0x00, 0x00], "recall_0"),
+    ];
+    for (cluster, command, payload, name) in table {
+        let action = parse_remote_command(cluster, &remote_frame(command, payload));
+        assert_eq!(
+            action.map(Action::name),
+            Ok(name.to_string()),
+            "{cluster:#06X} {command:#04X}"
+        );
+    }
+}
+
+#[test]
+fn recall_scene_7_is_recall_7() {
+    assert_eq!(
+        parse_remote_command(0x0005, &remote_frame(0x05, &[0x00, 0x00, 0x07])),
+        Ok(Action::Recall(7))
+    );
+    assert_eq!(Action::Recall(7).name(), "recall_7");
+}
+
+#[test]
+fn an_unknown_command_a_global_frame_or_a_server_frame_gives_no_action() {
+    // Move to Level (0x00 of Level) is not in the table.
+    assert_eq!(
+        parse_remote_command(0x0008, &remote_frame(0x00, &[0x80, 0x00, 0x00])),
+        Err(ZclError::WrongCommand)
+    );
+    // Another cluster.
+    assert_eq!(
+        parse_remote_command(0x0300, &remote_frame(0x02, &[])),
+        Err(ZclError::WrongCommand)
+    );
+    // A Report Attributes (global frame).
+    assert_eq!(
+        parse_remote_command(0x0006, &report_frame(1, &[(0x0000, 0x10, vec![1])])),
+        Err(ZclError::WrongCommand)
+    );
+    // A server-to-client cluster command.
+    assert_eq!(
+        parse_remote_command(0x0006, &[0x09, 0x07, 0x02]),
+        Err(ZclError::WrongCommand)
+    );
+    // A Move without its mode byte.
+    assert_eq!(
+        parse_remote_command(0x0008, &remote_frame(0x01, &[])),
+        Err(ZclError::TooShort)
+    );
+}
+
+#[test]
+fn a_remote_press_is_answered_success_and_an_unknown_cluster_command_unsupported() {
+    // Toggle (0x02) from a remote, client to server, default response asked: success (spec 049).
+    let press = [0x01, 0x42, 0x02];
+    let answer = solite_core::radio::zcl::default_response(0x0006, &press).expect("an answer");
+    assert_eq!(answer[2..], [0x0B, 0x02, 0x00]);
+    // A command of the same cluster the coordinator does not decode: unsupported (0x81).
+    let other = [0x01, 0x43, 0x41];
+    let answer = solite_core::radio::zcl::default_response(0x0006, &other).expect("an answer");
+    assert_eq!(answer[2..], [0x0B, 0x41, 0x81]);
 }

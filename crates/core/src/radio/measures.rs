@@ -6,9 +6,16 @@ use std::fmt;
 
 use super::zcl::{
     ATTRIBUTE_COLOR_TEMPERATURE, ATTRIBUTE_CURRENT_HUE, ATTRIBUTE_CURRENT_SATURATION,
-    ATTRIBUTE_CURRENT_X, ATTRIBUTE_CURRENT_Y, ATTRIBUTE_ZONE_STATUS, AttributeRecord,
-    CLUSTER_COLOR_CONTROL, CLUSTER_IAS_ZONE, ReportingRecord,
+    ATTRIBUTE_CURRENT_X, ATTRIBUTE_CURRENT_Y, ATTRIBUTE_ZONE_STATUS, Action, AttributeRecord,
+    CLUSTER_COLOR_CONTROL, CLUSTER_IAS_ZONE, CLUSTER_SCENES, ReportingRecord,
 };
+
+/// The number the setup reports (in the clusters set up) when a remote's output clusters are
+/// bound: not a cluster of the Zigbee specification, the catalog's key to the remote's `action`.
+pub const REMOTE_ACTION: u16 = 0xFFFF;
+
+/// The output clusters of a remote that are bound (spec 049).
+const REMOTE_OUTPUTS: [u16; 3] = [CLUSTER_ON_OFF, CLUSTER_LEVEL, CLUSTER_SCENES];
 
 /// A frame gives at most this many measures: the rest is dropped.
 pub const MAX_MEASURES_PER_FRAME: usize = 16;
@@ -142,6 +149,8 @@ impl Scale {
 pub enum Value {
     Number(f64),
     Bool(bool),
+    /// A remote's command (`action`).
+    Action(Action),
 }
 
 /// One measure of a device.
@@ -168,6 +177,7 @@ impl fmt::Display for Measure {
                 write!(f, "{}", if on { "on" } else { "off" })?;
             }
             Value::Bool(on) => write!(f, "{on}")?,
+            Value::Action(action) => write!(f, "{}", action.name())?,
         }
         if !self.unit.is_empty() {
             write!(f, " {}", self.unit)?;
@@ -397,6 +407,31 @@ pub fn from_records(cluster: u16, records: &[AttributeRecord]) -> Vec<Measure> {
         .collect()
 }
 
+/// The measure of a remote's command received on its output cluster, if it is one of the table
+/// (spec 049).
+pub fn from_remote_command(action: Action) -> Measure {
+    Measure {
+        kind: "action",
+        value: Value::Action(action),
+        unit: "",
+        device_value: None,
+    }
+}
+
+/// The output clusters of a remote to bind: those of the table among `outputs`, when the device
+/// is a remote (it has none of the On/Off cluster among its inputs: a light that also sends is
+/// not one). Empty for anything else.
+pub fn remote_clusters_to_bind(inputs: &[u16], outputs: &[u16]) -> Vec<u16> {
+    if inputs.contains(&CLUSTER_ON_OFF) {
+        return Vec::new();
+    }
+    REMOTE_OUTPUTS
+        .iter()
+        .copied()
+        .filter(|c| outputs.contains(c))
+        .collect()
+}
+
 /// The measures of an IAS zone status: `alarm` (bit 0), `tamper` (bit 2) and `battery_low`
 /// (bit 3).
 pub fn from_zone_status(status: u16) -> Vec<Measure> {
@@ -518,6 +553,9 @@ pub fn reporting_cluster(cluster: u16) -> Option<&'static ReportingCluster> {
 
 /// The name shown for a cluster in the `reporting:` line: what it measures, or its number.
 pub fn cluster_name(cluster: u16) -> String {
+    if cluster == REMOTE_ACTION {
+        return "action".to_string();
+    }
     reporting_cluster(cluster).map_or_else(|| format!("0x{cluster:04X}"), |r| r.name.to_string())
 }
 

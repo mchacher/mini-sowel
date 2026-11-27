@@ -37,6 +37,7 @@ The categories the device catalog gives a device's data (Sowel's `DataCategory`)
 | `light_color` | Color Control cluster (0x0300), the `color` object (type `json`) |
 | `battery` | Power configuration cluster (0x0001), percentage |
 | `voltage` | Power configuration cluster (0x0001), battery voltage |
+| `action` | A remote's On/Off (0x0006), Level (0x0008) and Scenes (0x0005) commands, the command's generic name (type `text`) |
 | `power` | Electrical Measurement cluster (0x0B04) ActivePower, else Metering (0x0702) InstantaneousDemand, in W |
 | `energy` | Metering cluster (0x0702) CurrentSummationDelivered, in kWh |
 | `current` | Electrical Measurement cluster (0x0B04) RMSCurrent, in A |

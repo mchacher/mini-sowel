@@ -752,6 +752,7 @@ impl Devices {
                     json_number(measure.device_value.unwrap_or(n))
                 }
                 (MeasureValue::Bool(on), ValueType::Boolean) => Value::Bool(on),
+                (MeasureValue::Action(action), ValueType::Text) => Value::String(action.name()),
                 _ => continue,
             };
             let previous = set_value(data, value, now);

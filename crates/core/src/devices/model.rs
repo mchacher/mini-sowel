@@ -237,24 +237,31 @@ impl PowerSource {
     }
 }
 
-/// Sowel's `DataType`, the three values Solite uses.
+/// Sowel's `DataType`, the four values Solite uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ValueType {
     Boolean,
     Number,
+    Text,
     Json,
 }
 
 impl ValueType {
     /// Every value, with its JSON string (the contract check reads them).
-    pub const ALL: [ValueType; 3] = [ValueType::Boolean, ValueType::Number, ValueType::Json];
+    pub const ALL: [ValueType; 4] = [
+        ValueType::Boolean,
+        ValueType::Number,
+        ValueType::Text,
+        ValueType::Json,
+    ];
 
     /// The value as Sowel writes it.
     pub fn as_str(self) -> &'static str {
         match self {
             ValueType::Boolean => "boolean",
             ValueType::Number => "number",
+            ValueType::Text => "text",
             ValueType::Json => "json",
         }
     }
