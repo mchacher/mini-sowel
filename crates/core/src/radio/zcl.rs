@@ -28,7 +28,7 @@ pub const ATTRIBUTE_CIE_ADDRESS: u16 = 0x0010;
 /// The zone id the Zone Enroll Response gives (Zigbee2MQTT's value).
 pub const ZONE_ID: u8 = 23;
 
-const COMMAND_READ_ATTRIBUTES_RESPONSE: u8 = 0x01;
+pub const COMMAND_READ_ATTRIBUTES_RESPONSE: u8 = 0x01;
 const COMMAND_WRITE_ATTRIBUTES: u8 = 0x02;
 const COMMAND_WRITE_ATTRIBUTES_RESPONSE: u8 = 0x04;
 const TYPE_EUI64: u8 = 0xF0;
@@ -598,6 +598,11 @@ pub fn configure_reporting_request(tsn: u8, records: &[ReportingRecord]) -> Vec<
         if let Some(change) = record.change {
             match fixed_size(record.data_type) {
                 Some(1) => frame.push(change as u8),
+                // The size of the attribute's type (uint48: 6 bytes), the change zero-extended.
+                Some(size) if size > 2 => {
+                    frame.extend_from_slice(&change.to_le_bytes());
+                    frame.resize(frame.len() + size - 2, 0);
+                }
                 _ => frame.extend_from_slice(&change.to_le_bytes()),
             }
         }

@@ -337,8 +337,14 @@ equipment's data), so a device heard during the wait shows the real date and sta
 Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugin names them:
 `temperature` (°C), `humidity` (%), `pressure` (hPa), `illuminance` (luminosity, lx), `occupancy`
 (motion), `state` (light_state), `brightness` (0 to 254), `color_temp` (light_color_temp, mired),
-`color` (light_color, type `json`), `battery` (%), `voltage` (mV); each with its last `value` and
-`lastUpdated`. A remote (an endpoint with On/Off, Level or Scenes among its output clusters and
+`color` (light_color, type `json`), `battery` (%), `voltage` (mV), and for a metering plug `power`
+(W, Electrical Measurement `0x0B04` ActivePower, else Metering `0x0702` InstantaneousDemand; one
+`power` when a device has both), `energy` (kWh, Metering CurrentSummationDelivered) and `current`
+(A, Electrical Measurement RMSCurrent); each with its last `value` and `lastUpdated`. The
+multiplier and divisor of these clusters are read once the reporting is set up (and again at the
+next report when they are not known, for instance after a restart): a value received before is not
+published, the next report carries it; a divisor of 0 or absent counts as 1, a multiplier absent as 1.
+Power is a whole number of W, energy and current have 2 decimals. The mains voltage is not a data. A remote (an endpoint with On/Off, Level or Scenes among its output clusters and
 On/Off not among its input clusters) is bound at pairing, on each of those output clusters, and
 gets `action` (category `action`, type `text`): the generic name of the command it sends, `on`,
 `off`, `toggle`, `brightness_move_up`, `brightness_move_down`, `brightness_step_up`,
@@ -1286,11 +1292,12 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
 | `color-light` | TEST CLR01 (synthetic colour bulb, mains) | `light_state`, `light_brightness`, `light_color_temp`, `color_x`/`color_y` (and `color_hue`/`color_saturation` when read) after its commands (on/off, level, colour temperature, XY, hue and saturation, applied even when off); a report takes `light_state`, `color_temp` (150 to 500) and `color` (`{"x", "y"}`, 0 to 1, one message) |
 | `button` | TEST BTN01 (synthetic remote, battery, output clusters On/Off and Level) | once bound, the command a report's `action` names (`on`, `off`, `toggle`, `brightness_move_up`, `brightness_move_down`), the same one twice if the scenario says so |
+| `plug` | TEST PLG01 (synthetic metering plug, mains) | `light_state` after its commands; answers the reads of the scale (power divisor 10, current and energy divisor 1000, multipliers 1); a report takes `light_state`, `power` (W), `current` (A) and `energy` (kWh) |
 
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
-relay), `scenarios/color-light.json` (one colour bulb) and `scenarios/button.json` (one remote).
+relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote) and `scenarios/plug.json` (one metering plug).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing

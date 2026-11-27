@@ -194,6 +194,26 @@ fn configure_reporting_request_for_battery_percentage_has_a_uint8_change_of_2() 
 }
 
 #[test]
+fn configure_reporting_request_for_a_uint48_summation_has_a_six_byte_change() {
+    let frame = configure_reporting_request(
+        5,
+        &[ReportingRecord {
+            attribute: 0x0000,
+            data_type: 0x25,
+            min_interval: 60,
+            max_interval: 600,
+            change: Some(1),
+        }],
+    );
+    assert_eq!(
+        frame,
+        vec![
+            0x10, 5, 0x06, 0x00, 0x00, 0x00, 0x25, 0x3C, 0x00, 0x58, 0x02, 1, 0, 0, 0, 0, 0
+        ]
+    );
+}
+
+#[test]
 fn configure_reporting_response_with_the_single_byte_00_accepts_everything() {
     let response = parse_configure_reporting_response(&[0x18, 9, 0x07, 0x00]).unwrap();
     assert_eq!(response.tsn, 9);

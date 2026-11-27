@@ -1,0 +1,13 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE654322", "network": "none" },
+  "devices": [
+    { "id": "plug", "kind": "plug", "eui64": "00124B00C0102040" }
+  ],
+  "events": [
+    { "at": "2s", "device": "plug", "do": "join" },
+    { "at": "30s", "device": "plug", "do": "report", "light_state": "on", "power": 120.5, "current": 0.52, "energy": 12.34 },
+    { "at": "1m", "device": "plug", "do": "report", "power": 98, "current": 0.43 },
+    { "at": "1m30s", "device": "plug", "do": "report", "power": 1150, "current": 5.02, "energy": 12.36 },
+    { "at": "2m", "device": "plug", "do": "report", "power": 0, "current": 0, "energy": 12.37 }
+  ]
+}

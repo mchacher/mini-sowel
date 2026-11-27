@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use super::backup::RestoredNetwork;
-use super::measures::{self, Measure};
+use super::measures::{self, Measure, Scale};
 use super::{Radio, RadioError, RadioTransport};
 use super::{ezsp, zcl, zdo};
 use ezsp::{ApsFrame, Callback, IncomingMessage, NetworkParameters, StackStatus, TrustCenterJoin};
@@ -43,6 +43,8 @@ const COMMAND_WRITE_ATTRIBUTES: u8 = 0x02;
 const MAX_ANSWERED: usize = 32;
 /// Node addresses whose 64-bit address is remembered; the oldest is dropped past this.
 const MAX_ADDRESSES: usize = 64;
+/// Time between two asks for the scale of one cluster of one device (spec 048).
+const SCALE_ASK_MS: u64 = 30_000;
 /// Wait between the steps of an enrollment (before the Zone Enroll Response, between two reads
 /// of the zone state), in milliseconds (Zigbee2MQTT's value).
 const ENROLL_WAIT_MS: u64 = 500;
@@ -516,6 +518,15 @@ impl Setup {
     }
 }
 
+/// The scale of the electrical clusters of one device (spec 048), and when each was last asked.
+#[derive(Debug)]
+struct ScaleEntry {
+    eui64: [u8; 8],
+    scale: Scale,
+    /// Milliseconds of the last ask, `[Electrical Measurement, Metering]`; 0: never.
+    asked: [u64; 2],
+}
+
 #[derive(Debug)]
 struct Device {
     eui64: [u8; 8],
@@ -538,6 +549,8 @@ struct Device {
 pub struct Pairing {
     /// At most `MAX_DEVICES`.
     devices: Vec<Device>,
+    /// One per device, at most `MAX_DEVICES`, the oldest dropped.
+    scales: Vec<ScaleEntry>,
     /// At most `MAX_IGNORED`.
     ignored: Vec<[u8; 8]>,
     tsn: u8,
@@ -1337,6 +1350,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         }
         self.report_finished_at(message.sender, events);
 
+        let scale_cluster = measures::scale_attributes(cluster).is_some();
         let measured = if let Ok(action) = zcl::parse_remote_command(cluster, frame) {
             vec![measures::from_remote_command(action)]
         } else if cluster == zcl::CLUSTER_IAS_ZONE {
@@ -1346,6 +1360,8 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                     .map(|report| measures::from_records(cluster, &report.records))
                     .unwrap_or_default(),
             }
+        } else if scale_cluster {
+            self.electrical_measures(wide, message, now)
         } else {
             zcl::parse_attribute_report(frame)
                 .map(|report| measures::from_records(cluster, &report.records))
@@ -1417,10 +1433,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
     /// Default Response, matched by sender, cluster, command and transaction number.
     fn on_configure_answer(&mut self, message: &IncomingMessage, now: u64) {
         let cluster = message.aps.cluster;
-        let Some(setup) = self
-            .device_at(message.sender)
-            .and_then(|d| d.setup.as_mut())
-        else {
+        let Some(device) = self.device_at(message.sender) else {
+            return;
+        };
+        let endpoint = device.endpoint;
+        let Some(setup) = device.setup.as_mut() else {
             return;
         };
         let Stage::WaitConfigure { tsn, .. } = setup.stage else {
@@ -1446,6 +1463,64 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             return;
         };
         setup.cluster_done(now, succeeded);
+        // The device is awake: its scale is read now (spec 048, R2).
+        if succeeded && measures::scale_attributes(cluster).is_some() {
+            self.commands
+                .queue_scale_read(message.sender, endpoint, cluster);
+        }
+    }
+
+    /// The measures of a frame of an electrical cluster (spec 048): the scale of the device is
+    /// updated from the frame, the values are scaled with it; a value whose scale is not known
+    /// is dropped and the scale asked again (at most every `SCALE_ASK_MS`).
+    fn electrical_measures(
+        &mut self,
+        wide: bool,
+        message: &IncomingMessage,
+        now: u64,
+    ) -> Vec<Measure> {
+        let cluster = message.aps.cluster;
+        let Ok(report) = zcl::parse_attribute_report(&message.payload) else {
+            return Vec::new();
+        };
+        let Ok(Sender::Eui64(eui64)) = self.sender_address(wide, message) else {
+            return Vec::new();
+        };
+        let answered = zcl::parse_header(&message.payload).is_ok_and(|(h, _)| {
+            h.frame_type == zcl::FrameType::Global
+                && h.command == zcl::COMMAND_READ_ATTRIBUTES_RESPONSE
+        });
+        let scales = &mut self.pairing.scales;
+        let index = match scales.iter().position(|e| e.eui64 == eui64) {
+            Some(index) => index,
+            None => {
+                if scales.len() >= MAX_DEVICES {
+                    scales.remove(0);
+                }
+                scales.push(ScaleEntry {
+                    eui64,
+                    scale: Scale::default(),
+                    asked: [0; 2],
+                });
+                scales.len() - 1
+            }
+        };
+        let entry = &mut scales[index];
+        entry.scale.absorb(cluster, &report.records, answered);
+        let (measures, missing) =
+            measures::from_records_scaled(cluster, &report.records, &entry.scale);
+        if missing {
+            let slot = usize::from(cluster == measures::CLUSTER_METERING);
+            if entry.asked[slot] == 0 || now.saturating_sub(entry.asked[slot]) >= SCALE_ASK_MS {
+                entry.asked[slot] = now.max(1);
+                self.commands.queue_scale_read(
+                    message.sender,
+                    message.aps.source_endpoint,
+                    cluster,
+                );
+            }
+        }
+        measures
     }
 
     /// A Zone Enroll Request: answered with a Zone Enroll Response carrying its transaction

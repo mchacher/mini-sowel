@@ -93,7 +93,7 @@ fn unknown_fields_kinds_devices_and_duplicates_name_the_field() {
     );
     assert_eq!(
         error(r#"{ "devices": [ { "id": "a", "kind": "lamp", "eui64": "00124B0000000001" } ] }"#),
-        "scenario: s.json: devices[0].kind: unknown kind \"lamp\" (temperature-humidity, motion, relay, dimmer, color-light or button)"
+        "scenario: s.json: devices[0].kind: unknown kind \"lamp\" (temperature-humidity, motion, relay, dimmer, color-light, button or plug)"
     );
     assert_eq!(
         error(&with_event(

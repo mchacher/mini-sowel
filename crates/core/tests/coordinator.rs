@@ -1317,7 +1317,7 @@ fn a_default_response_for_another_command_is_not_the_answer_to_the_configure_rep
 #[test]
 fn a_frame_without_measures_costs_no_lookup_and_still_gets_its_default_response() {
     use solite_core::radio::{Activity, Sender};
-    const UNKNOWN_CLUSTER: u16 = 0x0B04;
+    const UNKNOWN_CLUSTER: u16 = 0x0B05; // Diagnostics: 0x0B04 gives measures since spec 048
     // A report on a cluster that gives no measure, asking for a Default Response.
     let unknown_report =
         |tsn: u8| solite_sim::report_frame_with_control(0x08, tsn, &[(0x0000, 0x29, vec![1, 0])]);
@@ -2409,4 +2409,88 @@ fn a_remotes_presses_are_two_measure_events_when_equal_and_get_a_default_respons
     let answers = sends_on(&h, 0x0104, 0x0006);
     assert_eq!(answers.len(), 2);
     assert!(answers.iter().all(|m| m.message[2] == 0x0B));
+}
+
+// Spec 048: the scale of the electrical clusters.
+
+fn plug() -> SimDevice {
+    let mut device = SimDevice::of_kind(
+        solite_sim::Kind::Plug,
+        [0x78, 0x56, 0x34, 0x12, 0x00, 0x4B, 0x12, 0x00],
+        None,
+        None,
+    );
+    device.nwk = DEVICE_NWK;
+    device.auto_join = true;
+    device
+}
+
+fn measure_lines(events: &[PairingEvent]) -> Vec<String> {
+    measure_events(events)
+        .iter()
+        .flat_map(|m| m.lines())
+        .collect()
+}
+
+#[test]
+fn the_scale_of_a_plug_is_read_once_its_reporting_is_set_up_and_its_values_are_scaled() {
+    let mut h = started(with_device(plug()));
+    h.radio.permit_join(180).unwrap();
+    poll_for(&mut h, 30_000);
+    // One Read Attributes of the four scale attributes of each cluster.
+    let reads = sends_on(&h, 0x0104, 0x0B04);
+    let reads: Vec<_> = reads.iter().filter(|m| m.message[2] == 0x00).collect();
+    assert_eq!(reads.len(), 1, "one scale read of Electrical Measurement");
+    assert_eq!(
+        reads[0].message[3..],
+        [0x04, 0x06, 0x05, 0x06, 0x02, 0x06, 0x03, 0x06]
+    );
+    let reads = sends_on(&h, 0x0104, 0x0702);
+    assert_eq!(reads.iter().filter(|m| m.message[2] == 0x00).count(), 1);
+    // The device reports, in its own units: 1205 tenths of a watt, 520 mA, 12340 Wh.
+    let report = solite_sim::DeviceReport {
+        power: Some(120.5),
+        current: Some(0.52),
+        energy: Some(12.34),
+        ..solite_sim::DeviceReport::default()
+    };
+    h.ncp.borrow_mut().device_report(0, &report);
+    let lines = measure_lines(&poll_for(&mut h, 1_000));
+    assert!(
+        lines.iter().any(|l| l.ends_with("power 121 W")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("current 0.52 A")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.ends_with("energy 12.34 kWh")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_report_before_the_scale_is_known_publishes_nothing_and_the_next_one_carries_the_value() {
+    // The plug is in the network already (after a restart): the radio knows no scale.
+    let mut device = plug();
+    device.auto_join = false;
+    let mut h = started(with_device(device.in_network()));
+    let report = |tsn| solite_sim::electrical_report(tsn, Some(120.5), None);
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, 0x0B04, 1, &report(1));
+    let first = measure_lines(&poll_for(&mut h, 2_000));
+    assert!(first.is_empty(), "no figure before the scale: {first:?}");
+    // The scale was asked for, the device answered.
+    let asks = sends_on(&h, 0x0104, 0x0B04);
+    assert_eq!(asks.iter().filter(|m| m.message[2] == 0x00).count(), 1);
+    h.ncp
+        .borrow_mut()
+        .inject(DEVICE_NWK, 0x0104, 0x0B04, 1, &report(2));
+    let second = measure_lines(&poll_for(&mut h, 2_000));
+    assert!(
+        second.iter().any(|l| l.ends_with("power 121 W")),
+        "{second:?}"
+    );
 }
