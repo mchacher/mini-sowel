@@ -350,3 +350,33 @@ fn the_firmwares_scenario_with_its_home_ends_with_every_device_reported() {
     assert_eq!(child.wait().unwrap().code(), Some(130));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const BUTTON: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scenarios/button.json");
+
+#[test]
+fn pair_on_the_button_scenario_shows_its_actions_in_order_the_same_one_twice() {
+    let dir = data_dir();
+    let dir_text = dir.to_str().unwrap();
+    let output = run(
+        &[
+            "--sim", BUTTON, "--pair", "8", "--speed", "20", "--data", dir_text,
+        ],
+        None,
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+    let out = lines(&output);
+    let eui = "0x00124B0012345681";
+    assert!(
+        out.contains(&format!("reporting: {eui} battery, action")),
+        "{out:?}"
+    );
+    let actions: Vec<&str> = out
+        .iter()
+        .filter_map(|l| l.strip_prefix(&format!("{eui} action ")))
+        .collect();
+    assert_eq!(
+        actions,
+        vec!["toggle", "toggle", "on", "brightness_move_up", "off"]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

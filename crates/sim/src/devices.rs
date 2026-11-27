@@ -16,6 +16,9 @@ pub enum Kind {
     /// A mains-powered colour light: the dimmer's commands plus the Color Control cluster (Move to
     /// Color Temperature, Move to Color, Move to Hue and Saturation, spec 031).
     ColorLight,
+    /// A sleepy remote with the On/Off and Level clusters as output: it sends commands to what
+    /// it is bound to (spec 049).
+    Button,
 }
 
 impl Kind {
@@ -27,6 +30,7 @@ impl Kind {
             Kind::Relay => "relay",
             Kind::Dimmer => "dimmer",
             Kind::ColorLight => "color-light",
+            Kind::Button => "button",
         }
     }
 
@@ -38,6 +42,7 @@ impl Kind {
             Kind::Relay,
             Kind::Dimmer,
             Kind::ColorLight,
+            Kind::Button,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -51,6 +56,7 @@ impl Kind {
             Kind::Relay => 0x0100,
             Kind::Dimmer => 0x0101,
             Kind::ColorLight => 0x010D,
+            Kind::Button => 0x0006,
         }
     }
 }
@@ -68,6 +74,9 @@ pub struct DeviceReport {
     pub color_temp: Option<u16>,
     /// A colour as X and Y (each 0 to 1), `color-light` only: one frame with both attributes.
     pub color: Option<(f64, f64)>,
+    /// A command a `button` sends: `on`, `off`, `toggle`, `brightness_move_up`,
+    /// `brightness_move_down`.
+    pub action: Option<String>,
 }
 
 /// A character attribute of the simulated device.
@@ -195,6 +204,22 @@ pub fn zone_status_notification(tsn: u8, status: u16) -> Vec<u8> {
     frame
 }
 
+/// A remote's command (cluster-specific, client to server, a Default Response asked for): the
+/// cluster and the frame of a command named as in the scenario, or `None`.
+pub fn button_command(tsn: u8, name: &str) -> Option<(u16, Vec<u8>)> {
+    let (cluster, command, payload): (u16, u8, &[u8]) = match name {
+        "off" => (0x0006, 0x00, &[]),
+        "on" => (0x0006, 0x01, &[]),
+        "toggle" => (0x0006, 0x02, &[]),
+        "brightness_move_up" => (0x0008, 0x01, &[0x00, 0x32]),
+        "brightness_move_down" => (0x0008, 0x01, &[0x01, 0x32]),
+        _ => return None,
+    };
+    let mut frame = vec![0x01, tsn, command];
+    frame.extend_from_slice(payload);
+    Some((cluster, frame))
+}
+
 /// A simulated Zigbee device: it joins when pairing opens (or when its scenario says so),
 /// answers the endpoint request and the Basic read, then its descriptor, binds and Configure
 /// Reporting, and sends reports.
@@ -237,6 +262,9 @@ pub struct SimDevice {
     pub message_sent_last: bool,
     /// The input clusters of its endpoint, as its descriptor lists them.
     pub input_clusters: Vec<u16>,
+    /// The output clusters of its endpoint (what it sends commands on), as its descriptor lists
+    /// them; the update cluster 0x0019 when empty.
+    pub output_clusters: Vec<u16>,
     /// Number of Simple_Desc requests it ignores before it answers; `u32::MAX`: never.
     pub ignore_descriptors: u32,
     /// Clusters whose Bind it refuses (status 0x84).
@@ -344,6 +372,7 @@ impl SimDevice {
             answer_delay_ms: 0,
             message_sent_last: false,
             input_clusters: Vec::new(),
+            output_clusters: Vec::new(),
             ignore_descriptors: 0,
             bind_refused: Vec::new(),
             configure: ConfigureAnswer::Single,
@@ -420,11 +449,15 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300],
                 false,
             ),
+            Kind::Button => ("TEST", "BTN01", vec![0x0000, 0x0001, 0x0003], true),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
         device.model = text(model.unwrap_or(default_model));
         device.input_clusters = clusters;
+        if kind == Kind::Button {
+            device.output_clusters = vec![0x0006, 0x0008];
+        }
         if kind == Kind::Motion {
             device.zone_type = Some(0x000D);
         }

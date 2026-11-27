@@ -417,6 +417,9 @@ struct Setup {
     request_zone: Option<u16>,
     /// Reads of the zone state sent after the Zone Enroll Response; at most `MAX_ZONE_POLLS`.
     polls: u8,
+    /// How many of the last entries of `todo` are a remote's output clusters: bound only, never
+    /// configured (spec 049). At most 3.
+    remote_tail: usize,
 }
 
 impl Setup {
@@ -435,6 +438,7 @@ impl Setup {
             zone_type: None,
             request_zone: None,
             polls: 0,
+            remote_tail: 0,
         }
     }
 
@@ -472,8 +476,16 @@ impl Setup {
     /// The cluster in progress is done, well or not: on to the next.
     fn cluster_done(&mut self, now: u64, succeeded: bool) {
         if !self.todo.is_empty() {
+            let remote = self.binding_remote();
             let cluster = self.todo.remove(0);
-            if succeeded {
+            if remote {
+                // A remote's output cluster: the `action` data once one is bound; a failure is
+                // not retried (the remote's commands just do not arrive).
+                self.remote_tail -= 1;
+                if succeeded && !self.ok.contains(&measures::REMOTE_ACTION) {
+                    self.ok.push(measures::REMOTE_ACTION);
+                }
+            } else if succeeded {
                 self.ok.push(cluster);
             } else {
                 self.failed.push(cluster);
@@ -489,8 +501,16 @@ impl Setup {
         };
     }
 
-    /// The device does not answer: the clusters not done yet are failed.
+    /// The cluster in progress is a remote's output cluster, to bind and nothing more.
+    fn binding_remote(&self) -> bool {
+        !self.todo.is_empty() && self.todo.len() <= self.remote_tail
+    }
+
+    /// The device does not answer: the clusters not done yet are failed (a remote's are not).
     fn give_up(&mut self) {
+        self.todo
+            .truncate(self.todo.len() - self.remote_tail.min(self.todo.len()));
+        self.remote_tail = 0;
         self.failed.append(&mut self.todo);
         self.stage = Stage::Finish;
     }
@@ -1243,6 +1263,12 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         match zdo::parse_simple_descriptor_response(&message.payload) {
             Ok(descriptor) => {
                 setup.todo = measures::clusters_to_set_up(&descriptor.input_clusters);
+                let remote = measures::remote_clusters_to_bind(
+                    &descriptor.input_clusters,
+                    &descriptor.output_clusters,
+                );
+                setup.remote_tail = remote.len();
+                setup.todo.extend(remote);
                 setup.attempts = 0;
                 setup.busy = 0;
                 setup.due = now;
@@ -1279,7 +1305,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             setup.attempts = 0;
             setup.busy = 0;
             setup.due = now;
-            setup.stage = Stage::SendConfigure;
+            if setup.binding_remote() {
+                setup.cluster_done(now, true);
+            } else {
+                setup.stage = Stage::SendConfigure;
+            }
         } else {
             setup.cluster_done(now, false);
         }
@@ -1307,7 +1337,9 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         }
         self.report_finished_at(message.sender, events);
 
-        let measured = if cluster == zcl::CLUSTER_IAS_ZONE {
+        let measured = if let Ok(action) = zcl::parse_remote_command(cluster, frame) {
+            vec![measures::from_remote_command(action)]
+        } else if cluster == zcl::CLUSTER_IAS_ZONE {
             match zcl::parse_zone_status_change(frame) {
                 Ok(status) => measures::from_zone_status(status),
                 Err(_) => zcl::parse_attribute_report(frame)

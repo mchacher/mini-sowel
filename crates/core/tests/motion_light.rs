@@ -114,6 +114,29 @@ impl Run {
         self.report("press".into(), &temperature(0x60, 20.0));
     }
 
+    /// A press of a real button (spec 049): the toggle command of a remote.
+    fn toggle(&mut self) {
+        self.report(
+            "press".into(),
+            &action(0x70, solite_core::radio::zcl::Action::Toggle),
+        );
+    }
+
+    /// A button of the garage that is a remote with its `action` data.
+    fn remote_button(&mut self) -> String {
+        let remote = self.rig.remote(0x70);
+        let data = self.rig.home.devices.get(&remote).unwrap().data[0]
+            .id
+            .to_string();
+        let id = self.rig.equipment("Remote", "button", &self.g.zone, &[]);
+        let (status, body) = self.rig.post(
+            &format!("/api/v1/equipments/{id}/data-bindings"),
+            json!({"deviceDataId": data, "alias": "action"}),
+        );
+        assert_eq!(status, 201, "{body}");
+        id
+    }
+
     fn advance(&mut self, ms: u64) {
         self.rig.advance(ms);
         self.step(&format!("advance {ms}"));
@@ -442,6 +465,27 @@ fn a_button_press_switches_a_light_that_is_on_off_with_an_override_and_one_that_
             r.relay(true);
             r.advance(5 * SECOND);
             r.press();
+            r.advance(20 * SECOND);
+        },
+        &[
+            "Motion detected — 1 light(s) turned on",
+            "Button pressed — lights off, entering override mode",
+            "No motion for 20s — override cleared, lights off",
+        ],
+    );
+}
+
+#[test]
+fn a_remotes_toggle_command_switches_the_lights_like_a_button_press() {
+    both(
+        |r| {
+            let b = r.remote_button();
+            r.start(json!({"buttons": [b]}));
+            r.toggle();
+            r.relay(true);
+            r.advance(5 * SECOND);
+            // The same command a second time is a second press.
+            r.toggle();
             r.advance(20 * SECOND);
         },
         &[

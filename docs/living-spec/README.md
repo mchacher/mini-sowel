@@ -305,7 +305,7 @@ in Sowel: `temperature` (°C), `humidity` (%), `pressure` (hPa), `luminosity` (l
 `light_state`, `light_brightness` (%), `light_color_temp` (mired), the parts of a colour
 `color_x`, `color_y` (0 to 1, four decimals), `color_hue` (°), `color_saturation` (%), `battery`
 (%), `voltage` (V), and `alarm`, `tamper` (IAS zone notifications, sent by enrolled alarm
-devices); booleans are shown `motion true`, `light_state on`. A colour bulb's reporting is set up
+devices), and `action` (a remote's On/Off, Level and Scenes commands, shown `action toggle`; its output clusters are bound and the `reporting:` line lists it as `action`); booleans are shown `motion true`, `light_state on`. A colour bulb's reporting is set up
 for its colour temperature and X/Y (`light_color` in the `reporting:` line). The banner and the radio's lines come first, as with `--pair`.
 Invalid values and
 implausible ones (temperature outside −50 to 150 °C, humidity outside 0 to 100 %, a colour
@@ -338,7 +338,13 @@ Its data (`DeviceData`), one per measure, are named as Sowel's Zigbee2MQTT plugi
 `temperature` (°C), `humidity` (%), `pressure` (hPa), `illuminance` (luminosity, lx), `occupancy`
 (motion), `state` (light_state), `brightness` (0 to 254), `color_temp` (light_color_temp, mired),
 `color` (light_color, type `json`), `battery` (%), `voltage` (mV); each with its last `value` and
-`lastUpdated`. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
+`lastUpdated`. A remote (an endpoint with On/Off, Level or Scenes among its output clusters and
+On/Off not among its input clusters) is bound at pairing, on each of those output clusters, and
+gets `action` (category `action`, type `text`): the generic name of the command it sends, `on`,
+`off`, `toggle`, `brightness_move_up`, `brightness_move_down`, `brightness_step_up`,
+`brightness_step_down`, `brightness_stop` or `recall_<scene>`; every command is a
+`device.data.updated` event, even the same one twice. The names of a model's own buttons
+(`single`, `double`...) are not known. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
 and `saturation` (0 to 100): the colour measures of one message replace their fields once (one
 `device.data.updated`), and a message carrying X/Y and no hue/saturation drops hue and saturation
 (and the reverse), so the object never mixes two colours. Its orders (`DeviceOrder`): `state`
@@ -1279,11 +1285,12 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `motion` | eWeLink MS01 (Sonoff SNZB-03) | enrolled at pairing; then `alarm true` on motion, and `alarm false` 60 s of scenario time later |
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
 | `color-light` | TEST CLR01 (synthetic colour bulb, mains) | `light_state`, `light_brightness`, `light_color_temp`, `color_x`/`color_y` (and `color_hue`/`color_saturation` when read) after its commands (on/off, level, colour temperature, XY, hue and saturation, applied even when off); a report takes `light_state`, `color_temp` (150 to 500) and `color` (`{"x", "y"}`, 0 to 1, one message) |
+| `button` | TEST BTN01 (synthetic remote, battery, output clusters On/Off and Level) | once bound, the command a report's `action` names (`on`, `off`, `toggle`, `brightness_move_up`, `brightness_move_down`), the same one twice if the scenario says so |
 
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
-relay) and `scenarios/color-light.json` (one colour bulb).
+relay), `scenarios/color-light.json` (one colour bulb) and `scenarios/button.json` (one remote).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing

@@ -501,6 +501,74 @@ pub fn parse_zone_status_change(frame: &[u8]) -> Result<u16, ZclError> {
     Ok(u16::from_le_bytes([status[0], status[1]]))
 }
 
+/// The Scenes cluster, whose Recall Scene a remote sends.
+pub const CLUSTER_SCENES: u16 = 0x0005;
+
+/// What a remote's command means, in Zigbee2MQTT's generic names (spec 049).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Off,
+    On,
+    Toggle,
+    MoveUp,
+    MoveDown,
+    StepUp,
+    StepDown,
+    Stop,
+    Recall(u8),
+}
+
+impl Action {
+    /// The `action` value: `toggle`, `brightness_move_up`, `recall_7`...
+    pub fn name(self) -> String {
+        match self {
+            Action::Off => "off".into(),
+            Action::On => "on".into(),
+            Action::Toggle => "toggle".into(),
+            Action::MoveUp => "brightness_move_up".into(),
+            Action::MoveDown => "brightness_move_down".into(),
+            Action::StepUp => "brightness_step_up".into(),
+            Action::StepDown => "brightness_step_down".into(),
+            Action::Stop => "brightness_stop".into(),
+            Action::Recall(scene) => format!("recall_{scene}"),
+        }
+    }
+}
+
+/// Reads a command a remote sends on its output cluster `cluster` (On/Off, Level or Scenes):
+/// cluster-specific, from the client (the remote) to the server (the coordinator). Any other
+/// command, cluster or direction is `WrongCommand`.
+pub fn parse_remote_command(cluster: u16, frame: &[u8]) -> Result<Action, ZclError> {
+    let (header, payload) = parse_header(frame)?;
+    if header.frame_type != FrameType::Cluster || header.from_server {
+        return Err(ZclError::WrongCommand);
+    }
+    if header.manufacturer.is_some() {
+        return Err(ZclError::ManufacturerSpecific);
+    }
+    // Level's Move and Step carry a mode byte: 0 up, 1 down.
+    let by_mode = |up: Action, down: Action| match payload.first() {
+        Some(0) => Ok(up),
+        Some(1) => Ok(down),
+        Some(_) => Err(ZclError::WrongCommand),
+        None => Err(ZclError::TooShort),
+    };
+    match (cluster, header.command) {
+        (CLUSTER_ON_OFF, 0x00 | 0x40) => Ok(Action::Off),
+        (CLUSTER_ON_OFF, 0x01 | 0x42) => Ok(Action::On),
+        (CLUSTER_ON_OFF, 0x02) => Ok(Action::Toggle),
+        (CLUSTER_LEVEL_CONTROL, 0x01 | 0x05) => by_mode(Action::MoveUp, Action::MoveDown),
+        (CLUSTER_LEVEL_CONTROL, 0x02 | 0x06) => by_mode(Action::StepUp, Action::StepDown),
+        (CLUSTER_LEVEL_CONTROL, 0x03 | 0x07) => Ok(Action::Stop),
+        // Recall Scene: group id (two bytes), then the scene id.
+        (CLUSTER_SCENES, 0x05) => payload
+            .get(2)
+            .map(|scene| Action::Recall(*scene))
+            .ok_or(ZclError::TooShort),
+        _ => Err(ZclError::WrongCommand),
+    }
+}
+
 /// What to ask a device to report on one attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReportingRecord {

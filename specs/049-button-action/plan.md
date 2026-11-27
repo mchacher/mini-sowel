@@ -1,10 +1,10 @@
 # Plan: Spec 049
 
 ## Steps
-- [ ] 1. Living spec, Sowel subset, roadmap.
-- [ ] 2. Binding of a remote's output clusters.
-- [ ] 3. The command decoder and the `action` data; every press an event.
-- [ ] 4. Simulator button; tests; validate.
+- [x] 1. Living spec, Sowel subset, roadmap.
+- [x] 2. Binding of a remote's output clusters.
+- [x] 3. The command decoder and the `action` data; every press an event.
+- [x] 4. Simulator button; tests; validate.
 - [ ] 5. Review.
 
 Not applicable: API, interface (the device page shows any data).

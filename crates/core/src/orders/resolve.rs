@@ -134,7 +134,7 @@ fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
             state_command(value, order.value_on.as_deref(), order.value_off.as_deref())
         }
         (_, ValueType::Number) => level_command(value, order.min, order.max),
-        (_, ValueType::Json) => None,
+        (_, ValueType::Json | ValueType::Text) => None,
     }
 }
 

@@ -74,6 +74,12 @@ const COLOR: DataSpec = DataSpec {
     category: "light_color",
     unit: None,
 };
+const ACTION: DataSpec = DataSpec {
+    key: "action",
+    value_type: ValueType::Text,
+    category: "action",
+    unit: None,
+};
 const BATTERY: DataSpec = number("battery", "battery", Some("%"));
 const VOLTAGE: DataSpec = number("voltage", "voltage", Some("mV"));
 
@@ -126,6 +132,8 @@ pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
         0x0008 => &[BRIGHTNESS],
         0x0300 => &[COLOR_TEMP, COLOR],
         0x0001 => &[BATTERY, VOLTAGE],
+        // A remote's bound output clusters (spec 049), not a cluster of the specification.
+        crate::radio::measures::REMOTE_ACTION => &[ACTION],
         _ => &[],
     }
 }
@@ -198,6 +206,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
         "motion" => "occupancy",
         "light_state" => "state",
         "light_brightness" => "brightness",
+        "action" => "action",
         "light_color_temp" => "color_temp",
         "battery" => "battery",
         "voltage" => "voltage",
@@ -209,7 +218,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
 
 /// Where a data key comes in the table of spec 008 (R2): the order data are listed in.
 pub fn data_rank(key: &str) -> usize {
-    const ORDER: [&str; 16] = [
+    const ORDER: [&str; 17] = [
         "temperature",
         "humidity",
         "pressure",
@@ -226,6 +235,7 @@ pub fn data_rank(key: &str) -> usize {
         "voltage",
         "tamper",
         "battery_low",
+        "action",
     ];
     ORDER.iter().position(|k| *k == key).unwrap_or(ORDER.len())
 }
@@ -263,6 +273,7 @@ static WORDS: &[&str] = &[
     "color",
     "battery",
     "voltage",
+    "action",
     // Data categories.
     "luminosity",
     "motion",

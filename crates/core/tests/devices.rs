@@ -1845,3 +1845,61 @@ fn a_stored_device_with_twelve_data_keeps_its_first_eight_and_says_so_once() {
     );
     assert!(warnings_about("Three data device").is_empty());
 }
+
+// ---- A remote's `action` (spec 049) ----
+
+#[test]
+fn a_remote_gets_the_action_data_and_each_press_is_an_update_even_when_equal() {
+    use solite_core::radio::measures::REMOTE_ACTION;
+    use solite_core::radio::zcl::Action;
+    let mut devices = Devices::new();
+    let mut random = counter();
+    devices
+        .identified(EUI, Some("TEST"), Some("BTN01"), T0, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[REMOTE_ACTION], T0, &mut random)
+        .unwrap();
+    let data = &devices.list()[0].data;
+    assert_eq!(data.len(), 1);
+    assert_eq!(
+        (&*data[0].key, data[0].value_type, &*data[0].category),
+        ("action", ValueType::Text, "action")
+    );
+    assert_eq!(data[0].unit, None);
+    let press = |command| MeasureEvent {
+        sender: Sender::Eui64(EUI),
+        endpoint: 1,
+        measures: vec![Measure {
+            kind: "action",
+            value: Value::Action(command),
+            unit: "",
+            device_value: None,
+        }],
+    };
+    let mut told = Vec::new();
+    for (i, command) in [Action::Toggle, Action::Toggle, Action::Recall(7)]
+        .into_iter()
+        .enumerate()
+    {
+        devices
+            .measures_with(
+                &press(command),
+                T0 + i as u64,
+                &mut counter(),
+                &mut |_, data, previous| {
+                    told.push((previous.clone(), data.value.clone()));
+                },
+            )
+            .unwrap();
+    }
+    let value = |text: &str| serde_json::Value::String(text.into());
+    assert_eq!(
+        told,
+        vec![
+            (serde_json::Value::Null, value("toggle")),
+            (value("toggle"), value("toggle")),
+            (value("toggle"), value("recall_7")),
+        ]
+    );
+}

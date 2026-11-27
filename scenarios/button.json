@@ -1,0 +1,14 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE123456", "network": "none" },
+  "devices": [
+    { "id": "btn", "kind": "button", "eui64": "00124B0012345681" }
+  ],
+  "events": [
+    { "at": "2s", "device": "btn", "do": "join" },
+    { "at": "40s", "device": "btn", "do": "report", "action": "toggle" },
+    { "at": "45s", "device": "btn", "do": "report", "action": "toggle" },
+    { "at": "50s", "device": "btn", "do": "report", "action": "on" },
+    { "at": "55s", "device": "btn", "do": "report", "action": "brightness_move_up" },
+    { "at": "60s", "device": "btn", "do": "report", "action": "off" }
+  ]
+}
