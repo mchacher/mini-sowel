@@ -60,17 +60,21 @@ On/Off (`0x0006`), Level (`0x0008`) or Scenes (`0x0005`) commands to what it is 
   for `button`.
 
 ## Acceptance criteria
-- [ ] A simulated button: `action` `toggle`, then `toggle` again: two events (tested).
-- [ ] Each row of R2's table decodes (tested).
-- [ ] R1: a remote's output clusters are bound; a light's are not (tested).
-- [ ] `motion-light` with the button in its `buttons`: a press toggles the lights (tested, Mac).
-- [ ] validate green.
+- [x] A simulated button: `action` `toggle`, then `toggle` again: two events (tested).
+- [x] Each row of R2's table decodes (tested).
+- [x] R1: a remote's output clusters are bound; a light's are not (tested).
+- [x] `motion-light` with the button in its `buttons`: a press toggles the lights (tested, Mac).
+- [x] validate green.
 
 ## Edge cases
 - The same command twice: two events (R2).
 - A command of another cluster from the button: ignored as today.
 - A device with On/Off as input and output (a light that also sends): not a remote, not bound.
 - Scene id 0..255: `recall_0` .. `recall_255`.
+- A remote's bind that fails is not tried again: the remote has no `action` until it is paired
+  again (the reporting clusters' retry does not cover output clusters).
+- The Default Response to a press the coordinator decodes is success (0x00); to another
+  cluster-specific command, unsupported (0x81) as before.
 
 ## Sowel contract
 `DataCategory` "action" (`src/shared/types.ts:7` of the Sowel repository); the equipment type
@@ -78,3 +82,6 @@ On/Off (`0x0006`), Level (`0x0008`) or Scenes (`0x0005`) commands to what it is 
 
 ## How the user will check it
 `--sim` with a button scenario: the device page's `action`, and `motion-light` driven by it.
+
+### Result (2026-11-28)
+`validate --skip-slow` green (1879 tests, merged with spec 048). Code review (Sonnet): no blocking finding; the Default Response to a decoded press was 0x81 (fixed to success, tested). Not run with a real button: none paired on the box yet.

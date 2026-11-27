@@ -373,10 +373,15 @@ fn the_default_response_status_follows_the_kind_of_command() {
         default_response(0x0000, &[0x00, 0x21, 0x00, 0x00, 0x00]),
         Some(vec![0x18, 0x21, 0x0B, 0x00, 0x82])
     );
-    // A cluster-specific command sent to us (a toggle of the on/off cluster).
+    // A cluster-specific command sent to us that the coordinator does not decode (on/off 0x41).
+    assert_eq!(
+        default_response(0x0006, &[0x01, 0x22, 0x41]),
+        Some(vec![0x18, 0x22, 0x0B, 0x41, 0x81])
+    );
+    // A remote's toggle, decoded into `action` (spec 049): success.
     assert_eq!(
         default_response(0x0006, &[0x01, 0x22, 0x02]),
-        Some(vec![0x18, 0x22, 0x0B, 0x02, 0x81])
+        Some(vec![0x18, 0x22, 0x0B, 0x02, 0x00])
     );
     // A cluster-specific notification from the device: success.
     assert_eq!(
@@ -687,4 +692,16 @@ fn an_unknown_command_a_global_frame_or_a_server_frame_gives_no_action() {
         parse_remote_command(0x0008, &remote_frame(0x01, &[])),
         Err(ZclError::TooShort)
     );
+}
+
+#[test]
+fn a_remote_press_is_answered_success_and_an_unknown_cluster_command_unsupported() {
+    // Toggle (0x02) from a remote, client to server, default response asked: success (spec 049).
+    let press = [0x01, 0x42, 0x02];
+    let answer = solite_core::radio::zcl::default_response(0x0006, &press).expect("an answer");
+    assert_eq!(answer[2..], [0x0B, 0x02, 0x00]);
+    // A command of the same cluster the coordinator does not decode: unsupported (0x81).
+    let other = [0x01, 0x43, 0x41];
+    let answer = solite_core::radio::zcl::default_response(0x0006, &other).expect("an answer");
+    assert_eq!(answer[2..], [0x0B, 0x41, 0x81]);
 }

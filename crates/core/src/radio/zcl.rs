@@ -693,7 +693,8 @@ const STATUS_UNSUPPORTED_CLUSTER_COMMAND: u8 = 0x81;
 /// command that has its own response (the IAS Zone Enroll Request). Status: success for reports,
 /// notifications and responses; "unsupported general command" (0x82) for a global request the
 /// coordinator does not serve (Read Attributes...); "unsupported cluster command" (0x81) for a
-/// cluster-specific command sent to the coordinator as a server. Direction reversed,
+/// cluster-specific command sent to the coordinator as a server, but success for a remote's press
+/// it decodes (spec 049). Direction reversed,
 /// transaction number echoed, manufacturer code echoed when present.
 pub fn default_response(cluster: u16, received: &[u8]) -> Option<Vec<u8>> {
     let (header, _) = parse_header(received).ok()?;
@@ -715,6 +716,8 @@ pub fn default_response(cluster: u16, received: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
         FrameType::Cluster if header.from_server => STATUS_SUCCESS,
+        // A remote's press the coordinator decodes into `action` (spec 049) is accepted.
+        FrameType::Cluster if parse_remote_command(cluster, received).is_ok() => STATUS_SUCCESS,
         FrameType::Cluster => STATUS_UNSUPPORTED_CLUSTER_COMMAND,
         FrameType::Other => return None,
     };
