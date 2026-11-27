@@ -43,7 +43,8 @@ export function ZoneRecipesSection({
   }, [showPicker]);
 
   // No recipe is built in (spec 046): a box with none installed says so and points to the store,
-  // below the instances it kept (stopped, `Recipe not found`) that can still be read and deleted.
+  // below the instances it kept, which show `Recipe not installed` (R10: the row decides it from the
+  // recipe id missing in the list) and can be deleted.
   const noRecipe = recipes.length === 0;
   const mine = instances.filter((instance) => instance.params.zone === zoneId);
   const picked = recipes.find((r) => r.id === pickedId);

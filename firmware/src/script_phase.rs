@@ -420,6 +420,9 @@ pub fn run(
         "script phase: engine stack {} of {STACK_BYTES} bytes unused before it",
         job_thread::stack_unused()
     );
+    // The install step's uninstall deletes the recipe's instances (spec 042): the home's kept ones
+    // are noted first and made again once the recipe is loaded.
+    let kept_before = motion_light_instances(home);
     install_step(home)?;
     let runtimes = scripts::runtimes();
     let real = Arc::clone(&clocks.monotonic);
@@ -448,7 +451,13 @@ pub fn run(
 
     // 1. The three kept `motion-light` instances start now that the recipe is loaded (they were
     // stopped with `Recipe not found`, as on a box that has not installed it), the scenario again.
-    let originals = motion_light_instances(home);
+    let mut originals = motion_light_instances(home);
+    if originals.is_empty() {
+        for (_, params) in &kept_before {
+            create(home, MOTION_SCRIPT, params)?;
+        }
+        originals = motion_light_instances(home);
+    }
     if originals.is_empty() {
         return Err("script phase: the home has no motion-light instance".into());
     }

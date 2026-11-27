@@ -12,6 +12,7 @@
 - [x] 6. Remove the crate and the registration; feature-off builds (`-D warnings`).
 - [x] 7. Mac launchers, demo-garage, e2e, box-session B11 and its tests, firmware.sh, qemu.sh.
 - [x] 8. Docs "no longer true"; the image size and the scripts' line in the memory budget.
+- [x] 8b. R10: a row without its recipe (switch off and disabled, label, Delete), en/fr, living spec.
 - [ ] 9. validate; code review; the box check with the user (recipe key, flash, signed 1.1.2).
 
 ## Tests dropped (filled at step 3)
@@ -55,6 +56,8 @@
 | QEMU | script phase | script loaded, 3 kept instances started, memory gate measured with them |
 | build | radio image | no native symbol, no `id: "motion-light"` string; smaller |
 | UI | zone page with `GET /recipes` empty | no recipe, the store card pointed to |
+| UI | row whose recipe id is not in the list (`RecipeInstanceRow.test.tsx`) | switch off and disabled, "Recipe not installed", Delete asks then calls `DELETE` |
+| UI | row whose recipe exists | switch on and enabled, no label, no Delete |
 | box session | B11 on a box with the recipe missing, then present | installs from the given file; checks the garage's wave; never uninstalls |
 | tools | `demo-garage.sh` against a host without the recipe | stops with its message |
 

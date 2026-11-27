@@ -62,6 +62,9 @@ describe("ZoneRecipesSection", () => {
     renderSection();
     expect(screen.getAllByTestId("recipe-row")).toHaveLength(1);
     expect(screen.getByText("motion-light")).toBeTruthy(); // the recipe id: no name to show
+    expect(screen.getByText("Recipe not installed")).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
     expect(screen.getByText("1")).toBeTruthy(); // the count beside the title
     expect(screen.queryByText("Add a recipe")).toBeNull();
     expect(screen.queryByTitle("Add a recipe")).toBeNull();

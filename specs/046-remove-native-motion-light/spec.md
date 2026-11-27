@@ -124,6 +124,18 @@ listed in the plan with its reason.
   `id: "motion-light-script"`, the log lines) and `scripts/qemu.sh:155` search the new id.
 - A roadmap inbox line: "the box installs on its own the recipes it proposes" (user, question 4).
 
+### R10: an instance without its recipe says so (user, after the box demo of 2026-11-27)
+- On the zone page a row whose recipe id is absent from `GET /recipes` (the row decides it from
+  the list, never from the log text) shows its switch off and disabled (it cannot run, although
+  the instance is `enabled` in the saved home), the row dimmed, a "Recipe not installed" /
+  "Recette non installée" label and a visible Delete with the existing confirmation. A row whose
+  recipe exists is unchanged.
+- An uninstall deletes the instances (spec 042), so these rows come from a restore on another box
+  or a home saved with the native recipe before this spec. The "No recipe is installed" hint with
+  the link to `#/plugins` stays when no recipe at all is installed.
+- `ui/src/components/recipes/RecipeInstanceRow.tsx`; the journal's header offers Settings only
+  (Delete moved to the row).
+
 ## Living spec delta
 
 ### docs/living-spec/README.md

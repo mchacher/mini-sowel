@@ -1072,12 +1072,14 @@ copy embedded in the radio image at build time.
   and a switch that enables or disables it (dimmed when disabled; a refusal shows its text for
   5 s). A click on its name opens its journal: the log newest first, `HH:MM` and message, errors
   and warnings in their colours, read again every 5 s while open ("No entries"; "The journal could
-  not be read" when the first read fails), with a **Settings** button (Delete, for a recipe the
+  not be read" when the first read fails), with a **Settings** button (none for a recipe the
   host does not know). Settings opens the form in a dialog, filled from the instance, with Save
   and Delete (confirmed). "No recipe in <room>" and an "Add a recipe" link when the room has none. With no recipe installed on the host the panel
-  has no "+", still shows the instances of the room (named by their recipe id, stopped, with
-  `Recipe not found` in their journal, deletable), and says "No recipe is installed" under them,
-  with a link to the Plugins page of Administration.
+  has no "+" and says "No recipe is installed" with a link to the Plugins page of Administration.
+  An instance whose recipe id is absent from the recipe list (a home restored on another box, or
+  saved with a recipe since uninstalled) shows itself as it is, in the room whether or not another
+  recipe is installed: named by its recipe id, dimmed, its switch off and disabled (it cannot
+  run), a "Recipe not installed" label and a Delete (confirmed) in the row.
   **The form** is built from the recipe's slots, in their order, each with its name (`*` when
   required) and description: the zone is the room; an equipment list is a checkbox per equipment
   of the room of the slot's type; a duration is a number of minutes ("min"), sent as `"<n>m"`; a
