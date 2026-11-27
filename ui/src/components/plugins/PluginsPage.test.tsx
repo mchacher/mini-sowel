@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecipeStore, Resources, StoreEntry } from "../../api";
-import { mockApi, resetStores } from "../../test-utils";
+import { mockApi, recipeInstance, resetStores } from "../../test-utils";
 import { resetRecipeUpdates } from "../layout/useRecipeUpdates";
 import { Sidebar } from "../layout/Sidebar";
 import { PluginsPage } from "./PluginsPage";
@@ -326,6 +326,30 @@ describe("PluginsPage", () => {
     fireEvent.focusOut(within(a).getByRole("button", { name: "Confirm?" }));
     expect(await within(a).findByRole("button", { name: "Remove" })).toBeTruthy();
     expect(api.count(UNINSTALL_A)).toBe(0);
+  });
+
+  it.each([
+    [0, "Confirm?"],
+    [1, "Confirm? 1 instance will be deleted"],
+    [2, "Confirm? 2 instances will be deleted"],
+  ])("names the %i instances that a removal deletes", async (count, label) => {
+    const both = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+    const mine = Array.from({ length: count }, (_, n) =>
+      recipeInstance(`a${n}`, {}, { recipeId: "a" }),
+    );
+    mockApi({
+      [STORE]: { body: both },
+      [REFRESH]: { body: both },
+      [RESOURCES]: { body: resources() },
+      "GET /api/v1/recipe-instances": {
+        body: [...mine, recipeInstance("other", {})],
+      },
+      [UNINSTALL_A]: { status: 204 },
+    });
+    render(<PluginsPage />);
+    const a = await screen.findByTestId("recipe-a");
+    fireEvent.click(within(a).getByRole("button", { name: "Remove" }));
+    expect(await within(a).findByRole("button", { name: label })).toBeTruthy();
   });
 
   it("says why when the refresh at opening is refused, not that the catalogue is empty", async () => {

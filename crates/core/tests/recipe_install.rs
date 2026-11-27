@@ -1512,7 +1512,7 @@ fn an_entry_that_needs_a_newer_firmware_is_409() {
 }
 
 #[test]
-fn an_install_starts_the_instances_kept_for_that_id_when_they_are_enabled() {
+fn an_install_after_an_uninstall_finds_no_instance_to_start() {
     let mut world = World::new();
     world.installed("a", "1.0.0");
     let one = world.instance("a");
@@ -1529,12 +1529,15 @@ fn an_install_starts_the_instances_kept_for_that_id_when_they_are_enabled() {
         200
     );
     assert!(world.running(&one) && !world.running(&two));
-    // An uninstall keeps them stopped; the install brings the enabled one back.
+    // An uninstall deletes them (R3.6): a new install starts none.
     assert_eq!(world.uninstall("a").0, 204);
     assert!(!world.running(&one));
     world.installed("a", "1.0.0");
-    assert!(world.running(&one), "the enabled instance starts again");
-    assert!(!world.running(&two), "the disabled one stays stopped");
+    assert!(
+        !world.running(&one),
+        "the deleted instance does not come back"
+    );
+    assert!(world.lock().recipes().instances().next().is_none());
 }
 
 fn kept_instance(id: &str, params: &Value) -> RecipeInstance {
@@ -1792,34 +1795,95 @@ fn an_old_file_that_does_not_load_again_fails_the_recipe_with_both_reasons() {
 
 // ---- Uninstall (R3.6) ----
 
+/// An instance as `recipes.json` gives it back at start, in the root zone.
+fn restored(recipe: &str, id: &str) -> RecipeInstance {
+    RecipeInstance {
+        id: Id::parse(id).unwrap(),
+        recipe_id: recipe.into(),
+        params: format!(r#"{{"zone":"{ROOT}"}}"#).into(),
+        enabled: true,
+        created_at: T0,
+    }
+}
+
 #[test]
-fn an_uninstall_stops_and_keeps_the_instances_drops_the_runtime_and_removes_the_file() {
+fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_removes_the_file() {
     let mut world = World::new();
-    world.installed("a", "1.0.0");
-    let instance = world.instance("a");
+    let (a, b) = (
+        signed(&world.signing.clone(), "a", "1.0.0"),
+        signed(&world.signing.clone(), "b", "1.0.0"),
+    );
+    world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b)]);
+    assert_eq!(world.install_id("a").0, 201);
+    let one = world.instance("a");
+    let (status, zone) = world.call(
+        "POST",
+        "/api/v1/zones",
+        Some(JSON),
+        json!({ "name": "Annex" }).to_string().as_bytes(),
+    );
+    assert_eq!(status, 201, "{zone}");
+    let (status, body) = world.call(
+        "POST",
+        "/api/v1/recipe-instances",
+        Some(JSON),
+        json!({ "recipeId": "a", "params": { "zone": zone["id"] } })
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(status, 201, "{body}");
+    let two = body["id"].as_str().unwrap().to_string();
+    // Another recipe's instance stays.
+    assert_eq!(world.install_id("b").0, 201);
+    let other = world.instance("b");
+    let (hub, client) = {
+        let hub = world.lock().live();
+        let client = hub.connect().expect("a free slot");
+        let message = json!({"type": "subscribe", "topics": ["recipes"]}).to_string();
+        assert!(hub.subscribe(client, &message));
+        (hub, client)
+    };
+    world.lock().take_recipes_cursor();
     let (status, body) = world.uninstall("a");
     assert_eq!((status, body), (204, Value::Null));
-    assert!(!world.running(&instance));
+    assert!(!world.running(&one) && !world.running(&two));
+    assert!(world.running(&other));
     assert_eq!(world.file("a"), None);
     assert!(world.lock().recipes().recipe_info("a").is_none());
-    assert!(
-        world
-            .messages(&instance)
-            .iter()
-            .any(|m| m == "Recipe not found: a"),
-        "{:?}",
-        world.messages(&instance)
-    );
-    // The instance is kept.
+    let (_, list) = world.get("/api/v1/recipe-instances");
+    let ids: Vec<&str> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [other.as_str()]);
     assert_eq!(
-        world
-            .get("/api/v1/recipe-instances")
-            .1
-            .as_array()
-            .unwrap()
-            .len(),
-        1
+        world.get(&format!("/api/v1/recipe-instances/{one}/log")).1,
+        json!([]),
+        "the log goes with the instance"
     );
+    // The saver is asked to write recipes.json, without them.
+    let mut home = world.lock();
+    let mut cursor = home.take_recipes_cursor().expect("recipes.json to write");
+    let mut text = String::new();
+    while let Some(chunk) = cursor.next_chunk(&home).unwrap() {
+        text.push_str(&chunk);
+    }
+    let written: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(written.as_array().unwrap().len(), 1);
+    assert_eq!(written[0]["id"], other.as_str());
+    // One removed event per instance.
+    let batch: Value = serde_json::from_str(&hub.take_batch(client).unwrap()).unwrap();
+    let removed: Vec<&str> = batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["type"] == "recipe.instance.removed")
+        .map(|e| e["instanceId"].as_str().unwrap())
+        .collect();
+    assert_eq!(removed.len(), 2, "{batch}");
+    assert!(removed.contains(&one.as_str()) && removed.contains(&two.as_str()));
 }
 
 #[test]
@@ -1838,9 +1902,17 @@ fn an_uninstall_of_a_recipe_script_or_nothing_is_refused() {
 fn an_uninstall_removes_a_refused_file_too() {
     let mut world = World::new();
     world.storage.put("scripts/bad.srs", b"not a recipe file at all, and long enough to pass the length check of a header but no more");
+    world.lock().load_recipes(vec![restored(
+        "bad",
+        "22222222-2222-4222-8222-222222222222",
+    )]);
     world.boot();
     assert_eq!(world.lock().resources().scripts[0].state, "refused");
+    assert_eq!(world.lock().recipes().instances().count(), 1);
     assert_eq!(world.uninstall("bad").0, 204);
+    // The instance the refused file left goes with it.
+    assert_eq!(world.lock().recipes().instances().count(), 0);
+    assert!(world.lock().recipes_changed());
     assert!(world.storage.file("scripts/bad.srs").is_none());
     assert!(world.lock().resources().scripts.is_empty());
 }
@@ -2101,6 +2173,9 @@ fn in_the_safe_mode_the_uninstall_goes_through_and_install_update_and_refresh_ar
     world
         .storage
         .put("scripts/a.srs", &signed(&signing, "a", "1.0.0"));
+    world
+        .lock()
+        .load_recipes(vec![restored("a", "22222222-2222-4222-8222-222222222222")]);
     safe(&world);
     world.boot();
     let a = signed(&signing, "a", "1.0.0");
@@ -2116,9 +2191,11 @@ fn in_the_safe_mode_the_uninstall_goes_through_and_install_update_and_refresh_ar
     // The GETs answer.
     assert_eq!(world.get("/api/v1/recipes/store").0, 200);
     assert_eq!(world.get("/api/v1/system/resources").0, 200);
-    // The uninstall removes the refused file.
+    // The uninstall removes the refused file and the recipe's instance.
     assert_eq!(world.uninstall("a").0, 204);
     assert!(world.storage.file("scripts/a.srs").is_none());
+    assert_eq!(world.lock().recipes().instances().count(), 0);
+    assert!(world.lock().recipes_changed());
 }
 
 // ---- The factory reset (R3.9) ----

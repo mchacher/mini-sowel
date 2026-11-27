@@ -28,6 +28,7 @@
       `box_session_script.rs` (the F2 group of R7 is not part of this step: it is built with
       step 13, with the user)
 - [x] 11. Interface: the Resources and Recipes cards
+- [x] 11c. Revised after the second box demo (2026-11-27): an uninstall deletes the recipe's instances; the Plugins page's confirmation names their count (R3.6)
 - [x] 11b. Revised after the box demo (2026-11-27): the Plugins page of Administration replaces the Recipes card (R5.4); an uninstall needs only its thread's stack (R4.2)
 - [x] 12. Docs: living spec, sowel-subset, D78, memory budget, architecture, roadmap, design system
 - [ ] 13. Box run with the user (R7): the F2 group of `box-session.sh` and its tests in

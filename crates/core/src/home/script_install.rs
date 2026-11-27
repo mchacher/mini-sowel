@@ -277,10 +277,15 @@ impl Home {
         })
     }
 
-    /// An uninstall (R3.6): the instances stop and stay, the runtime is dropped, a refused file of
-    /// that id is forgotten. The file is the job's to remove.
+    /// An uninstall (R3.6): the recipe's instances are deleted (as `DELETE /recipe-instances/:id`
+    /// does, `recipes.json` to write), the runtime is dropped, a refused file of that id is
+    /// forgotten. The file is the job's to remove.
     pub(crate) fn uninstall_step(&mut self, id: &str, wall: u64) {
-        self.with_engine(|engine, _| engine.remove_script(id, wall, true));
+        let deleted = self.with_engine(|engine, _| engine.delete_instances_of(id));
+        if deleted > 0 {
+            self.recipes_changed = true;
+        }
+        self.with_engine(|engine, _| engine.remove_script(id, wall, false));
         self.install.refused.retain(|refused| refused.id != id);
     }
 

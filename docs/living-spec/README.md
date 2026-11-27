@@ -939,15 +939,16 @@ same routes and from a room's page, with the same log, state and events.
   factory reset are refused while a recipe job runs (a restart and a check also during a refresh),
   each with its own text.
 - **Install, update, uninstall**: an install loads the script, writes `scripts/<id>.srs` (one
-  flash write) and starts the instances kept for that id (stopped by an uninstall, a restore or an
+  flash write) and starts the instances kept for that id (stopped by a restore or an
   image that carries no such script, with `Failed to restore: Recipe not found: <id>`); a write
   that fails unloads it again (500 `Could not save the recipe`). An update stops the instances,
   drops the old runtime, loads the new file and writes it over the old one, then starts the
   instances with their settings; a new version that does not load leaves the old one running (400
   with the reason); a write that fails gives the old one back (500); an old file that does not
   load again fails the recipe as a script that fails (500 with both reasons). An uninstall
-  stops the instances and keeps them (`Recipe not found: <id>` in their log), drops the runtime and
-  removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
+  deletes the recipe's instances, in every zone, with their settings and logs (as `DELETE
+  /recipe-instances/:id` does: `recipe.instance.removed` for each, `recipes.json` written by the
+  saver), drops the runtime and removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
   without a file, 409 `<id> is built in` for a `--recipe-script`.
 - **At start** the files of `scripts/` are read in the order of their ids (a lone `<id>.srs.new`
   left by a power cut is promoted, a `.tmp` ignored) and go through the same checks; the enabled
@@ -1226,7 +1227,8 @@ copy embedded in the radio image at build time.
   figure is `null`). French and English.
   The **Plugins** page (`#/plugins`, Administration, after Discovery; Sowel's page cut to script
   recipes, with no category filter): two tabs with their counts, **Installed** (each installed
-  recipe with its name and version, Update when the catalogue holds a newer one, Remove; the
+  recipe with its name and version, Update when the catalogue holds a newer one, Remove, whose
+  second click says how many instances go with it: "Confirm? 2 instances will be deleted"; the
   files refused at start with their reason, and the installed files the catalogue does not list,
   with Remove) and **Store** (the catalogue, with Install, or the "Installed" mark and Update; a
   recipe the program provides itself marked "Provided by Solite" with no button; the error of the

@@ -1544,7 +1544,9 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   stack is in PSRAM: the download, the write and the removal run on a `recipe` thread in internal
   RAM, the load and unload on the `script` thread. No script is built into the radio image. Not in
   the backup (D54's old releases refuse an unknown file). The uninstall is allowed in safe mode (the
-  way out of a script that breaks the engine, as D79's restart). The routes are Solite's own, under
+  way out of a script that breaks the engine, as D79's restart). It deletes the recipe's instances
+  (settings and logs) with the file, as a delete does: kept and stopped, an instance stayed in its
+  zone as a ghost (the second box demo, 2026-11-27); the page's confirmation names their count. The routes are Solite's own, under
   `/recipes/*`, and the ids `store` and `install` are reserved so that they never meet Sowel's
   `/recipes/:recipeId`. The factory reset removes the installed recipes.
 - **Why**: a new recipe needed a new firmware (D76); the user ranked its removal first. Sowel's
