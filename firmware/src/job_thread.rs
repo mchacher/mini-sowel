@@ -1,5 +1,5 @@
 //! The threads a heavy request runs on (D59, D60): started for the job, their stack in internal
-//! RAM (PSRAM for the permanent `script` thread alone, D83), pinned to core 0 with the API
+//! RAM, or in PSRAM where the caller says so (`StackPlace`: the `script` threads, D83), pinned to core 0 with the API
 //! workers, ended with the job. The worker that took the request
 //! lends it and waits. An API worker's stack is 10 KB in PSRAM: a job that touches the flash (the
 //! backup's) or that needs more stack than a worker has left (the update's signature check) runs
@@ -58,7 +58,7 @@ pub enum StackPlace {
 }
 
 /// Runs `job` on a thread named `name` whose stack (`stack_bytes`) is in `place`, on core 0,
-/// and waits for it. `Err` when the thread cannot start (no internal RAM block of that size):
+/// and waits for it. `Err` when the thread cannot start (no free block of that size there):
 /// `job` did not run. `Ok(None)` when `job` panicked.
 pub fn run<T: Send>(
     name: &'static CStr,
@@ -103,7 +103,7 @@ pub fn run<T: Send>(
     result
 }
 
-/// Runs a closure the caller borrows on a thread named `name` whose stack is in internal RAM, and
+/// Runs a closure the caller borrows on a thread named `name` whose stack is in `place`, and
 /// waits for it (the `script` step of a recipe job in the image QEMU runs, spec 042). `Err` when
 /// the thread cannot start: `job` did not run.
 #[cfg(all(feature = "sim", feature = "scripts"))]

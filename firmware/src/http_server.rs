@@ -9,8 +9,8 @@
 //! stack than a worker has: their answer runs on a thread started for the job (`job_thread.rs`),
 //! its stack in internal RAM, while the worker waits for it. The handler of every request that is not a
 //! `GET` (it can start or call a script recipe, spec 041) runs on the `script` thread, made once at
-//! boot (its 32 KB of internal RAM are taken while the memory is whole, not per request), one request
-//! at a time: a worker's 10 KB cannot hold the script's 16 KB stack.
+//! boot, its 32 KB stack in PSRAM (nothing it runs touches the flash, D83), one request at a time: a
+//! worker's 10 KB cannot hold the script's 16 KB stack.
 
 use std::ffi::{CStr, CString};
 use std::io::Read;
@@ -981,8 +981,8 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         handle_guarded(&api.home, &request, wall_ms(), &mut random)
     };
     // A request that changes something can start a script (an instance's start, a settle, a
-    // validation): its handler runs on the `script` thread, made at boot, its stack in internal
-    // RAM and sized for the script's own, never on this worker's 10 KB in PSRAM (spec 041 R3.4).
+    // validation): its handler runs on the `script` thread, made at boot, its 32 KB stack in PSRAM
+    // and sized for the script's own (D83), never on this worker's 10 KB (spec 041 R3.4).
     // One at a time: the home's lock serialises them anyway. A `GET` never reaches a script, nor
     // do the account's routes (`/api/v1/auth/*`: the login's password hash must not hold every
     // other write behind it); they stay on this worker, as they were before scripts.
@@ -1103,7 +1103,23 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
             after_job_thread(&raw, "update-check", ran);
         }
         Reply::RecipeJob(ticket) | Reply::CatalogueRefresh(ticket) => {
-            let ran = run_on_recipe_thread(&raw, ticket, Arc::clone(&api.home));
+            let home = Arc::clone(&api.home);
+            // The `recipe` thread made at boot; when it could not be made, a thread for this job
+            // (the admission then counts its 20 KB stack, spec 045 R3), so an uninstall, safe
+            // mode's way out of a bad recipe, still runs.
+            let ran = if RECIPE_JOBS.get().is_some() {
+                run_on_recipe_thread(&raw, ticket, home)
+            } else {
+                let lent = Lent(&raw);
+                job_thread::run(
+                    c"recipe",
+                    FETCH_STACK_BYTES,
+                    StackPlace::Internal,
+                    move || {
+                        answer_recipe(lent.get(), ticket, &home);
+                    },
+                )
+            };
             after_job_thread(&raw, "recipe", ran);
         }
         Reply::UpdatePull(ticket) => {

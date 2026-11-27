@@ -967,8 +967,7 @@ same routes and from a room's page, with the same log, state and events.
   made once at start, so an install, an update or a refresh needs only those 16 KB and an uninstall,
   which opens no TLS session, needs none; where a thread is made for each job (the QEMU run), the
   thread's 20 KB count too (36 KB, 20 KB for an uninstall). When the box's `recipe` thread could
-  not be made at start (no 20 KB block), it logs it and every recipe job answers 503 `Busy, try
-  again`. The Mac reads no memory: its admission always passes.
+  not be made at start (no 20 KB block), it logs it, and each recipe job runs on a thread made for it, the admission then counting its 20 KB (36 KB for an install, update or refresh, 20 KB for an uninstall). The Mac reads no memory: its admission always passes.
 - **Where it runs on the box**: the download, the checks, the write and the removal run on the
   `recipe` thread, made once at start, whose stack is in internal RAM (the flash is never touched
   from a task whose stack is in PSRAM), one job at a time; the load and unload of a runtime on the

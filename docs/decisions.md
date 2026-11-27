@@ -1442,7 +1442,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (cannot hold motion-light's state machine; rejected by Sowel's own draft); native recipes delivered
   by firmware updates only (no recipe without a release).
 
-## D74: One QuickJS runtime per script recipe, its bounds and where it lives on the box (spec 041)
+## D74: One QuickJS runtime per script recipe, its bounds and where it lives on the box (spec 041; the `script` thread's internal stack: replaced by D83)
 
 - **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
 - **Choice**: one runtime and one context per script recipe, shared by its instances (Sowel's draft:
@@ -1531,7 +1531,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   wired as data lines, not checked on the Dongle Max); QuickJS compiled at `-O2` (a larger image,
   more cache misses; not measured); keeping 160 MHz and a slower limit per call.
 
-## D78: Script recipes installed from a catalogue or a signed file, checked at every start (spec 042)
+## D78: Script recipes installed from a catalogue or a signed file, checked at every start (spec 042; the per-job `recipe` thread on the box: replaced by D83)
 
 - **Date**: 2026-11-27
 - **Choice**: refines D76. A script recipe is installed from a catalogue (`recipes.json`, at
@@ -1673,7 +1673,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   The core's admission (`RecipeInstalls::job_thread_kept`) then counts only the TLS session's 16 KB
   for an install, an update or a refresh, and nothing for an uninstall; the Mac and the QEMU run,
   which make a thread per job, keep the 36 KB and the 20 KB. A thread that cannot be made at start
-  is logged and every recipe job answers 503 `Busy`. A PSRAM stack is allowed because nothing the
+  is logged and a recipe job then runs on a thread made for it (internal RAM), the admission counting its 20 KB as before. A PSRAM stack is allowed because nothing the
   `script` thread runs touches the flash (D59: a flash access, a read too, turns the caches and so
   the PSRAM off): the core's router for every non-`GET` request but `/auth/*` reaches no `Storage`
   (the saves are written by the engine's saver), and the recipe jobs' load, swap and unload steps

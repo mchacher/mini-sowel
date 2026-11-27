@@ -14,7 +14,9 @@ session) until a restart. Two causes: the permanent `script` thread's 32 KB stac
 each job (`firmware/src/http_server.rs:998`, D78).
 
 ## Goals
-- The internal RAM 32 KB higher for the whole run (the script thread's stack in PSRAM).
+- The internal RAM 32 KB higher at its lowest, during a recipe job (the script thread's stack in
+  PSRAM; the `recipe` thread's 20 KB, now held for the whole run, makes it about 12 KB higher when
+  no job runs).
 - An install no longer needs a whole 20 KB block at the time of the job.
 
 ## Out of scope
@@ -51,8 +53,9 @@ each job (`firmware/src/http_server.rs:998`, D78).
 - The internal RAM admission of an install, update or refresh then needs only the TLS session's
   16 KB (`RECIPE_INTERNAL_MARGIN`); an uninstall needs nothing. The text is unchanged
   (`Not enough internal memory: largest free block <n> KB, <m> KB needed`).
-- When the thread cannot be made at boot (no 20 KB block), the box logs it and every recipe job
-  answers 503 `Busy` (as the script thread's absence does).
+- When the thread cannot be made at boot (no 20 KB block), the box logs it, and each recipe job
+  runs on a thread made for it as before spec 045, the admission counting its 20 KB (so an
+  uninstall, safe mode's way out of a bad recipe, still runs).
 - The Mac host and the QEMU phase keep a job thread per job (their admission keeps the 36 KB).
 
 ### R4: QEMU
@@ -84,7 +87,7 @@ each job (`firmware/src/http_server.rs:998`, D78).
       install accepted, the internal minimum at least 64 KB (B11.6), the garage still running.
 
 ## Edge cases
-- No 20 KB block at boot for the `recipe` thread: logged, recipe jobs 503 `Busy`.
+- No 20 KB block at boot for the `recipe` thread: logged, each recipe job on a thread of its own.
 - A storage call from a PSRAM stack (none today): an error, logged, the chip keeps running.
 - Two recipe jobs at once: the second is 409 as today (one job at a time).
 
