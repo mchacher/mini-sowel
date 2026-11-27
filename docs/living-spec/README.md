@@ -433,6 +433,7 @@ except:
   the update route's, streamed up to 4 MB and a header, see "Updates itself from a signed file", and the backup restore's, streamed up to 2 MiB); a body
   that stops for 5 s, 408 `Request timeout`, its connection closed; a request head over 4096 bytes,
   431 (the backup's password header can need 1536 of them). A method other than GET, POST, PUT, DELETE and PATCH is answered 405 by ESP-IDF itself.
+- On the box the server is one task (ESP-IDF's): it waits at most 2 s for the next bytes of a request (an inactivity gap, so a large upload that keeps flowing is not cut), and a connection that sent its headers and never its body holds that task for 2 s, during which every other request waits. The task answers 408 and moves on.
 - In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
   `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`),
   `POST /api/v1/system/update`, `POST /api/v1/system/version/check` and `POST /api/v1/system/restart`; a restore and a factory reset are refused too.

@@ -38,6 +38,14 @@ use crate::update::release::ReleaseTicket;
 /// Request bodies over this many bytes are refused (413).
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
 
+/// How long the box's HTTP server (one task) waits for the next bytes of a request, in seconds
+/// (ESP-IDF's `recv_wait_timeout`). A client that sends its headers and never the body holds that
+/// task for this long, and every other request waits behind it. The wait is per receive, an
+/// inactivity gap and not a total: 2 s keeps a 2 MiB upload over Wi-Fi working, and stays above
+/// the 1 s that curl waits after `Expect: 100-continue` before sending the body. esp-idf-svc
+/// hardcodes 5 s.
+pub const HTTPD_RECV_WAIT_SECS: u16 = 2;
+
 const PREFIX: &str = "/api/v1";
 
 /// The routes this module serves, as (method, path): a segment starting with `:` is a
