@@ -2,15 +2,15 @@
 
 ## Steps
 
-- [ ] 1. Living spec, `CLAUDE.md`, `README.md`, `docs/sowel-subset.md`, D80
-- [ ] 2. The constants: `MAX_DATA` 8, `MAX_BINDINGS` 8 (core and interface), `MAX_LOG_ENTRIES` 20
+- [x] 1. Living spec, `CLAUDE.md`, `README.md`, `docs/sowel-subset.md`, D80
+- [x] 2. The constants: `MAX_DATA` 8, `MAX_BINDINGS` 8 (core and interface), `MAX_LOG_ENTRIES` 20
       (params unchanged, R4)
-- [ ] 3. The device's "not added" line once per device and key; the loads' cut lines; the home's
+- [x] 3. The device's "not added" line once per device and key; the loads' cut lines; the home's
       load drops dangling bindings before it cuts at 8
-- [ ] 4. The interface's form and texts at 8
-- [ ] 5. `measure-api.sh` and the box session's B6 at 17 requests
-- [ ] 6. Tests moved to the new bounds; the worst-case test at the new bounds
-- [ ] 7. `docs/memory-budget.md` measured again (Mac worst case, realistic home, QEMU)
+- [x] 4. The interface's form and texts at 8
+- [x] 5. `measure-api.sh` and the box session's B6 at 17 requests
+- [x] 6. Tests moved to the new bounds; the worst-case test at the new bounds
+- [x] 7. `docs/memory-budget.md` measured again (Mac worst case, realistic home, QEMU)
 
 ## Test plan
 
@@ -35,6 +35,6 @@
 
 ## Validation
 
-- [ ] Validate command green
-- [ ] Agent review done, blocking findings fixed
-- [ ] Demo seen and approved by the user
+- [x] Validate command green
+- [x] Agent review done, blocking findings fixed
+- [x] Demo seen and approved by the user (the box, 2026-11-27: "ça marche")

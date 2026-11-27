@@ -153,15 +153,15 @@ values of each kind (R2.2), and 8 data a device stands, the IAS multi-sensor's z
 
 ## Acceptance criteria
 
-- [ ] `MAX_DATA` 8, `MAX_BINDINGS` 8 (core and interface), `MAX_LOG_ENTRIES` 20; params unchanged
+- [x] `MAX_DATA` 8, `MAX_BINDINGS` 8 (core and interface), `MAX_LOG_ENTRIES` 20; params unchanged
       at 2 KB.
-- [ ] The tests of the plan pass; the old bounds' tests moved to the new ones (`DeviceSelector.test.tsx:166-186`,
+- [x] The tests of the plan pass; the old bounds' tests moved to the new ones (`DeviceSelector.test.tsx:166-186`,
       `bindingUtils.test.ts:132-135, 260` included).
-- [ ] `memory_worst_case` under 1 MiB at about 715 KB (over 800 KB: told to the user first); the
+- [x] `memory_worst_case` under 1 MiB at about 715 KB (over 800 KB: told to the user first); the
       figures written in `docs/memory-budget.md`; `measure-api.sh` at 17 requests.
-- [ ] Living spec, `CLAUDE.md`, `README.md`, `docs/sowel-subset.md` and D80 written;
+- [x] Living spec, `CLAUDE.md`, `README.md`, `docs/sowel-subset.md` and D80 written;
       `sh scripts/validate.sh` green.
-- [ ] Box (with the user; their flash, `--keep-storage`): the home loads unchanged (2 devices, 1
+- [x] Box (with the user; their flash, `--keep-storage`): the home loads unchanged (2 devices, 1
       zone, 2 equipments, 1 recipe instance), the recipe runs, a log shows at most 20 lines.
 
 ## Edge cases
@@ -189,3 +189,9 @@ box as is; the link with Sowel (milestone G) will have to say so.
 On the Mac: the worst-case figure before and after (`cargo test -p solite-core --test
 memory_worst_case -- --nocapture`). On the box (with the user, their flash with `--keep-storage`):
 the garage is there as before, the motion light works, a recipe's log shows at most 20 lines.
+
+**Result on the box (2026-11-27)**: the image flashed with `--keep-storage` and the update key
+(`update: key 91b2c084`); no cut at load (the home is far under the bounds); 2 devices online (the
+relay 1 data, the motion sensor 4), 1 zone, 2 equipments online, `motion-light-script` enabled and
+its log answered (`?limit=50` gave the lines kept); memory as before (internal 101 KB free, PSRAM
+1753 KB free); the user's wave switched the spots on.
