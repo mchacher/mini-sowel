@@ -1,9 +1,9 @@
 # Plan: Spec 047
 
 ## Steps
-- [ ] 1. Living spec and design system delta.
-- [ ] 2. `Nav` and `AdminSection` (`Sidebar.tsx`).
-- [ ] 3. Tests (`Sidebar.test.tsx`).
+- [x] 1. Living spec and design system delta.
+- [x] 2. `Nav` and `AdminSection` (`Sidebar.tsx`).
+- [x] 3. Tests (`Sidebar.test.tsx`).
 - [ ] 4. Screenshots, Hybrid and Dark, desktop and drawer, 1 room and 10 rooms.
 - [ ] 5. validate; code review; demo.
 

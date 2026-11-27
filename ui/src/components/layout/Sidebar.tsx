@@ -31,7 +31,7 @@ function AdminSection({ page, onPick }: { page: Page | null; onPick?: () => void
     if (page !== null) setExpanded(true);
   }, [page]);
   return (
-    <div className="mt-3 pt-3 border-t border-border-light">
+    <div>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
@@ -106,10 +106,16 @@ function LogoutButton() {
 function Nav({ zones, activeId, page, onPick }: Zones & { onPick?: () => void }) {
   const { t } = useTranslation();
   return (
-    <nav aria-label={t("app.mainNav")} className="flex-1 overflow-y-auto py-3 px-2">
-      <ZoneTree zones={zones} activeId={page ? null : activeId} onPick={onPick} />
-      <AdminSection page={page ?? null} onPick={onPick} />
-      <LogoutButton />
+    <nav aria-label={t("app.mainNav")} className="flex-1 min-h-0 flex flex-col">
+      {/* The rooms scroll alone; Administration and Log out stay pinned at the bottom, as Sowel's
+          sidebar (spec 047). */}
+      <div className="flex-1 min-h-0 overflow-y-auto py-3 px-2">
+        <ZoneTree zones={zones} activeId={page ? null : activeId} onPick={onPick} />
+      </div>
+      <div className="border-t border-border-light py-2 px-2 min-h-0 overflow-y-auto">
+        <AdminSection page={page ?? null} onPick={onPick} />
+        <LogoutButton />
+      </div>
     </nav>
   );
 }

@@ -53,14 +53,58 @@ describe("Sidebar, Administration section", () => {
     expect(entries()).toEqual(["Home", "Garage", "House"]);
   });
 
-  it("sits at the foot of the navigation, under a top border", () => {
+  it("sits in a bottom block under the scrolling room tree, as Sowel's (spec 047)", () => {
     show();
+    const nav = screen.getByRole("navigation");
+    const [tree, bottom, ...rest] = Array.from(nav.children);
+    expect(rest).toEqual([]);
+    expect(tree.className).toContain("overflow-y-auto");
+    expect(tree.className).toContain("flex-1");
+    expect(tree.className).toContain("min-h-0");
+    expect(tree.textContent).toContain("Garage");
+    for (const c of [
+      "border-t",
+      "border-border-light",
+      "py-2",
+      "px-2",
+      "min-h-0",
+      "overflow-y-auto",
+    ])
+      expect(bottom.className.split(" ")).toContain(c);
     const section = title().parentElement!;
-    expect(section.className).toContain("border-t");
-    expect(section.className).toContain("border-border-light");
+    expect(section.parentElement).toBe(bottom);
+    expect(section.className).not.toContain("border-t");
     // Log out follows, and nothing after it.
     expect(section.nextElementSibling?.textContent).toBe("Log out");
     expect(section.nextElementSibling?.nextElementSibling).toBeNull();
+  });
+
+  it("has the same bottom block in the phone's drawer", () => {
+    render(<MobileDrawer zones={flat} activeId="garage" page={null} onClose={() => {}} />);
+    const [tree, bottom] = Array.from(screen.getByRole("navigation").children);
+    expect(tree.className).toContain("overflow-y-auto");
+    expect(bottom.className).toContain("border-t");
+    expect(bottom.textContent).toContain("Administration");
+    expect(bottom.textContent).toContain("Log out");
+  });
+
+  it("keeps every room in the scrolling area, many or none", () => {
+    const many = flattenZones([
+      zone(
+        "root",
+        "Home",
+        Array.from({ length: 20 }, (_, i) => zone(`z${i}`, `Room ${i}`, [], "root")),
+      ),
+    ]);
+    render(<Sidebar zones={many} activeId="z0" page={null} />);
+    const [tree, bottom] = Array.from(screen.getByRole("navigation").children);
+    expect(tree.textContent).toContain("Room 19");
+    expect(bottom.textContent).not.toContain("Room");
+    cleanup();
+    render(<Sidebar zones={[]} activeId={null} page={null} />);
+    const nav = screen.getByRole("navigation");
+    expect(nav.lastElementChild?.textContent).toContain("Administration");
+    expect(nav.lastElementChild?.textContent).toContain("Log out");
   });
 
   it.each([
