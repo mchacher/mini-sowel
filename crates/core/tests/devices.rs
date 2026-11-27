@@ -123,10 +123,47 @@ fn every_row_of_the_cluster_table_gives_its_data() {
         ]
     );
     assert!(data_for_cluster(0x0500).is_empty());
+    // Spec 048: Electrical Measurement and Metering.
+    let electrical = |cluster| {
+        data_for_cluster(cluster)
+            .iter()
+            .map(|d| (d.key, d.category, d.unit))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        electrical(0x0B04),
+        vec![
+            ("power", "power", Some("W")),
+            ("current", "current", Some("A"))
+        ]
+    );
+    assert_eq!(
+        electrical(0x0702),
+        vec![
+            ("power", "power", Some("W")),
+            ("energy", "energy", Some("kWh"))
+        ]
+    );
     // The orders: on/off, level and colour.
     assert_eq!(orders_for_cluster(0x0006)[0].category, "light_toggle");
     assert_eq!(orders_for_cluster(0x0008)[0].category, "set_brightness");
     assert!(orders_for_cluster(0x0402).is_empty());
+}
+
+#[test]
+fn a_plug_with_both_electrical_clusters_has_one_power_one_energy_one_current() {
+    let mut devices = Devices::new();
+    let mut random = counter();
+    devices
+        .identified(EUI, Some("TEST"), Some("PLG01"), T0, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[0x0006, 0x0702, 0x0B04], T0, &mut random)
+        .unwrap();
+    assert_eq!(
+        keys(&devices.list()[0]),
+        ["state", "power", "energy", "current"]
+    );
 }
 
 #[test]

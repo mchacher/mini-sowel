@@ -16,6 +16,10 @@ pub enum Kind {
     /// A mains-powered colour light: the dimmer's commands plus the Color Control cluster (Move to
     /// Color Temperature, Move to Color, Move to Hue and Saturation, spec 031).
     ColorLight,
+    /// A mains-powered metering plug: On, Off and Toggle, Electrical Measurement and Metering
+    /// (spec 048). It answers the reads of the scale: power divisor 10, current and energy
+    /// divisor 1000, multipliers 1.
+    Plug,
 }
 
 impl Kind {
@@ -27,6 +31,7 @@ impl Kind {
             Kind::Relay => "relay",
             Kind::Dimmer => "dimmer",
             Kind::ColorLight => "color-light",
+            Kind::Plug => "plug",
         }
     }
 
@@ -38,6 +43,7 @@ impl Kind {
             Kind::Relay,
             Kind::Dimmer,
             Kind::ColorLight,
+            Kind::Plug,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -51,6 +57,7 @@ impl Kind {
             Kind::Relay => 0x0100,
             Kind::Dimmer => 0x0101,
             Kind::ColorLight => 0x010D,
+            Kind::Plug => 0x0051,
         }
     }
 }
@@ -68,6 +75,12 @@ pub struct DeviceReport {
     pub color_temp: Option<u16>,
     /// A colour as X and Y (each 0 to 1), `color-light` only: one frame with both attributes.
     pub color: Option<(f64, f64)>,
+    /// Watts, `plug` only (reported with the plug's scale).
+    pub power: Option<f64>,
+    /// Amperes, `plug` only.
+    pub current: Option<f64>,
+    /// Kilowatt-hours, `plug` only.
+    pub energy: Option<f64>,
 }
 
 /// A character attribute of the simulated device.
@@ -177,6 +190,31 @@ pub fn color_xy_report(tsn: u8, x: u16, y: u16) -> Vec<u8> {
 /// The raw CurrentX or CurrentY of a value from 0 to 1.
 pub fn color_raw(value: f64) -> u16 {
     ((value * 65535.0).round() as u16).min(0xFEFF)
+}
+
+/// The scale a simulated plug answers: (Electrical Measurement power multiplier, power divisor,
+/// current multiplier, current divisor, Metering multiplier, divisor).
+pub const PLUG_SCALE: (u16, u16, u16, u16, u32, u32) = (1, 10, 1, 1000, 1, 1000);
+
+/// An Electrical Measurement report: ActivePower (int16, in 1/10 W) and RMSCurrent (uint16, mA)
+/// of the plug's scale; `None` leaves the attribute out.
+pub fn electrical_report(tsn: u8, watts: Option<f64>, amperes: Option<f64>) -> Vec<u8> {
+    let mut records = Vec::new();
+    if let Some(watts) = watts {
+        let raw = (watts * f64::from(PLUG_SCALE.1)).round() as i16;
+        records.push((0x050B, 0x29, raw.to_le_bytes().to_vec()));
+    }
+    if let Some(amperes) = amperes {
+        let raw = (amperes * f64::from(PLUG_SCALE.3)).round() as u16;
+        records.push((0x0508, 0x21, raw.to_le_bytes().to_vec()));
+    }
+    report_frame(tsn, &records)
+}
+
+/// A Metering report: CurrentSummationDelivered (uint48, in Wh).
+pub fn metering_report(tsn: u8, kilowatt_hours: f64) -> Vec<u8> {
+    let raw = (kilowatt_hours * f64::from(PLUG_SCALE.5)).round() as u64;
+    report_frame(tsn, &[(0x0000, 0x25, raw.to_le_bytes()[..6].to_vec())])
 }
 
 /// An IAS Zone Status Change Notification (cluster-specific, server to client): the alarm bit
@@ -420,6 +458,12 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0008, 0x0300],
                 false,
             ),
+            Kind::Plug => (
+                "TEST",
+                "PLG01",
+                vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0702, 0x0B04],
+                false,
+            ),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
@@ -429,7 +473,10 @@ impl SimDevice {
             device.zone_type = Some(0x000D);
         }
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
-        if matches!(kind, Kind::Relay | Kind::Dimmer | Kind::ColorLight) {
+        if matches!(
+            kind,
+            Kind::Relay | Kind::Dimmer | Kind::ColorLight | Kind::Plug
+        ) {
             device.capability = CAPABILITY_MAINS;
         }
         device

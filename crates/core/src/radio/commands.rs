@@ -173,6 +173,24 @@ impl Commands {
         self.results.push_back((done.handle, result));
     }
 
+    /// Queues the read of the scale attributes of an electrical cluster (spec 048): sent by the
+    /// next poll, its answer is a Read Attributes Response the coordinator takes the scale from.
+    pub(super) fn queue_scale_read(&mut self, nwk: u16, endpoint: u8, cluster: u16) {
+        let Some(wanted) = super::measures::scale_attributes(cluster) else {
+            return;
+        };
+        let mut attributes = [0; MAX_READ_ATTRIBUTES];
+        let count = wanted.len().min(MAX_READ_ATTRIBUTES);
+        attributes[..count].copy_from_slice(&wanted[..count]);
+        self.push_read(StateRead {
+            nwk,
+            endpoint,
+            cluster,
+            attributes,
+            count,
+        });
+    }
+
     fn push_read(&mut self, read: StateRead) {
         if self.reads.len() >= MAX_READS {
             self.reads.pop_front();

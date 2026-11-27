@@ -1,10 +1,10 @@
 # Plan: Spec 048
 
 ## Steps
-- [ ] 1. Living spec, Sowel subset, roadmap.
-- [ ] 2. Catalog, measures, scale read, reporting.
-- [ ] 3. Simulator plug and scenario.
-- [ ] 4. Tests; validate.
+- [x] 1. Living spec, Sowel subset, roadmap.
+- [x] 2. Catalog, measures, scale read, reporting.
+- [x] 3. Simulator plug and scenario.
+- [x] 4. Tests; validate.
 - [ ] 5. Review.
 
 Not applicable: API (the data go through the existing routes), interface (the device page shows

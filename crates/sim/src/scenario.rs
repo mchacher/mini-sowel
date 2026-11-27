@@ -113,6 +113,9 @@ struct RawEvent {
     light_state: Option<Value>,
     color_temp: Option<Value>,
     color: Option<Value>,
+    power: Option<Value>,
+    current: Option<Value>,
+    energy: Option<Value>,
 }
 
 /// Reads the raw structure of one object; `prefix` is the path of the object plus a dot
@@ -284,7 +287,7 @@ fn devices_of(values: Vec<Value>) -> Result<Vec<DeviceSpec>, String> {
         let kind_text = required_text(spec.kind, &format!("{prefix}kind"))?;
         let kind = Kind::from_name(&kind_text).ok_or_else(|| {
             format!(
-                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer or color-light)"
+                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light or plug)"
             )
         })?;
         let eui_path = format!("{prefix}eui64");
@@ -312,6 +315,7 @@ fn allows(kind: Kind, field: &str) -> bool {
         Kind::TemperatureHumidity => matches!(field, "temperature" | "humidity" | "battery"),
         Kind::Motion => matches!(field, "motion" | "battery"),
         Kind::Relay | Kind::Dimmer => field == "light_state",
+        Kind::Plug => matches!(field, "light_state" | "power" | "current" | "energy"),
         Kind::ColorLight => matches!(field, "light_state" | "color_temp" | "color"),
     }
 }
@@ -365,6 +369,9 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
         ("light_state", spec.light_state),
         ("color_temp", spec.color_temp),
         ("color", spec.color),
+        ("power", spec.power),
+        ("current", spec.current),
+        ("energy", spec.energy),
     ];
     let action = match action_text.as_str() {
         "join" => {
@@ -419,6 +426,9 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
                         );
                     }
                     "color" => report.color = Some(color_of(&value, &path)?),
+                    "power" => report.power = Some(number_in(&value, -3000.0, 3000.0, &path)?),
+                    "current" => report.current = Some(number_in(&value, 0.0, 60.0, &path)?),
+                    "energy" => report.energy = Some(number_in(&value, 0.0, 1_000_000.0, &path)?),
                     _ => {
                         report.light_state = Some(match value.as_str() {
                             Some("on") => true,
