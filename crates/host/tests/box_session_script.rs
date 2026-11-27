@@ -1874,7 +1874,7 @@ fn a_password_in_the_environment_sets_up_the_account_and_measure_api_logs_in_wit
     assert_eq!(out.code, 0, "{}", out.text);
     assert_eq!(out.status("B4.2"), "OK (account set up)");
     let b6 = out.status("B6");
-    assert!(b6.contains("33 answered 201"), "{b6}");
+    assert!(b6.contains("17 answered 201"), "{b6}");
     // The password is the user's: no password file, no password on the verdict line.
     assert!(!session.root().join("password").exists());
     assert!(
@@ -2000,7 +2000,7 @@ fn api_only_against_the_garage_runs_every_api_group_and_skips_the_box_only_check
     out.skipped("B1", "box only");
     out.skipped("B9", "box only");
     let b6 = out.status("B6");
-    assert!(b6.contains("33 answered 201"), "{b6}");
+    assert!(b6.contains("17 answered 201"), "{b6}");
     out.skipped("B7.6", "box only");
     out.skipped("B8.2", "this build has no update key");
     for n in 0..=3 {

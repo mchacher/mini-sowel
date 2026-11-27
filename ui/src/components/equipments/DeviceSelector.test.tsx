@@ -163,17 +163,17 @@ describe("DeviceSelector", () => {
     expect(screen.getByText("At most 64 devices")).toBeTruthy();
   });
 
-  it("warns, without blocking, when the plan holds more than 16 values", async () => {
-    const six = Array.from({ length: 6 }, (_, i) => fixtures.th01(`th${i}`));
+  it("warns, without blocking, when the plan holds more than 8 values", async () => {
+    const three = Array.from({ length: 3 }, (_, i) => fixtures.th01(`th${i}`));
     await setup(
       "sensor",
-      six,
-      six.map((d) => d.id),
+      three,
+      three.map((d) => d.id),
     );
-    expect(screen.getByText("These devices give 18 values; only 16 are bound")).toBeTruthy();
+    expect(screen.getByText("These devices give 9 values; only 8 are bound")).toBeTruthy();
     cleanup();
     await setup("sensor", [TH01, MS01], ["th", "ms"]);
-    expect(screen.queryByText(/only 16 are bound/)).toBeNull();
+    expect(screen.queryByText(/only 8 are bound/)).toBeNull();
   });
 
   it("does not count what the type does not use: a voltage is no value for a sensor", async () => {
@@ -183,6 +183,6 @@ describe("DeviceSelector", () => {
       Array.from({ length: 20 }, (_, i): [string, "voltage"] => [`k${i}`, "voltage"]),
     );
     await setup("sensor", [many], ["big"]);
-    expect(screen.queryByText(/only 16 are bound/)).toBeNull();
+    expect(screen.queryByText(/only 8 are bound/)).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-//! `scripts/measure-api.sh` (spec 022 R10.2-3): the 33 requests of an equipment with 16 + 16
+//! `scripts/measure-api.sh` (spec 022 R10.2-3): the 17 requests of an equipment with 8 + 8
 //! bindings, against the Mac host and against small test servers for the 503 and slow cases.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -152,12 +152,12 @@ fn measure_zone_count(port: u16) -> usize {
 }
 
 #[test]
-fn against_a_host_the_33_requests_all_answer_201_and_nothing_is_left_behind() {
+fn against_a_host_the_17_requests_all_answer_201_and_nothing_is_left_behind() {
     let (_host, port, _data) = serving(GARAGE);
     let (ok, out, err) = run(&[&port.to_string()]);
     assert!(ok, "{out}\n{err}");
     assert!(
-        out.contains("measure: 33 requests, 33 answered 201, 0 Busy, total "),
+        out.contains("measure: 17 requests, 17 answered 201, 0 Busy, total "),
         "{out}"
     );
     assert!(
@@ -169,7 +169,7 @@ fn against_a_host_the_33_requests_all_answer_201_and_nothing_is_left_behind() {
 }
 
 #[test]
-fn keep_leaves_the_zone_and_the_equipment_with_16_and_16_bindings() {
+fn keep_leaves_the_zone_and_the_equipment_with_8_and_8_bindings() {
     let (_host, port, _data) = serving(GARAGE);
     let (ok, out, err) = run(&[&format!("127.0.0.1:{port}"), "--keep"]);
     assert!(ok, "{out}\n{err}");
@@ -181,8 +181,8 @@ fn keep_leaves_the_zone_and_the_equipment_with_16_and_16_bindings() {
         .iter()
         .find(|e| e["name"] == "Measure 33")
         .expect("the equipment is kept");
-    assert_eq!(kept["dataBindings"].as_array().unwrap().len(), 16);
-    assert_eq!(kept["orderBindings"].as_array().unwrap().len(), 16);
+    assert_eq!(kept["dataBindings"].as_array().unwrap().len(), 8);
+    assert_eq!(kept["orderBindings"].as_array().unwrap().len(), 8);
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn a_503_busy_is_counted_the_first_bad_answer_is_shown_and_everything_is_deleted
     let (port, fake) = fake(Some(10), 0);
     let (ok, out, err) = run(&[&port.to_string()]);
     assert!(!ok, "{out}");
-    assert!(out.contains("32 answered 201, 1 Busy"), "{out}");
+    assert!(out.contains("16 answered 201, 1 Busy"), "{out}");
     assert!(
         err.contains("first answer that was not 201: request 10: status 503"),
         "{err}"
@@ -374,13 +374,13 @@ fn a_503_busy_is_counted_the_first_bad_answer_is_shown_and_everything_is_deleted
 }
 
 #[test]
-#[ignore = "slow (13 s, over the production limit of 10 s): sh scripts/validate.sh runs it"]
+#[ignore = "slow (11 s, over the production limit of 10 s): sh scripts/validate.sh runs it"]
 fn a_total_over_10_seconds_fails_and_prints_the_time() {
-    // 33 answers of 400 ms: about 13 s.
-    let (port, fake) = fake(None, 400);
+    // 17 answers of 650 ms: about 11 s.
+    let (port, fake) = fake(None, 650);
     let (ok, out, err) = run(&[&port.to_string()]);
     assert!(!ok, "{out}");
-    assert!(out.contains("33 answered 201, 0 Busy, total "), "{out}");
+    assert!(out.contains("17 answered 201, 0 Busy, total "), "{out}");
     assert!(err.contains("over 10 s"), "{err}");
     let seen = fake.seen.lock().unwrap();
     assert!(

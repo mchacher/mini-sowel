@@ -311,7 +311,7 @@ fn the_same_requests_give_the_same_bodies_and_statuses_under_loopback_and_lan() 
 }
 
 #[test]
-fn the_33_requests_of_the_largest_creation_are_all_201_on_the_lan() {
+fn the_17_requests_of_the_largest_creation_are_all_201_on_the_lan() {
     let mut home = home();
     let send = |home: &mut Home, method: &str, path: &str, body: Value| -> (u16, Value) {
         let response = call(
@@ -355,7 +355,7 @@ fn the_33_requests_of_the_largest_creation_are_all_201_on_the_lan() {
     assert_eq!(status, 201, "{equipment}");
     let id = equipment["id"].as_str().unwrap().to_string();
     let mut created = 1;
-    for i in 1..=16 {
+    for i in 1..=8 {
         let (status, body) = send(
             &mut home,
             "POST",
@@ -365,7 +365,7 @@ fn the_33_requests_of_the_largest_creation_are_all_201_on_the_lan() {
         assert_eq!(status, 201, "data {i}: {body}");
         created += 1;
     }
-    for i in 1..=16 {
+    for i in 1..=8 {
         let (status, body) = send(
             &mut home,
             "POST",
@@ -375,13 +375,13 @@ fn the_33_requests_of_the_largest_creation_are_all_201_on_the_lan() {
         assert_eq!(status, 201, "order {i}: {body}");
         created += 1;
     }
-    assert_eq!(created, 33);
+    assert_eq!(created, 17);
     let (_, equipment) = send(
         &mut home,
         "GET",
         &format!("/api/v1/equipments/{id}"),
         json!({}),
     );
-    assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 16);
-    assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 16);
+    assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 8);
+    assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 8);
 }

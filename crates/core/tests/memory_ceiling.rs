@@ -9,6 +9,7 @@ use solite_core::api::{Reply, handle, handle_stream};
 use solite_core::home::{Home, ListCursor};
 use solite_core::radio::measures::{Measure, Value as MeasureValue};
 use solite_core::radio::{MeasureEvent, Sender};
+use solite_core::recipes::MAX_LOG_ENTRIES;
 
 mod realistic;
 
@@ -104,15 +105,15 @@ fn a_home_of_fifty_devices_ten_zones_and_fifty_equipments_answers_under_300_kb()
     assert_eq!(hub.close_request(client), None, "not overflowed");
     let (queued_events, queued_bytes) = hub.queued(client);
 
-    // The logs: 50 entries each, of switching lines. The worst case (every entry 200
+    // The logs: `MAX_LOG_ENTRIES` entries each, of switching lines. The worst case (every entry 200
     // bytes) is added to the peak to show that it fits too.
     let mut log_bytes = 0usize;
     for id in &instance_ids {
-        let log = home.recipes().log(id, 50);
-        assert_eq!(log.len(), 50);
+        let log = home.recipes().log(id, MAX_LOG_ENTRIES);
+        assert_eq!(log.len(), MAX_LOG_ENTRIES);
         log_bytes += log.iter().map(|e| e.message.len() + 56).sum::<usize>();
     }
-    let worst_log_bytes: usize = 3 * 50 * (200 + 56);
+    let worst_log_bytes: usize = 3 * MAX_LOG_ENTRIES * (200 + 56);
 
     // The long lists are streamed, as the server does: one chunk alive at a time, taken and
     // dropped before the next. Only the length is kept.

@@ -5,11 +5,11 @@
 // `STANDARD_ALIASES`, `ORDER_CATEGORY_ALIASES`, `DATA_CATEGORY_ALIASES`, `TYPE_CATEGORY_ALIASES`
 // (the entries of those types), `resolveAlias`, `isRelevantData`, `isRelevantOrder`, `uniqueAlias` and
 // `computeBindingPlan` (candidate path for lights, switches and shutters, legacy path for the
-// rest). Changes: no VMC, door, contract, historize or skip options; the plan keeps at most 16 data
-// and 16 order bindings and aliases of at most 32 characters (the API's bounds); `applyBindingPlan`
+// rest). Changes: no VMC, door, contract, historize or skip options; the plan keeps at most 8 data
+// and 8 order bindings and aliases of at most 32 characters (the API's bounds); `applyBindingPlan`
 // stops at the first refusal and throws it (Sowel's carries on). Spec 030, the equipment page:
 // `computeMissingBindings` (Sowel's name; the plan of the bound devices minus what is bound, aliases
-// unique against the bound ones, the 16 per kind counting the bound ones), `fetchDevices` and
+// unique against the bound ones, the 8 per kind counting the bound ones), `fetchDevices` and
 // `removeAllBindings` (which stops at the first refusal, as `applyBindingPlan`). The rest of
 // Sowel's file (the EV contracts) is not used by Solite's screens.
 import type {
@@ -126,7 +126,7 @@ export function relayStateOn(
 // ============================================================
 
 /** The API's bound on the data bindings, and on the order bindings, of one equipment. */
-export const MAX_BINDINGS = 16;
+export const MAX_BINDINGS = 8;
 /** The API's bound on an alias (`Invalid alias` past it). */
 export const MAX_ALIAS = 32;
 
@@ -283,7 +283,7 @@ interface PlanOptions {
   skipSourceIds: ReadonlySet<string>;
 }
 
-/** The bindings of these devices, in the order given, before the 16 and 16 cut. */
+/** The bindings of these devices, in the order given, before the 8 and 8 cut. */
 function planAll(
   devices: readonly DeviceWithData[],
   equipmentType: string,
@@ -367,7 +367,7 @@ function planAll(
   return plan;
 }
 
-/** How many data and orders these devices would give, before the cut at 16 each. */
+/** How many data and orders these devices would give, before the cut at 8 each. */
 export function countPlanned(
   devices: readonly DeviceWithData[],
   equipmentType: string,
@@ -379,7 +379,7 @@ export function countPlanned(
 
 /**
  * The bindings to create for these devices (given in the order they were ticked): what the type
- * uses, under Sowel's aliases, data first, at most 16 of each kind. Pure.
+ * uses, under Sowel's aliases, data first, at most 8 of each kind. Pure.
  */
 export function computeBindingPlan(
   devices: readonly DeviceWithData[],
@@ -412,7 +412,7 @@ export async function applyBindingPlan(
 /**
  * What the plan of the creation form would add today to an equipment: the plan of its bound
  * devices (in the order they are first bound), minus the items already bound, with aliases unique
- * against those it already uses, and at most 16 of each kind counting the bound ones. Pure.
+ * against those it already uses, and at most 8 of each kind counting the bound ones. Pure.
  */
 export function computeMissingBindings(
   devices: readonly DeviceWithData[],

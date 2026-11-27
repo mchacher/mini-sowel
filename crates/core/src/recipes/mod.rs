@@ -42,14 +42,14 @@ use native::{NativeHost, RecipeName};
 /// Instances kept; one more is refused (400).
 pub const MAX_INSTANCES: usize = 16;
 /// Log entries kept per instance; the oldest goes first.
-pub const MAX_LOG_ENTRIES: usize = 50;
+pub const MAX_LOG_ENTRIES: usize = 20;
 /// A log message is cut at this many bytes.
 pub const MAX_LOG_MESSAGE_BYTES: usize = 200;
 /// The longest `params`, serialized, in bytes.
 pub const MAX_PARAMS_BYTES: usize = 2048;
-// Worst case of the bounds: 16 instances x 50 entries x about 260 bytes (200 of message, the rest
-// of the entry) is about 208 KB of logs, plus 16 x 2 KB of params kept as text (never parsed
-// while kept: 2 KB of nested JSON takes about 112 KB once parsed): about 240 KB. The ceiling test
+// Worst case of the bounds: 16 instances x 20 entries x about 260 bytes (200 of message, the rest
+// of the entry) is about 83 KB of logs, plus 16 x 2 KB of params kept as text (never parsed
+// while kept: 2 KB of nested JSON takes about 112 KB once parsed): about 115 KB. The ceiling test
 // measures the params of 16 adversarial instances at about 2.5 KB each. It fits the box's PSRAM
 // (2 MB); a home of a few instances holds a few KB.
 

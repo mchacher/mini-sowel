@@ -147,7 +147,7 @@ describe("EquipmentForm", () => {
     await loaded();
     fireEvent.click(screen.getByLabelText("TH01"));
     fireEvent.click(screen.getByLabelText("MS01"));
-    expect(screen.queryByText(/only 16 are bound/)).toBeNull();
+    expect(screen.queryByText(/only 8 are bound/)).toBeNull();
     expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled).toBe(
       false,
     );

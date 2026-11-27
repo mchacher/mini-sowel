@@ -2,7 +2,7 @@
 // 1.87.0). Cut (spec 018): the candidate channel picker, the contracts of chargers and cars,
 // water-valve and pool rules, `boundDeviceIds` and the bound keys. Added: real check boxes, at most
 // 64 devices chosen (the API's bound on the form's devices), the warning when the chosen devices
-// give more than 16 values (only 16 are bound, spec 010 R7.5), the error text when the devices
+// give more than 8 values (only 8 are bound, spec 010 R7.5), the error text when the devices
 // cannot be read. Spec 019: the candidates for lights, switches and shutters and the thermostat
 // contract are ported (`isCompatible`); the devices ticked are listed first, compatible or not; the
 // warning counts the binding plan; the devices read are given back to the form, and read again

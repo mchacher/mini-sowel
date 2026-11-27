@@ -25,7 +25,7 @@ use serde::{Serialize, Serializer};
 use crate::auth::{Account, Attempts, Sessions};
 use crate::backup::BackupState;
 use crate::devices::{Device, Devices, Id, Random, format_iso};
-use crate::equipments::{Alias, Equipments, StatusTracker, StoredEquipment};
+use crate::equipments::{Alias, Equipments, MAX_BINDINGS, StatusTracker, StoredEquipment};
 use crate::failure::{Failure, Outcome};
 use crate::live::{EngineEvent, LiveHandle, LiveHub, Topic};
 use crate::orders::OrderQueue;
@@ -221,6 +221,27 @@ impl Home {
                 }
                 keep
             });
+            // Then the first `MAX_BINDINGS` valid ones of each kind, in the file's order.
+            let (data, orders) = (item.data_bindings.len(), item.order_bindings.len());
+            if data > MAX_BINDINGS {
+                log::warn!(
+                    "equipments: {}: {data} data bindings, {} not kept (at most {MAX_BINDINGS})",
+                    item.equipment.name,
+                    data - MAX_BINDINGS
+                );
+                item.data_bindings.truncate(MAX_BINDINGS);
+            }
+            if orders > MAX_BINDINGS {
+                log::warn!(
+                    "equipments: {}: {orders} order bindings, {} not kept (at most {MAX_BINDINGS})",
+                    item.equipment.name,
+                    orders - MAX_BINDINGS
+                );
+                item.order_bindings.truncate(MAX_BINDINGS);
+            }
+            // Memory: what was read has no spare room.
+            item.data_bindings.shrink_to_fit();
+            item.order_bindings.shrink_to_fit();
             repaired |= bindings != item.data_bindings.len() + item.order_bindings.len();
         }
         let live = LiveHub::handle();

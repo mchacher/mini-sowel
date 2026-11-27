@@ -1,12 +1,12 @@
 #!/bin/sh
 # Measures the largest creation the interface sends (spec 019, spec 022 R10): an equipment with
-# 16 data and 16 order bindings, that is 33 requests, one after the other, each on its own
+# 8 data and 8 order bindings, that is 17 requests, one after the other, each on its own
 # connection, against the API of a running host or box. It needs a device with a data and a
 # device with an order (the same or two). It creates the zone "Measure 33" and the equipment
-# "Measure 33" (the same data and order bound under 16 aliases: the core accepts it, and the bodies
+# "Measure 33" (the same data and order bound under 8 aliases: the core accepts it, and the bodies
 # have the sizes of real ones), times each request, then deletes both (kept with --keep).
 #
-# Passes (exit 0) when the 33 answered 201, none was 503 `Busy`, and the total is at most 10 s.
+# Passes (exit 0) when the 17 answered 201, none was 503 `Busy`, and the total is at most 10 s.
 # Otherwise exit 1, with the first answer that was not 201.
 #
 # The box asks for its password (spec 029): SOLITE_PASSWORD (and SOLITE_USER, `admin` when unset);
@@ -170,7 +170,7 @@ if [ -z "$ZONE" ]; then
   exit 1
 fi
 
-# One request of the 33: $1 its number, $2 the method, $3 the path, $4 the body. Writes the answer
+# One request of the 17: $1 its number, $2 the method, $3 the path, $4 the body. Writes the answer
 # to $WORK/body, and `<status> <seconds>` to $WORK/times at the end of the file.
 send() {
   result=$(curl -sS -o "$WORK/body" --max-time 30 -H "@$AUTH_FILE" -w '%{http_code} %{time_total}' -X "$2" "$API$3" -H "$JSON" -d "$4" 2>/dev/null) || result="000 0"
@@ -189,13 +189,13 @@ if send 1 POST /equipments "{\"name\":\"$NAME\",\"type\":\"switch\",\"zoneId\":\
 fi
 if [ -n "$EQUIPMENT" ]; then
   i=1
-  while [ "$i" -le 16 ]; do
+  while [ "$i" -le 8 ]; do
     send $((i + 1)) POST "/equipments/$EQUIPMENT/data-bindings" "{\"deviceDataId\":\"$DATA\",\"alias\":\"m$i\"}" || :
     i=$((i + 1))
   done
   i=1
-  while [ "$i" -le 16 ]; do
-    send $((i + 17)) POST "/equipments/$EQUIPMENT/order-bindings" "{\"deviceOrderId\":\"$ORDER\",\"alias\":\"o$i\"}" || :
+  while [ "$i" -le 8 ]; do
+    send $((i + 9)) POST "/equipments/$EQUIPMENT/order-bindings" "{\"deviceOrderId\":\"$ORDER\",\"alias\":\"o$i\"}" || :
     i=$((i + 1))
   done
 fi
@@ -206,11 +206,11 @@ SUMMARY=$(awk '
   END { printf "%d %d %d %.3f %.3f %d", n, ok, busy, total, slow, at }' "$WORK/times")
 set -- $SUMMARY
 SENT=$1; OK=$2; BUSY=$3; TOTAL=$4; SLOWEST=$5; AT=$6
-echo "measure: 33 requests, $OK answered 201, $BUSY Busy, total $TOTAL s, slowest $SLOWEST s (request $AT)"
+echo "measure: 17 requests, $OK answered 201, $BUSY Busy, total $TOTAL s, slowest $SLOWEST s (request $AT)"
 
-if [ "$OK" -ne 33 ] || [ "$BUSY" -ne 0 ]; then
+if [ "$OK" -ne 17 ] || [ "$BUSY" -ne 0 ]; then
   echo "measure: first answer that was not 201: $(cat "$WORK/first-bad")" >&2
-  [ "$SENT" -eq 33 ] || echo "measure: only $SENT requests were sent" >&2
+  [ "$SENT" -eq 17 ] || echo "measure: only $SENT requests were sent" >&2
   exit 1
 fi
 if awk -v t="$TOTAL" -v m="$LIMIT_SECONDS" 'BEGIN { exit !(t > m) }'; then

@@ -234,14 +234,14 @@ fn two_state_data_get_state_and_state_2() {
 }
 
 #[test]
-fn twenty_sensor_data_give_sixteen_bindings() {
+fn twenty_sensor_data_give_eight_bindings() {
     // The key is the alias (a temperature has no alias of its own): twenty of the same key.
     let data = [("temperature", "temperature", "number"); 20];
     let p = proposal(&synthetic(10, &data, &[]));
     assert_eq!(p.kind, EquipmentType::Sensor);
-    assert_eq!(p.data.len(), 16);
+    assert_eq!(p.data.len(), 8);
     assert_eq!(aliases(&p.data)[..2], ["temperature", "temperature_2"]);
-    assert_eq!(aliases(&p.data)[15], "temperature_16");
+    assert_eq!(aliases(&p.data)[7], "temperature_8");
 }
 
 #[test]

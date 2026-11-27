@@ -340,7 +340,7 @@ before this was possible keep only their battery data until paired again.
 The host keeps them in `devices.json` in its data folder (owner-only): a device paired, renamed
 or deleted is written within 2 seconds under `--serve` (a burst of changes gives one write) and at
 once with `--pair`, the latest values every 10 minutes, and everything at once when the host stops,
-so a restart keeps them. At most 64 devices, 16 data and 4 orders each; beyond: `pairing: device store
+so a restart keeps them. At most 64 devices, 8 data and 4 orders each (a stored device over the bound keeps its first 8 data, logged once, `devices: <name>: <n> data, <n - 8> not kept (at most 8)`); beyond: `pairing: device store
 full (64), <address> ignored`. A `devices.json` that cannot be read stops the host
 (`devices: <file>: cannot read: <reason>`), never overwritten. One host at a time per data folder.
 
@@ -539,7 +539,7 @@ enabled and disabled (see "Shows the home in the browser").
   Each equipment shows its bindings with their values, `lastChanged`, `stale` (a temperature,
   humidity, pressure or luminosity silent for 65 minutes), and its `status`: `online`,
   `degraded` (a device offline among several, or a binding stale) or `offline` (all its devices
-  offline, or no binding), with the reason. At most 64 equipments, 16 bindings of each kind.
+  offline, or no binding), with the reason. At most 64 equipments, 8 bindings of each kind (a stored equipment over the bound loses first its dangling bindings, then keeps its first 8 valid ones of each kind, logged once, `equipments: <name>: <n> data bindings, <n - 8> not kept (at most 8)`, and is written once).
 - **Sowel's optional equipment fields** (`energyProfile`, `requireConfirmation`,
   `trackOrderOutcome`, `meteringParentId`, `separateSupply`, `localProduction`, `family`,
   `plugInHybrid`, `usualVehicleId`, `solarProfile`, `invertDirection`, `timedCommand`): kept in
@@ -564,7 +564,7 @@ enabled and disabled (see "Shows the home in the browser").
   ZBMINIR2), a colour bulb (cluster `0x0300`) being `light_color` with `state`, `brightness`,
   `color_temp` and `color` bound both ways, `shutter`, `thermostat`, `button`, `sensor` (a measure of Sowel's sensor
   categories), or none (battery only); bindings under Sowel's aliases, `state_2` for a second
-  `state`, at most 16 of each kind. Not exposed by the API (Sowel has no such route); nothing
+  `state`, at most 8 of each kind. Not exposed by the API (Sowel has no such route); nothing
   computes it per measure.
 - **Orders**: `POST /api/v1/equipments/:id/orders/:alias {"value": ...}` sends the order bound
   under that alias to its devices, as Sowel: `state` takes `true`/`false`, `"on"`/`"off"`,
@@ -764,7 +764,7 @@ this recipe:
   `.../disable`, `.../actions`, `GET .../log?limit=`; texts and statuses as Sowel's (`Invalid
   params: <reason>`, `Recipe not found: <id>`, `Instance not found`, `Instance not running`,
   `Invalid body`).
-- **Its log**: the last 50 lines of each instance, newest first, each message at most 200 bytes;
+- **Its log**: the last 20 lines of each instance, newest first, each message at most 200 bytes (`?limit=` over 20 gives the 20 kept);
   its state (`overrideMode`, `timerExpiresAt`, `failsafeExpiresAt`) is shown with the instance.
 - **What survives a restart**: the instances, in `recipes.json` beside the other files, written
   within 2 seconds of a change; each enabled one is started again (one that no longer validates logs `Failed to restore:
@@ -982,7 +982,7 @@ copy embedded in the radio image at build time.
   shows the text; edit the name and room; delete (confirmed). An equipment of a type the form does not
   offer (made through the API, `door`...) keeps its type when edited, shown as written; the room is chosen there. A refusal keeps the form open with its
   text. At most 64 devices chosen; a warning when they give more than
-  16 values, of which only 16 are bound.
+  8 values, of which only 8 are bound.
 - **Equipment page** (`#/equipments/<id>`): a back link to the equipment's room ("Equipments" when
   its room is unknown); the header: the type's icon, the name, the status badge (with its reason),
   and under it the type, the room and "Disabled" when it is, with an **Edit** button (name and
@@ -998,7 +998,7 @@ copy embedded in the radio image at build time.
     bound to it; "No device" when none. **Change devices** (or "Add" with none) opens a dialog with
     the creation form's device list for the equipment's type, nothing ticked at first: "Save"
     removes every binding, then writes what the type uses from the devices ticked (under Sowel's
-    names, at most 16 of each kind), one request after the other. The first refusal stops it and
+    names, at most 8 of each kind), one request after the other. The first refusal stops it and
     shows the host's text; what was written so far stays (the bindings list shows it). "Save" stays
     disabled with no device ticked or when the devices give nothing the type uses; for a type with
     no binding rules (one of Sowel's 23 others) it says "This type is completed binding by
@@ -1121,10 +1121,10 @@ relay) and `scenarios/color-light.json` (one colour bulb).
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing
 listening: `demo-garage: no host answers at <address>:<port> ...`, exit 1.
-`SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:<port>] [--keep]` sends, one after the other, the 33 requests
-of an equipment with 16 data and 16 order bindings (the same data and order under 16 aliases),
-times each one (its login is not counted), and prints `measure: 33 requests, <k> answered 201, <b> Busy, total <s> s, slowest
-<t> s (request <i>)`; it exits 0 only when the 33 answered 201, none was 503 and the total is at
+`SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:<port>] [--keep]` sends, one after the other, the 17 requests
+of an equipment with 8 data and 8 order bindings (the same data and order under 8 aliases),
+times each one (its login is not counted), and prints `measure: 17 requests, <k> answered 201, <b> Busy, total <s> s, slowest
+<t> s (request <i>)`; it exits 0 only when the 17 answered 201, none was 503 and the total is at
 most 10 s, else 1 with the first answer that was not 201. It needs a device with an order (`no
 device with an order: pair a relay first`, exit 1), refuses when a zone `Measure 33` exists, and
 deletes its zone and equipment afterwards (kept with `--keep`). It is run on the Mac against the
@@ -1764,8 +1764,8 @@ fills them). The same image pulls a release from an in-memory fetch adapter on a
 and must leave 8 KB of that stack unused, the room for the TLS handshake the box runs. Script
 recipes have a ceiling of their own, 512 KB for the 2 of them at their limit (224 KB each), counted beside the
 engine's in both the realistic home and the worst case. It stays
-under 1 MB with every bound of the core at its maximum (64 devices of 16 data, 32 zones, 64
-equipments of 16 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
+under 1 MB with every bound of the core at its maximum (64 devices of 8 data, 32 zones, 64
+equipments of 8 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
@@ -1776,7 +1776,7 @@ and `box.sh
 log --image radio` fails when its internal RAM minimum is below the 64 KB reserve.
 `docs/memory-budget.md` has a row for the internal RAM with Wi-Fi up (the `memory-network:`
 snapshot measured on the box; the network's cost as a difference of two `heap:` minima and the
-projection for the realistic home are not computed) and one for the 33 requests' time on the box,
+projection for the realistic home are not computed) and one for the 17 requests' time on the box,
 not measured (it needs a relay paired). `docs/memory-budget.md` also has the time the engine holds the home lock for one batch of
 measures, measured on the Mac. It shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
@@ -1830,3 +1830,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
 | 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |
 | 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |
+| 044 | Tighter bounds: 8 data a device, 8 data and 8 order bindings an equipment, 20 log lines a recipe instance; a home stored with the old bounds is cut at load, logged once |

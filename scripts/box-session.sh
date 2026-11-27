@@ -1571,20 +1571,20 @@ step_b5() {
 }
 
 step_b6() {
-  precheck B6 "33 requests (025)" api w || return
-  account_usable B6 "33 requests (025)" || return
+  precheck B6 "17 requests (025)" api w || return
+  account_usable B6 "17 requests (025)" || return
   refresh_password
   via_saves B6 5 sh -c 'sh "$1" --group permit; sh "$2" "$SOLITE_BOX_ADDRESS"' box-session "$SELF" "$ROOT/scripts/measure-api.sh"
   grep -a '^box-session: ' "$SV_OUT"
-  _measure=$(grep -a '^measure: 33 requests' "$SV_OUT" | tail -n 1)
+  _measure=$(grep -a '^measure: 17 requests' "$SV_OUT" | tail -n 1)
   if [ -n "$SV_OVER" ]; then
-    report B6 "33 requests (025)" KO "$SV_OVER"
+    report B6 "17 requests (025)" KO "$SV_OVER"
     STOPPED=B6
   elif [ "$SV_RC" -eq 0 ] && [ -n "$_measure" ]; then
-    report B6 "33 requests (025)" OK "${_measure#measure: }"
+    report B6 "17 requests (025)" OK "${_measure#measure: }"
   else
     _why=$(grep -aE '^(measure|measure-api):' "$SV_OUT" | tail -n 1)
-    report B6 "33 requests (025)" KO "${_why:-$(reason_of "$SV_OUT" "$SV_RC")}"
+    report B6 "17 requests (025)" KO "${_why:-$(reason_of "$SV_OUT" "$SV_RC")}"
   fi
 }
 

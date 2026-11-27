@@ -344,7 +344,7 @@ fn seventeen_lights_or_seventeen_buttons_are_refused() {
 }
 
 #[test]
-fn the_log_keeps_the_last_50_lines_newest_first_and_cuts_a_message_at_200_bytes() {
+fn the_log_keeps_the_last_20_lines_newest_first_and_cuts_a_message_at_200_bytes() {
     let mut rig = Rig::new();
     let g = rig.garage();
     let id = rig.garage_instance(&g, json!({}));
@@ -356,11 +356,11 @@ fn the_log_keeps_the_last_50_lines_newest_first_and_cuts_a_message_at_200_bytes(
     }
     let (_, log) = rig.get(&format!("{}/{id}/log", base()));
     let log = log.as_array().unwrap();
-    assert_eq!(log.len(), 50, "50 at most, the default");
+    assert_eq!(log.len(), 20, "20 at most, the default");
     // Newest first, ids going down, the oldest ones gone.
     let ids: Vec<u64> = log.iter().map(|e| e["id"].as_u64().unwrap()).collect();
     assert!(ids.windows(2).all(|w| w[0] == w[1] + 1));
-    assert!(ids[49] > 11, "the first lines were dropped: {ids:?}");
+    assert!(ids[19] > 11, "the first lines were dropped: {ids:?}");
     assert!(!log.iter().any(|e| e["message"] == "Instance created"));
 
     // A message over 200 bytes: a light named with 64 characters, 3-byte ones, deleted (spec
@@ -385,7 +385,7 @@ fn the_log_keeps_the_last_50_lines_newest_first_and_cuts_a_message_at_200_bytes(
 }
 
 #[test]
-fn the_log_limit_is_a_positive_whole_number_of_at_most_50() {
+fn the_log_limit_is_a_positive_whole_number_of_at_most_20() {
     let mut rig = Rig::new();
     let g = rig.garage();
     let id = rig.garage_instance(&g, json!({}));
@@ -395,14 +395,16 @@ fn the_log_limit_is_a_positive_whole_number_of_at_most_50() {
         rig.advance(2001);
     }
     for (query, count) in [
-        ("", 50),
-        ("?limit=0", 50),
-        ("?limit=-3", 50),
-        ("?limit=abc", 50),
+        ("", 20),
+        ("?limit=0", 20),
+        ("?limit=-3", 20),
+        ("?limit=abc", 20),
         ("?limit=10", 10),
-        ("?limit=500", 50),
+        ("?limit=5", 5),
+        ("?limit=50", 20),
+        ("?limit=500", 20),
         ("?limit=1", 1),
-        ("?limit=", 50),
+        ("?limit=", 20),
     ] {
         let (status, log) = rig.get(&format!("{}/{id}/log{query}", base()));
         assert_eq!(status, 200, "{query}");
