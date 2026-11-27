@@ -21,22 +21,21 @@ use std::time::Instant;
 
 use esp_idf_svc::hal::cpu::Core;
 use esp_idf_svc::hal::task::thread::{MallocCap, ThreadSpawnConfiguration};
-use esp_idf_svc::handle::RawHandle;
-use esp_idf_svc::http::server::{Configuration, EspHttpServer, KeepAlive};
 use esp_idf_svc::sys::{
-    ESP_FAIL, ESP_OK, HTTPD_SOCK_ERR_TIMEOUT, MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM, esp_err_t,
-    heap_caps_malloc, http_method_HTTP_DELETE, http_method_HTTP_GET, http_method_HTTP_HEAD,
-    http_method_HTTP_PATCH, http_method_HTTP_POST, http_method_HTTP_PUT, httpd_handle_t,
-    httpd_register_uri_handler, httpd_req_async_handler_begin, httpd_req_async_handler_complete,
-    httpd_req_get_hdr_value_len, httpd_req_get_hdr_value_str, httpd_req_recv, httpd_req_t,
-    httpd_req_to_sockfd, httpd_resp_send, httpd_resp_send_chunk, httpd_resp_set_hdr,
-    httpd_resp_set_status, httpd_resp_set_type, httpd_sess_trigger_close, httpd_uri_t,
+    ESP_FAIL, ESP_OK, HTTPD_SOCK_ERR_TIMEOUT, MALLOC_CAP_8BIT, MALLOC_CAP_INTERNAL,
+    MALLOC_CAP_SPIRAM, esp_err_t, heap_caps_malloc, http_method_HTTP_DELETE, http_method_HTTP_GET,
+    http_method_HTTP_HEAD, http_method_HTTP_PATCH, http_method_HTTP_POST, http_method_HTTP_PUT,
+    httpd_config_t, httpd_handle_t, httpd_register_uri_handler, httpd_req_async_handler_begin,
+    httpd_req_async_handler_complete, httpd_req_get_hdr_value_len, httpd_req_get_hdr_value_str,
+    httpd_req_recv, httpd_req_t, httpd_req_to_sockfd, httpd_resp_send, httpd_resp_send_chunk,
+    httpd_resp_set_hdr, httpd_resp_set_status, httpd_resp_set_type, httpd_sess_trigger_close,
+    httpd_start, httpd_stop, httpd_uri_match_wildcard, httpd_uri_t,
 };
 use solite_core::api::drain::{DRAIN_LIMIT_MS, drain_body};
 use solite_core::api::static_files::{STATIC_HEADERS, cache_control, find};
 use solite_core::api::{
-    MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard, Slots, handle_guarded,
-    is_streamed_request, is_update_request, order_response, static_reply,
+    HTTPD_RECV_WAIT_SECS, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Response, SlotGuard,
+    Slots, handle_guarded, is_streamed_request, is_update_request, order_response, static_reply,
 };
 use solite_core::backup::{BackupTicket, CHUNK_BYTES};
 use solite_core::devices::lock;
@@ -178,7 +177,19 @@ pub fn http_stack() -> Option<(usize, usize)> {
 
 /// The running server; dropping it stops the server (it is kept for the whole run).
 pub struct Server {
-    _server: EspHttpServer<'static>,
+    handle: httpd_handle_t,
+}
+
+// SAFETY: the handle is ESP-IDF's, used from any task by its own API (as `register` does).
+#[allow(unsafe_code)]
+unsafe impl Send for Server {}
+
+impl Drop for Server {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        // SAFETY: the handle came from a successful `httpd_start` and is stopped once.
+        unsafe { httpd_stop(self.handle) };
+    }
 }
 
 /// One request of ESP-IDF's server: valid while the handler that got it runs, or, for an
@@ -266,8 +277,8 @@ impl Raw {
         }
     }
 
-    /// Reads body bytes: their number, or ESP-IDF's error (`HTTPD_SOCK_ERR_TIMEOUT` after 5 s
-    /// without a byte).
+    /// Reads body bytes: their number, or ESP-IDF's error (`HTTPD_SOCK_ERR_TIMEOUT` after
+    /// `HTTPD_RECV_WAIT_SECS` without a byte).
     #[allow(unsafe_code)]
     fn receive(&self, buffer: &mut [u8]) -> i32 {
         // SAFETY: the request is valid; ESP-IDF writes at most `buffer.len()` bytes into it.
@@ -1003,6 +1014,45 @@ fn register(
     }
 }
 
+/// Starts ESP-IDF's server with the configuration esp-idf-svc 0.53 builds for its
+/// `EspHttpServer` (same fields, same values), except `recv_wait_timeout`: esp-idf-svc hardcodes
+/// 5 s and offers no field, and a request whose body never comes holds the server's single task
+/// that long (`HTTPD_RECV_WAIT_SECS`). The handlers are all registered raw, so nothing here needs
+/// esp-idf-svc's own server type.
+#[allow(unsafe_code)]
+fn start_httpd(port: u16) -> Result<httpd_handle_t, String> {
+    let configuration = httpd_config_t {
+        task_priority: 5,
+        task_caps: MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT,
+        stack_size: SERVER_STACK_BYTES,
+        core_id: Core::Core0.into(),
+        server_port: port,
+        ctrl_port: 32768,
+        max_open_sockets: MAX_OPEN_SOCKETS as _,
+        max_uri_handlers: 32,
+        max_resp_headers: 10,
+        backlog_conn: 5,
+        lru_purge_enable: true,
+        recv_wait_timeout: HTTPD_RECV_WAIT_SECS,
+        send_wait_timeout: 5,
+        uri_match_fn: Some(httpd_uri_match_wildcard),
+        keep_alive_enable: true,
+        keep_alive_idle: 30,
+        keep_alive_interval: 5,
+        keep_alive_count: 3,
+        ..Default::default()
+    };
+    let mut handle: httpd_handle_t = std::ptr::null_mut();
+    // SAFETY: `configuration` is a complete `httpd_config_t` that lives through the call (ESP-IDF
+    // copies it); `handle` is a valid place for the result.
+    let code = unsafe { httpd_start(&mut handle, &configuration) };
+    if code == ESP_OK && !handle.is_null() {
+        Ok(handle)
+    } else {
+        Err(format!("httpd_start failed ({code})"))
+    }
+}
+
 /// Starts the server for the shared home: `/ws`, the interface, then the API on every other
 /// path (ESP-IDF tries the handlers in the order they were registered).
 pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, String> {
@@ -1018,23 +1068,7 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
         .map_err(|_| "the server is already started".to_string())?;
     start_script_thread()?;
     start_workers(jobs)?;
-    let configuration = Configuration {
-        http_port: port,
-        core: Some(Core::Core0),
-        stack_size: SERVER_STACK_BYTES,
-        max_open_sockets: MAX_OPEN_SOCKETS,
-        lru_purge_enable: true,
-        uri_match_wildcard: true,
-        max_resp_headers: 10,
-        keep_alive: Some(KeepAlive {
-            idle_secs: 30,
-            interval_secs: 5,
-            probe_count: 3,
-        }),
-        ..Default::default()
-    };
-    let server = EspHttpServer::new(&configuration).map_err(|e| e.to_string())?;
-    let handle = server.handle();
+    let handle = start_httpd(port)?;
     live_ws::register(handle, shared.hub, Arc::clone(&shared.home), name, port)?;
     for method in [
         http_method_HTTP_GET,
@@ -1055,5 +1089,5 @@ pub fn start(shared: Shared, name: &'static str, port: u16) -> Result<Server, St
         register(handle, c"/*", method, api_entry)?;
     }
     ota::API_LISTENING.store(true, Ordering::SeqCst);
-    Ok(Server { _server: server })
+    Ok(Server { handle })
 }

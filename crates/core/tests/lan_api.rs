@@ -2,7 +2,7 @@
 //! route answering there as on the Mac, and the answers being the same as under `Reach::Loopback`.
 
 use serde_json::{Value, json};
-use solite_core::api::{MAX_BODY_BYTES, Reach, Request, Response, handle};
+use solite_core::api::{HTTPD_RECV_WAIT_SECS, MAX_BODY_BYTES, Reach, Request, Response, handle};
 use solite_core::devices::Devices;
 use solite_core::home::Home;
 
@@ -384,4 +384,12 @@ fn the_17_requests_of_the_largest_creation_are_all_201_on_the_lan() {
     );
     assert_eq!(equipment["dataBindings"].as_array().unwrap().len(), 8);
     assert_eq!(equipment["orderBindings"].as_array().unwrap().len(), 8);
+}
+
+/// The server's receive wait stays above curl's 1 s `Expect: 100-continue` wait (or an upload
+/// would stall) and well under the 5 s esp-idf-svc hardcodes (or a client that never sends its
+/// body holds every other request for 5 s).
+#[test]
+fn the_receive_wait_is_between_curls_wait_and_five_seconds() {
+    const { assert!(HTTPD_RECV_WAIT_SECS > 1 && HTTPD_RECV_WAIT_SECS < 5) };
 }
