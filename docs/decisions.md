@@ -1646,3 +1646,20 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   author's runs a script instance, F2 not being released); keeping the native recipe as the
   fallback (the two would drift); the box installing on its own the recipes it proposes (a roadmap
   line, not part of this change).
+
+## D82: The operator's secrets have an encrypted copy in a private repository (completes D64)
+
+- **Date**: 2026-11-27
+- **Choice**: the two private keys (`~/keys/solite.update-key`, `~/keys/solite.recipe-key`), the
+  box's password and its Wi-Fi settings (`~/.config/solite/box-password`, `wifi.env`) are kept as one
+  archive encrypted with `gpg` (symmetric, AES-256) in the private repository `mchacher/solite-ops`.
+  Its passphrase lives only in the operator's password manager; its README says how to restore the
+  files (mode 600) on a new computer and how to update the archive. This repository holds none of
+  them, encrypted or not; the release CI does not read `solite-ops` (its secrets are typed into
+  GitHub, D64). The archive is D64's offline copy.
+- **Why**: a second computer had to sign recipes and reach the box; the password manager alone
+  does not restore files with their paths and modes, and a copy that needs both the repository and
+  the passphrase survives the loss of one computer without exposing a key.
+- **Alternatives**: an encrypted volume on a disk (D64's first wording: one copy, in one place);
+  the keys in the password manager only (typed back by hand, mode and path by hand); a secret store
+  of a cloud service (one more account holding the keys).
