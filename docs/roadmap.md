@@ -307,6 +307,8 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-26 | Sowel's `system.update.*` events for the progress of a check and a pull (the answer waits for the end today) | spec 039 |
 | 2026-11-26 | `scripts/release.sh` refuses a manifest over 12 KB (the box reads at most 16 KB, spec 038's notes are not bounded) | spec 039 |
 | 2026-11-26 | Revisit the default of `update.autoCheck` (off, D67) once the TLS session's memory is measured on the box | spec 039 |
+| 2026-11-27 | **The script recipes' small Rust blocks to PSRAM**: with two script recipes of 8 instances each the box's internal RAM reaches 64.6 KB at its lowest (spec 045's box check), 608 bytes over the 64 KB floor; the Rust side's blocks (about 4 KB a script recipe, 3 to 5 KB an instance, kept internal by `SPIRAM_MALLOC_ALWAYSINTERNAL` 4096) go to PSRAM | Spec 045, box 2026-11-27 |
+| 2026-11-27 | **The box runs a test build numbered 0.1.2** (spec 045's image, installed as a signed update): the next release is 0.1.3 or later, or the box is flashed over USB first, since an update must be newer than the running version | Spec 045, box 2026-11-27 |
 
 ## Sowel issues to open
 
@@ -534,3 +536,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-27: the interrupt-watchdog restart read without the box; kept as an inbox line to watch in normal use (the user's choice), spec 045 waiting for it.
 - 2026-11-27: spec 047 done: the sidebar's Administration block and Log out pinned at the bottom of the column, as in Sowel (the inbox line placed and done).
 - 2026-11-27: spec 045 built (D83): the `script` thread's 32 KB stack in PSRAM, the `recipe` thread made once at start (an install needs a 16 KB internal block, not 36 KB), a flash call from a PSRAM stack refused in `storage.rs`; the box check (2 recipes, 8 instances of each, 5 uninstall-install cycles) pending.
+- 2026-11-27: spec 045 done (D83): the box's `script` thread's stack in PSRAM, the `recipe` thread made once; on the box, two recipes of 8 instances and 5 install cycles, internal RAM at least 64.6 KB, every install accepted.

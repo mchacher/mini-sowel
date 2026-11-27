@@ -1,13 +1,13 @@
 # Plan: Spec 045
 
 ## Steps
-- [ ] 1. Living spec, memory budget, D83, roadmap.
-- [ ] 2. Core: `job_thread_kept`, `internal_refusal`, tests.
-- [ ] 3. Firmware: `job_thread` caps, the `script` thread in PSRAM, the permanent `recipe`
+- [x] 1. Living spec, memory budget, D83, roadmap.
+- [x] 2. Core: `job_thread_kept`, `internal_refusal`, tests.
+- [x] 3. Firmware: `job_thread` caps, the `script` thread in PSRAM, the permanent `recipe`
       thread, the storage guard, QEMU config.
-- [ ] 4. validate (QEMU included).
-- [ ] 5. Box: flash (backup kept), the check of the acceptance criteria.
-- [ ] 6. Review, demo to the user.
+- [x] 4. validate (QEMU included).
+- [x] 5. Box: flash (backup kept), the check of the acceptance criteria.
+- [x] 6. Review, demo to the user.
 
 Not applicable: Sowel types, API, interface.
 

@@ -80,10 +80,10 @@ each job (`firmware/src/http_server.rs:998`, D78).
 - `docs/roadmap.md` 245 (the line goes: done).
 
 ## Acceptance criteria
-- [ ] Tests (core): the admission with the thread kept (16 KB; uninstall never refused) and without
+- [x] Tests (core): the admission with the thread kept (16 KB; uninstall never refused) and without
       it (36 and 20 KB, unchanged).
-- [ ] validate green, QEMU included, `script thread stack` at least 2 KB unused in PSRAM.
-- [ ] Box: 2 recipes, 8 instances of each, then 5 uninstall-install cycles of one recipe: every
+- [x] validate green, QEMU included, `script thread stack` at least 2 KB unused in PSRAM.
+- [x] Box: 2 recipes, 8 instances of each, then 5 uninstall-install cycles of one recipe: every
       install accepted, the internal minimum at least 64 KB (B11.6), the garage still running.
 
 ## Edge cases
@@ -96,3 +96,18 @@ None: no type, field or route.
 
 ## How the user will check it
 The box check above, its figures written here; `GET /system/resources` before and after.
+
+### Result (2026-11-27, the Dongle Max, autonomous run)
+- The image of this branch installed over Wi-Fi as a signed update (a test build numbered 0.1.2,
+  `--update-sign`, the update key; the USB flash needs a person at the terminal, D6), confirmed
+  after its probation.
+- Two script recipes (`motion-light` 1.1.2 and a copy of it under the id `motion-light-b`, both
+  signed with the recipe key), 8 instances of each on the garage's light, then 5 cycles of
+  uninstall, install and 8 new instances of the second: every install accepted (201), every
+  uninstall 204.
+- Internal RAM: at its lowest 66,144 bytes (64.6 KB, the floor of 64 KB held by 608 bytes; 44 KB
+  before this spec); the largest free block 38 KB through the cycles and 47 KB at rest (27 KB
+  before, when an install was refused). No restart of the box during the run (the watchdog bug not
+  seen).
+- Left on the box: `motion-light` with one instance on the garage (a zone `Garage` made again, its
+  two equipments moved to it: they pointed to a zone that no longer existed).
