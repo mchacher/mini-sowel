@@ -5,7 +5,7 @@
 //! gate: run it in release on the Mac and copy the figures into `docs/memory-budget.md`.
 //!
 //! ```text
-//! cargo test --release -p solite-core --test lock_time -- --ignored --nocapture
+//! cargo test --release -p solite-core --features script-recipes --test lock_time -- --ignored --nocapture
 //! ```
 
 use std::time::Instant;
@@ -99,27 +99,13 @@ fn one_batch_of_measures_holds_the_home_lock() {
     println!("lock per motion batch: mean {mean:.1} us, longest {longest:.1} us");
 }
 
-// ---- Script recipes (spec 041, R6.1) ----
+// ---- Script instances (spec 041, R6.1; spec 046) ----
 
-/// The realistic home with `count` instances of `recipe` (the three of `motion-light` the builder
-/// made are deleted first), each on the first zone and its 16 lights, with the safety auto-off
-/// (the realistic home's button is a sensor, which the script's slot refuses: no button).
-#[cfg(feature = "script-recipes")]
-fn with_instances(recipe: &str, count: usize) -> realistic::Realistic {
+/// The realistic home (its `motion-light` script loaded) with `count` instances, each on the first
+/// zone and its 16 lights, with the safety auto-off (the three the builder made are deleted
+/// first, and no button: the realistic home's button has no event of its own here).
+fn with_instances(count: usize) -> realistic::Realistic {
     use realistic::request;
-    use std::sync::Arc;
-
-    // The system's allocator with a roomy limit: sixteen instances of the script hold more than
-    // the Mac's own limit (`SystemRuntimes`).
-    struct Roomy;
-    impl solite_core::recipes::script::ScriptRuntimes for Roomy {
-        fn new_runtime(&self) -> Result<solite_core::recipes::script::NewRuntime, String> {
-            solite_core::recipes::script::SystemRuntimes.new_runtime()
-        }
-        fn memory_limit(&self) -> usize {
-            1024 * 1024
-        }
-    }
 
     let mut random = realistic::random();
     let mut built = realistic::build(&mut random);
@@ -133,20 +119,9 @@ fn with_instances(recipe: &str, count: usize) -> realistic::Realistic {
         );
         assert_eq!(gone.status, 204);
     }
-    let start = Instant::now();
-    let clock: solite_core::recipes::ScriptClock =
-        Arc::new(move || u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX));
-    built
-        .home
-        .load_script_recipe(
-            include_str!("../../../recipes/scripts/motion-light-script.js"),
-            Arc::new(Roomy),
-            clock,
-        )
-        .unwrap();
     for _ in 0..count {
         let body = serde_json::json!({
-            "recipeId": recipe,
+            "recipeId": "motion-light",
             "params": {"zone": built.zone_ids[0], "lights": built.lights,
                        "timeout": "20s", "maxOnDuration": "5m"}
         })
@@ -162,7 +137,6 @@ fn with_instances(recipe: &str, count: usize) -> realistic::Realistic {
     built
 }
 
-#[cfg(feature = "script-recipes")]
 fn motion_batches(home: &mut Home) -> (f64, f64) {
     let hub = home.live();
     let client = hub.connect().expect("a free slot");
@@ -182,39 +156,24 @@ fn motion_batches(home: &mut Home) -> (f64, f64) {
     )
 }
 
-#[cfg(feature = "script-recipes")]
 #[test]
 #[ignore = "slow: a measurement, run in release with --nocapture; figures in docs/memory-budget.md"]
-fn a_motion_event_through_the_script_against_the_built_in_recipe() {
-    for (recipe, label) in [
-        ("motion-light", "built in"),
-        ("motion-light-script", "script"),
-    ] {
-        let mut built = with_instances(recipe, 3);
-        let (mean, longest) = motion_batches(&mut built.home);
-        println!(
-            "lock per motion batch, 3 instances of {recipe} ({label}): mean {mean:.1} us, longest {longest:.1} us"
-        );
-    }
+fn a_motion_event_through_the_script_with_three_instances() {
+    let mut built = with_instances(3);
+    let (mean, longest) = motion_batches(&mut built.home);
+    println!(
+        "lock per motion batch, 3 instances of motion-light: mean {mean:.1} us, longest {longest:.1} us"
+    );
 }
 
-#[cfg(feature = "script-recipes")]
 #[test]
 #[ignore = "slow: a measurement, run in release with --nocapture; figures in docs/memory-budget.md"]
 fn one_motion_event_to_the_most_instances() {
-    // The built-in recipe up to the engine's 16, a script recipe up to its 8.
-    for (recipe, label, count) in [
-        ("motion-light", "built in", 16),
-        (
-            "motion-light-script",
-            "script",
-            solite_core::recipes::MAX_INSTANCES_PER_SCRIPT,
-        ),
-    ] {
-        let mut built = with_instances(recipe, count);
-        let (mean, longest) = motion_batches(&mut built.home);
-        println!(
-            "lock per motion batch, {count} instances of {recipe} ({label}): mean {mean:.1} us, longest {longest:.1} us"
-        );
-    }
+    // A script recipe holds at most 8 instances (D74, spec 046).
+    let count = solite_core::recipes::MAX_INSTANCES_PER_SCRIPT;
+    let mut built = with_instances(count);
+    let (mean, longest) = motion_batches(&mut built.home);
+    println!(
+        "lock per motion batch, {count} instances of motion-light: mean {mean:.1} us, longest {longest:.1} us"
+    );
 }

@@ -22,11 +22,11 @@ pub const MAX_SCRIPT_BYTES: usize = 16 * 1024;
 pub const SCRIPT_MEMORY_LIMIT: usize = 224 * 1024;
 /// The same limit on the Mac (`SystemRuntimes`), twice the box's, 448 KB: QuickJS's objects hold
 /// 8-byte pointers there and `malloc_size` rounds each block up, so the same runtime counts about
-/// 1.6 times the 32-bit figure (measured: `motion-light-script` with 8 instances holds about
+/// 1.6 times the 32-bit figure (measured: `motion-light` with 8 instances holds about
 /// 206 KB on the Mac, over 2 times under this limit).
 pub const SYSTEM_MEMORY_LIMIT: usize = 2 * SCRIPT_MEMORY_LIMIT;
 /// One call into a script takes at most this long (the interrupt handler stops it). Measured on
-/// the box: a call of `motion-light-script` takes about 24 ms on average and up to 83 ms at 160 MHz
+/// the box: a call of `motion-light` takes about 24 ms on average and up to 83 ms at 160 MHz
 /// (2026-11-26); 200 ms leaves room for the slowest without letting a loop hold the engine long.
 pub const SCRIPT_CALL_LIMIT_MS: u64 = 200;
 /// Loading a script (compile, top level, the `recipe()` call, its info) takes at most this long:

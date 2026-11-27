@@ -296,6 +296,8 @@ fn the_firmwares_scenario_with_its_home_ends_with_every_device_reported() {
                 "--verbose",
                 "--speed",
                 "100",
+                "--recipe-script",
+                "../../recipes/scripts/motion-light.js",
                 "--data",
                 dir.to_str().unwrap(),
             ])

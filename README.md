@@ -51,7 +51,7 @@ cargo run -p solite-host -- --radio tcp://<address>:6638   # identify the Dongle
 cargo run -p solite-host -- --radio tcp://<address>:6638 --pair   # start the network, pair
 cargo run -p solite-host -- --radio tcp://<address>:6638 --listen # show the measures
 cargo run -p solite-host -- --sim scenarios/garage.json --pair 30 --speed 10  # without the dongle
-cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10    # API and interface on :8080
+cargo run -p solite-host -- --sim scenarios/garage.json --serve --speed 10 --recipe-script recipes/scripts/motion-light.js    # API and interface on :8080, with the motion-light recipe
 SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
 SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 17 requests of an equipment with 8 + 8 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                              # the interface in development, :5173 (host on :8080)

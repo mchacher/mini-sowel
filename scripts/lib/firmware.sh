@@ -234,13 +234,13 @@ fw_check_quickjs() {
 }
 
 # No image but the QEMU script build carries a script (spec 042 R3.10): $1 the ELF, $2 the image's
-# name, $3 `with` or `without` the id `id: "motion-light-script"` of the script's source. The QEMU
+# name, $3 `with` or `without` the id `id: "motion-light"` of the script's source. The QEMU
 # image reads that source for its own phase, so it is the positive control of the search (a search
 # that finds nothing anywhere would pass for the wrong reason). Prints the reason and returns 1
 # when it is not so.
 fw_check_script_source() {
-  if grep -aqF 'id: "motion-light-script"' "$1"; then found=with; else found=without; fi
-  [ "$found" = "$3" ] || { echo "the $2 image is $found the source of motion-light-script (id: \"motion-light-script\" in its ELF), it must be $3: no script is built into an image."; return 1; }
+  if grep -aqF 'id: "motion-light"' "$1"; then found=with; else found=without; fi
+  [ "$found" = "$3" ] || { echo "the $2 image is $found the source of motion-light (id: \"motion-light\" in its ELF), it must be $3: no script is built into an image."; return 1; }
   return 0
 }
 
@@ -262,22 +262,29 @@ fw_check_recipe_install() {
 }
 
 # The script phase of the QEMU image (spec 041 R6.2, `firmware/src/script_phase.rs`), $1 the log:
-# the `recipes: script motion-light-script ...` line is there, the internal RAM's minimum is at
+# the `recipes: script motion-light ...` line is there, the internal RAM's minimum is at
 # least INTERNAL_MIN_KB, the engine thread and the `script` thread keep at least SCRIPT_STACK_MARGIN
-# bytes of their stack unused, the depth script called the engine at its deepest on both (and the
+# bytes of their stack unused, the home's heap with the realistic home's three instances running
+# (`heap peak <n> KB` of the line: free before the engine started minus the lowest free of the phase)
+# is at most SCRIPT_PHASE_HEAP_LIMIT_KB, the depth script called the engine at its deepest on both (and the
 # create on the script thread answered 201), and the three instances' peak (`script sizes:` line, in bytes) is at
 # most 75 % of the script memory limit (SCRIPT_MEMORY_LIMIT in the core). Prints the reason and
 # returns 1 otherwise.
+# D27's 350 KB for the engine plus the 224 KB ceiling of one script runtime (spec 046 R8, D81).
+SCRIPT_PHASE_HEAP_LIMIT_KB=574
 SCRIPT_STACK_MARGIN=2048
 fw_check_script_phase() {
-  line=$(grep -a 'recipes: script motion-light-script .* KB source; psram' "$1" | tail -n 1)
-  [ -n "$line" ] || { echo "the script phase's line (recipes: script motion-light-script ... KB source; psram ...) is missing."; return 1; }
+  line=$(grep -a 'recipes: script motion-light .* KB source; psram' "$1" | tail -n 1)
+  [ -n "$line" ] || { echo "the script phase's line (recipes: script motion-light ... KB source; psram ...) is missing."; return 1; }
   min=$(echo "$line" | sed -n 's/.*internal +[0-9]* KB (min \([0-9]*\) KB free).*/\1/p')
   [ -n "$min" ] || { echo "cannot read the internal minimum from the script line: $line"; return 1; }
   [ "$min" -ge "$INTERNAL_MIN_KB" ] || { echo "the internal RAM minimum free is $min KB during the script phase, below the $INTERNAL_MIN_KB KB kept for the network."; return 1; }
   engine=$(echo "$line" | sed -n 's/.*engine stack \([0-9]*\) of [0-9]* unused.*/\1/p')
   script=$(echo "$line" | sed -n 's/.*script thread stack \([0-9]*\) of [0-9]* unused.*/\1/p')
   [ -n "$engine" ] && [ -n "$script" ] || { echo "cannot read the stacks from the script line: $line"; return 1; }
+  heap=$(echo "$line" | sed -n 's/.*; heap peak \([0-9]*\) KB.*/\1/p')
+  [ -n "$heap" ] || { echo "cannot read the heap peak from the script line: $line"; return 1; }
+  [ "$heap" -le "$SCRIPT_PHASE_HEAP_LIMIT_KB" ] || { echo "the heap peaks at $heap KB with the home's instances running, above the $SCRIPT_PHASE_HEAP_LIMIT_KB KB of the script phase (spec 046)."; return 1; }
   [ "$engine" -ge "$SCRIPT_STACK_MARGIN" ] || { echo "the engine thread keeps $engine bytes of its stack unused with a script recursing, below $SCRIPT_STACK_MARGIN."; return 1; }
   [ "$script" -ge "$SCRIPT_STACK_MARGIN" ] || { echo "the script thread keeps $script bytes of its stack unused, below $SCRIPT_STACK_MARGIN."; return 1; }
   # The recursion reached the engine at its deepest on both threads, and the router's create on the
@@ -293,10 +300,10 @@ fw_check_script_phase() {
   [ "$post" = 201 ] || { echo "the create of the depth script on the script thread answered ${post:-nothing}, not 201."; return 1; }
   limit=$(sed -n 's/^pub const SCRIPT_MEMORY_LIMIT: usize = \([0-9]*\) \* 1024;/\1/p' "$ROOT/crates/core/src/recipes/script/limits.rs")
   [ -n "$limit" ] || { echo "cannot read SCRIPT_MEMORY_LIMIT from the core."; return 1; }
-  sizes=$(grep -a 'script sizes: motion-light-script' "$1" | tail -n 1)
+  sizes=$(grep -a 'script sizes: motion-light' "$1" | tail -n 1)
   peak3=$(echo "$sizes" | sed -n 's/.*3 instances [0-9]* B (peak \([0-9]*\) B).*/\1/p')
   [ -n "$peak3" ] || { echo "cannot read the three instances' peak from the sizes line: $sizes"; return 1; }
-  [ $((peak3 * 100)) -le $((limit * 1024 * 75)) ] || { echo "three motion-light-script instances peak at $peak3 bytes, above 75 % of the $limit KB script memory limit."; return 1; }
+  [ $((peak3 * 100)) -le $((limit * 1024 * 75)) ] || { echo "three motion-light instances peak at $peak3 bytes, above 75 % of the $limit KB script memory limit."; return 1; }
   return 0
 }
 

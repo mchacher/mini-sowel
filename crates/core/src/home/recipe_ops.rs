@@ -46,7 +46,7 @@ impl Home {
     /// Runs `f` with the engine taken out of the home, so that the engine can read the home it
     /// belongs to.
     fn engine_reads_home<R>(&mut self, f: impl FnOnce(&mut RecipeEngine, &Home) -> R) -> R {
-        let mut engine = std::mem::replace(&mut self.recipes, RecipeEngine::placeholder());
+        let mut engine = std::mem::take(&mut self.recipes);
         let result = f(&mut engine, self);
         self.recipes = engine;
         result

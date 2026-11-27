@@ -1,19 +1,22 @@
 //! The script phase of the image QEMU runs (feature `scripts`, spec 041 R6.2), after the engine's
-//! own line (its gate, D27, is untouched: no script is loaded before it). The image carries no
-//! script (spec 042 R3.10): the phase reads `recipes/scripts/motion-light-script.js` at build
-//! time, for itself only. First it makes an install (`install_step`): that file signed at boot
-//! with a throwaway key, installed through an in-memory fetcher on a `recipe` thread, loaded again
-//! as at start into a home of no use, and uninstalled; the thread logs `recipe: thread stack <n> of
-//! 20480 bytes never used`. On the realistic home the engine just ran:
+//! own line (its gate, D27, is untouched: no script is loaded before it, the home's recipe
+//! instances are kept stopped, spec 046). The image carries no script (spec 042 R3.10): the phase
+//! reads `recipes/scripts/motion-light.js` at build time, for itself only. First it makes an
+//! install (`install_step`): that file signed at boot with a throwaway key, installed through an
+//! in-memory fetcher on a `recipe` thread, loaded again as at start into a home of no use, and
+//! uninstalled; the thread logs `recipe: thread stack <n> of 20480 bytes never used`. On the
+//! realistic home the engine just ran:
 //!
-//! 1. loads `motion-light-script`, swaps the home's three `motion-light` instances for three
-//!    instances of it with the same settings, and plays the scenario again (a motion event);
+//! 1. loads `motion-light`, starts the home's three kept `motion-light` instances (they were
+//!    stopped for want of the recipe, as a box that has not installed it) with their own settings,
+//!    and plays the scenario again (a motion event); the heap then (`heap peak` of the line below,
+//!    taken before the depth script) is the figure the second gate reads, with the instances running;
 //! 2. loads a script that recurses as deep as the stack limit allows and calls `get` and `order` at
 //!    its deepest (`fixtures/depth-host.js`), and starts an instance of it twice: on this (the
 //!    engine) thread, and on a `script` job thread, as the radio image's HTTP server runs a
 //!    request that changes something (the router's frames included, `handle_stream`);
-//! 3. logs `recipes: script motion-light-script ...` (the memory taken by the phase, the lowest
-//!    free internal RAM, the two stacks), and the `scripts:` line the radio image prints.
+//! 3. logs `recipes: script motion-light ...` (the memory taken by the phase, the lowest free
+//!    internal RAM, the two stacks), and the `scripts:` line the radio image prints.
 //!
 //! Then, outside that line's window, the same with `MAX_INSTANCES_PER_SCRIPT` instances (8, the most one
 //! script recipe holds), to read the script's memory at the bound: `script sizes: ...`.
@@ -62,9 +65,9 @@ use crate::scripts::{self, SCRIPT_THREAD_STACK_BYTES};
 /// speed. The time limits themselves are tested on the Mac.
 const QEMU_SLOWDOWN: u64 = 50;
 
-const MOTION_SCRIPT: &str = "motion-light-script";
+const MOTION_SCRIPT: &str = "motion-light";
 /// The script of the phase: read here, at build time, never carried by an image that is not this one.
-const MOTION_SCRIPT_SOURCE: &str = include_str!("../../recipes/scripts/motion-light-script.js");
+const MOTION_SCRIPT_SOURCE: &str = include_str!("../../recipes/scripts/motion-light.js");
 const DEPTH_SCRIPT: &str = include_str!("../fixtures/depth-host.js");
 /// The realistic home's zone and first light (`fixtures/recipes.json`): the depth script's slots.
 const ZONE: &str = "00000191-5a5a-4a5a-9a5a-5a5a5a5a5a5a";
@@ -120,22 +123,23 @@ fn replay(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), Str
     Ok(())
 }
 
-/// The params text of each `motion-light` instance of the home, and their ids, for an instance of
-/// the script: the same settings, without `buttons`. The fixture's one button is a temperature
-/// sensor (synthetic data): the built-in recipe takes it, the script's own `validate` refuses an
-/// equipment with no `action` data (R5.2).
+/// The version the script declares (`version: "x.y.z"`): the installed file's header must say it.
+fn script_version() -> Result<Version, String> {
+    let at = MOTION_SCRIPT_SOURCE
+        .find("version: \"")
+        .ok_or("script phase: the script declares no version")?;
+    let text = &MOTION_SCRIPT_SOURCE[at + "version: \"".len()..];
+    let end = text.find('"').ok_or("script phase: bad version")?;
+    Version::parse(&text[..end]).ok_or_else(|| "script phase: bad version".to_string())
+}
+
+/// The params text of each `motion-light` instance the home keeps, with their ids.
 fn motion_light_instances(home: &Mutex<Home>) -> Vec<(String, String)> {
     lock(home)
         .recipes()
         .instances()
         .filter(|i| i.recipe_id == "motion-light")
-        .map(|i| {
-            let mut params: serde_json::Value = serde_json::from_str(&i.params).unwrap_or_default();
-            if let Some(object) = params.as_object_mut() {
-                object.remove("buttons");
-            }
-            (i.id.to_string(), params.to_string())
-        })
+        .map(|i| (i.id.to_string(), i.params.to_string()))
         .collect()
 }
 
@@ -184,7 +188,7 @@ fn stats_of(home: &Mutex<Home>, id: &str) -> Option<(usize, usize)> {
 /// The wall time the install step passes to the core: a clock that is set (the QEMU image's is not).
 const INSTALL_WALL_MS: u64 = 1_795_252_323_120;
 /// The recipe's address in the in-memory catalogue.
-const RECIPE_URL: &str = "https://recipes.example.test/motion-light-script.srs";
+const RECIPE_URL: &str = "https://recipes.example.test/motion-light.srs";
 
 /// The files of the install step, in memory: the flash is not the subject.
 #[derive(Default)]
@@ -326,7 +330,7 @@ fn job(
     ran.ok_or_else(|| "script phase: the recipe thread panicked".to_string())
 }
 
-/// Installs `motion-light-script`, signed now with a key made from the ESP32's random numbers (no
+/// Installs `motion-light`, signed now with a key made from the ESP32's random numbers (no
 /// key in any file), from an in-memory catalogue on a `recipe` thread; loads it again as the start
 /// does, into a home of no use; uninstalls it. Logs `script phase: install 201, boot load ok,
 /// uninstall 204`. The home is left as it was: the script phase's own measures follow.
@@ -338,7 +342,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     let key = SigningKey::from_bytes(&seed);
     let public_hex = hex(&key.verifying_key().to_bytes());
     let source = MOTION_SCRIPT_SOURCE.as_bytes();
-    let version = Version::new(1, 0, 0);
+    let version = script_version()?;
     let head = signed_bytes(
         version,
         u32::try_from(source.len()).map_err(|_| "script phase: script too large")?,
@@ -349,7 +353,7 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     file.extend_from_slice(source);
     debug_assert_eq!(file.len(), HEADER_BYTES + source.len());
     let catalogue = format!(
-        r#"{{"format":1,"recipes":[{{"id":"{MOTION_SCRIPT}","version":"1.0.0","name":"Motion light","description":"The script recipe","size":{},"sha256":"{}","url":"{RECIPE_URL}"}}]}}"#,
+        r#"{{"format":1,"recipes":[{{"id":"{MOTION_SCRIPT}","version":"{version}","name":"Motion light","description":"The script recipe","size":{},"sha256":"{}","url":"{RECIPE_URL}"}}]}}"#,
         file.len(),
         hex(&digest(&file))
     )
@@ -379,9 +383,11 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
         let mut scratch = Home::new(INSTALL_WALL_MS);
         scratch.set_recipe_installs(installs);
         let lines = scratch.load_installed_scripts(&files, &runtimes, &scripts::clock());
-        lines
-            .iter()
-            .any(|l| l.starts_with(&format!("recipes: script {MOTION_SCRIPT} 1.0.0 installed")))
+        lines.iter().any(|l| {
+            l.starts_with(&format!(
+                "recipes: script {MOTION_SCRIPT} {version} installed"
+            ))
+        })
     };
     let removed = job(
         home,
@@ -404,7 +410,12 @@ fn install_step(home: &Mutex<Home>) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), String> {
+pub fn run(
+    home: &Mutex<Home>,
+    clocks: &Clocks,
+    start: Instant,
+    engine_before: usize,
+) -> Result<(), String> {
     log::info!(
         "script phase: engine stack {} of {STACK_BYTES} bytes unused before it",
         job_thread::stack_unused()
@@ -429,23 +440,45 @@ pub fn run(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), St
         &runtimes,
         &clock,
     )
-    .ok_or("script phase: motion-light-script did not load")?;
+    .ok_or("script phase: motion-light did not load")?;
     log::info!(
         "script phase: loaded in {} ms of QEMU's time",
         began.elapsed().as_millis()
     );
 
-    // 1. Three instances with the three `motion-light` instances' settings, the scenario again.
+    // 1. The three kept `motion-light` instances start now that the recipe is loaded (they were
+    // stopped with `Recipe not found`, as on a box that has not installed it), the scenario again.
     let originals = motion_light_instances(home);
     if originals.is_empty() {
         return Err("script phase: the home has no motion-light instance".into());
     }
-    delete_all(home, "motion-light");
-    for (_, params) in &originals {
-        create(home, MOTION_SCRIPT, params)?;
+    lock(home).start_recipes((clocks.monotonic)(), wall_ms());
+    let stopped: Vec<String> = {
+        let guard = lock(home);
+        guard
+            .recipes()
+            .instances()
+            .filter(|i| i.recipe_id == MOTION_SCRIPT && !guard.recipes().is_running(&i.id))
+            .map(|i| i.id.to_string())
+            .collect()
+    };
+    if !stopped.is_empty() {
+        let why = stopped
+            .first()
+            .map(|id| last_log(home, id))
+            .unwrap_or_default();
+        return Err(format!(
+            "script phase: {} kept instance(s) did not start: {why}",
+            stopped.len()
+        ));
     }
     replay(home, clocks, start)?;
     let (held3, peak3) = stats_of(home, MOTION_SCRIPT).ok_or("script phase: no counters")?;
+    // The home with `motion-light` loaded and its three instances running, the scenario replayed:
+    // the figure the script phase's gate reads (free before the engine started minus the lowest
+    // free of the phase so far; the depth script and the `script` thread's stack come after it).
+    lows.mark();
+    let heap_peak = engine_before.saturating_sub(lows.total);
     for line in scripts::lines_of(&lock(home)) {
         log::info!("{line}");
     }
@@ -505,6 +538,7 @@ pub fn run(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), St
         source: summary.source_bytes,
         psram_used: psram_before.saturating_sub(now.psram.map_or(0, |p| p.free)),
         psram_peak: psram_before.saturating_sub(lows.psram),
+        heap_peak,
         internal_used: before.internal_free.saturating_sub(now.internal_free),
         internal_min: lows.internal,
         engine_stack: (engine_unused, STACK_BYTES),

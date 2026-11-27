@@ -137,14 +137,29 @@ fn serve(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Serving {
 /// Starts `--serve` without an account (the auth tests).
 fn serve_bare(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Serving {
     for _ in 0..5 {
-        if let Some(serving) = try_serve(dir, speed, env) {
+        if let Some(serving) = try_serve(dir, speed, env, &[]) {
             return serving;
         }
     }
     panic!("the host could not bind a free port in five tries");
 }
 
-fn try_serve(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Option<Serving> {
+/// The `motion-light` script recipe, given to the host as the Mac's launchers give it (spec 046).
+const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light.js";
+
+/// Starts `--serve` with the `motion-light` script loaded (`--recipe-script`).
+fn serve_with_motion_light(dir: &Path, speed: &str) -> Serving {
+    for _ in 0..5 {
+        if let Some(serving) = try_serve(dir, speed, &[], &["--recipe-script", MOTION_LIGHT_SCRIPT])
+        {
+            serving.sign_in();
+            return serving;
+        }
+    }
+    panic!("the host could not bind a free port in five tries");
+}
+
+fn try_serve(dir: &Path, speed: &str, env: &[(&str, &str)], extra: &[&str]) -> Option<Serving> {
     let port = free_port();
     let mut command = host();
     command
@@ -158,6 +173,7 @@ fn try_serve(dir: &Path, speed: &str, env: &[(&str, &str)]) -> Option<Serving> {
             "--data",
         ])
         .arg(dir)
+        .args(extra)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (name, value) in env {
@@ -637,7 +653,7 @@ fn the_garage_and_its_motion_light_are_seen_live_as_the_scenario_plays() {
     let dir = data_dir();
     pair(&dir);
     // Spec 010's garage set up, then spec 012's instance (timeout 20 s), then the host again.
-    let first = serve(&dir, "100", &[]);
+    let first = serve_with_motion_light(&dir, "100");
     let (_, devices) = first.send("GET", "/api/v1/devices", &Value::Null);
     let devices = devices.as_array().unwrap().clone();
     let zone = first.zone("Garage");
@@ -679,7 +695,7 @@ fn the_garage_and_its_motion_light_are_seen_live_as_the_scenario_plays() {
     let instance = instance["id"].as_str().unwrap().to_string();
     assert_eq!(first.interrupt(), Some(130));
 
-    let serving = serve(&dir, "10", &[]);
+    let serving = serve_with_motion_light(&dir, "10");
     let mut client = connect(serving.port);
     client.welcome();
     client.subscribe(&["devices", "equipments", "zones"]);

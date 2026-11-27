@@ -83,7 +83,7 @@ At boot, an instance whose recipe is not installed stays stopped with `Failed to
 not found: motion-light` (`recipes/mod.rs:1706-1710`), keeps its settings, and starts as soon as
 `motion-light` is installed (F2 starts the kept instances of an installed recipe) or at the next
 boot. Its settings are checked by the script on start; an instance with only the legacy `light` key
-stays stopped with `Failed to restore: Invalid params: At least one light is required` (exact text
+stays stopped with `Failed to restore: At least one light is required` (the restore path adds no `Invalid params:`) (exact text
 fixed by R3, checked in a test).
 
 ### R7: behaviour tests

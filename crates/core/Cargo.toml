@@ -18,9 +18,8 @@ script-recipes = ["dep:rquickjs", "dep:scoped-tls-hkt"]
 
 [dependencies]
 log = "0.4"
-# The recipe contract, and the recipes the core provides itself (spec 041).
+# The recipe contract (spec 041); no recipe is built in (spec 046).
 solite-recipe-sdk = { path = "../recipe-sdk" }
-solite-recipe-motion-light = { path = "../recipes/motion-light" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # Password hash (spec 029, D47): PBKDF2-HMAC-SHA256, no default features (no_std-friendly crates).
@@ -51,7 +50,7 @@ name = "script_recipes"
 required-features = ["script-recipes"]
 
 [[test]]
-name = "script_parity"
+name = "motion_light"
 required-features = ["script-recipes"]
 
 [[test]]
@@ -60,4 +59,72 @@ required-features = ["script-recipes"]
 
 [[test]]
 name = "recipe_install"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "auth"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "engine"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "equipments"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "saves"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "events"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "orders"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "recipes"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "sowel_contract"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "recipe_params_memory"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "recipe_settle"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "recipe_json_bytes"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "lock_time"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "memory_ceiling"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "memory_worst_case"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "memory"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "fixtures"
+required-features = ["script-recipes"]
+
+[[test]]
+name = "live"
 required-features = ["script-recipes"]

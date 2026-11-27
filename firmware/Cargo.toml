@@ -33,7 +33,7 @@ flash-saves = ["sim"]
 radio = ["scripts"]
 # Script recipes (spec 041, 042): the core's `script-recipes` (QuickJS through rquickjs) with the
 # firmware's PSRAM allocator. No script is built into any image: the box's scripts are installed
-# (spec 042); the image QEMU runs (`--features sim,scripts`) reads `recipes/scripts/motion-light-script.js`
+# (spec 042); the image QEMU runs (`--features sim,scripts`) reads `recipes/scripts/motion-light.js`
 # for its own measures. The radio image carries it, so does the image QEMU runs; the box's own image,
 # the measuring image (`flash-saves`) and plain `sim` do not (`scripts/validate.sh` searches their
 # ELF for QuickJS, and the radio image's for the script's id).

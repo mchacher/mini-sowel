@@ -32,8 +32,8 @@ struct CallCx<'a> {
     host: &'a dyn Host,
     instances: &'a [Instance],
     gate: &'a Gate,
-    /// The equipments `validate` may read the facts of: the ones the params it is given name, as
-    /// the host resolved them. Empty outside `validate`.
+    /// The equipments and zones `validate` may read the facts of: the ones the params it is given
+    /// name, as the host resolved them. Empty outside `validate`.
     named: &'a [String],
 }
 
@@ -566,16 +566,36 @@ impl ScriptRecipe {
         self.gate.take();
     }
 
-    /// The host's checks of the params, then the script's own `validate`.
+    /// The script's own `validate` first, then the host's checks of the params (spec 046, R3): a
+    /// refusal the script makes carries its text. A `validate` that throws or runs out of its time
+    /// on settings of the wrong shape gives way to the host's check, whose text is then the answer;
+    /// the settings that check lets through get the script's failure. A script can never make a
+    /// setting pass that the slot definitions refuse.
     fn check(&self, host: &dyn Host, params: &serde_json::Value) -> Result<(), RecipeError> {
+        let failure = if self.has_validate {
+            match self.run_validate(host, params) {
+                Ok(None) => None,
+                Ok(Some(text)) => return Err(RecipeError::instance(text)),
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        };
         slots::validate_params(&self.defs, host, params).map_err(RecipeError::instance)?;
-        if !self.has_validate {
-            return Ok(());
-        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// The script's `validate`: `Ok(None)` passes, `Ok(Some(text))` is its refusal, `Err` is a
+    /// failure of the script (an exception) or of the recipe (a limit).
+    fn run_validate(
+        &self,
+        host: &dyn Host,
+        params: &serde_json::Value,
+    ) -> Result<Option<String>, RecipeError> {
         let (parsed, slots) = slots::resolve(&self.defs, params);
         let named: Vec<String> = slots
             .iter()
-            .filter(|s| s.kind == SlotKind::Equipment)
+            .filter(|s| matches!(s.kind, SlotKind::Equipment | SlotKind::Zone))
             .flat_map(|s| s.ids.iter().cloned())
             .collect();
         limits::before_call(&self.rt, &self.gate, &self.clock, self.limit, &self.refused);
@@ -606,8 +626,8 @@ impl ScriptRecipe {
         self.after_call_check()?;
         let status = raw.map_err(|m| classify(m, self.limit))?;
         match status.split_once(':') {
-            None => Ok(()),
-            Some(("v", text)) => Err(RecipeError::instance(text)),
+            None => Ok(None),
+            Some(("v", text)) => Ok(Some(text.to_string())),
             Some(("f", reason)) => Err(RecipeError::recipe(reason)),
             Some(("e", message)) => Err(RecipeError::instance(format!("Script error: {message}"))),
             Some(_) => Err(RecipeError::instance("Script error: bad answer")),
@@ -1054,7 +1074,8 @@ pub(super) fn register<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         ),
     )?;
     // What a script's `validate` may know of an equipment its own params name (the shim checks the
-    // id is one of them): its name and the aliases of its order and data bindings.
+    // id is one of them): its name, its `type` and `zoneId` (Sowel's fields) and the aliases of its
+    // order and data bindings.
     host.set(
         "facts",
         Function::new(
@@ -1069,11 +1090,29 @@ pub(super) fn register<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
                     Ok(cx.host.equipment(&id).map(|view| {
                         json!({
                             "name": view.name,
+                            "type": view.kind,
+                            "zoneId": view.zone_id,
                             "orders": view.order_bindings.iter().map(|b| &b.alias).collect::<Vec<_>>(),
                             "data": view.data_bindings.iter().map(|b| &b.alias).collect::<Vec<_>>(),
                         })
                         .to_string()
                     }))
+                })
+            },
+        ),
+    )?;
+    // Whether a zone its own params name exists (Sowel's `Zone not found`): `null` for any other
+    // text.
+    host.set(
+        "zoneFacts",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, id: String| -> rquickjs::Result<Option<String>> {
+                with_call(&ctx, |cx| {
+                    if !cx.named.contains(&id) || cx.host.zone_data(&id).is_none() {
+                        return Ok(None);
+                    }
+                    Ok(Some(json!({ "id": id }).to_string()))
                 })
             },
         ),

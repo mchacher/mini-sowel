@@ -1,5 +1,5 @@
 //! The bounds a recipe and the engine share (spec 041, R2): the state text, the listen set, the
-//! params depth, the log. The engine and every recipe (linked in, or a script) read the same
+//! params depth, the log. The engine and every recipe (a script, or another recipe written against the SDK) read the same
 //! constants, so a bound is written once.
 
 /// The longest state text of an instance. Worst case: 512 bytes kept per instance, 16 instances

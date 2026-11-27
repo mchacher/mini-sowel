@@ -4,7 +4,6 @@ members = [
   "crates/core",
   "crates/host",
   "crates/recipe-sdk",
-  "crates/recipes/motion-light",
   "crates/sim",
   "crates/ui-embed",
 ]

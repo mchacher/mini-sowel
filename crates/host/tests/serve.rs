@@ -1447,7 +1447,7 @@ fn an_order_is_answered_while_slow_clients_hold_the_long_lists_open() {
     assert_eq!(serving.interrupt(), Some(130));
 }
 
-// ---- Spec 012: the motion-light recipe ----
+// ---- Spec 012, 041, 046: the motion-light recipe, a script given by `--recipe-script` ----
 
 /// The id of the garage light equipment.
 fn garage_light(serving: &Serving) -> String {
@@ -1477,15 +1477,33 @@ fn messages(serving: &Serving, instance: &str) -> Vec<String> {
         .collect()
 }
 
+const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light.js";
+
 #[test]
 fn a_motion_light_instance_switches_the_garage_light_and_runs_again_after_a_restart() {
     let dir = data_dir();
     pair(&dir);
+    let script = ["--recipe-script", MOTION_LIGHT_SCRIPT];
     // Speed 60: the scenario's motions (1 and 3 minutes) come after 1 s and 3 s, and each clears
     // a second later; with a timeout of 3 s the light goes off about 7 s after the start.
-    let serving = serve(&dir, "60", &[]);
+    let serving = serve(&dir, "60", &script);
+    let line = serving
+        .shown
+        .iter()
+        .find(|l| l.starts_with("recipes: script "))
+        .expect("the start line of the script");
+    assert!(
+        line.starts_with(&format!(
+            "recipes: script motion-light 1.1.2 from {MOTION_LIGHT_SCRIPT} ("
+        )) && line.ends_with(" KB in its runtime)"),
+        "{line}"
+    );
     let zone = set_up_the_garage(&serving);
     let light = garage_light(&serving);
+    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(recipes.as_array().unwrap().len(), 1);
+    assert_eq!(recipes[0]["id"], "motion-light");
     let (status, created) = serving.send(
         "POST",
         "/api/v1/recipe-instances",
@@ -1502,100 +1520,6 @@ fn a_motion_light_instance_switches_the_garage_light_and_runs_again_after_a_rest
     let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(saved[0]["id"], instance.as_str());
     assert_eq!(saved[0]["params"]["timeout"], "3s");
-    assert_eq!(serving.interrupt(), Some(130));
-
-    // The host again: the instance is running from its start.
-    let serving = serve(&dir, "60", &[]);
-    let (status, head, body) = serving.request_full(
-        "GET",
-        "/api/v1/recipe-instances",
-        &format!("127.0.0.1:{}", serving.port),
-        "",
-    );
-    assert_eq!(status, 200);
-    assert!(
-        head.to_ascii_lowercase()
-            .contains("transfer-encoding: chunked"),
-        "{head}"
-    );
-    let list: Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(list[0]["id"], instance.as_str());
-    assert_eq!(list[0]["enabled"], true);
-    assert!(list[0]["state"].is_object());
-    wait_until("the light on", || {
-        binding_value(&serving, &light, "state") == true
-    });
-    wait_until("the light off", || {
-        binding_value(&serving, &light, "state") == false
-    });
-    // Newest first; the log of the run before is not kept.
-    wait_until("three lines", || messages(&serving, &instance).len() >= 3);
-    assert_eq!(
-        messages(&serving, &instance),
-        [
-            "No motion for 3s — lights turned off",
-            "Motion detected — 1 light(s) turned on",
-            "Recipe activated — no motion, lights off"
-        ]
-    );
-    // The routes over HTTP.
-    let (status, body) = serving.send(
-        "POST",
-        &format!("/api/v1/recipe-instances/{instance}/disable"),
-        &serde_json::json!({}),
-    );
-    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
-    let (status, _) = serving.send(
-        "DELETE",
-        &format!("/api/v1/recipe-instances/{instance}"),
-        &Value::Null,
-    );
-    assert_eq!(status, 204);
-    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
-    assert_eq!(status, 200);
-    assert_eq!(recipes[0]["id"], "motion-light");
-    assert_eq!(serving.interrupt(), Some(130));
-}
-
-const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light-script.js";
-
-#[test]
-fn a_script_recipe_switches_the_garage_light_through_the_api_and_is_loaded_again_after_a_restart() {
-    let dir = data_dir();
-    pair(&dir);
-    let script = ["--recipe-script", MOTION_LIGHT_SCRIPT];
-    // Speed 60, as the built-in recipe's test: the light goes on with the scenario's motion and
-    // off 3 s after it.
-    let serving = serve(&dir, "60", &script);
-    let line = serving
-        .shown
-        .iter()
-        .find(|l| l.starts_with("recipes: script "))
-        .expect("the start line of the script");
-    assert!(
-        line.starts_with(&format!(
-            "recipes: script motion-light-script 1.0.0 from {MOTION_LIGHT_SCRIPT} ("
-        )) && line.ends_with(" KB in its runtime)"),
-        "{line}"
-    );
-    let zone = set_up_the_garage(&serving);
-    let light = garage_light(&serving);
-    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
-    assert_eq!(status, 200);
-    assert_eq!(recipes[0]["id"], "motion-light");
-    assert_eq!(recipes[1]["id"], "motion-light-script");
-    let (status, created) = serving.send(
-        "POST",
-        "/api/v1/recipe-instances",
-        &serde_json::json!({
-            "recipeId": "motion-light-script",
-            "params": {"zone": zone, "lights": [light], "timeout": "3s"}
-        }),
-    );
-    assert_eq!(status, 201, "{created}");
-    let instance = created["id"].as_str().unwrap().to_string();
-    let file = dir.join("recipes.json");
-    wait_until("recipes.json written", || file.exists());
     wait_until("the light on", || {
         binding_value(&serving, &light, "state") == true
     });
@@ -1616,13 +1540,83 @@ fn a_script_recipe_switches_the_garage_light_through_the_api_and_is_loaded_again
 
     // The host again, with the script: the saved instance starts with the others.
     let serving = serve(&dir, "60", &script);
-    let (status, list) = serving.send("GET", "/api/v1/recipe-instances", &Value::Null);
+    let (status, head, body) = serving.request_full(
+        "GET",
+        "/api/v1/recipe-instances",
+        &format!("127.0.0.1:{}", serving.port),
+        "",
+    );
     assert_eq!(status, 200);
+    assert!(
+        head.to_ascii_lowercase()
+            .contains("transfer-encoding: chunked"),
+        "{head}"
+    );
+    let list: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(list[0]["id"], instance.as_str());
     assert_eq!(list[0]["enabled"], true);
+    assert!(list[0]["state"].is_object());
     wait_until("the light on again", || {
         binding_value(&serving, &light, "state") == true
     });
+    // The routes over HTTP.
+    let (status, body) = serving.send(
+        "POST",
+        &format!("/api/v1/recipe-instances/{instance}/disable"),
+        &serde_json::json!({}),
+    );
+    assert_eq!((status, body), (200, serde_json::json!({"success": true})));
+    let (status, _) = serving.send(
+        "DELETE",
+        &format!("/api/v1/recipe-instances/{instance}"),
+        &Value::Null,
+    );
+    assert_eq!(status, 204);
+    assert_eq!(serving.interrupt(), Some(130));
+}
+
+#[test]
+fn a_home_saved_with_motion_light_instances_keeps_them_stopped_without_the_script_and_runs_them_with_it()
+ {
+    let dir = data_dir();
+    pair(&dir);
+    let script = ["--recipe-script", MOTION_LIGHT_SCRIPT];
+    let serving = serve(&dir, "60", &script);
+    let zone = set_up_the_garage(&serving);
+    let light = garage_light(&serving);
+    let params = serde_json::json!({"zone": zone, "lights": [light], "timeout": "3s"});
+    let (status, created) = serving.send(
+        "POST",
+        "/api/v1/recipe-instances",
+        &serde_json::json!({"recipeId": "motion-light", "params": params}),
+    );
+    assert_eq!(status, 201, "{created}");
+    let instance = created["id"].as_str().unwrap().to_string();
+    wait_until("recipes.json written", || dir.join("recipes.json").exists());
+    assert_eq!(serving.interrupt(), Some(130));
+
+    // The host again, with no script: no recipe is listed, the instance is kept, stopped, with its
+    // settings.
+    let serving = serve(&dir, "60", &[]);
+    let (status, recipes) = serving.send("GET", "/api/v1/recipes", &Value::Null);
+    assert_eq!((status, recipes), (200, serde_json::json!([])));
+    let (_, list) = serving.send("GET", "/api/v1/recipe-instances", &Value::Null);
+    assert_eq!(list[0]["id"], instance.as_str());
+    assert_eq!(list[0]["enabled"], true);
+    assert_eq!(list[0]["params"], params);
+    assert_eq!(
+        messages(&serving, &instance),
+        ["Failed to restore: Recipe not found: motion-light"]
+    );
+    assert_eq!(serving.interrupt(), Some(130));
+
+    // With the script again: it runs, its settings unchanged.
+    let serving = serve(&dir, "60", &script);
+    wait_until("the light on", || {
+        binding_value(&serving, &light, "state") == true
+    });
+    let (_, list) = serving.send("GET", "/api/v1/recipe-instances", &Value::Null);
+    assert_eq!(list[0]["params"], params);
     assert_eq!(serving.interrupt(), Some(130));
 }
 

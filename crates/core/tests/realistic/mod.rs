@@ -1,6 +1,6 @@
 //! The realistic home of decision D20, built once for the tests that need it: 50 devices with 6
 //! data and 1 order each, 10 zones, 50 equipments of 6 bindings (16 of them lights of the first
-//! zone), and 3 instances of `motion-light`. Devices 10, 20 and 30 are the motion sensors of the
+//! zone), and 3 instances of `motion-light` (the script, loaded). Devices 10, 20 and 30 are the motion sensors of the
 //! first zone (occupancy instead of pressure: still 6 data). `memory_ceiling.rs` measures it, `fixtures.rs`
 //! writes it to `firmware/fixtures/`.
 #![allow(dead_code)]
@@ -87,8 +87,11 @@ pub fn build(random: &mut impl FnMut(&mut [u8]) -> Result<(), String>) -> Realis
     }
     for (i, device) in device_ids.iter().enumerate() {
         // The last 16 are lights of the first zone, for the recipes below.
+        // The first one is the button of the instances below (the script's slot wants a button).
         let (kind, zone) = if i >= 34 {
             ("light_onoff", &zone_ids[0])
+        } else if i == 0 {
+            ("button", &zone_ids[0])
         } else {
             ("sensor", &zone_ids[i % 10])
         };
@@ -149,6 +152,14 @@ pub fn build(random: &mut impl FnMut(&mut [u8]) -> Result<(), String>) -> Realis
         .status,
         201
     );
+    // `motion-light` is a script recipe (spec 046): loaded as the boot loads an installed file.
+    let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
+    home.load_script_recipe(
+        include_str!("../../../../recipes/scripts/motion-light.js"),
+        std::sync::Arc::new(solite_core::recipes::script::SystemRuntimes),
+        clock,
+    )
+    .unwrap();
     let mut instance_ids = Vec::new();
     for _ in 0..3 {
         let body = serde_json::json!({

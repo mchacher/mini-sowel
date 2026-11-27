@@ -2194,7 +2194,7 @@ fn phase_with_depth(
     post: u32,
 ) -> String {
     format!(
-        "I (8000) solite_firmware::simulated::script_phase: script phase: engine thread, depth 600, engine called at {}\nI (8500) solite_firmware::simulated::script_phase: script phase: script thread, POST status {post}, depth 600, engine called at {}\nI (9000) solite_firmware::simulated::script_phase: recipes: script motion-light-script 14 KB source; psram +250 KB (peak +300 KB); internal +50 KB (min {internal_min} KB free); engine stack {engine} of 32768 unused; script thread stack {script} of 32768 unused\n",
+        "I (8000) solite_firmware::simulated::script_phase: script phase: engine thread, depth 600, engine called at {}\nI (8500) solite_firmware::simulated::script_phase: script phase: script thread, POST status {post}, depth 600, engine called at {}\nI (9000) solite_firmware::simulated::script_phase: recipes: script motion-light 14 KB source; psram +250 KB (peak +300 KB); internal +50 KB (min {internal_min} KB free); engine stack {engine} of 32768 unused; script thread stack {script} of 32768 unused; heap peak 480 KB\n",
         called.0, called.1
     )
 }
@@ -2205,7 +2205,7 @@ fn phase_line(internal_min: u32, engine: u32, script: u32) -> String {
 
 fn sizes_line(peak3: u64) -> String {
     format!(
-        "I (9500) solite_firmware::simulated::script_phase: script sizes: motion-light-script loaded 100000 B, 3 instances 130000 B (peak {peak3} B), 8 instances 190000 B (peak 200000 B)\n"
+        "I (9500) solite_firmware::simulated::script_phase: script sizes: motion-light loaded 100000 B, 3 instances 130000 B (peak {peak3} B), 8 instances 190000 B (peak 200000 B)\n"
     )
 }
 
@@ -2237,6 +2237,21 @@ fn the_script_phase_needs_its_line_the_internal_ram_and_both_stacks() {
     let (ok, reason) = script_phase_check(&(phase_line(76, 5824, 2047) + &sizes_line(1)));
     assert!(!ok);
     assert!(reason.contains("script thread keeps 2047"), "{reason}");
+}
+
+#[test]
+fn the_script_phase_needs_its_heap_peak_at_most_574_kb_with_the_instances_running() {
+    let sizes = sizes_line(1);
+    let line = phase_line(76, 5824, 8032);
+    let with = |kb: &str| line.replace("heap peak 480 KB", &format!("heap peak {kb} KB"));
+    assert!(script_phase_check(&(with("574") + &sizes)).0);
+    let (ok, reason) = script_phase_check(&(with("575") + &sizes));
+    assert!(!ok);
+    assert!(reason.contains("heap peaks at 575 KB"), "{reason}");
+    // The figure missing: the line of an image that does not measure it.
+    let (ok, reason) = script_phase_check(&(line.replace("; heap peak 480 KB", "") + &sizes));
+    assert!(!ok);
+    assert!(reason.contains("cannot read the heap peak"), "{reason}");
 }
 
 #[test]
@@ -2328,10 +2343,10 @@ fn an_image_with_quickjs_is_refused_where_there_must_be_none_and_the_other_way_r
 }
 
 // ---------------------------------------------------------------------------------------------
-// The script group (spec 041 R7): the garage's motion-light swapped for a motion-light-script
+// The script group (spec 041 R7, spec 046): the wave checked on the garage's own motion-light
 // ---------------------------------------------------------------------------------------------
 
-/// How the fake box's light behaves once the script instance exists.
+/// How the fake box's light behaves.
 #[derive(Clone, Copy, PartialEq)]
 enum Light {
     /// On at the first look, off from the third.
@@ -2342,21 +2357,20 @@ enum Light {
     NeverOff,
 }
 
-/// What the fake box saw and holds: the calls, the garage instance's `enabled`, the script
-/// instance (the body it was created with).
+/// What the fake box saw and holds: the calls, and the recipe (installed by an upload or not).
 #[derive(Default)]
 struct ScriptBox {
     calls: Vec<String>,
-    garage_enabled: bool,
-    script: Option<String>,
     looks: u32,
-    /// `motion-light-script` was installed by an upload (spec 042 R7.6), and the body it came with.
+    /// `motion-light` was installed by an upload (spec 042 R7.6), and the body it came with.
     installed: bool,
     uploaded: Option<Vec<u8>>,
     /// The content type of the upload.
     upload_type: Option<String>,
     /// The status the upload answers (201 by default).
     upload_status: Option<u16>,
+    /// The garage instance's timeout, as written in its params ("10m" by default).
+    timeout: Option<&'static str>,
 }
 
 fn script_fake(
@@ -2365,7 +2379,6 @@ fn script_fake(
     has_recipe: bool,
     state: Arc<Mutex<ScriptBox>>,
 ) -> Handler {
-    state.lock().unwrap().garage_enabled = true;
     Arc::new(move |r: &Req| {
         let mut st = state.lock().unwrap();
         st.calls.push(format!("{} {}", r.method, r.path));
@@ -2385,57 +2398,34 @@ fn script_fake(
                     ),
                     _ => {
                         st.installed = true;
-                        (
-                            201,
-                            r#"{"id":"motion-light-script","version":"1.0.0"}"#.into(),
-                        )
+                        (201, r#"{"id":"motion-light","version":"1.1.2"}"#.into())
                     }
                 }
             }
-            ("POST", "/api/v1/recipes/motion-light-script/uninstall") => {
+            ("POST", "/api/v1/recipes/motion-light/uninstall") => {
                 st.installed = false;
                 (204, String::new())
             }
             ("GET", "/api/v1/recipes") => {
-                let script = if has_recipe || st.installed {
-                    r#",{"id":"motion-light-script","name":"Motion light (script)"}"#
+                if has_recipe || st.installed {
+                    (
+                        200,
+                        r#"[{"id":"motion-light","name":"Motion Light"}]"#.into(),
+                    )
                 } else {
-                    ""
-                };
-                (
-                    200,
-                    format!(r#"[{{"id":"motion-light","name":"Motion light"}}{script}]"#),
-                )
+                    (200, "[]".into())
+                }
             }
             ("GET", "/api/v1/recipe-instances") => {
+                let timeout = st.timeout.unwrap_or("10m");
                 let garage = if has_garage {
                     format!(
-                        r#"{{"id":"g1","recipeId":"motion-light","enabled":{},"params":{{"zone":"z1","lights":["L1","L2"],"buttons":["B1"],"luxThreshold":50,"timeout":"10m","maxOnDuration":"1h"}}}}"#,
-                        st.garage_enabled
+                        r#"{{"id":"g1","recipeId":"motion-light","enabled":true,"params":{{"zone":"z1","lights":["L1","L2"],"buttons":["B1"],"luxThreshold":50,"timeout":"{timeout}","maxOnDuration":"1h"}}}}"#
                     )
                 } else {
                     String::new()
                 };
                 (200, format!("[{garage}]"))
-            }
-            ("POST", "/api/v1/recipe-instances/g1/disable") => {
-                st.garage_enabled = false;
-                (200, r#"{"success":true}"#.into())
-            }
-            ("POST", "/api/v1/recipe-instances/g1/enable") => {
-                st.garage_enabled = true;
-                (200, r#"{"success":true}"#.into())
-            }
-            ("POST", "/api/v1/recipe-instances") => {
-                st.script = Some(String::from_utf8_lossy(&r.body).into_owned());
-                (
-                    201,
-                    r#"{"id":"s1","recipeId":"motion-light-script"}"#.into(),
-                )
-            }
-            ("DELETE", "/api/v1/recipe-instances/s1") => {
-                st.script = None;
-                (204, String::new())
             }
             ("GET", "/api/v1/equipments/L1") => {
                 st.looks += 1;
@@ -2470,8 +2460,21 @@ fn script_group(handler: Handler, extra: &[(&str, &str)]) -> (Out, TempDir) {
     group("script", &format!("127.0.0.1:{port}"), &envs)
 }
 
+/// No call that changes the home: nothing is created, disabled, enabled, deleted or uninstalled.
+fn changes_nothing(calls: &str) {
+    for change in [
+        "POST /api/v1/recipe-instances",
+        "DELETE",
+        "disable",
+        "enable",
+        "uninstall",
+    ] {
+        assert!(!calls.contains(change), "{change}: {calls}");
+    }
+}
+
 #[test]
-fn the_script_group_swaps_the_garage_checks_the_light_and_puts_the_garage_back() {
+fn the_script_group_checks_the_wave_on_the_garages_own_instance_and_changes_nothing() {
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::Follows, true, true, state.clone()), &[]);
     assert_eq!(out.code, 0, "{}", out.text);
@@ -2480,50 +2483,38 @@ fn the_script_group_swaps_the_garage_checks_the_light_and_puts_the_garage_back()
     out.ok("B11.3");
     out.ok("B11.4");
     out.ok("B11.5");
-    out.ok("B11.7");
+    // The instance's own timeout (10 minutes) is read, nothing is copied: the garage is not touched.
+    assert!(out.text.contains("timeout 600s"), "{}", out.text);
+    assert!(!out.text.contains("B11.7"), "{}", out.text);
     let st = state.lock().unwrap();
-    // The script instance has the garage's zone, lights, buttons and lux setting, a timeout of
-    // 1 minute, and nothing else (no maxOnDuration).
-    assert!(st.script.is_none(), "deleted at the end");
-    assert!(st.garage_enabled, "motion-light enabled again");
-    let calls = st.calls.join("\n");
-    assert!(
-        calls.contains("POST /api/v1/recipe-instances/g1/disable"),
-        "{calls}"
-    );
-    assert!(
-        calls.contains("DELETE /api/v1/recipe-instances/s1"),
-        "{calls}"
-    );
-    assert!(
-        calls.contains("POST /api/v1/recipe-instances/g1/enable"),
-        "{calls}"
-    );
+    assert!(st.uploaded.is_none());
+    changes_nothing(&st.calls.join("\n"));
 }
 
 #[test]
-fn the_script_instance_is_created_with_the_garages_settings_and_a_timeout_of_a_minute() {
-    let state = Arc::new(Mutex::new(ScriptBox::default()));
-    let seen = Arc::new(Mutex::new(String::new()));
-    let (inner, seen_in) = (script_fake(Light::Follows, true, true, state), seen.clone());
-    // Wrap: keep the body of the creation before the fake deletes the instance.
-    let handler: Handler = Arc::new(move |r: &Req| {
-        if r.method == "POST" && r.path == "/api/v1/recipe-instances" {
-            *seen_in.lock().unwrap() = String::from_utf8_lossy(&r.body).into_owned();
-        }
-        inner(r)
-    });
-    let (out, _dir) = script_group(handler, &[]);
+fn a_timeout_the_group_cannot_read_skips_the_off_check_with_a_line() {
+    let state = Arc::new(Mutex::new(ScriptBox {
+        timeout: Some("1h30m"),
+        ..ScriptBox::default()
+    }));
+    // No override of the wait: the timeout is what sets it.
+    let (out, _dir) = script_group(
+        script_fake(Light::NeverOff, true, true, state.clone()),
+        &[("SOLITE_SESSION_OFF_WAIT", "")],
+    );
     assert_eq!(out.code, 0, "{}", out.text);
-    let body = seen.lock().unwrap().clone();
-    assert_eq!(
-        body,
-        r#"{"recipeId": "motion-light-script", "params": {"zone": "z1", "lights": ["L1", "L2"], "buttons": ["B1"], "luxThreshold": 50, "timeout": "1m"}}"#
+    out.ok("B11.2");
+    out.ok("B11.3");
+    out.skipped(
+        "B11.4",
+        "the instance's timeout cannot be read, so how long to wait is unknown",
     );
+    assert!(out.text.contains("timeout unreadable"), "{}", out.text);
+    changes_nothing(&state.lock().unwrap().calls.join("\n"));
 }
 
 #[test]
-fn a_light_that_never_comes_on_is_ko_and_the_garage_is_put_back_all_the_same() {
+fn a_light_that_never_comes_on_is_ko_and_nothing_is_changed() {
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::NeverOn, true, true, state.clone()), &[]);
     assert_eq!(out.code, 1, "{}", out.text);
@@ -2532,14 +2523,11 @@ fn a_light_that_never_comes_on_is_ko_and_the_garage_is_put_back_all_the_same() {
         "{}",
         out.text
     );
-    out.ok("B11.7");
-    let st = state.lock().unwrap();
-    assert!(st.script.is_none());
-    assert!(st.garage_enabled);
+    changes_nothing(&state.lock().unwrap().calls.join("\n"));
 }
 
 #[test]
-fn a_light_that_never_goes_off_is_ko_and_the_garage_is_put_back_all_the_same() {
+fn a_light_that_never_goes_off_is_ko_and_nothing_is_changed() {
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::NeverOff, true, true, state.clone()), &[]);
     assert_eq!(out.code, 1, "{}", out.text);
@@ -2550,35 +2538,7 @@ fn a_light_that_never_goes_off_is_ko_and_the_garage_is_put_back_all_the_same() {
         "{}",
         out.text
     );
-    out.ok("B11.7");
-    let st = state.lock().unwrap();
-    assert!(st.script.is_none());
-    assert!(st.garage_enabled);
-}
-
-#[test]
-fn a_script_instance_the_box_refuses_leaves_motion_light_enabled() {
-    let state = Arc::new(Mutex::new(ScriptBox::default()));
-    let inner = script_fake(Light::Follows, true, true, state.clone());
-    let handler: Handler = Arc::new(move |r: &Req| {
-        if r.method == "POST" && r.path == "/api/v1/recipe-instances" {
-            return (
-                400,
-                r#"{"error":"Invalid params: lights is required"}"#.into(),
-            );
-        }
-        inner(r)
-    });
-    let (out, _dir) = script_group(handler, &[]);
-    assert_eq!(out.code, 1, "{}", out.text);
-    assert!(
-        out.ko("B11.2")
-            .contains("Invalid params: lights is required"),
-        "{}",
-        out.text
-    );
-    out.ok("B11.7");
-    assert!(state.lock().unwrap().garage_enabled);
+    changes_nothing(&state.lock().unwrap().calls.join("\n"));
 }
 
 #[test]
@@ -2588,20 +2548,15 @@ fn no_script_recipe_or_no_garage_instance_changes_nothing() {
     // Spec 042: no script is built in; without a file to upload the group says so and changes nothing.
     assert_eq!(out.code, 0, "{}", out.text);
     out.skipped("B11.1", "not installed: --recipe-file");
-    assert!(state.lock().unwrap().garage_enabled);
-    assert!(!state.lock().unwrap().calls.join("\n").contains("disable"));
+    changes_nothing(&state.lock().unwrap().calls.join("\n"));
     let state = Arc::new(Mutex::new(ScriptBox::default()));
     let (out, _dir) = script_group(script_fake(Light::Follows, false, true, state.clone()), &[]);
     assert_eq!(out.code, 0, "{}", out.text);
     out.skipped(
-        "B11.1",
-        "the box has no enabled motion-light instance to copy the settings from",
+        "B11.2",
+        "the box has no enabled motion-light instance (the garage's)",
     );
-    let calls = state.lock().unwrap().calls.join("\n");
-    assert!(
-        !calls.contains("disable") && !calls.contains("DELETE"),
-        "{calls}"
-    );
+    changes_nothing(&state.lock().unwrap().calls.join("\n"));
 }
 
 #[test]
@@ -2615,7 +2570,7 @@ fn the_step_is_skipped_without_the_gestures_or_a_terminal() {
 
 /// A signed recipe file of the tests: any bytes, the fake box does not read them.
 fn recipe_file(dir: &Path) -> PathBuf {
-    let file = dir.join("motion-light-script.srs");
+    let file = dir.join("motion-light.srs");
     fs::write(
         &file,
         b"SOLITERS and some bytes the fake box never reads\x00\x01\x02",
@@ -2625,7 +2580,7 @@ fn recipe_file(dir: &Path) -> PathBuf {
 }
 
 #[test]
-fn a_recipe_file_is_uploaded_when_the_recipe_is_not_installed_and_uninstalled_at_the_end() {
+fn a_recipe_file_is_uploaded_when_the_recipe_is_not_installed_and_kept_while_an_instance_uses_it() {
     let dir = TempDir::new("recipe-file");
     let file = recipe_file(dir.path());
     let state = Arc::new(Mutex::new(ScriptBox::default()));
@@ -2640,12 +2595,34 @@ fn a_recipe_file_is_uploaded_when_the_recipe_is_not_installed_and_uninstalled_at
     let st = state.lock().unwrap();
     assert_eq!(st.uploaded.as_deref(), Some(&fs::read(&file).unwrap()[..]));
     assert_eq!(st.upload_type.as_deref(), Some("application/octet-stream"));
-    assert!(!st.installed, "uninstalled at the end");
-    assert!(st.garage_enabled);
+    // The garage's instance uses the recipe: it is never uninstalled.
+    assert!(st.installed, "kept: an instance uses it");
     let calls = st.calls.join("\n");
+    assert!(!calls.contains("uninstall"), "{calls}");
+}
+
+#[test]
+fn an_uploaded_recipe_no_instance_uses_is_uninstalled_again() {
+    let dir = TempDir::new("recipe-file");
+    let file = recipe_file(dir.path());
+    let state = Arc::new(Mutex::new(ScriptBox::default()));
+    let (out, _dir) = script_group(
+        script_fake(Light::Follows, false, false, state.clone()),
+        &[("SOLITE_SESSION_RECIPE_FILE", file.to_str().unwrap())],
+    );
+    assert_eq!(out.code, 0, "{}", out.text);
+    out.ok("B11.1");
+    out.skipped(
+        "B11.2",
+        "the box has no enabled motion-light instance (the garage's)",
+    );
+    out.ok("B11.7");
+    let st = state.lock().unwrap();
+    assert!(!st.installed, "no instance uses it: taken away again");
     assert!(
-        calls.contains("POST /api/v1/recipes/motion-light-script/uninstall"),
-        "{calls}"
+        st.calls
+            .join("\n")
+            .contains("POST /api/v1/recipes/motion-light/uninstall")
     );
 }
 
@@ -2681,7 +2658,6 @@ fn a_recipe_file_the_box_refuses_or_that_is_missing_is_ko_and_nothing_is_changed
         "{}",
         out.text
     );
-    assert!(state.lock().unwrap().garage_enabled);
     assert!(!state.lock().unwrap().calls.join("\n").contains("uninstall"));
     // A file that is not there.
     let state = Arc::new(Mutex::new(ScriptBox::default()));
@@ -2799,15 +2775,14 @@ fn script_source_check(bytes: &[u8], want: &str) -> (bool, String) {
 #[test]
 fn an_image_that_carries_the_scripts_source_is_refused_where_there_must_be_none_and_the_other_way_round()
  {
-    let with =
-        b"\x7fELF....recipe({ api: 1, id: \"motion-light-script\", version: \"1.0.0\" })....";
+    let with = b"\x7fELF....recipe({ api: 1, id: \"motion-light\", version: \"1.1.2\" })....";
     let without = b"\x7fELF....recipe nothing of the kind....";
     assert!(script_source_check(without, "without").0);
     assert!(script_source_check(with, "with").0);
     let (ok, reason) = script_source_check(with, "without");
     assert!(!ok);
     assert!(
-        reason.contains("the radio image is with the source of motion-light-script"),
+        reason.contains("the radio image is with the source of motion-light"),
         "{reason}"
     );
     let (ok, reason) = script_source_check(without, "with");

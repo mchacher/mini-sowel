@@ -629,7 +629,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "solite-recipe-motion-light",
  "solite-recipe-sdk",
  "solite-sim",
 ]
@@ -648,14 +647,6 @@ dependencies = [
  "solite-sim",
  "tiny_http",
  "tungstenite",
-]
-
-[[package]]
-name = "solite-recipe-motion-light"
-version = "0.1.1"
-dependencies = [
- "serde_json",
- "solite-recipe-sdk",
 ]
 
 [[package]]

@@ -15,7 +15,7 @@ Every one of Sowel's 31 equipment types is accepted, stored and served; Sowel's 
 equipment fields are kept.
 
 To rewrite the snapshot after Sowel moved: `SOWEL_SNAPSHOT=write cargo test -p solite-core
---test sowel_contract` with Sowel's repository beside this one.
+--features script-recipes --test sowel_contract` with Sowel's repository beside this one.
 
 ## Data categories
 
@@ -75,7 +75,7 @@ The events Solite sends on `/ws` (Sowel's `EngineEvent`); the others are not sen
 | `recipe.instance.removed` | Recipe routes |
 | `recipe.instance.started` | Recipe routes |
 | `recipe.instance.stopped` | Recipe routes |
-| `recipe.instance.state.changed` | motion-light's state |
+| `recipe.instance.state.changed` | A recipe instance's state |
 | `recipe.instance.error` | A recipe that cannot run |
 | `settings.changed` | Settings routes |
 | `sunlight.changed` | Sun times on the root zone |
@@ -88,8 +88,8 @@ The events Solite sends on `/ws` (Sowel's `EngineEvent`); the others are not sen
 | `home.latitude` | Sun times |
 | `home.longitude` | Sun times |
 | `home.timezone` | Local time (Sowel's global key; D41, D44) |
-| `home.sunriseOffset` | motion-light's "Inactive during day" |
-| `home.sunsetOffset` | motion-light's "Inactive during day" |
+| `home.sunriseOffset` | The `motion-light` script's "Inactive during day" |
+| `home.sunsetOffset` | The `motion-light` script's "Inactive during day" |
 | `update.manifestUrl` | Where the box reads the latest release's manifest (Solite's own, D67) |
 | `update.autoCheck` | The automatic check for a release, off by default (Solite's own, D67) |
 | `recipes.catalogue` | Where the box reads the catalogue of script recipes (Solite's own, D78) |
@@ -129,7 +129,7 @@ interface's files).
 | `DELETE /api/v1/recipe-instances/:id` | Recipe instances |
 | `POST /api/v1/recipe-instances/:id/enable` | Recipe instances |
 | `POST /api/v1/recipe-instances/:id/disable` | Recipe instances |
-| `POST /api/v1/recipe-instances/:id/actions` | motion-light's actions |
+| `POST /api/v1/recipe-instances/:id/actions` | The `motion-light` script's actions |
 | `GET /api/v1/recipe-instances/:id/log` | Recipe journal |
 | `GET /api/v1/settings` | Settings |
 | `PUT /api/v1/settings` | Settings |
@@ -250,7 +250,9 @@ test reads), each kept by D75 or D74:
   with the value and the equipment's id on every motion report of a motion sensor of the zone, so
   that a safety auto-off can be reset by fresh motion; `cancel(id)` for the timers;
   `console.log` as `log`; `validate(params, home)` with a second argument, `home.equipment(id)` giving
-  the `name`, `orders` and `data` of an equipment named in the params (the draft's `validate` has
+  the `name`, `type`, `zoneId` (Sowel's `Equipment` fields), `orders` and `data` of an equipment
+  named in the params, and `home.zone(id)` giving `{ id }` for a zone named in the params that
+  exists, else `null` (the draft's `validate` has
   `params` only, and no way to check bindings). A Sowel issue proposes `id`, the zone slot rule,
   `onMotionReport` and `validate(params, home)` for the draft.
 - **Left out**: `mode()` (no modes), the tariff period in `now()`, `energy.claim/release`, history

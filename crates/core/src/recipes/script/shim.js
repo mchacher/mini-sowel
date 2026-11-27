@@ -357,6 +357,12 @@
             if (known[id] !== true) return null;
             var f = H.facts(id);
             return f === null || f === undefined ? null : parse(f);
+          },
+          zone: function (id) {
+            id = String(id);
+            if (known[id] !== true) return null;
+            var f = H.zoneFacts(id);
+            return f === null || f === undefined ? null : parse(f);
           }
         };
         var r = defn.validate(params, home);

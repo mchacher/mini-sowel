@@ -15,6 +15,8 @@ use solite_core::radio::measures::{Measure, Value};
 use solite_core::radio::zcl::Command;
 use solite_core::radio::{MeasureEvent, Sender};
 
+/// The `motion-light` script recipe, Sowel's 1.1.2 (spec 046).
+pub const MOTION_LIGHT: &str = include_str!("../../../../recipes/scripts/motion-light.js");
 pub const T0: u64 = 1_795_252_323_120; // 2026-11-21T09:12:03.120Z
 pub const MINUTE: u64 = 60_000;
 pub const HOUR: u64 = 60 * MINUTE;
@@ -412,8 +414,27 @@ impl Rig {
         commands
     }
 
-    /// Creates an instance of `motion-light`; (status, body).
+    /// Loads the `motion-light` script (the recipe no longer is built in, spec 046) unless the home
+    /// has it already.
+    #[cfg(feature = "script-recipes")]
+    pub fn load_motion_light(&mut self) {
+        if self.home.recipes().recipe_info("motion-light").is_some() {
+            return;
+        }
+        let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
+        self.home
+            .load_script_recipe(
+                MOTION_LIGHT,
+                std::sync::Arc::new(solite_core::recipes::script::SystemRuntimes),
+                clock,
+            )
+            .unwrap();
+    }
+
+    /// Creates an instance of `motion-light` (loading the script first if need be); (status, body).
     pub fn instance(&mut self, params: Json) -> (u16, Json) {
+        #[cfg(feature = "script-recipes")]
+        self.load_motion_light();
         self.post(
             "/api/v1/recipe-instances",
             json!({ "recipeId": "motion-light", "params": params }),

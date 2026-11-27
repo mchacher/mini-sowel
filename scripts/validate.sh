@@ -89,7 +89,7 @@ fi
 if want rust; then
   # Spec 027: Solite's names against Sowel's (the snapshot, and ../sowel when present).
   step "Sowel contract"
-  cargo test -p solite-core --quiet --test sowel_contract -- --nocapture solite_is_a_subset_of_sowel
+  cargo test -p solite-core --features script-recipes --quiet --test sowel_contract -- --nocapture solite_is_a_subset_of_sowel
 
   if $slow; then
     # The slow tests are the ignored ones: no test is ignored for any other reason.
@@ -133,7 +133,7 @@ if want firmware; then
   # $1 the image's name, $2 its ELF, $3 `with` or `without` QuickJS (spec 041: a symbol search; the
   # ELF is read before the next build overwrites it). The tools exist once the first build has
   # downloaded ESP-IDF.
-  # $4 `with` or `without` the source of `motion-light-script` (spec 042 R3.10): only the QEMU
+  # $4 `with` or `without` the source of `motion-light` (spec 042 R3.10): only the QEMU
   # image's script build reads it, for its own phase.
   measure_image() {
     _why=$(fw_check_quickjs "$2" "$1" "$3") || { echo "validate: $_why" >&2; exit 1; }

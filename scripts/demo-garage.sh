@@ -3,7 +3,9 @@
 # (`--sim scenarios/garage.json --serve`, after `--pair` or after adding the devices from the
 # interface): the zone "Garage", the paired devices placed in it (simulated TH01, MS01, or the real SNZB-02 (optional), SNZB-03PR2, ZBMINIR2),
 # their equipments (climate and motion sensors, the light), and the
-# motion-light recipe (spec 012) with a timeout of 20 s. Prints the ids.
+# motion-light recipe (spec 012, a script recipe since spec 046: the host is started with
+# `--recipe-script recipes/scripts/motion-light.js`, a box has it installed) with a timeout of 20 s.
+# Prints the ids.
 # The same garage is made from the interface's Topology and Equipments pages (spec 018).
 # The box asks for its password (spec 029): SOLITE_PASSWORD (and SOLITE_USER, `admin` when unset);
 # a box without an account is set up with it, else the script logs in. Never an argument.
@@ -109,6 +111,14 @@ def names(zones):
         yield from names(z.get("children", []))
 sys.exit(0 if "Garage" in names(json.load(sys.stdin)) else 1)'; then
   echo "demo-garage: a zone named Garage exists already: nothing done" >&2
+  exit 1
+fi
+
+# No recipe is built in (spec 046): the instance below needs the motion-light script.
+if ! curl -sS -f -H "@$AUTH_FILE" "$API/recipes" | python3 -c '
+import sys, json
+sys.exit(0 if any(r.get("id") == "motion-light" for r in json.load(sys.stdin)) else 1)'; then
+  echo "demo-garage: the box has no motion-light recipe: install it first (the host: --recipe-script recipes/scripts/motion-light.js)" >&2
   exit 1
 fi
 

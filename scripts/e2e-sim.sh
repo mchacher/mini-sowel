@@ -52,7 +52,8 @@ if [ ! -f ui/dist/index.html ] || [ -n "$(find ui/src ui/index.html ui/package.j
 fi
 sh scripts/quiet.sh cargo build -p solite-host || exit 1
 
-./target/debug/solite-host --sim scenarios/garage.json --serve "$port" --speed 10 --data "$data" >"$log" 2>&1 &
+# The `motion-light` recipe is a script (spec 046): the e2e test makes an instance of it.
+./target/debug/solite-host --sim scenarios/garage.json --serve "$port" --speed 10 --recipe-script recipes/scripts/motion-light.js --data "$data" >"$log" 2>&1 &
 host_pid=$!
 
 # Wait until it answers (at most 60 s): the status of the account needs no token (spec 029); the

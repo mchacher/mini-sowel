@@ -9,7 +9,7 @@
 //! - `docs/sowel-subset.md`: what Solite has (its tables must equal the code) and the deviations,
 //!   each with its decision.
 //!
-//! `SOWEL_SNAPSHOT=write cargo test -p solite-core --test sowel_contract` rewrites the snapshot
+//! `SOWEL_SNAPSHOT=write cargo test -p solite-core --features script-recipes --test sowel_contract` rewrites the snapshot
 //! from the Sowel repository.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -667,6 +667,14 @@ fn solite_fields() -> (BTreeMap<String, BTreeSet<String>>, BTreeSet<String>) {
         add("ZoneAggregatedData", data);
     }
 
+    // `motion-light` is a script recipe (spec 046): loaded as the boot loads an installed file.
+    let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
+    home.load_script_recipe(
+        include_str!("../../../recipes/scripts/motion-light.js"),
+        std::sync::Arc::new(solite_core::recipes::script::SystemRuntimes),
+        clock,
+    )
+    .expect("the motion-light script loads");
     let recipes = json(call(&mut home, "GET", "/api/v1/recipes", ""));
     for recipe in recipes.as_array().expect("recipes") {
         add("RecipeInfo", recipe);
@@ -1023,7 +1031,7 @@ fn solite_is_a_subset_of_sowel() {
             let drift = differences(&snapshot, &live);
             if !drift.is_empty() {
                 println!(
-                    "sowel contract: warning, the snapshot ({}) differs from {} ({}); rewrite it with SOWEL_SNAPSHOT=write cargo test -p solite-core --test sowel_contract:",
+                    "sowel contract: warning, the snapshot ({}) differs from {} ({}); rewrite it with SOWEL_SNAPSHOT=write cargo test -p solite-core --features script-recipes --test sowel_contract:",
                     snapshot.commit,
                     repo.display(),
                     live.commit

@@ -350,7 +350,7 @@ pub fn run(before: usize) -> Result<(), String> {
     log::info!("{}", solite_core::engine_line(&stats));
     // After the engine's line, which the scripts never touch (decision D27): the script phase.
     #[cfg(feature = "scripts")]
-    script_phase::run(&home, &clocks, start)?;
+    script_phase::run(&home, &clocks, start, before)?;
     Ok(())
 }
 
