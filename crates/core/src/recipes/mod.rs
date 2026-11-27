@@ -1377,6 +1377,18 @@ impl RecipeEngine {
         Ok(())
     }
 
+    /// Deletes every instance of a recipe, as `delete` does one by one (events, logs forgotten).
+    /// The number deleted.
+    pub fn delete_instances_of(&mut self, recipe_id: &str) -> usize {
+        let ids: Vec<String> = self
+            .slots
+            .iter()
+            .filter(|slot| slot.instance.recipe_id == recipe_id)
+            .map(|slot| slot.instance.id.to_string())
+            .collect();
+        ids.iter().filter(|id| self.delete(id).is_ok()).count()
+    }
+
     /// Enables or disables an instance. Enabling one that is enabled already does nothing;
     /// otherwise it starts (a failure is only logged), and disabling stops it. True when the
     /// instance changed.

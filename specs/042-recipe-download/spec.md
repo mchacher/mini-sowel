@@ -173,8 +173,11 @@ of spec 041 (load, bounds, failure and restart).
    from the old file) and the answer is 500 with both reasons. R4.1 counts the old runtime's memory
    as freed. The upload form of R3.2 updates too, with the same rules (strictly newer).
 6. `POST /api/v1/recipes/:id/uninstall`: a native recipe or a `--recipe-script` (409 `<id> is built
-   in`); no file of that id (404). The instances stop and are kept (`Recipe not found: <id>` in
-   their log), the runtime is dropped, the file removed (a refused file too); 204. The removal fails:
+   in`); no file of that id (404). **The recipe's instances are deleted** with it (their settings
+   and logs; revised after the box demo of 2026-11-27, where a kept instance stayed in the zone as a
+   ghost), the runtime is dropped, the file removed (a refused file too); 204. The Plugins page's
+   confirmation says how many: "Confirm? <n> instance(s) will be deleted" (the count from
+   `GET /recipe-instances`). The removal fails:
    500 `Could not remove the recipe` (the runtime stays dropped; the file loads again at the next
    boot).
 7. At boot, after any `--recipe-script` and **before the instances start** (`start_all`), the
@@ -360,7 +363,7 @@ and the Resources card done; "Before F2" reworded as spec 045 after F2).
       with the firmware's key, or any other, or changed by one byte, or of 16 KB + 1, is refused
       with its reason.
 - [ ] Update replaces the runtime and restarts the instances; a new version that does not load leaves
-      the old one running; uninstall keeps the instances stopped, and a new install starts them.
+      the old one running; uninstall deletes the recipe's instances (the confirmation names their count).
 - [ ] Every row of R3.1's table is a test, with its text.
 - [ ] An install that would take the PSRAM under the reserve, or find the internal RAM's largest
       block too small, is refused with the figures (a fake probe on the Mac); a third script recipe

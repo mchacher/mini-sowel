@@ -13,6 +13,7 @@ import { useTranslation } from "react-i18next";
 import { ArrowUpCircle, Download, Loader2, Package, Search, SearchX, X } from "lucide-react";
 import {
   getRecipeStore,
+  getRecipeInstances,
   getResources,
   installRecipe,
   installRecipeFile,
@@ -57,6 +58,8 @@ export function PluginsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   /** The recipe whose Remove was clicked once: the next click uninstalls. */
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** How many instances the recipe being confirmed has: they are deleted with it (R3.6). */
+  const [instanceCount, setInstanceCount] = useState(0);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const upload = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
@@ -158,6 +161,13 @@ export function PluginsPage() {
       onClick={() => {
         if (confirming !== id) {
           setConfirming(id);
+          setInstanceCount(0);
+          // The count as the box holds it now; a failed read leaves the plain "Confirm?".
+          void getRecipeInstances().then(
+            (list) =>
+              alive.current && setInstanceCount(list.filter((i) => i.recipeId === id).length),
+            () => undefined,
+          );
           return;
         }
         void act(id, () => uninstallRecipe(id), t("recipeStore.removed"));
@@ -169,7 +179,11 @@ export function PluginsPage() {
           : BUTTON_SECONDARY
       }
     >
-      {confirming === id ? t("plugins.uninstallConfirm") : t("recipeStore.remove")}
+      {confirming === id
+        ? instanceCount > 0
+          ? t("plugins.uninstallConfirmCount", { count: instanceCount })
+          : t("plugins.uninstallConfirm")
+        : t("recipeStore.remove")}
     </button>
   );
 
