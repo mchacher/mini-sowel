@@ -119,6 +119,13 @@ fn the_log_lists_newest_first_with_sowels_fields_and_integer_ids_counting_from_o
 #[test]
 fn recipes_are_listed_and_read_and_unknown_ones_refused_on_every_route() {
     let mut rig = Rig::new();
+    // No recipe is built in: nothing is listed until a script is loaded (spec 046, R1).
+    assert_eq!(rig.get("/api/v1/recipes"), (200, json!([])));
+    assert_eq!(
+        rig.refused("GET", "/api/v1/recipes/motion-light", ""),
+        (404, "Recipe not found".to_string())
+    );
+    rig.load_motion_light();
     let (status, list) = rig.get("/api/v1/recipes");
     assert_eq!(status, 200);
     assert_eq!(list.as_array().unwrap().len(), 1);
@@ -219,9 +226,16 @@ fn bodies_that_are_not_what_the_route_takes_are_a_400_invalid_body() {
 
 #[test]
 fn the_seventeenth_instance_and_params_over_2_kb_are_refused() {
+    // 16 instances in all: 9 stored ones of a recipe nobody provides (kept stopped) and 7 of the
+    // script, which holds 8 at most (D74): the eighth hits the bound of all recipes together.
     let mut rig = Rig::new();
     let g = rig.garage();
-    for _ in 0..16 {
+    let stored: Vec<RecipeInstance> = (1..=9u8)
+        .map(|n| instance(n, "nope", json!({"zone": g.zone})))
+        .collect();
+    rig.home.load_recipes(stored);
+    rig.home.start_recipes(rig.now, rig.now);
+    for _ in 0..7 {
         rig.garage_instance(&g, json!({}));
     }
     let (status, body) = rig.instance(json!({"zone": g.zone, "lights": [g.light]}));
@@ -544,6 +558,7 @@ fn after_a_restart_the_instances_run_again_and_one_whose_light_is_gone_stays_sto
     let text = saved(&mut rig.home).unwrap();
     rig.delete(&format!("/api/v1/equipments/{second}"));
     restart(&mut rig);
+    rig.load_motion_light();
     rig.home.load_recipes(serde_json::from_str(&text).unwrap());
     rig.home.start_recipes(rig.now, rig.now);
     // The first one started: its sync switched the light off, and its log starts here.
@@ -613,6 +628,7 @@ fn what_recipes_json_holds_that_cannot_run_is_kept_stopped_dropped_or_refused_as
     }
     assert_eq!(list.len(), 18);
     restart(&mut rig);
+    rig.load_motion_light();
     rig.home.load_recipes(list);
     assert_eq!(rig.home.recipes().len(), 16, "16 kept");
     rig.home.start_recipes(rig.now, rig.now);

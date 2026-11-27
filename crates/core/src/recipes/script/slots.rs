@@ -215,6 +215,16 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
     Ok(defs)
 }
 
+/// A bound as JavaScript writes it: a whole number has no decimal point (`0`, not `0.0`), so that
+/// a script's `min: 0` is served as Sowel's TypeScript recipe serves it (spec 046, R2).
+fn number_value(n: f64) -> Value {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        json!(n as i64)
+    } else {
+        json!(n)
+    }
+}
+
 /// The slots as `RecipeInfo.slots` serves them (Sowel's `RecipeSlotDef`), in declaration order.
 pub fn info_slots(defs: &[SlotDef]) -> Value {
     Value::Array(
@@ -245,10 +255,10 @@ pub fn info_slots(defs: &[SlotDef]) -> Value {
                     constraints.insert("equipmentType".into(), types.clone());
                 }
                 if let Some(min) = def.min {
-                    constraints.insert("min".into(), json!(min));
+                    constraints.insert("min".into(), number_value(min));
                 }
                 if let Some(max) = def.max {
-                    constraints.insert("max".into(), json!(max));
+                    constraints.insert("max".into(), number_value(max));
                 }
                 if def.cross_zone {
                     constraints.insert("crossZone".into(), json!(true));

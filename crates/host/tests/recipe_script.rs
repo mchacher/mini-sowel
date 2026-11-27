@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 const GARAGE: &str = "../../scenarios/garage.json";
-const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light-script.js";
+const MOTION_LIGHT_SCRIPT: &str = "../../recipes/scripts/motion-light.js";
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// A fresh folder for the data and the scripts of one test.
@@ -67,10 +67,8 @@ fn a_refused_script_stops_the_host_with_script_recipe_invalid_and_exit_2() {
             "api2.js",
             "recipe({ api: 2, id: 'a', name: 'A', slots: {}, start: function () {} });",
         ),
-        (
-            "builtin.js",
-            "recipe({ api: 1, id: 'motion-light', name: 'A', slots: {}, start: function () {} });",
-        ),
+        // No recipe is built in (spec 046): the id `motion-light` loads like any other, as
+        // `a_valid_script_is_loaded_before_serving...` shows with the real script.
         (
             "nostart.js",
             "recipe({ api: 1, id: 'a', name: 'A', slots: {} });",
@@ -198,7 +196,7 @@ fn a_valid_script_is_loaded_before_serving_and_its_line_is_printed_once_each() {
     assert_eq!(scripts.len(), 2, "{shown:?}");
     assert!(
         scripts[0].starts_with(&format!(
-            "recipes: script motion-light-script 1.0.0 from {MOTION_LIGHT_SCRIPT} ("
+            "recipes: script motion-light 1.1.2 from {MOTION_LIGHT_SCRIPT} ("
         )),
         "{}",
         scripts[0]

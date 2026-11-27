@@ -175,8 +175,8 @@ fn a_valid_script_is_loaded_and_served_with_sowels_shape() {
         .iter()
         .map(|r| r["id"].as_str().unwrap())
         .collect();
-    // The built-in recipe first, then the script.
-    assert_eq!(ids, ["motion-light", "slots"]);
+    // No recipe is built in (spec 046): the script alone.
+    assert_eq!(ids, ["slots"]);
     let (status, one) = rig.get("/api/v1/recipes/slots");
     assert_eq!(status, 200);
     assert_eq!(one["name"], "Slots");
@@ -274,7 +274,6 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'color'}}}}, {OK_START}}}")), "slot t: unknown type \"color\""),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: 5, {OK_START}}}")), "slots must be an object"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{zone: {{type: 'number'}}}}, {OK_START}}}")), "slot zone must be of type zone"),
-        (script(&format!("{{api: 1, id: 'motion-light', name: 'A', {OK_START}}}")), "id motion-light is a built-in recipe"),
         ("throw new Error('at load');".into(), "the script failed when loaded: at load"),
     ];
     for (source, expected) in cases {
@@ -287,7 +286,7 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
         );
         // Nothing was loaded.
         let (_, list) = rig.get("/api/v1/recipes");
-        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list.as_array().unwrap().len(), 0);
     }
 }
 
@@ -318,7 +317,7 @@ fn a_script_with_a_loaded_id_is_refused_and_a_third_script_too() {
         .unwrap_err(),
         format!("Script recipe invalid: too many script recipes (at most {MAX_SCRIPT_RECIPES})")
     );
-    // The scripts in load order, after the built-in recipe.
+    // The scripts in load order.
     let (_, list) = rig.get("/api/v1/recipes");
     let ids: Vec<&str> = list
         .as_array()
@@ -326,13 +325,13 @@ fn a_script_with_a_loaded_id_is_refused_and_a_third_script_too() {
         .iter()
         .map(|r| r["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["motion-light", "probe", "script-2"]);
+    assert_eq!(ids, ["probe", "script-2"]);
 }
 
 #[test]
-fn a_script_recipe_holds_eight_instances_and_a_ninth_is_refused_the_built_in_ones_not_counted() {
+fn a_script_recipe_holds_eight_instances_and_a_ninth_is_refused_another_scripts_not_counted() {
     let (mut rig, g) = loaded(PROBE);
-    // Built-in instances do not count against the script's bound.
+    // The instances of another script (`motion-light`) do not count against this one's bound.
     let _ = rig.garage_instance(&g, json!({}));
     for _ in 0..MAX_INSTANCES_PER_SCRIPT {
         probe_instance(&mut rig, &g);
@@ -517,7 +516,7 @@ fn an_equipment_outside_the_zone_is_accepted_with_cross_zone_and_a_list_holds_16
 }
 
 #[test]
-fn the_scripts_own_validate_comes_after_the_hosts_checks() {
+fn the_scripts_own_validate_comes_before_the_hosts_checks_and_gives_way_when_it_throws() {
     let (mut rig, g) = slots_rig();
     let base = json!({"zone": g.zone, "lights": [g.light]});
     let mut forty_two = base.clone();
@@ -526,13 +525,23 @@ fn the_scripts_own_validate_comes_after_the_hosts_checks() {
         reason(&mut rig, "slots", forty_two.clone()),
         invalid("forty-two is taken")
     );
-    // The host's checks first: a bad zone wins over the script's text.
+    // The script first (spec 046, R3): its text wins over a bad zone's.
     forty_two["zone"] = json!("11111111-2222-4333-8444-555555555555");
+    assert_eq!(
+        reason(&mut rig, "slots", forty_two),
+        invalid("forty-two is taken")
+    );
+    // A validate that throws on settings the slots refuse: the host's text is the answer, so a
+    // script never lets through what the slots refuse.
+    let mut throws = base.clone();
+    throws["level"] = json!(43);
+    throws["zone"] = json!("11111111-2222-4333-8444-555555555555");
     assert!(
-        reason(&mut rig, "slots", forty_two)
+        reason(&mut rig, "slots", throws)
             .1
             .contains("zone not found")
     );
+    // ... and on settings the slots accept, the script's error stands.
     let mut throws = base.clone();
     throws["level"] = json!(43);
     assert_eq!(
@@ -552,6 +561,63 @@ fn the_scripts_own_validate_comes_after_the_hosts_checks() {
         (400, "Invalid params: forty-two is taken")
     );
     assert!(running(&rig, &id));
+}
+
+#[test]
+fn a_validate_that_throws_on_settings_of_the_wrong_shape_never_lets_them_pass() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    load(
+        &mut rig,
+        &script(
+            "{api: 1, id: 'shape', name: 'Shape', slots: {level: {type: 'number', name: 'Level'}}, validate: function (params) { params.level.toFixed(1); }, start: function () {}}",
+        ),
+    )
+    .unwrap();
+    // A text where a number goes: `toFixed` is not a function of a string, so the script throws;
+    // the host's check answers with its own text.
+    assert_eq!(
+        reason(&mut rig, "shape", json!({"zone": g.zone, "level": "abc"})),
+        invalid("level must be a number")
+    );
+    // A number: the script is happy and the instance is made.
+    assert_eq!(
+        created(&mut rig, "shape", json!({"zone": g.zone, "level": 2})).len(),
+        36
+    );
+    // A script that runs out of its 200 ms on settings the slots refuse: the host's text too.
+    load(
+        &mut rig,
+        &script(
+            "{api: 1, id: 'slow-shape', name: 'Slow', slots: {level: {type: 'number', name: 'Level'}}, validate: function () { for (;;) {} }, start: function () {}}",
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        reason(
+            &mut rig,
+            "slow-shape",
+            json!({"zone": g.zone, "level": "abc"})
+        ),
+        invalid("level must be a number")
+    );
+}
+
+#[test]
+fn a_script_without_its_own_validate_gets_the_hosts_texts() {
+    let mut rig = Rig::new();
+    let g = rig.garage();
+    load(
+        &mut rig,
+        &script(
+            "{api: 1, id: 'plain', name: 'Plain', slots: {level: {type: 'number', name: 'Level'}}, start: function () {}}",
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        reason(&mut rig, "plain", json!({"zone": g.zone, "level": "abc"})),
+        invalid("level must be a number")
+    );
 }
 
 #[test]

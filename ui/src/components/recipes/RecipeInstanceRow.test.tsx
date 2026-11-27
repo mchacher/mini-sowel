@@ -115,19 +115,39 @@ describe("RecipeInstanceRow", () => {
     expect(screen.queryByText("Override")).toBeNull();
   });
 
-  it("an unknown recipe shows its id, and the journal's header offers Delete, not Settings", async () => {
+  it("an instance whose recipe is not installed: switch off and disabled, a label, a working Delete", async () => {
     const api = mockApi({
-      "GET /api/v1/recipe-instances/i1/log?limit=50": { body: [] },
       "DELETE /api/v1/recipe-instances/i1": { status: 204 },
       "GET /api/v1/recipe-instances": { body: [] },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderRow(recipeInstance("i1", { zone: "garage" }, { recipeId: "old-recipe" }), null);
+    expect(screen.getByText("old-recipe")).toBeTruthy();
+    expect(screen.getByText("Recipe not installed")).toBeTruthy();
+    const sw = screen.getByRole("switch") as HTMLButtonElement;
+    expect(sw.getAttribute("aria-checked")).toBe("false");
+    expect(sw.disabled).toBe(true);
+    expect(screen.getByTestId("recipe-row").className).toContain("opacity-50");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(confirm).toHaveBeenCalled();
+    await waitFor(() => expect(api.count("DELETE /api/v1/recipe-instances/i1")).toBe(1));
+  });
+
+  it("a row whose recipe exists has no missing-recipe label or Delete, its switch is on", () => {
+    renderRow(recipeInstance("i1", { zone: "garage", lights: ["l1"] }));
+    expect(screen.queryByText("Recipe not installed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    const sw = screen.getByRole("switch") as HTMLButtonElement;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    expect(sw.disabled).toBe(false);
+  });
+
+  it("the journal of an instance without recipe opens and offers no Settings", async () => {
+    mockApi({ "GET /api/v1/recipe-instances/i1/log?limit=50": { body: [] } });
     renderRow(recipeInstance("i1", { zone: "garage" }, { recipeId: "old-recipe" }), null);
     fireEvent.click(screen.getByText("old-recipe"));
     await waitFor(() => expect(screen.getByText("No entries")).toBeTruthy());
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(api.count("DELETE /api/v1/recipe-instances/i1")).toBe(1));
   });
 
   it("the journal's Settings button opens the form in a dialog, filled with the instance", async () => {

@@ -167,7 +167,7 @@ describe("ZonePage", () => {
     expect(create.disabled).toBe(false);
   });
 
-  it("shows the Recipes panel under the equipments when the host has recipes, and none without", () => {
+  it("shows the Recipes panel under the equipments, with its instances when the host has recipes and the store link without", () => {
     render(
       <ZonePage
         zone={garage}
@@ -176,7 +176,8 @@ describe("ZonePage", () => {
         onExecuteOrder={noOrder}
       />,
     );
-    expect(screen.queryByRole("heading", { name: "Recipes" })).toBeNull();
+    expect(screen.getByText("No recipe is installed")).toBeTruthy();
+    expect(screen.queryByText("Motion Light")).toBeNull();
     cleanup();
     useRecipes.setState({
       recipes: [motionLightRecipe()],

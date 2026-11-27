@@ -2,8 +2,9 @@
 // commit 5da84dc1, UI 1.87.0). Cuts: the mobile bottom sheet, duplicate dialog, mode-cycle pills,
 // marquee name, alarm dot and summary line, groups. The tile is lucide's `Lightbulb` for the icon
 // `Lightbulb` and `ChefHat` otherwise (Sowel resolves the manifest's icon name from a larger set).
-// Settings opens a `Modal` (the form of `RecipeForm`); without the recipe the journal's header
-// offers Delete instead (there are no slots to build a form from).
+// Settings opens a `Modal` (the form of `RecipeForm`). Without the recipe (its id is not in
+// `GET /recipes`; there are no slots to build a form from) the row says so: switch off and
+// disabled, a "Recipe not installed" label and a Delete beside it (spec 046, R10).
 import { useEffect, useRef, useState } from "react";
 import { ChefHat, Lightbulb, Settings, ShieldOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -89,9 +90,13 @@ export function RecipeInstanceRow({
     }
   };
 
+  // The instance is `enabled` in the saved home but cannot run without its recipe.
+  const missing = recipe === undefined;
+  const running = instance.enabled && !missing;
+
   const timerExpiresAt = instance.state?.timerExpiresAt;
-  const showTimer = instance.enabled && typeof timerExpiresAt === "string" && timerExpiresAt !== "";
-  const showOverride = instance.enabled && !!instance.state?.overrideMode;
+  const showTimer = running && typeof timerExpiresAt === "string" && timerExpiresAt !== "";
+  const showOverride = running && !!instance.state?.overrideMode;
 
   const headerAction = recipe ? (
     <button
@@ -102,30 +107,22 @@ export function RecipeInstanceRow({
       <Settings size={13} strokeWidth={1.5} aria-hidden="true" />
       {t("recipes.settings")}
     </button>
-  ) : (
-    <button
-      type="button"
-      onClick={() => void remove()}
-      className="px-1.5 py-0.5 rounded-sm text-caption font-medium text-error hover:bg-border-light transition-colors duration-150"
-    >
-      {t("common.delete")}
-    </button>
-  );
+  ) : undefined;
 
   const Icon = recipe?.icon === "Lightbulb" ? Lightbulb : ChefHat;
 
   return (
     <>
-      <div className={instance.enabled ? "" : "opacity-50"} data-testid="recipe-row">
+      <div className={running ? "" : "opacity-50"} data-testid="recipe-row">
         <div className="grid grid-cols-[32px_1fr_auto] gap-x-[0.85rem] gap-y-0.5 items-center px-[1.1rem] py-2 min-h-[52px]">
           <div
-            className={`w-8 h-8 rounded-md flex items-center justify-center row-span-2 self-center ${instance.enabled ? "bg-primary-light" : "bg-background"}`}
+            className={`w-8 h-8 rounded-md flex items-center justify-center row-span-2 self-center ${running ? "bg-primary-light" : "bg-background"}`}
           >
             <Icon
               size={16}
               strokeWidth={1.5}
               aria-hidden="true"
-              className={instance.enabled ? "text-primary" : "text-text-tertiary"}
+              className={running ? "text-primary" : "text-text-tertiary"}
             />
           </div>
           <button
@@ -137,11 +134,17 @@ export function RecipeInstanceRow({
             {displayName}
           </button>
           <Switch
-            checked={instance.enabled}
+            checked={running}
             onChange={() => void toggle()}
-            disabled={busy}
-            title={instance.enabled ? t("recipes.disable") : t("recipes.enable")}
-            label={instance.enabled ? t("recipes.disable") : t("recipes.enable")}
+            disabled={busy || missing}
+            title={
+              missing
+                ? t("recipes.notInstalled")
+                : running
+                  ? t("recipes.disable")
+                  : t("recipes.enable")
+            }
+            label={running ? t("recipes.disable") : t("recipes.enable")}
             className="col-start-3 row-start-1 row-span-2 justify-self-end"
           />
           <div className="col-start-2 row-start-2 flex items-center gap-x-2 min-w-0 text-caption text-text-secondary">
@@ -152,6 +155,18 @@ export function RecipeInstanceRow({
                   <span className="flex-shrink-0 whitespace-pre"> +{list.more}</span>
                 )}
               </span>
+            )}
+            {missing && (
+              <>
+                <span className="text-error font-medium">{t("recipes.notInstalled")}</span>
+                <button
+                  type="button"
+                  onClick={() => void remove()}
+                  className="px-1.5 py-0.5 rounded-sm text-caption font-medium text-error hover:bg-border-light transition-colors duration-150"
+                >
+                  {t("common.delete")}
+                </button>
+              </>
             )}
             {showTimer && <CountdownTimer expiresAt={timerExpiresAt} />}
             {showOverride && (

@@ -1,6 +1,6 @@
-//! The bytes of the recipe routes, pinned (spec 041): `GET /recipes`, `GET /recipes/motion-light`
-//! and `GET /recipe-instances` with the instance state, compared as text, so that moving the
-//! recipe onto the SDK (and running scripts beside it) cannot change a byte, key order included.
+//! The bytes of the recipe routes, pinned (spec 041, 046): `GET /recipes`, `GET /recipes/motion-light`
+//! (the script, Sowel's 1.1.2) and `GET /recipe-instances` with the instance state, compared as
+//! text, so that no change of the recipe or its engine can change a byte, key order included.
 
 mod support;
 
@@ -18,6 +18,8 @@ fn body(rig: &mut Rig, path: &str) -> String {
 #[test]
 fn the_recipe_list_and_the_recipe_are_served_byte_for_byte() {
     let mut rig = Rig::new();
+    // The script, as the boot loads it: Sowel's bytes, `min` as `0` included (spec 046, R2).
+    rig.load_motion_light();
     let list = body(&mut rig, "/api/v1/recipes");
     let one = body(&mut rig, "/api/v1/recipes/motion-light");
     assert_eq!(list, include_str!("pinned/recipes.json"));

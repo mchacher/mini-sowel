@@ -6,8 +6,7 @@
 //! that the second never runs while the first measures.
 //!
 //! Every `pub const MAX_*` of `crates/core/src`, as `file::NAME`, and of `crates/recipe-sdk/src`
-//! and `crates/recipes` (spec 041), as `recipe-sdk/src/file::NAME` and
-//! `recipes/<crate>/src/file::NAME`, and how the test reaches it
+//! (spec 041), as `recipe-sdk/src/file::NAME`, and how the test reaches it
 //! (`every_memory_bound_is_listed_in_the_header` fails when one is missing from this list):
 //!
 //! - `devices/registry.rs::MAX_DEVICES`: 64 devices; a 65th is refused at the end.
@@ -29,7 +28,8 @@
 //!   bytes (8192 in all, a vehicle id of 64 characters and a padded object in each), held beside
 //!   the home since the API cannot set an object; the 1024 bytes of one equipment are far under
 //!   the total's share, the total is the bound that counts.
-//! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances of `motion-light`; a 17th is refused.
+//! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances, 8 of the `motion-light` script and 8 of a copy
+//!   of it under another id (a script recipe holds 8, D74); a 17th is refused.
 //! - `recipes/mod.rs::MAX_PARAMS_BYTES`: params of 2 KB each (nested padding, as
 //!   `recipe_params_memory.rs`); the API refuses more, so this is the largest accepted size.
 //! - `recipes/mod.rs::MAX_LOG_ENTRIES`: 20 entries in each instance's log, by button presses.
@@ -43,8 +43,9 @@
 //!   `recipes/script/slots.rs::MAX_SLOT_EQUIPMENTS`, `recipes/script/slots.rs::MAX_SLOTS`
 //!   (spec 041, script recipes): the script runtimes (2 of 224 KB on the box, 448 KB under the 512 KB ceiling) are QuickJS's
 //!   own memory, which the counting allocator below does not see (QuickJS allocates through the
-//!   C library), on their own line of the budget. The engine's worst case drives no script (none
-//!   is loaded: its ceiling is unchanged); the script's own worst case is the third test of this
+//!   C library), on their own line of the budget. The engine's worst case runs 16 instances of two
+//!   loaded `motion-light` scripts (spec 046, D81): it counts their Rust side (slots, listen sets,
+//!   states, logs), not their runtimes; the script's own worst case is the third test of this
 //!   file (`two_scripts_pushed_to_their_limit_with_eight_instances_each`), which loads
 //!   `MAX_SCRIPT_RECIPES` scripts, each with a ballast that takes it to about 85 % of its limit, and
 //!   starts `MAX_INSTANCES_PER_SCRIPT` instances in each. The Mac's limit is `SYSTEM_MEMORY_LIMIT`,
@@ -54,9 +55,8 @@
 //! - `recipes/mod.rs::MAX_CARRIED_EVENTS`: events left for the next turn when scripts ran out of
 //!   time (at most 128, the home's own queue bound); empty while no script is slow, as in this
 //!   state.
-//! - `recipes/motion-light/src/params.rs::MAX_LIGHTS`: 16 lights in each instance (the recipe
-//!   moved out of the core, spec 041).
-//! - `recipes/motion-light/src/params.rs::MAX_BUTTONS`: 16 buttons in each instance.
+//! - The `motion-light` script's own bounds (`recipes/scripts/motion-light.js`, `validate`, spec
+//!   046): 16 lights and 16 buttons in each instance.
 //! - `recipe-sdk/src/bounds.rs::MAX_LISTEN_ZONES`, `recipe-sdk/src/bounds.rs::MAX_LISTEN_EQUIPMENTS`,
 //!   `recipe-sdk/src/bounds.rs::MAX_LISTEN_DEVICES` (spec 041): the 16 instances' listen sets, each
 //!   at 1 zone and 32 equipments (16 lights, 16 buttons) and the motion sources of the zone; the
@@ -170,7 +170,7 @@ use solite_core::orders::{
 use solite_core::radio::measures::{Measure, Value as MeasureValue};
 use solite_core::radio::zcl::Command;
 use solite_core::radio::{MeasureEvent, Sender};
-use solite_core::recipes::{MAX_INSTANCES, MAX_LOG_ENTRIES};
+use solite_core::recipes::{MAX_INSTANCES, MAX_INSTANCES_PER_SCRIPT, MAX_LOG_ENTRIES};
 use solite_core::settings::MAX_HOME_NAME_CHARS;
 use solite_core::zones::MAX_ZONES;
 
@@ -385,7 +385,8 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
         let (kind, zone, devices): (&str, &String, Vec<&String>) = if i < 16 {
             ("light_onoff", &zone_ids[0], vec![&device_ids[i]])
         } else if i < 32 {
-            ("sensor", &zone_ids[i % 31], vec![&device_ids[i]])
+            // Buttons of the first zone: the script's slot wants a button of the instance's zone.
+            ("button", &zone_ids[0], vec![&device_ids[i]])
         } else {
             let first = 32 + (i - 32) % 8 * 4;
             (
@@ -488,9 +489,23 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert_eq!(extras_json_bytes, MAX_EXTRAS_TOTAL_BYTES);
     assert!(extras.iter().all(|e| e.json_len() <= MAX_EXTRAS_BYTES));
 
-    // Recipes: 16 instances, each with 16 lights, 16 buttons and params padded to 2 KB.
+    // Recipes: 16 instances, each with 16 lights, 16 buttons and params padded to 2 KB. A script
+    // recipe holds 8 instances (D74): the `motion-light` script and a copy of it under another id.
+    // The Rust side of the instances is what this counts; QuickJS's own memory is not seen here.
+    let motion_light = include_str!("../../../recipes/scripts/motion-light.js");
+    let recipe_ids = ["motion-light", "motion-light-b"];
+    for id in recipe_ids {
+        let text = motion_light.replace("id: \"motion-light\"", &format!("id: \"{id}\""));
+        let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
+        home.load_script_recipe(
+            &text,
+            std::sync::Arc::new(solite_core::recipes::script::SystemRuntimes),
+            clock,
+        )
+        .unwrap();
+    }
     let mut instance_ids = Vec::new();
-    for _ in 0..MAX_INSTANCES {
+    for n in 0..MAX_INSTANCES {
         let mut params = json!({
             "zone": zone_ids[0], "lights": lights, "buttons": buttons,
             "timeout": "20s", "maxOnDuration": "5m"
@@ -508,7 +523,8 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
             "{}",
             params.len()
         );
-        let body = format!(r#"{{"recipeId":"motion-light","params":{params}}}"#);
+        let recipe_id = recipe_ids[n / MAX_INSTANCES_PER_SCRIPT];
+        let body = format!(r#"{{"recipeId":"{recipe_id}","params":{params}}}"#);
         let created = handle(
             &mut home,
             &request("POST", "/api/v1/recipe-instances", body.as_bytes()),
@@ -758,7 +774,7 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     );
     assert_eq!(equipment.status, 400, "{equipment:?}");
     let body = json!({
-        "recipeId": "motion-light",
+        "recipeId": "motion-light-b",
         "params": {"zone": zone_ids[0], "lights": lights}
     })
     .to_string();
@@ -830,12 +846,11 @@ fn every_memory_bound_is_listed_in_the_header() {
         .collect::<Vec<_>>()
         .join("\n");
     // The core's own sources, named from `crates/core/src`; the recipe SDK and the recipes, named
-    // from `crates/` (`recipe-sdk/src/bounds.rs`, `recipes/motion-light/src/params.rs`).
+    // from `crates/` (`recipe-sdk/src/bounds.rs`).
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let roots = [
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
         crates.join("recipe-sdk/src"),
-        crates.join("recipes"),
     ];
     let mut missing = Vec::new();
     let mut found = 0;
@@ -886,7 +901,7 @@ fn two_scripts_pushed_to_their_limit_with_eight_instances_each() {
     use solite_core::recipes::script::{
         SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes, SystemRuntimes,
     };
-    use solite_core::recipes::{MAX_INSTANCES_PER_SCRIPT, MAX_SCRIPT_RECIPES, ScriptClock};
+    use solite_core::recipes::{MAX_SCRIPT_RECIPES, ScriptClock};
     use solite_recipe_sdk::{Clock, Recipe};
     use std::sync::Arc;
 
@@ -939,15 +954,15 @@ fn two_scripts_pushed_to_their_limit_with_eight_instances_each() {
     let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
     let clock: ScriptClock = Arc::new(|| 0);
     let params = json!({"zone": zone, "lights": lights, "timeout": "20s", "maxOnDuration": "5m"});
-    let script = include_str!("../../../recipes/scripts/motion-light-script.js");
+    let script = include_str!("../../../recipes/scripts/motion-light.js");
     // What a script of this size holds with its instances, with no ballast.
     let per_recipe = MAX_INSTANCES_PER_SCRIPT;
     let names = |k: usize| RecipeName {
-        id: format!("motion-light-script-{k}").into(),
-        name: "Motion Light (script)".into(),
+        id: format!("motion-light-{k}").into(),
+        name: "Motion Light".into(),
     };
     let source = |k: usize, ballast: usize| {
-        let text = script.replace("motion-light-script", &format!("motion-light-script-{k}"));
+        let text = script.replace("id: \"motion-light\"", &format!("id: \"motion-light-{k}\""));
         format!("{text}\nvar ballast = \"x\".repeat({ballast});\n")
     };
     let started = |k: usize, ballast: usize| -> ScriptRecipe {

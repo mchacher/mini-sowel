@@ -103,14 +103,22 @@ Each of the three programs starts and says which tool it is, with its version:
   (D68's margin); the signature check after the download is deeper still, so 1024 bytes is what
   is left at the deepest point (8336 unused measured).
   After the `engine:` line the image QEMU runs (built with the scripts, never flashed on the box)
-  runs the realistic home's motion scenario again on three `motion-light-script` instances with the
-  same settings, then a script that recurses as deep as its stack allows, calling the engine at its
+  loads the `motion-light` script and starts the realistic home's three kept `motion-light`
+  instances (stopped until then with `Recipe not found: motion-light`, as on a box that has not
+  installed the recipe, and kept with their settings), runs the home's motion scenario again, then
+  a script that recurses as deep as its stack allows, calling the engine at its
   deepest, on the engine thread and on a `script` job thread, and logs `recipes: script
-  motion-light-script <KB> KB source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB
-  free); engine stack <n> of <n> unused; script thread stack <n> of <n> unused`; the run fails when
-  that line is missing, the three instances' peak passes 75 % of a script's memory limit, the
-  internal RAM minimum is under 64 KB, or either stack keeps less than 2 KB unused.
-  The script is the file `recipes/scripts/motion-light-script.js` read at build time by that
+  motion-light <KB> KB source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB
+  free); engine stack <n> of <n> unused; script thread stack <n> of <n> unused; heap peak <KB> KB`;
+  the run fails when that line is missing, the three instances' peak passes 75 % of a script's
+  memory limit, the internal RAM minimum is under 64 KB, either stack keeps less than 2 KB unused,
+  or the heap peak passes 574 KB. The two gates measure two things: the `engine:` line's 350 KB is
+  the engine with the home's three instances stopped (the engine runs with no script loaded); the script
+  phase's 574 KB (350 KB for the engine and 224 KB, the ceiling of one script runtime) is the
+  whole heap (internal RAM and PSRAM), free before the engine started minus the lowest free seen
+  until the home's scenario has played again with the `motion-light` runtime loaded and the three
+  instances running (the depth script comes after it).
+  The script is the file `recipes/scripts/motion-light.js` read at build time by that
   phase only (the radio image carries no script). The phase also signs that script at boot with a
   throwaway key, installs it through an in-memory fetcher on a `recipe` thread of 20 KB, loads it
   again as at start, and logs `recipe: thread stack <n> of 20480 bytes never used`; the run fails
@@ -759,10 +767,16 @@ line: `sowel contract: OK (...)`, naming what it was checked against.
 
 ### Runs the motion-light recipe
 
-The host and the box run Sowel's `motion-light` recipe (the same id, settings, messages and
-behaviour as Sowel's 1.1.2), through Sowel's routes. It is built in. The host and the box also run
-recipes written as JavaScript scripts (next section), among them `motion-light-script`, a port of
-this recipe (the box runs it once it is installed, never built in):
+`motion-light` is a **script recipe** (next section), the port of Sowel's `sowel-recipe-motion-light`
+1.1.2 (`recipes/scripts/motion-light.js`): Sowel's id, settings, messages and behaviour, version
+`1.1.2`, through Sowel's routes. No recipe is built in: the box runs it once it is installed from
+the catalogue or from a file, and the host (Mac) when given `--recipe-script
+recipes/scripts/motion-light.js`. With nothing installed `GET /api/v1/recipes` lists `[]` and an
+instance of `motion-light` is refused 404 `Recipe not found: motion-light`. Five behaviours are
+Solite's engine's own, the adaptations of decision D81: a deleted equipment leaves the settings by
+the generic settle; a button that loses its `action` data binding disables the instance; the legacy
+`light` setting is not read; a refused order's reason is logged; the 2 s echo window is counted on
+the wall clock.
 
 - **What it does**: when motion is seen in its zone, it switches its lights on (`light_onoff`
   equipments of that zone); after the timeout (`10m` by default) with no motion, it switches them
@@ -784,12 +798,26 @@ this recipe (the box runs it once it is installed, never built in):
   its state (`overrideMode`, `timerExpiresAt`, `failsafeExpiresAt`) is shown with the instance.
 - **What survives a restart**: the instances, in `recipes.json` beside the other files, written
   within 2 seconds of a change; each enabled one is started again (one that no longer validates logs `Failed to restore:
-  <reason>` and stays stopped). Its log and state start empty. A `recipes.json` that cannot be
+  <reason>` and stays stopped). An instance whose recipe is not installed stays stopped with
+  `Failed to restore: Recipe not found: motion-light`, keeps its settings, and starts as soon as
+  the recipe is installed (or at the next start); an instance with only the legacy `light` setting
+  stays stopped with `Failed to restore: At least one light is required`. Its log and state start
+  empty. A `recipes.json` that cannot be
   read stops the host; an entry beyond 16, or with an id already seen, is dropped.
-- **When what it uses changes** (decisions D38 and D46; Sowel keeps the stale ids): right after an
+- **Validation texts**: a refused setting answers Sowel's 1.1.2 text, the script's own `validate`
+  running before the host's check of the slots: `Zone parameter is required`, `At least one light
+  is required`, `At most 16 lights`, `Light equipment not found: <id>`, `Light "<name>" has no
+  "state" order binding`, `Invalid duration format: <v>. Use e.g. "10m", "30s", "1h"`, `luxThreshold
+  must be a non-negative number`, `At most 16 buttons`, `Button equipment not found: <id>`, `Button
+  "<name>" has no "action" data binding`, and, in Sowel's order, `Zone not found: <id>`, `Light "<name>"
+  is type "<type>" but this recipe requires light_onoff` and `Light "<name>" does not belong to
+  the selected zone`. A script's `validate` sees, for what the params name, `home.equipment(id)`
+  (`name`, `type`, `zoneId`, the aliases of its `orders` and `data`) and `home.zone(id)` (`null`
+  for a zone that does not exist); the host's texts come only for what the script lets through.
+- **When what it uses changes** (decisions D38 and D81; Sowel keeps the stale ids): right after an
   equipment is created, changed or deleted, a data binding added or removed, an order binding
   removed, a device removed, or a zone updated through its route or deleted, the instances settle. A deleted equipment leaves the settings of every instance that names it (its
-  id taken out of the lights, the buttons, or the legacy `light`, which becomes empty), with the
+  id taken out of the lights and the buttons), with the
   warning `Equipment removed from settings: <name>` in its log, and the change is written. Every
   enabled instance is then checked as a creation is: one that no longer validates is stopped,
   disabled and written, with the error `Disabled: <reason>` (`At least one light is required`, a
@@ -797,10 +825,9 @@ this recipe (the box runs it once it is installed, never built in):
   `recipe.instance.stopped` (when it ran) and `recipe.instance.error`; it sends no order after
   that. A running one whose lights lost an id and still validates starts again with them (its
   start line, its state reset). A button that no longer has an `action` data binding (its
-  device removed, its binding deleted) or no longer exists leaves the settings of every
-  motion-light instance, enabled or not, with the warning `Button removed from settings: <name>`,
-  instead of disabling it; a change of the buttons alone is taken in place, without a restart.
-  `POST` and `PUT /recipe-instances` still refuse a button without an `action` binding. A running
+  device removed, its binding deleted) disables the instance, `Disabled: Button "<name>" has no
+  "action" data binding`; a button that no longer exists leaves the settings like any equipment.
+  `POST` and `PUT /recipe-instances` refuse a button without an `action` binding. A running
   instance that is not restarted resolves its motion sources again at each settle (the enabled
   equipments of its zone and the zones below it), keeping its timers and state: a sensor deleted,
   unbound, disabled or moved out stops resetting the safety auto-off, one added or moved in
@@ -810,7 +837,8 @@ this recipe (the box runs it once it is installed, never built in):
   no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled.
 - **From the interface**: the instances are made, changed, enabled, disabled and deleted, and
   their log read, from a room's page (see "Shows the home in the browser").
-- **Bounds**: 16 instances, 16 lights and 16 buttons each, settings of at most 2 KB and nested at
+- **Bounds**: 8 instances of `motion-light`, all zones together (D74; the 16 instances of all
+  recipes together stay the bound of the engine), 16 lights and 16 buttons each, settings of at most 2 KB and nested at
   most 8 levels deep (deeper: `Invalid params: params nested too deeply`), 128 events waiting for
   the recipes.
 
@@ -818,22 +846,25 @@ this recipe (the box runs it once it is installed, never built in):
 
 A recipe can also be a **script**: one JavaScript text in Sowel's script-recipe format (Sowel's
 `roadmap/ai-script-recipes/spec.md`), run by QuickJS, a small JavaScript engine built into the host
-and the box. To the API it is a recipe like the built-in one: it is listed by `GET /recipes` (after
-the built-in recipes), its instances are made, changed, enabled, disabled and deleted through the
+and the box. To the API it is a recipe: it is listed by `GET /recipes` (in load
+order), its instances are made, changed, enabled, disabled and deleted through the
 same routes and from a room's page, with the same log, state and events.
 
 - **Its form**: `recipe({ api: 1, id, name, description, slots, icon?, i18n?, version?, validate?,
   start })`, called once. `api` must be 1; `id` is 1 to 64 lower-case letters, digits and `-` (1 to 32 for an installed
-  script), not a built-in recipe's, and never `store` or `install` (`Script recipe invalid: id <id>
+  script), not one already loaded, and never `store` or `install` (`Script recipe invalid: id <id>
   is reserved`: `/recipes/store` and `/recipes/install` sit beside Sowel's `/recipes/:recipeId`). An
   installed script must declare `version` as `x.y.z` (three numbers of 0 to 65535: `Script recipe
   invalid: version must be x.y.z`); the version of a script given by `--recipe-script` stays free. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
   `boolean`, `select`), written as an object by slot id; the slot `zone` is added first when missing.
-  The settings are checked by the program from the slots before the script runs (`Invalid params:
+  The settings are checked by the script's own `validate` first, if it has one, so that a refusal
+  it makes carries its text (spec 046); then by the program from the slots (`Invalid params:
   <slot> is required`, `... must be a number between <min> and <max>`, `...: invalid duration`,
   `... must be one of ...`, `...: equipment not found`, `...: <name> is not a <type>`, `...: <name>
-  is not in the zone`, `...: at most 16 equipments`), then by the script's own `validate` if it has
-  one.
+  is not in the zone`, `...: at most 16 equipments`). A `validate` that throws, or runs out of its
+  200 ms, on settings of the wrong shape gives way to the program's check, whose text is the
+  answer: a script never makes a setting pass that the slots refuse. A whole number in a slot's
+  `min` or `max` is served without a decimal point (`0`, as Sowel's TypeScript recipes).
 - **What a script may do**: `on(slot, alias, fn)` when a data of an equipment of a slot is updated;
   `onZone(alias, fn)` at each change of its zone's aggregate (`motion`, `luminosity`,
   `motionSensors`); `onMotionReport(fn)` at each report of a motion sensor of the zone, which
@@ -891,7 +922,7 @@ same routes and from a room's page, with the same log, state and events.
   version must be newer: 409 `<id> <x.y.z> is not newer than <x.y.z>`; an upload of a signed file
   of an installed recipe updates it the same way; an upload's id is read from the `id: "..."` text of its `recipe({...})` call without loading it, 400 when there is none, and the load refuses a script that declares another; `POST /api/v1/recipes/:id/uninstall`, 204.
   Install is refused, in order: the build's key (503), the one-job rule (409, below), the internal
-  RAM (503), a built-in id (409 `<id> is built in`), a loaded id (409 `<id> is installed: update
+  RAM (503), the id of a `--recipe-script` (409 `<id> is built in`), a loaded id (409 `<id> is installed: update
   it`), two files on the flash (409 `Too many script recipes (at most 2)`), an id the catalogue
   lacks (404 `Recipe not in the catalogue: <id>`), a `minVersion` above the firmware (409 `<id>
   <x.y.z> needs Solite <minVersion> or later`), an unreachable catalogue or a failed download
@@ -918,11 +949,11 @@ same routes and from a room's page, with the same log, state and events.
   deletes the recipe's instances, in every zone, with their settings and logs (as `DELETE
   /recipe-instances/:id` does: `recipe.instance.removed` for each, `recipes.json` written by the
   saver), drops the runtime and removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
-  without a file, 409 `<id> is built in` for a native recipe or a `--recipe-script`.
+  without a file, 409 `<id> is built in` for a `--recipe-script`.
 - **At start** the files of `scripts/` are read in the order of their ids (a lone `<id>.srs.new`
   left by a power cut is promoted, a `.tmp` ignored) and go through the same checks; the enabled
   instances of the loaded recipes then start. A file refused (changed, format 2, a third file, a
-  built-in id, not enough memory) is left in place, logged `recipes: script <id>: <reason>` and
+  the id of a `--recipe-script`, not enough memory) is left in place, logged `recipes: script <id>: <reason>` and
   shown `refused` with its reason; an uninstall removes it, an install or an upload of that id
   replaces it. In the safe mode no file is loaded (`Safe mode: not loaded`); the uninstall goes
   through, install, update and refresh answer 503. The factory reset removes the installed
@@ -939,11 +970,6 @@ same routes and from a room's page, with the same log, state and events.
   stack is in PSRAM); the load and unload of a runtime on the `script` thread. The scripts are not
   in the full backup: a restore on the same box leaves the files (the restored instances start),
   on another box the restored instances stay stopped until the recipe is installed.
-- **`motion-light-script`**: the port of `motion-light` with the same slots and behaviour, the
-  safety auto-off reset at each motion report. It differs from the built-in recipe in its validation
-  texts, in what it does when a button loses its `action` binding (the instance is disabled, where
-  the built-in one drops the button), in the legacy `light` key it does not read, and in the reason
-  texts of a refused order.
 - **Bounds**: 2 scripts of at most 16 KB, at most 8 instances of each (a ninth is refused: 400 `Too
   many instances of <recipe id> (max 8)`; on restore the ninth and later fail to restore with that
   text and stay stopped); each runs in its own QuickJS runtime of at most 224 KB on the box (448 KB
@@ -952,8 +978,7 @@ same routes and from a room's page, with the same log, state and events.
   into a script stops after 200 ms, its stack at 16 KB; no event or timer goes to a script once
   300 ms of a turn of the engine's loop are spent on scripts (the one under way finishes: one call
   per instance, or per equipment holding a reporting motion sensor, each of at most 200 ms), the rest
-  waiting for the next turn (the built-in recipes get each event at
-  once whatever the scripts spent); a failed script's restart, one recipe per turn, counts in those
+  waiting for the next turn; a failed script's restart, one recipe per turn, counts in those
   300 ms, and its load may take up to its 1000 ms limit (that turn is longer). A call that leaves
   the runtime over 85 % of its memory limit, or 32 KB more than the last collection left, is
   followed by a garbage collection. The engine checks the end of each call (the state is a JSON
@@ -1040,17 +1065,21 @@ copy embedded in the radio image at build time.
   keep working as before); an "Add equipment" button opens the equipment form with the room chosen.
   "No room yet: create one in the Topology page" when only the home's root exists and it holds no equipment; "No equipment
   in this room".
-- **The room's recipes**: under its equipments, the **Recipes** panel (when the host has a
-  recipe) with the number of instances whose zone is the room and a "+" that lists the recipes
+- **The room's recipes**: under its equipments, the **Recipes** panel with the number of instances whose zone is the room and a "+" that lists the recipes
   (name, description); picking one opens the form under the panel. Each instance is a row: the
   recipe's icon and name (French from the recipe's `i18n.fr`), the names of its lights (three,
   then `+N`), a timer pill counting down to the off timer and an "Override" pill while enabled,
   and a switch that enables or disables it (dimmed when disabled; a refusal shows its text for
   5 s). A click on its name opens its journal: the log newest first, `HH:MM` and message, errors
   and warnings in their colours, read again every 5 s while open ("No entries"; "The journal could
-  not be read" when the first read fails), with a **Settings** button (Delete, for a recipe the
+  not be read" when the first read fails), with a **Settings** button (none for a recipe the
   host does not know). Settings opens the form in a dialog, filled from the instance, with Save
-  and Delete (confirmed). "No recipe in <room>" and an "Add a recipe" link when the room has none.
+  and Delete (confirmed). "No recipe in <room>" and an "Add a recipe" link when the room has none. With no recipe installed on the host the panel
+  has no "+" and says "No recipe is installed" with a link to the Plugins page of Administration.
+  An instance whose recipe id is absent from the recipe list (a home restored on another box, or
+  saved with a recipe since uninstalled) shows itself as it is, in the room whether or not another
+  recipe is installed: named by its recipe id, dimmed, its switch off and disabled (it cannot
+  run), a "Recipe not installed" label and a Delete (confirmed) in the row.
   **The form** is built from the recipe's slots, in their order, each with its name (`*` when
   required) and description: the zone is the room; an equipment list is a checkbox per equipment
   of the room of the slot's type; a duration is a number of minutes ("min"), sent as `"<n>m"`; a
@@ -1831,10 +1860,14 @@ Without it nothing is flashed and nothing is written through the API: preflight,
   one banner, no token in the serial log); B6 `measure-api.sh` inside `saves --budget 5`; B7 the
   home checks inside `saves --budget 4`; B8 the update checks, outside `saves` (the box restarts);
   B9 `box.sh log --raw --seconds 300 --budget 1` and its `heap:` line; B10 the factory reset inside
-  `saves --budget 7`, only with `--factory-reset` (it erases the home); B11 the script group (a
-  script recipe's instances; when `motion-light-script` is not installed it uploads the signed file
-  given by `--recipe-file <file.srs>` and uninstalls it at the group's end, else is `skipped (not
-  installed: --recipe-file)`, and so is its serial-lines check). A step whose dependency failed is
+  `saves --budget 7`, only with `--factory-reset` (it erases the home); B11 the script group: when `motion-light` is not installed it uploads the signed file given by
+  `--recipe-file <file.srs>` (else the group is `skipped (not installed: --recipe-file)`, and so
+  is its serial-lines check); it then takes the garage's own enabled `motion-light` instance
+  (`skipped` without one) and checks it by a wave: the light on within 10 s, then off within the
+  instance's timeout plus 30 s (an unreadable timeout, as "1h30m", skips the off check with a
+  line); nothing of the home is copied, changed or deleted; at the group's end the recipe is kept
+  while an instance of it exists on the box (the garage's own), and only an upload that no
+  instance uses is uninstalled again. A step whose dependency failed is
   `skipped (after <id> <outcome>)`.
 - **The checks**: authentication (status, setup or login, one login timed, at most 2 s, 401
   without a token, `/ws` closed 4001 without a token and live with it, the pairing route behind the
@@ -1925,8 +1958,8 @@ measures, measured on the Mac. It shares the box's 2 MB
 of PSRAM and its internal RAM item by item, and `docs/hardware.md` is the sheet of the Dongle Max's
 wiring and its risks.
 
-No mode exists in the tool; `motion-light` is its only built-in recipe, beside the script
-recipes; the host keeps the devices,
+No mode exists in the tool; no recipe is built in (`motion-light` is a script recipe, installed from
+the catalogue or a file); the host keeps the devices,
 zones, equipments, recipe instances, the account and the network backup, makes and restores the full backup, serves Sowel's device, zone,
 equipment and recipe API, its live events and the interface (above), executes equipment orders, runs the recipe instances,
 and talks to the radio to identify it, start its network, pair devices and receive their
@@ -1972,6 +2005,7 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
 | 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |
-| 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Plugins page; `motion-light-script` leaves the radio image |
+| 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Plugins page; the script leaves the radio image |
 | 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |
 | 044 | Tighter bounds: 8 data a device, 8 data and 8 order bindings an equipment, 20 log lines a recipe instance; a home stored with the old bounds is cut at load, logged once |
+| 046 | The native `motion-light` recipe removed: no recipe is built in, `motion-light` is Sowel's 1.1.2 as a script recipe (Sowel's id, info and validation texts, at most 8 instances), the memory ceilings measure scripts, the Mac launchers pass `--recipe-script` |

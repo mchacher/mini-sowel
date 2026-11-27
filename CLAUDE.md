@@ -54,7 +54,7 @@ the interface, with Sowel's design system. Details and reasons: decision D1.
 cd ui && npm ci && cd ../tools/z2m-coverage && npm ci   # once, after a clone (same in tools/e2e, the browser test)
 cargo run -p solite-host                     # the host program (Mac)
 cargo run -p solite-host -- --radio tcp://<address>:6638 [--pair|--listen]   # identify the Dongle Max's radio | start the network and pair | show the measures
-cargo run -p solite-host -- --sim scenarios/garage.json --pair 30|--serve --speed 10 [--recipe-script recipes/scripts/motion-light-script.js]   # no dongle | API, interface :8080 (+ a JavaScript script recipe)
+cargo run -p solite-host -- --sim scenarios/garage.json --pair 30|--serve --speed 10 [--recipe-script recipes/scripts/motion-light.js]   # no dongle | API, interface :8080 (+ a JavaScript script recipe)
 SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [port | address[:port]]    # the demo garage, through the API
 SOLITE_PASSWORD=<password> sh scripts/measure-api.sh <address>[:port] [--keep]  # the 17 requests of an equipment with 8 + 8 bindings (Mac sim; box: once per milestone)
 cd ui && npm run dev                             # the interface in development, :5173 (host on :8080)

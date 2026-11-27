@@ -153,8 +153,8 @@ impl Home {
     }
 
     #[cfg(not(feature = "script-recipes"))]
-    fn is_built_in_recipe(&self, id: &str) -> bool {
-        id == "motion-light"
+    fn is_built_in_recipe(&self, _id: &str) -> bool {
+        false
     }
 
     // ---- The memory rules (R4) ----

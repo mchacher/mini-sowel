@@ -2,7 +2,7 @@
 //! engine, a scenario that makes its devices report, and the simulated radio's memory that has
 //! them joined. The firmware embeds them (spec 016 R4); this test builds the same home as
 //! `memory_ceiling.rs` and checks the files are its output. `UPDATE_FIXTURES=1 cargo test -p
-//! solite-core --test fixtures` writes them.
+//! solite-core --features script-recipes --test fixtures` writes them.
 
 mod mem_storage;
 mod realistic;

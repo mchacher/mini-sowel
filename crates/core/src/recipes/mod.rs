@@ -188,6 +188,7 @@ struct Native {
 }
 
 impl Native {
+    #[cfg(test)]
     fn new(recipe: Box<dyn Recipe + Send>) -> Native {
         let names = Native::names_of(&recipe.info());
         Native {
@@ -197,6 +198,7 @@ impl Native {
         }
     }
 
+    #[cfg(any(test, feature = "script-recipes"))]
     fn names_of(info: &Value) -> RecipeName {
         let text = |key: &str| {
             info.get(key)
@@ -568,18 +570,11 @@ fn sdk_event(event: &Event) -> SdkEvent {
 }
 
 impl RecipeEngine {
+    /// An engine with no instance and no recipe: no recipe is built in (spec 046). The scripts
+    /// come from the catalogue, a file or `--recipe-script`. It is also what the home leaves in
+    /// the engine's place while the real one is taken out to read the home
+    /// (`Home::engine_reads_home`).
     pub fn new() -> Self {
-        RecipeEngine {
-            natives: vec![Native::new(Box::new(
-                solite_recipe_motion_light::MotionLightRecipe::new(),
-            ))],
-            ..RecipeEngine::placeholder()
-        }
-    }
-
-    /// An engine with no instance and no recipe: what the home leaves in its place while the
-    /// real one is taken out to read the home (`Home::engine_reads_home`).
-    pub(crate) fn placeholder() -> Self {
         RecipeEngine {
             slots: Vec::new(),
             next_log_id: 0,
@@ -2107,7 +2102,8 @@ mod tests {
         }
     }
 
-    /// An engine with the test recipes after the built-in one (indexes 1 and 2).
+    /// The origin of a script recipe given by the program (`--recipe-script`), for the tests.
+    #[cfg(feature = "script-recipes")]
     fn test_origin() -> ScriptOrigin {
         ScriptOrigin {
             source: ScriptSource::BuiltIn,
@@ -2200,8 +2196,8 @@ mod tests {
     type Calls = Arc<std::sync::Mutex<Vec<u32>>>;
 
     #[cfg(feature = "script-recipes")]
-    /// An engine with a counting built-in recipe (provider 1) and a slow script recipe (provider
-    /// 2, 400 ms per event, over the 300 ms of a turn), `scripts` instances of the script, all
+    /// An engine with a counting native recipe (provider 0) and a slow script recipe (provider
+    /// 1, 400 ms per event, over the 300 ms of a turn), `scripts` instances of the script, all
     /// listening to the root zone, and one of the counting recipe.
     fn slow_world(scripts: u8) -> (RecipeEngine, Arc<AtomicUsize>, Calls) {
         let clock = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -2224,9 +2220,9 @@ mod tests {
                 test_origin(),
             )
             .unwrap();
-        engine.slots.push(slot(1, "counting", Some(1)));
+        engine.slots.push(slot(1, "counting", Some(0)));
         for n in 0..scripts {
-            engine.slots.push(slot(10 + n, "slow", Some(2)));
+            engine.slots.push(slot(10 + n, "slow", Some(1)));
         }
         let listen = engine.listens.indexes(&[ListenEntry::Zone {
             zone: Id::ROOT_ZONE.to_string(),
@@ -2343,8 +2339,8 @@ mod tests {
         let home = Home::new(1);
         let count = Arc::new(AtomicUsize::new(0));
         let mut engine = engine_with(vec![Box::new(Failing), Box::new(Counting(count.clone()))]);
-        engine.slots.push(slot(1, "failing", Some(1)));
-        engine.slots.push(slot(2, "counting", Some(2)));
+        engine.slots.push(slot(1, "failing", Some(0)));
+        engine.slots.push(slot(2, "counting", Some(1)));
         let event = Event::Zone {
             zone: Id::ROOT_ZONE,
             motion: true,
@@ -2370,7 +2366,7 @@ mod tests {
         assert!(hub.subscribe(client, r#"{"type":"subscribe","topics":["recipes"]}"#));
         let mut engine = RecipeEngine::new();
         engine.set_live(hub.clone());
-        // Params that no recipe takes: the start fails whatever the way it is asked for.
+        // A recipe nobody provides: the start fails whatever the way it is asked for.
         engine.slots.push(slot(1, "motion-light", None));
         // The start right after a create: log line and event.
         assert!(

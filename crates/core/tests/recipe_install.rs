@@ -44,7 +44,7 @@ use solite_core::update::release::{Fetched, Fetcher, Limits};
 use solite_core::update::{HEADER_BYTES, Updates, Version, signed_bytes};
 use solite_core::{MemoryProbe, MemoryReading, MemoryStats, PsramStats};
 use support::update_fake::FakeAdapter;
-use support::{HOST, PORT, ROOT, T0, counter};
+use support::{HOST, MOTION_LIGHT, PORT, ROOT, T0, counter};
 
 // ---- Keys, scripts, files ----
 
@@ -468,10 +468,21 @@ impl World {
         World::build(signing, Some(&key), now)
     }
 
+    /// A world over a home a test made (devices, zones, equipments, saved instances), with the
+    /// recipe key and the account as `new` gives them.
+    fn over(home: Home, now: u64) -> World {
+        let signing = new_key();
+        let key = public_hex(&signing);
+        World::build_with(home, signing, Some(&key), now)
+    }
+
     fn build(signing: SigningKey, key: Option<&str>, now: u64) -> World {
+        World::build_with(Home::new(T0), signing, key, now)
+    }
+
+    fn build_with(mut home: Home, signing: SigningKey, key: Option<&str>, now: u64) -> World {
         let probe = Arc::new(FakeProbe::new());
         let (installs, line) = RecipeInstalls::from_key_text(key, probe.clone());
-        let mut home = Home::new(T0);
         home.set_recipe_installs(installs);
         home.set_presence(AlwaysConfirmed);
         home.load_auth(Some(Account {
@@ -1032,12 +1043,18 @@ fn a_valid_catalogue_is_kept_and_served_with_what_is_installed() {
 }
 
 #[test]
-fn the_store_marks_an_installed_recipe_a_refused_file_and_a_native_recipes_id() {
+fn the_store_marks_an_installed_recipe_a_refused_file_and_the_id_of_a_script_the_program_carries() {
     let mut world = World::new();
     let signing = world.signing.clone();
     let a = signed(&signing, "a", "1.0.0");
     let b = signed(&signing, "b", "1.0.0");
     let native = signed(&signing, "native-like", "1.0.0");
+    // `motion-light` is the script given by `--recipe-script` (built in).
+    let clock = world.script_clock();
+    world
+        .lock()
+        .load_script_recipe(MOTION_LIGHT, Arc::new(SystemRuntimes), clock)
+        .unwrap();
     // `b` is on the flash but changed: refused at start.
     let mut changed = b.clone();
     *changed.last_mut().unwrap() ^= 1;
@@ -1418,7 +1435,8 @@ fn an_install_with_the_network_down_or_a_download_cut_for_good_is_502() {
 }
 
 #[test]
-fn an_install_is_refused_for_a_built_in_installed_or_unknown_id_or_a_third_file() {
+fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknown_id_or_a_third_file()
+ {
     let mut world = World::new();
     let signing = world.signing.clone();
     let a = signed(&signing, "a", "1.0.0");
@@ -1426,18 +1444,7 @@ fn an_install_is_refused_for_a_built_in_installed_or_unknown_id_or_a_third_file(
     let c = signed(&signing, "c", "1.0.0");
     let local = signed(&signing, "local", "1.0.0");
     let old = signed(&signing, "old", "1.0.0");
-    world.serve(&[
-        ("a", "1.0.0", &a),
-        ("b", "1.0.0", &b),
-        ("c", "1.0.0", &c),
-        ("motion-light", "1.0.0", &a),
-    ]);
-    // A native recipe's id.
-    refused(
-        world.install_id("motion-light"),
-        409,
-        "motion-light is built in",
-    );
+    world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b), ("c", "1.0.0", &c)]);
     // A script given by `--recipe-script`.
     let clock = world.script_clock();
     world
@@ -1531,6 +1538,111 @@ fn an_install_after_an_uninstall_finds_no_instance_to_start() {
         "the deleted instance does not come back"
     );
     assert!(world.lock().recipes().instances().next().is_none());
+}
+
+fn kept_instance(id: &str, params: &Value) -> RecipeInstance {
+    RecipeInstance {
+        id: Id::parse(id).unwrap(),
+        recipe_id: "motion-light".into(),
+        params: params.to_string().into(),
+        enabled: true,
+        created_at: T0,
+    }
+}
+
+#[test]
+fn the_real_motion_light_installed_by_an_upload_starts_the_three_instances_a_native_home_kept() {
+    // Spec 046 R6: a home saved with native `motion-light` instances, flashed with its storage
+    // kept: they are stopped (no recipe), then the signed 1.1.2 is uploaded and they start.
+    let mut rig = support::Rig::new();
+    let g = rig.garage();
+    let params = json!({"zone": g.zone, "lights": [g.light], "timeout": "20s"});
+    let ids = [
+        "22222222-2222-4222-8222-000000000001",
+        "22222222-2222-4222-8222-000000000002",
+        "22222222-2222-4222-8222-000000000003",
+    ];
+    rig.home
+        .load_recipes(ids.iter().map(|id| kept_instance(id, &params)).collect());
+    rig.home.start_recipes(rig.now, rig.now);
+    let mut world = World::over(rig.home, T0);
+    for id in ids {
+        assert!(!world.running(id));
+        assert_eq!(
+            world.messages(id).last().unwrap(),
+            "Failed to restore: Recipe not found: motion-light"
+        );
+    }
+    let file = signed_with(&world.signing.clone(), "1.1.2", MOTION_LIGHT);
+    let (status, body) = world.upload(&file);
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(body["id"], "motion-light");
+    for id in ids {
+        assert!(world.running(id), "{id}: {:?}", world.messages(id));
+    }
+    let (_, list) = world.get("/api/v1/recipe-instances");
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 3);
+    for item in list {
+        assert_eq!(item["params"], params, "the settings are kept");
+        assert_eq!(item["enabled"], true);
+    }
+}
+
+#[test]
+fn a_boot_by_day_with_the_installed_file_starts_with_the_daylight_before_any_aggregate() {
+    use solite_core::engine::{Saver, load_home};
+    use solite_core::radio::zcl::Command;
+    use support::{Rig, motion};
+    const JUNE_NOON: u64 = 1_782_043_200_000;
+    const PIR: u8 = support::PIR;
+    let mut rig = Rig::new();
+    rig.now = JUNE_NOON;
+    let g = rig.garage();
+    let (status, body) = rig.put(
+        "/api/v1/settings",
+        json!({
+            "home.latitude": "48.8566",
+            "home.longitude": "2.3522",
+            "home.timezone": "Europe/Paris",
+        }),
+    );
+    assert_eq!(status, 200, "{body}");
+    rig.report(&motion(PIR, true));
+    // The instance is made as the saved home had it (the script loaded here only to create it).
+    let id = rig.garage_instance(&g, json!({"disableWhenDaylight": true}));
+    let id = id.as_str();
+    let saved = MemStorage::default();
+    let home = Mutex::new(std::mem::replace(&mut rig.home, Home::new(0)));
+    Saver::new(&saved, rig.now)
+        .tick(&home, rig.now, true)
+        .unwrap();
+    // The boot: the home read back, the installed file loaded as the start does, the recipes
+    // started before the first aggregate.
+    let loaded = load_home(&&saved, JUNE_NOON + 1_000).unwrap();
+    let mut world = World::over(loaded, JUNE_NOON + 1_000);
+    let file = signed_with(&world.signing.clone(), "1.1.2", MOTION_LIGHT);
+    world.storage.put("scripts/motion-light.srs", &file);
+    let lines = world.boot();
+    assert!(
+        lines[0].contains("motion-light 1.1.2 installed"),
+        "{lines:?}"
+    );
+    let now = JUNE_NOON + 1_000;
+    world.lock().start_recipes(now, now);
+    let mut sent = Vec::new();
+    {
+        let home = world.lock();
+        while let Some(queued) = home.orders().take(now) {
+            sent.extend(queued.request.commands.iter().map(|c| c.command));
+            home.orders().done();
+        }
+    }
+    assert!(!sent.contains(&Command::On), "{sent:?}");
+    assert_eq!(
+        world.messages(id).last().unwrap(),
+        "Recipe activated — daytime, lights off"
+    );
 }
 
 #[test]
@@ -1775,13 +1887,8 @@ fn an_uninstall_deletes_the_instances_in_every_zone_drops_the_runtime_and_remove
 }
 
 #[test]
-fn an_uninstall_of_a_native_recipe_a_recipe_script_or_nothing_is_refused() {
+fn an_uninstall_of_a_recipe_script_or_nothing_is_refused() {
     let mut world = World::new();
-    refused(
-        world.uninstall("motion-light"),
-        409,
-        "motion-light is built in",
-    );
     let clock = world.script_clock();
     world
         .lock()
@@ -2002,6 +2109,37 @@ fn an_install_or_an_upload_over_a_refused_file_replaces_it() {
     let rows = world.lock().resources().scripts;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, "ready");
+}
+
+#[test]
+fn the_motion_light_script_given_by_the_program_is_built_in_for_every_source() {
+    // On the Mac, `--recipe-script recipes/scripts/motion-light.js` (spec 046): its id is taken.
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let clock = world.script_clock();
+    world
+        .lock()
+        .load_script_recipe(MOTION_LIGHT, Arc::new(SystemRuntimes), clock)
+        .unwrap();
+    let file = signed_with(&signing, "1.1.2", MOTION_LIGHT);
+    world.serve(&[("motion-light", "1.1.2", &file)]);
+    refused(
+        world.install_id("motion-light"),
+        409,
+        "motion-light is built in",
+    );
+    refused(world.upload(&file), 409, "motion-light is built in");
+    refused(
+        world.uninstall("motion-light"),
+        409,
+        "motion-light is built in",
+    );
+    // An installed `scripts/motion-light.srs` beside it: refused at boot, the program's script runs.
+    world.storage.put("scripts/motion-light.srs", &file);
+    let lines = world.boot();
+    assert!(lines[0].ends_with("motion-light: built in"), "{lines:?}");
+    assert_eq!(world.version_of("motion-light"), None);
+    assert!(world.storage.file("scripts/motion-light.srs").is_some());
 }
 
 // ---- The safe mode (R3.8) ----
@@ -2548,17 +2686,12 @@ fn an_upload_that_updates_follows_the_catalogues_rules_with_one_new_runtime() {
 }
 
 #[test]
-fn an_upload_is_refused_for_a_built_in_id_or_a_third_file_before_any_load_or_memory_check() {
+fn an_upload_is_refused_for_a_third_file_before_any_load_or_memory_check() {
     let (mut world, counting, needed) = counting_world();
     let signing = world.signing.clone();
     // The memory is short for any new runtime: a load or the memory rule would say so.
     world.probe.set(64 * 1024, 1024);
     let made = counting.made.load(Ordering::SeqCst);
-    refused(
-        world.upload(&signed(&signing, "motion-light", "1.0.0")),
-        409,
-        "motion-light is built in",
-    );
     world.probe.set(64 * 1024, needed + 200 * 1024);
     let b = signed(&signing, "b", "1.0.0");
     let c = signed(&signing, "c", "1.0.0");

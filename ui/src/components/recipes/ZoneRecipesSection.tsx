@@ -42,8 +42,10 @@ export function ZoneRecipesSection({
     return () => document.removeEventListener("mousedown", onDown);
   }, [showPicker]);
 
-  if (recipes.length === 0) return null;
-
+  // No recipe is built in (spec 046): a box with none installed says so and points to the store,
+  // below the instances it kept, which show `Recipe not installed` (R10: the row decides it from the
+  // recipe id missing in the list) and can be deleted.
+  const noRecipe = recipes.length === 0;
   const mine = instances.filter((instance) => instance.params.zone === zoneId);
   const picked = recipes.find((r) => r.id === pickedId);
 
@@ -52,21 +54,23 @@ export function ZoneRecipesSection({
       title={t("recipes.title")}
       count={mine.length}
       headerRight={
-        <div ref={pickerWrap} className="relative">
-          <SliceAddButton
-            onClick={() => setShowPicker((open) => !open)}
-            title={t("recipes.addRecipe")}
-          />
-          {showPicker && (
-            <RecipePickerPopover
-              recipes={recipes}
-              onPick={(id) => {
-                setShowPicker(false);
-                setPickedId(id);
-              }}
+        noRecipe ? undefined : (
+          <div ref={pickerWrap} className="relative">
+            <SliceAddButton
+              onClick={() => setShowPicker((open) => !open)}
+              title={t("recipes.addRecipe")}
             />
-          )}
-        </div>
+            {showPicker && (
+              <RecipePickerPopover
+                recipes={recipes}
+                onPick={(id) => {
+                  setShowPicker(false);
+                  setPickedId(id);
+                }}
+              />
+            )}
+          </div>
+        )
       }
     >
       <div>
@@ -84,7 +88,18 @@ export function ZoneRecipesSection({
             ))}
           </div>
         )}
-        {mine.length === 0 && !picked && (
+        {noRecipe && (
+          <div className="flex items-center justify-center gap-2 px-4 py-3 text-caption text-text-tertiary">
+            <span>{t("recipes.noneInstalled")}</span>
+            <a
+              href="#/plugins"
+              className="text-primary hover:text-primary-hover transition-colors duration-150"
+            >
+              {t("recipes.openStore")}
+            </a>
+          </div>
+        )}
+        {!noRecipe && mine.length === 0 && !picked && (
           <div className="flex items-center justify-center gap-2 px-4 py-3 text-caption text-text-tertiary">
             <span>{t("recipes.noActiveRecipes", { name: zoneName })}</span>
             <button

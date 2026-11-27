@@ -158,6 +158,10 @@ pub struct ScriptPhase {
     /// PSRAM taken by the phase at its end, and at the most (below the level before it).
     pub psram_used: usize,
     pub psram_peak: usize,
+    /// The heap (internal RAM and PSRAM) of the home with its script loaded and its three
+    /// instances running, at the most: free before the engine started minus the lowest free seen
+    /// until the scenario had played again (spec 046 R8).
+    pub heap_peak: usize,
     /// Internal RAM taken by the phase at its end (a negative change reads 0), and its lowest free.
     pub internal_used: usize,
     pub internal_min: usize,
@@ -167,12 +171,12 @@ pub struct ScriptPhase {
     pub script_stack: (usize, usize),
 }
 
-/// The line the QEMU image logs after its script phase: `recipes: script motion-light-script <KB> KB
+/// The line the QEMU image logs after its script phase: `recipes: script motion-light <KB> KB
 /// source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB free); engine stack <n>
-/// of <n> unused; script thread stack <n> of <n> unused` (stacks in bytes).
+/// of <n> unused; script thread stack <n> of <n> unused; heap peak <KB> KB` (stacks in bytes).
 pub fn script_phase_line(id: &str, phase: &ScriptPhase) -> String {
     format!(
-        "recipes: script {id} {} KB source; psram +{} KB (peak +{} KB); internal +{} KB (min {} KB free); engine stack {} of {} unused; script thread stack {} of {} unused",
+        "recipes: script {id} {} KB source; psram +{} KB (peak +{} KB); internal +{} KB (min {} KB free); engine stack {} of {} unused; script thread stack {} of {} unused; heap peak {} KB",
         kib(phase.source),
         kib(phase.psram_used),
         kib(phase.psram_peak),
@@ -182,6 +186,7 @@ pub fn script_phase_line(id: &str, phase: &ScriptPhase) -> String {
         phase.engine_stack.1,
         phase.script_stack.0,
         phase.script_stack.1,
+        kib(phase.heap_peak),
     )
 }
 

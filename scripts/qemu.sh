@@ -21,9 +21,9 @@
 # 200 and at least 1024 bytes of that stack unused, the resume touching an 8 KB stand-in for the
 # TLS handshake (which QEMU cannot run) at its deepest point.
 # The sim image is built with the scripts (`--features sim,scripts`, spec 041): after the `engine:`
-# line it runs the scenario again on three `motion-light-script` instances, a script recursing as deep
+# line it loads the `motion-light` script, starts the realistic home's three kept `motion-light` instances and runs the scenario again, then a script recursing as deep
 # as its stack allows on the engine thread and on a `script` thread, and logs `recipes: script
-# motion-light-script <KB> KB source; psram ...` (R6.2); the run fails when that line is missing, the
+# motion-light <KB> KB source; psram ...` (R6.2); the run fails when that line is missing, the
 # three instances' peak passes 75 % of the script memory limit, the internal RAM minimum is under
 # 64 KB, or either stack keeps less than 2 KB unused. The box's image is checked to carry no QuickJS.
 # QEMU is always stopped, also on Ctrl-C.
@@ -152,7 +152,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   # A script phase that ended in an error never logs its last line: say so now, not at the timeout.
   [ "$MODE" = sim ] && grep -aqE '^E \([0-9]+\) .*script phase' "$LOG" \
     && show_failure "the script phase failed: $(grep -aE '^E \([0-9]+\) .*script phase' "$LOG" | tail -n 1)"
-  if ok && { [ "$MODE" != sim ] || grep -aq 'script sizes: motion-light-script' "$LOG"; }; then
+  if ok && { [ "$MODE" != sim ] || grep -aq 'script sizes: motion-light' "$LOG"; }; then
     # A short grace period: a reboot right after the banner must not pass.
     sleep 3
     broken && show_failure "the firmware panicked or rebooted."

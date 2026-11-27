@@ -3,7 +3,7 @@
 //! from the engine's counting allocator and its ceilings (`memory_worst_case.rs`). The figures
 //! are printed (`script memory: ...`, read with `--nocapture`) and bounded.
 //!
-//! A loaded `motion-light-script` with 0, 1, 3 and 8 instances; what a motion event holds right
+//! A loaded `motion-light` with 0, 1, 3 and 8 instances; what a motion event holds right
 //! after the call (QuickJS frees by reference counting, so this is its peak but for temporaries
 //! inside the call); and the memory held after 10,000 events, which may grow by 4 KB at most.
 //!
@@ -27,7 +27,7 @@ use solite_core::recipes::script::{
 use solite_recipe_sdk::{Clock, Event, EventValue, Recipe};
 use support::*;
 
-const SCRIPT: &str = include_str!("../../../recipes/scripts/motion-light-script.js");
+const SCRIPT: &str = include_str!("../../../recipes/scripts/motion-light.js");
 const SECOND: u64 = 1000;
 
 /// The system's allocator with a roomy limit: the table is the measure, so the sixteen instances
@@ -63,8 +63,8 @@ impl World {
             g,
             recipe,
             names: RecipeName {
-                id: "motion-light-script".into(),
-                name: "Motion Light (script)".into(),
+                id: "motion-light".into(),
+                name: "Motion Light".into(),
             },
         }
     }

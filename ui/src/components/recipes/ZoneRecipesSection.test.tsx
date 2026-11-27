@@ -51,10 +51,33 @@ describe("ZoneRecipesSection", () => {
     expect(screen.getByRole("checkbox", { name: "Garage light" })).toBeTruthy();
   });
 
-  it("no recipe on the host: no panel", () => {
-    useRecipes.setState({ recipes: [], instances: [recipeInstance("a", { zone: "garage" })] });
+  it("no recipe installed on the host: the kept instances are rows (recipe id, stopped), deletable, and the store is pointed to", () => {
+    useRecipes.setState({
+      recipes: [],
+      instances: [
+        recipeInstance("a", { zone: "garage" }, { enabled: false }),
+        recipeInstance("b", { zone: "kitchen" }),
+      ],
+    });
     renderSection();
-    expect(screen.queryByRole("heading", { name: "Recipes" })).toBeNull();
+    expect(screen.getAllByTestId("recipe-row")).toHaveLength(1);
+    expect(screen.getByText("motion-light")).toBeTruthy(); // the recipe id: no name to show
+    expect(screen.getByText("Recipe not installed")).toBeTruthy();
+    expect((screen.getByRole("switch") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+    expect(screen.getByText("1")).toBeTruthy(); // the count beside the title
+    expect(screen.queryByText("Add a recipe")).toBeNull();
+    expect(screen.queryByTitle("Add a recipe")).toBeNull();
+    expect(screen.getByText("No recipe is installed")).toBeTruthy();
+    const link = screen.getByRole("link", { name: "Open the recipe store" });
+    expect(link.getAttribute("href")).toBe("#/plugins");
+  });
+
+  it("no recipe installed and no instance: only the store hint, count 0", () => {
+    useRecipes.setState({ recipes: [], instances: [] });
+    renderSection();
     expect(screen.queryByTestId("recipe-row")).toBeNull();
+    expect(screen.getByText("No recipe is installed")).toBeTruthy();
+    expect(screen.getByText("0")).toBeTruthy();
   });
 });

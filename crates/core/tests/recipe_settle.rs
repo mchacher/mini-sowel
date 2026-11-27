@@ -208,23 +208,6 @@ fn an_equipment_no_instance_names_changes_nothing() {
 }
 
 #[test]
-fn the_legacy_light_naming_the_deleted_light_becomes_empty_and_the_instance_is_disabled() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (status, body) = rig.instance(json!({"zone": g.zone, "light": g.light}));
-    assert_eq!(status, 201, "{body}");
-    let id = body["id"].as_str().unwrap().to_string();
-    rig.delete(&format!("/api/v1/equipments/{}", g.light));
-    let instance = listed(&mut rig, &id);
-    assert_eq!(instance["params"]["light"], "");
-    assert_eq!(instance["enabled"], false);
-    assert_eq!(
-        rig.messages(&id).last().unwrap(),
-        "Disabled: At least one light is required"
-    );
-}
-
-#[test]
 fn a_light_moved_to_another_zone_disables_the_instance() {
     let mut rig = Rig::new();
     let g = rig.garage();
@@ -343,6 +326,7 @@ fn an_instance_that_failed_to_restore_is_disabled_at_the_next_change_and_the_req
 {
     let mut rig = Rig::new();
     let g = rig.garage();
+    rig.load_motion_light();
     let other = second_light(&mut rig, &g);
     let broken = RecipeInstance {
         id: Id::from_random([7; 16]),
@@ -397,7 +381,7 @@ fn enable_still_starts_a_disabled_instance_that_validates() {
 }
 
 #[test]
-fn a_light_named_by_sixteen_instances_of_sixteen_lights_is_pruned_from_all_in_one_change() {
+fn a_light_named_by_eight_instances_of_sixteen_lights_is_pruned_from_all_in_one_change() {
     let mut rig = Rig::new();
     let g = rig.garage();
     let mut lights = vec![g.light.clone()];
@@ -405,7 +389,8 @@ fn a_light_named_by_sixteen_instances_of_sixteen_lights_is_pruned_from_all_in_on
         let relay = rig.relay(0x90 + n);
         lights.push(rig.equipment(&format!("Light {n}"), "light_onoff", &g.zone, &[&relay]));
     }
-    let ids: Vec<String> = (0..16)
+    // At most 8 instances of one script recipe (D74, spec 046).
+    let ids: Vec<String> = (0..8)
         .map(|_| rig.garage_instance(&g, json!({"lights": lights})))
         .collect();
     let (status, _) = rig.delete(&format!("/api/v1/equipments/{}", lights[15]));
@@ -461,98 +446,6 @@ fn count(messages: &[String], text: &str) -> usize {
 }
 
 #[test]
-fn a_button_whose_device_is_removed_leaves_the_settings_and_the_instance_keeps_running() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, sensor, _) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
-    rig.sent();
-    saved(&mut rig.home);
-    let (hub, c) = listening(&rig);
-    let (status, _) = rig.delete(&format!("/api/v1/devices/{sensor}"));
-    assert_eq!(status, 204);
-    let instance = listed(&mut rig, &id);
-    assert_eq!(instance["enabled"], true);
-    assert_eq!(instance["params"]["buttons"], json!([]));
-    assert!(!not_running(&mut rig, &id));
-    assert_eq!(starts(&mut rig, &id), 1, "not restarted");
-    assert_eq!(
-        rig.messages(&id).last().unwrap(),
-        "Button removed from settings: Wall button"
-    );
-    assert!(!types(&hub, c).contains(&"recipe.instance.error".to_string()));
-    let written = saved(&mut rig.home).expect("recipes.json is written");
-    assert_eq!(written[0]["params"]["buttons"], json!([]));
-    assert_eq!(written[0]["enabled"], true);
-}
-
-#[test]
-fn a_button_whose_action_binding_is_removed_leaves_the_settings_and_the_instance_keeps_running() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
-    rig.sent();
-    saved(&mut rig.home);
-    unbind(&mut rig, &button, &binding);
-    let instance = listed(&mut rig, &id);
-    assert_eq!(instance["enabled"], true);
-    assert_eq!(instance["params"]["buttons"], json!([]));
-    assert!(!not_running(&mut rig, &id));
-    assert_eq!(starts(&mut rig, &id), 1);
-    assert_eq!(
-        rig.messages(&id).last().unwrap(),
-        "Button removed from settings: Wall button"
-    );
-    let written = saved(&mut rig.home).expect("recipes.json is written");
-    assert_eq!(written[0]["params"]["buttons"], json!([]));
-    // The light still follows motion.
-    rig.report(&motion(PIR, true));
-    assert_eq!(rig.sent(), [Command::On]);
-}
-
-#[test]
-fn a_button_pruned_while_the_light_is_on_keeps_its_timer_and_sends_nothing() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
-    rig.sent();
-    rig.report(&motion(PIR, true));
-    rig.report(&state(RELAY, true));
-    rig.report(&motion(PIR, false));
-    rig.sent();
-    let before = rig.state(&id);
-    assert!(before["timerExpiresAt"].is_string());
-    unbind(&mut rig, &button, &binding);
-    assert_eq!(rig.state(&id), before);
-    assert!(rig.sent().is_empty());
-    assert_eq!(starts(&mut rig, &id), 1);
-    // The timer still fires.
-    rig.advance(20 * SECOND);
-    assert_eq!(rig.sent(), [Command::Off]);
-}
-
-#[test]
-fn a_disabled_instance_has_its_stale_button_pruned_logged_and_written_and_stays_disabled() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
-    rig.post(&format!("{BASE}/{id}/disable"), json!({}));
-    saved(&mut rig.home);
-    unbind(&mut rig, &button, &binding);
-    let instance = listed(&mut rig, &id);
-    assert_eq!(instance["enabled"], false);
-    assert_eq!(instance["params"]["buttons"], json!([]));
-    assert_eq!(
-        rig.messages(&id).last().unwrap(),
-        "Button removed from settings: Wall button"
-    );
-    assert!(saved(&mut rig.home).is_some());
-}
-
-#[test]
 fn a_deleted_button_equipment_is_logged_once_by_the_deletion_and_does_not_restart() {
     let mut rig = Rig::new();
     let g = rig.garage();
@@ -568,52 +461,6 @@ fn a_deleted_button_equipment_is_logged_once_by_the_deletion_and_does_not_restar
     assert_eq!(starts(&mut rig, &id), 1, "not restarted");
     assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
     assert!(!not_running(&mut rig, &id));
-}
-
-#[test]
-fn a_button_in_two_instances_is_pruned_from_both_with_one_line_each() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let first = rig.garage_instance(&g, json!({"buttons": [button]}));
-    let second = rig.garage_instance(&g, json!({"buttons": [button]}));
-    unbind(&mut rig, &button, &binding);
-    for id in [&first, &second] {
-        assert_eq!(listed(&mut rig, id)["params"]["buttons"], json!([]));
-        let messages = rig.messages(id);
-        assert_eq!(
-            count(&messages, "Button removed from settings: Wall button"),
-            1
-        );
-        assert!(!not_running(&mut rig, id));
-    }
-}
-
-#[test]
-fn the_same_button_twice_in_the_stored_buttons_is_taken_out_with_one_line() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, _, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let params = json!({"zone": g.zone, "lights": [g.light], "timeout": "20s",
-        "buttons": [button, button]});
-    let stored = RecipeInstance {
-        id: Id::from_random([9; 16]),
-        recipe_id: "motion-light".into(),
-        params: params.to_string().into(),
-        enabled: true,
-        created_at: rig.now,
-    };
-    rig.home.load_recipes(vec![stored]);
-    rig.home.start_recipes(rig.now, rig.now);
-    let id = Id::from_random([9; 16]).to_string();
-    assert!(!not_running(&mut rig, &id));
-    unbind(&mut rig, &button, &binding);
-    assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
-    let messages = rig.messages(&id);
-    assert_eq!(
-        count(&messages, "Button removed from settings: Wall button"),
-        1
-    );
 }
 
 #[test]
@@ -634,29 +481,6 @@ fn creating_or_changing_an_instance_with_a_button_without_action_is_still_refuse
     );
     let body = json!({"params": params}).to_string();
     assert_eq!(rig.refused("PUT", &format!("{BASE}/{id}"), &body).0, 400);
-}
-
-#[test]
-fn a_press_on_a_pruned_button_does_nothing_even_when_its_binding_comes_back() {
-    let mut rig = Rig::new();
-    let g = rig.garage();
-    let (button, sensor, binding) = action_button(&mut rig, &g.zone, "Wall button", 0x60);
-    let id = rig.garage_instance(&g, json!({"buttons": [button]}));
-    rig.sent();
-    unbind(&mut rig, &button, &binding);
-    let data = rig.home.devices.get(&sensor).unwrap().data[0]
-        .id
-        .to_string();
-    let (status, _) = rig.post(
-        &format!("/api/v1/equipments/{button}/data-bindings"),
-        json!({"deviceDataId": data, "alias": "action"}),
-    );
-    assert_eq!(status, 201);
-    let before = rig.messages(&id);
-    rig.report(&temperature(0x60, 20.0));
-    assert!(rig.sent().is_empty());
-    assert_eq!(rig.messages(&id), before);
-    assert_eq!(listed(&mut rig, &id)["params"]["buttons"], json!([]));
 }
 
 /// An instance of the garage with a safety auto-off, its light on and its zone's motion on;

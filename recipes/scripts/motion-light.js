@@ -1,7 +1,10 @@
-// motion-light-script: the script version of the built-in `motion-light` (spec 041, R5), a port of
-// Sowel's `sowel-recipe-motion-light` 1.1.2 to the script API: same slots, behaviour, log texts and
-// state keys. The top level is shared by the instances, so it holds functions only: each takes the
-// instance's data `c` (made in `start`), which keeps an instance down to a few small closures.
+// motion-light: the port of Sowel's `sowel-recipe-motion-light` 1.1.2 to the script API (spec 046):
+// Sowel's id, slots, info, texts and behaviour, adapted for Solite where its engine differs (a
+// deleted equipment leaves the settings by the generic settle, a button that loses its `action`
+// binding disables the instance, the legacy `light` key is not read, a refused order's reason is
+// logged, the 2 s echo window is counted on the wall clock). The top level is shared by the
+// instances, so it holds functions only: each takes the instance's data `c` (made in `start`),
+// which keeps an instance down to a few small closures.
 var GRACE_MS = 2000;
 var HYSTERESIS = 0.1;
 
@@ -41,7 +44,7 @@ function iso(ms) {
   return new Date(ms).toISOString();
 }
 
-// ---- State keys, rebuilt in the built-in recipe's order at each change ----
+// ---- State keys, rebuilt in Sowel's order at each change ----
 function syncState(c) {
   var st = c.api.state;
   st.delete("overrideMode");
@@ -287,17 +290,17 @@ function syncLightsOnStart(c, motion, l) {
 
 recipe({
   api: 1,
-  id: "motion-light-script",
-  version: "1.0.0",
-  name: "Motion Light (script)",
+  id: "motion-light",
+  version: "1.1.2",
+  name: "Motion Light",
   description:
-    "Turns on lights when motion is detected, turns off after a timeout with no motion (script version). Differs from the built-in recipe: validation texts are the host's for the settings and its own for the lights' state order and the buttons' action data; a deleted equipment leaves the settings by the generic settle, and a button that loses its action data invalidates the settings (instance disabled) instead of being pruned; the legacy light setting is not read; a refused order logs the host's reason; the 2 s echo window is counted on the wall clock.",
+    "Turns on lights when motion is detected, turns off after a timeout with no motion. Supports lux threshold, failsafe max-on duration, and button override.",
   icon: "Lightbulb",
   i18n: {
     fr: {
-      name: "Lumière sur mouvement (script)",
+      name: "Lumière sur mouvement",
       description:
-        "Allume les lumières quand un mouvement est détecté, éteint après un délai sans mouvement. Version script de Lumière sur mouvement.",
+        "Allume les lumières quand un mouvement est détecté, éteint après un délai sans mouvement. Supporte un seuil de luminosité optionnel et une durée max d'allumage.",
       slots: {
         zone: { name: "Zone", description: "Zone à surveiller" },
         lights: { name: "Lumières", description: "Lumières à contrôler (doivent appartenir à la zone)" },
@@ -364,22 +367,40 @@ recipe({
     },
   },
 
-  // What the slots cannot say: lights have a `state` order, buttons an `action` data.
+  // Sowel's 1.1.2 `validate`, with its texts and in its order (the host's own checks of the slots
+  // follow, and can only refuse more).
   validate: function (params, home) {
-    var i, item, ids;
-    ids = params.lights || [];
+    var i, item, ids, value;
+    var durationText = function (v) {
+      return "Invalid duration format: " + String(v) + '. Use e.g. "10m", "30s", "1h"';
+    };
+    if (typeof params.zone !== "string" || params.zone === "") return "Zone parameter is required";
+    if (!home.zone(params.zone)) return "Zone not found: " + params.zone;
+    ids = Array.isArray(params.lights) ? params.lights : [];
+    if (ids.length === 0) return "At least one light is required";
+    if (ids.length > 16) return "At most 16 lights";
     for (i = 0; i < ids.length; i++) {
       item = home.equipment(ids[i]);
-      if (item && item.orders.indexOf("state") < 0) {
-        return 'Light "' + item.name + '" has no "state" order binding';
+      if (!item) return "Light equipment not found: " + ids[i];
+      if (item.type !== "light_onoff") {
+        return 'Light "' + item.name + '" is type "' + item.type + '" but this recipe requires light_onoff';
       }
+      if (item.zoneId !== params.zone) return 'Light "' + item.name + '" does not belong to the selected zone';
+      if (item.orders.indexOf("state") < 0) return 'Light "' + item.name + '" has no "state" order binding';
     }
-    ids = params.buttons || [];
+    if (typeof params.timeout !== "number") return durationText(params.timeout);
+    value = params.luxThreshold;
+    if (value !== undefined && value !== null && (typeof value !== "number" || !(value >= 0))) {
+      return "luxThreshold must be a non-negative number";
+    }
+    value = params.maxOnDuration;
+    if (value !== undefined && value !== null && typeof value !== "number") return durationText(value);
+    ids = Array.isArray(params.buttons) ? params.buttons : [];
+    if (ids.length > 16) return "At most 16 buttons";
     for (i = 0; i < ids.length; i++) {
       item = home.equipment(ids[i]);
-      if (item && item.data.indexOf("action") < 0) {
-        return 'Button "' + item.name + '" has no "action" data binding';
-      }
+      if (!item) return "Button equipment not found: " + ids[i];
+      if (item.data.indexOf("action") < 0) return 'Button "' + item.name + '" has no "action" data binding';
     }
     return "";
   },

@@ -1599,3 +1599,50 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   to 8 lights and 8 buttons and the script recipes' list slots to 8: refused, params stay at 2 KB);
   raising the 1 MiB ceiling (the PSRAM is shared with the radio's and the script recipes' shares);
   a bound of 12 (about half the gain).
+
+## D81: No recipe is built in: `motion-light` is a script recipe, Sowel's 1.1.2 (replaces D17's native recipes and D46's pruned button, spec 046)
+
+- **Date**: 2026-11-27
+- **Choice**: the native (Rust) `motion-light` recipe and its crate are removed; the engine
+  provides no recipe, every recipe is a script loaded at start (installed from the catalogue or a
+  signed file, or given to the Mac's host by `--recipe-script`). The recipe SDK stays (the
+  engine's contract). `motion-light` is the script `recipes/scripts/motion-light.js`, version
+  `1.1.2`: Sowel's id, slots, info (French included, served byte for byte as the native served it,
+  a whole `min` written `0`) and validation texts, the script's own `validate` run before the
+  host's check of the slots (a `validate` that throws or runs out of time gives way to the host's
+  text; it reads, of what the params name, an equipment's `name`, `type`, `zoneId` and binding
+  aliases and whether a zone exists, so that `Zone not found`, `... is type "<type>" but this
+  recipe requires light_onoff` and `... does not belong to the selected zone` are Sowel's, in
+  Sowel's order). The principle: **the recipes are Sowel's, only adapted for performance to Solite's
+  context**. Five behaviours are the engine's own and stay as the script does them (they replace
+  D17's "the native settle" and D46's pruned button): a deleted equipment leaves the settings by
+  the generic settle; a button that loses its `action` binding disables the instance (D46 kept
+  running and dropped the button); the legacy `light` key is not read; a refused order's reason is
+  logged; the 2 s echo window is counted on the wall clock. At most 8 instances of `motion-light`
+  (D74's bound of one script recipe; D17's 16); `MAX_INSTANCES` (16) still bounds all recipes.
+  A home saved with native instances finds its recipe again once the script is installed: until
+  then they stay stopped with `Failed to restore: Recipe not found: motion-light`, settings kept.
+  What the memory ceilings measure (effect on D20 and D27): the Mac's tests (`memory_ceiling.rs`,
+  300 KB, `memory_worst_case.rs`, 1 MiB) run script instances and count the Rust side (QuickJS
+  allocates through the C library and is not seen): the realistic home peaks at 238 KB, 243 KB
+  with every log entry at 200 bytes (163 and 173 KB with the native recipe), the worst case at 880
+  KB with every log entry at 200 bytes (804 KB), 16 instances over two script recipes; the
+  runtimes are a line of their own in `docs/memory-budget.md` (224 KB each on the box). The QEMU
+  gate of D27 (350 KB, the `engine:` line) still runs before any script is loaded, so it measures
+  the home with its three `motion-light` instances kept stopped (peak 274 KB, 312 KB with the
+  native recipe running); the script phase then loads
+  `motion-light`, starts the three kept instances, plays the scenario and measures them running
+  (`recipes: script motion-light ...`, `script sizes: ...`). A second gate holds that running
+  case: the whole heap (internal RAM and PSRAM, from before the engine started) with the script
+  loaded and the three instances running is at most 574 KB, D27's 350 KB plus the 224 KB ceiling of
+  one script runtime (`heap peak` of the `recipes: script` line, checked in `fw_check_script_phase`;
+  measured 535 KB, 565 KB with the depth script's runtime added); D27 itself is unchanged. The radio image is 34 KB smaller (2932 KB, 71 % of its slot).
+- **Why**: since F2 (spec 042) the radio image carried no script but still carried the native
+  recipe's code, and two implementations of one behaviour were tested against each other. One
+  recipe, one place it comes from, and a box that gets its recipes from the catalogue; the native
+  code and its 16-instance bound would have kept a second set of rules alive. The script's
+  differences are what Solite's engine needs, none a rule of the recipe.
+- **Alternatives**: an id alias `motion-light-script` to `motion-light` at load (no box but the
+  author's runs a script instance, F2 not being released); keeping the native recipe as the
+  fallback (the two would drift); the box installing on its own the recipes it proposes (a roadmap
+  line, not part of this change).

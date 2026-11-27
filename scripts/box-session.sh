@@ -833,24 +833,31 @@ group_permit() {
   check 0 "pairing closed" OK
 }
 
-# ---- script recipe (spec 041, R7) ----
+# ---- script recipe (spec 041, R7; spec 046) ----
 
-# The garage's `motion-light` instance, from the list of instances on the standard input: its id,
-# then the body that creates a `motion-light-script` instance with the same zone, lights, buttons
-# and lux settings and the timeout $1; the first light's id last. Nothing when there is none.
-SCRIPT_COPY_PY=$(cat <<'PY'
-import sys, json
-timeout = sys.argv[1]
+# The garage's own `motion-light` instance, from the list of instances on the standard input: its
+# id, its first light's id, and its timeout in seconds (a number of milliseconds, or "10s", "10m",
+# "1h"; 600 when it says nothing; empty when the text cannot be read, as "1h30m": the off check is
+# then skipped). Nothing when no enabled instance is there.
+GARAGE_PY=$(cat <<'PY'
+import sys, json, re
 for instance in json.load(sys.stdin):
     if instance.get("recipeId") != "motion-light" or not instance.get("enabled", True):
         continue
     params = instance.get("params") or {}
-    copy = {k: params[k] for k in ("zone", "lights", "buttons", "luxThreshold", "disableWhenDaylight") if k in params}
-    copy["timeout"] = timeout
     lights = params.get("lights") or []
+    timeout = params.get("timeout", "10m")
+    seconds = 600
+    if isinstance(timeout, (int, float)):
+        seconds = int(timeout) // 1000
+    elif isinstance(timeout, str):
+        found = re.match(r"^\s*(\d+)\s*([smh])$", timeout)
+        seconds = int(found.group(1)) * {"s": 1, "m": 60, "h": 3600}[found.group(2)] if found else ""
+    else:
+        seconds = ""
     print(instance["id"])
-    print(json.dumps({"recipeId": "motion-light-script", "params": copy}))
     print(lights[0] if lights else "")
+    print(seconds)
     break
 PY
 )
@@ -880,31 +887,27 @@ light_state() {
   python3 -c "$LIGHT_PY" "$TMP/body"
 }
 
-# Puts the garage back as it was, always (also after a failure or a signal): the script instance
-# deleted, the `motion-light` instance enabled again. A fresh login first: the access token may
-# have expired during the wait.
+# The recipe this run uploaded (`--recipe-file`) stays when an instance uses it, which the garage's
+# instance does: a recipe an instance on the box uses is never uninstalled. Only an upload that no
+# instance uses is taken away again, so that the box is left as it was found. A fresh login first:
+# the access token may have expired during the wait.
 script_cleanup() {
-  [ -n "${SCRIPT_INSTANCE:-}${GARAGE_DISABLED:-}${RECIPE_UPLOADED:-}" ] || return 0
+  [ -n "${RECIPE_UPLOADED:-}" ] || return 0
   relogin || :
-  _left=
-  if [ -n "${SCRIPT_INSTANCE:-}" ]; then
-    http DELETE "/recipe-instances/$SCRIPT_INSTANCE" -H "@$AUTH_FILE"
-    case "$CODE" in 200 | 204) SCRIPT_INSTANCE= ;; *) _left="the script instance $SCRIPT_INSTANCE was not deleted ($CODE)" ;; esac
+  http GET /recipe-instances -H "@$AUTH_FILE"
+  if [ "$CODE" != 200 ]; then
+    check 7 "uploaded recipe" KO "GET /recipe-instances answered $CODE"
+    return
   fi
-  if [ -n "${GARAGE_DISABLED:-}" ]; then
-    http POST "/recipe-instances/$GARAGE_DISABLED/enable" -H "@$AUTH_FILE" -H "$JSON" -d '{}'
-    case "$CODE" in 200 | 204) GARAGE_DISABLED= ;; *) _left="${_left:+$_left; }motion-light $GARAGE_DISABLED was not enabled again ($CODE)" ;; esac
+  if grep -aq '"recipeId":"motion-light"' "$TMP/body"; then
+    check 7 "uploaded recipe" OK "kept: an instance of motion-light uses it"
+    return
   fi
-  # The recipe this run uploaded (spec 042 R7.6) goes again: the box is left as it was found.
-  if [ -n "${RECIPE_UPLOADED:-}" ]; then
-    http POST /recipes/motion-light-script/uninstall -H "@$AUTH_FILE"
-    case "$CODE" in 200 | 204) RECIPE_UPLOADED= ;; *) _left="${_left:+$_left; }motion-light-script was not uninstalled ($CODE)" ;; esac
-  fi
-  if [ -z "$_left" ]; then
-    check 7 "garage put back" OK "script instance deleted, motion-light enabled again${SOLITE_SESSION_RECIPE_FILE:+, uploaded recipe uninstalled}"
-  else
-    check 7 "garage put back" KO "$_left"
-  fi
+  http POST /recipes/motion-light/uninstall -H "@$AUTH_FILE"
+  case "$CODE" in
+    200 | 204) RECIPE_UPLOADED=; check 7 "uploaded recipe" OK "no instance uses it: uninstalled again" ;;
+    *) check 7 "uploaded recipe" KO "motion-light was not uninstalled ($CODE)" ;;
+  esac
 }
 
 # The person's wave (a seam for the tests: SOLITE_SESSION_WAVE=auto asks nobody).
@@ -929,21 +932,19 @@ wait_light() {
 
 group_script() {
   group_login || return
-  SCRIPT_INSTANCE=
-  GARAGE_DISABLED=
   RECIPE_UPLOADED=
-  # Whatever happens below, the garage is put back (a signal ends the shell through `exit`).
+  # Whatever happens below, an upload no instance uses is taken away (a signal ends the shell
+  # through `exit`).
   trap 'script_cleanup; rm -rf "$TMP"' EXIT
 
-  # 1. The garage's instance, and the script recipe on the box: since spec 042 no script is built
-  # in, so it is installed, or, with `--recipe-file <file.srs>` (a signed file), uploaded for this
-  # run and uninstalled at its end; without it the group says so and stops.
+  # 1. The `motion-light` recipe on the box: it is installed, or, with `--recipe-file <file.srs>` (a
+  # signed file), uploaded for this run; without it the group says so and stops.
   http GET /recipes -H "@$AUTH_FILE"
   if [ "$CODE" != 200 ]; then
     check 1 "script recipe on the box" KO "GET /recipes answered $CODE"
     return
   fi
-  if ! grep -aq '"id":"motion-light-script"' "$TMP/body"; then
+  if ! grep -aq '"id":"motion-light"' "$TMP/body"; then
     if [ -z "${SOLITE_SESSION_RECIPE_FILE:-}" ]; then
       check 1 "script recipe on the box" skipped "not installed: --recipe-file"
       return
@@ -958,45 +959,41 @@ group_script() {
       return
     fi
     RECIPE_UPLOADED=1
-    check 1 "script recipe on the box" OK "uploaded from $SOLITE_SESSION_RECIPE_FILE"
+    check 1 "script recipe on the box" OK "installed from $SOLITE_SESSION_RECIPE_FILE"
+  else
+    check 1 "script recipe on the box" OK "installed"
   fi
+
+  # 2. The garage's own instance: it is the one the wave is checked on (nothing is copied, swapped
+  # or deleted: the home is not touched).
   http GET /recipe-instances -H "@$AUTH_FILE"
   if [ "$CODE" != 200 ]; then
-    check 1 "garage instance" KO "GET /recipe-instances answered $CODE"
+    check 2 "garage instance" KO "GET /recipe-instances answered $CODE"
     return
   fi
-  _copy=$(python3 -c "$SCRIPT_COPY_PY" "${SOLITE_SESSION_SCRIPT_TIMEOUT:-1m}" <"$TMP/body" 2>/dev/null)
-  GARAGE=$(printf '%s\n' "$_copy" | sed -n 1p)
-  _create=$(printf '%s\n' "$_copy" | sed -n 2p)
-  LIGHT=$(printf '%s\n' "$_copy" | sed -n 3p)
+  _garage=$(python3 -c "$GARAGE_PY" <"$TMP/body" 2>/dev/null)
+  GARAGE=$(printf '%s\n' "$_garage" | sed -n 1p)
+  LIGHT=$(printf '%s\n' "$_garage" | sed -n 2p)
+  _timeout=$(printf '%s\n' "$_garage" | sed -n 3p)
   if [ -z "$GARAGE" ]; then
-    check 1 "garage instance" skipped "the box has no enabled motion-light instance to copy the settings from"
+    check 2 "garage instance" skipped "the box has no enabled motion-light instance (the garage's)"
     return
   fi
   if [ -z "$LIGHT" ]; then
-    check 1 "garage instance" KO "the motion-light instance $GARAGE has no light"
+    check 2 "garage instance" KO "the motion-light instance $GARAGE has no light"
     return
   fi
-  check 1 "garage instance" OK "motion-light $GARAGE, light $LIGHT"
+  if [ -n "$_timeout" ]; then
+    check 2 "garage instance" OK "motion-light $GARAGE, light $LIGHT, timeout ${_timeout}s"
+  else
+    check 2 "garage instance" OK "motion-light $GARAGE, light $LIGHT, timeout unreadable: the off check is skipped"
+  fi
 
-  # 2. Its place taken by a script instance with the same settings and a timeout of 1 minute.
-  http POST "/recipe-instances/$GARAGE/disable" -H "@$AUTH_FILE" -H "$JSON" -d '{}'
-  if [ "$CODE" != 200 ] && [ "$CODE" != 204 ]; then
-    check 2 "script instance" KO "disabling motion-light answered $CODE: $(errtext)"
-    return
-  fi
-  GARAGE_DISABLED=$GARAGE
-  printf '%s' "$_create" >"$TMP/create.json"
-  http POST /recipe-instances -H "@$AUTH_FILE" -H "$JSON" --data-binary "@$TMP/create.json"
-  if [ "$CODE" != 201 ]; then
-    check 2 "script instance" KO "creating the motion-light-script instance answered $CODE: $(errtext)"
-    return
-  fi
-  SCRIPT_INSTANCE=$(jget "$TMP/body" id 2>/dev/null) || SCRIPT_INSTANCE=
-  check 2 "script instance" OK "motion-light-script $SCRIPT_INSTANCE, timeout ${SOLITE_SESSION_SCRIPT_TIMEOUT:-1m}"
-
-  # 3. The wave: the light on within 10 s of it, then off within 90 s of the light being seen on (the
-  # instance's timeout is 1 minute from the last motion, which is no later than that moment).
+  # 3. The wave: the light on within 10 s of it, then off within the instance's timeout (and a
+  # margin) of the light being seen on (the timeout runs from the last motion, which is no later
+  # than that moment).
+  _off_wait=${SOLITE_SESSION_OFF_WAIT:-}
+  [ -n "$_off_wait" ] || [ -z "$_timeout" ] || _off_wait=$((_timeout + 30))
   if ! ask_wave; then
     check 3 "light on" KO "no terminal to ask the person at"
     return
@@ -1007,15 +1004,17 @@ group_script() {
     check 3 "light on" KO "the light $LIGHT was not on ${SOLITE_SESSION_ON_WAIT:-10} s after the wave"
     return
   fi
-  if wait_light off "${SOLITE_SESSION_OFF_WAIT:-90}"; then
-    check 4 "light off" OK "off within ${SOLITE_SESSION_OFF_WAIT:-90} s of being seen on"
+  if [ -z "$_off_wait" ]; then
+    check 4 "light off" skipped "the instance's timeout cannot be read, so how long to wait is unknown"
+  elif wait_light off "$_off_wait"; then
+    check 4 "light off" OK "off within $_off_wait s of being seen on"
   else
-    check 4 "light off" KO "the light $LIGHT was still on ${SOLITE_SESSION_OFF_WAIT:-90} s after it was seen on"
+    check 4 "light off" KO "the light $LIGHT was still on $_off_wait s after it was seen on"
     return
   fi
 
   # 4. The box prints its `heap:` and `scripts:` lines every 240 s: the session's serial log, read
-  # by the step once this ends, holds the next ones if the script instance stays that long. The
+  # by the step once this ends, holds the next ones if the instance stays that long. The
   # wait is the whole 240 s and not "at most": `box.sh saves` writes the session's log file only
   # when the session ends (`keep_log`, an `atexit` of its serial reader), and gives this command
   # nothing to read it by, so the `scripts:` line cannot be polled from here to stop early.
@@ -1710,9 +1709,10 @@ step_b10() {
 HAVE_TTY=false
 (exec </dev/tty) 2>/dev/null && HAVE_TTY=true
 
-# The script recipe on the box (spec 041, R7): a person at the garage's motion sensor. The group
-# swaps the garage's `motion-light` for a `motion-light-script` instance, checks the light goes on
-# and off, and always puts the garage back; this step then reads the serial log of its `saves`
+# The script recipe on the box (spec 041, R7; spec 046): a person at the garage's motion sensor. The
+# group checks the garage's own `motion-light` instance: the light goes on, then off after its
+# timeout (it installs the signed file given to the session first when the recipe is missing, and
+# never uninstalls a recipe an instance uses); this step then reads the serial log of its `saves`
 # session for the `scripts:` line (the instance listed, with calls) and the `heap:` line before it,
 # whose internal RAM minimum must be at least INTERNAL_MIN_KB.
 step_b11() {
@@ -1725,12 +1725,14 @@ step_b11() {
   via_saves B11 5 sh "$SELF" --group script
   if grep -aq 'box-session: B11.1 .*: skipped (not installed: --recipe-file)' "$SV_OUT" 2>/dev/null; then
     printf 'box-session: B11.6 serial lines: skipped (not installed: --recipe-file)\n' >>"$SV_OUT"
+  elif grep -aq 'box-session: B11.2 .*: skipped (the box has no enabled motion-light instance' "$SV_OUT" 2>/dev/null; then
+    printf 'box-session: B11.6 serial lines: skipped (no motion-light instance on the box)\n' >>"$SV_OUT"
   elif $API_ONLY; then
     printf 'box-session: B11.6 serial lines: skipped (box only)\n' >>"$SV_OUT"
   elif [ -z "$SV_LOG" ] || [ ! -f "$SV_LOG" ]; then
     printf 'box-session: B11.6 serial lines: KO (no serial log)\n' >>"$SV_OUT"
   else
-    _pair=$(awk '/heap: internal/ { h = $0 } /scripts: motion-light-script [1-9][0-9]* instances/ { print h; print $0 }' "$SV_LOG" | tail -n 2)
+    _pair=$(awk '/heap: internal/ { h = $0 } /scripts: motion-light [1-9][0-9]* instances/ { print h; print $0 }' "$SV_LOG" | tail -n 2)
     _h=$(printf '%s\n' "$_pair" | sed -n 1p)
     _sl=$(printf '%s\n' "$_pair" | sed -n 2p)
     _min=$(printf '%s' "$_h" | sed -n 's/.*heap: internal [0-9]* KB free (min \([0-9]*\) KB).*/\1/p')

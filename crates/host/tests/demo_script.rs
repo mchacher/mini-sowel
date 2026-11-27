@@ -46,8 +46,14 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Pairs the garage's three devices, then serves; returns once the host says `serving:`.
+/// Pairs the garage's three devices, then serves with the `motion-light` script recipe (the Mac's
+/// launchers give it, spec 046); returns once the host says `serving:`.
 fn serving() -> (Reaped, u16, TempDir) {
+    serving_with(&["--recipe-script", "../../recipes/scripts/motion-light.js"])
+}
+
+/// The same, with these extra arguments for the host.
+fn serving_with(extra: &[&str]) -> (Reaped, u16, TempDir) {
     let dir = std::env::temp_dir().join(format!(
         "solite-demo-script-{}-{}",
         std::process::id(),
@@ -75,6 +81,7 @@ fn serving() -> (Reaped, u16, TempDir) {
                 "--data",
             ])
             .arg(&data.0)
+            .args(extra)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -144,6 +151,20 @@ fn login(port: u16) -> String {
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let tokens: serde_json::Value = serde_json::from_str(&text).expect(&text);
     tokens["accessToken"].as_str().expect(&text).to_string()
+}
+
+#[test]
+fn the_script_stops_with_its_message_when_the_host_has_no_motion_light_recipe() {
+    let (_host, port, _data) = serving_with(&[]);
+    let (ok, out, err) = run_script(port);
+    assert!(!ok, "{out}");
+    assert!(
+        err.contains("the box has no motion-light recipe: install it first"),
+        "{err}"
+    );
+    // Nothing was made: no zone.
+    let token = login(port);
+    assert!(!get_with(port, &token, "zones").contains("\"Garage\""));
 }
 
 #[test]
@@ -224,6 +245,8 @@ fn host_refusing_equipments() -> u16 {
                 ("200 OK", r#"{"setupRequired":false}"#.to_string())
             } else if line.starts_with("POST /api/v1/auth/login") {
                 ("200 OK", r#"{"accessToken":"stub-token"}"#.to_string())
+            } else if line.starts_with("GET /api/v1/recipes") {
+                ("200 OK", r#"[{"id":"motion-light"}]"#.to_string())
             } else if line.starts_with("GET /api/v1/zones") {
                 ("200 OK", "[]".to_string())
             } else if line.starts_with("GET /api/v1/devices") {
@@ -309,6 +332,8 @@ fn host_with_real_devices() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>
                 r#"{"setupRequired":false}"#.to_string()
             } else if line.starts_with("POST /api/v1/auth/login") {
                 r#"{"accessToken":"stub-token"}"#.to_string()
+            } else if line.starts_with("GET /api/v1/recipes") {
+                r#"[{"id":"motion-light"}]"#.to_string()
             } else if line.starts_with("GET /api/v1/zones") {
                 "[]".to_string()
             } else if line.starts_with("GET /api/v1/devices") {

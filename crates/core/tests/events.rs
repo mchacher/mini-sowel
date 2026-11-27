@@ -207,6 +207,7 @@ fn the_first_recompute_after_a_start_gives_one_zone_event_per_zone_listened_to()
     let root_light = rig.equipment("Hall light", "light_onoff", ROOT, &[&relay]);
     // A home as it is right after a start: it has computed no zone yet.
     rig.add_devices(Vec::new());
+    rig.load_motion_light();
     assert!(events(&rig).is_empty());
     let one = rig
         .home
