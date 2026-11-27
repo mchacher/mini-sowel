@@ -31,6 +31,6 @@
 
 ## Validation
 
-- [ ] Validate command green
-- [ ] Agent review done, blocking findings fixed
+- [x] Validate command green
+- [x] Agent review done, blocking findings fixed
 - [ ] Demo seen and approved by the user (box: with the user)
