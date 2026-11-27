@@ -313,14 +313,14 @@ fn summation_123456_with_divisor_1000_is_123_46_kwh() {
 #[test]
 fn instantaneous_demand_of_a_metering_only_plug_is_power_in_w() {
     // 1500 with divisor 1000: 1.5 kW.
-    let records = [record(0x0400, 0x2B, &[0xDC, 0x05, 0x00])];
+    let records = [record(0x0400, 0x2A, &[0xDC, 0x05, 0x00])];
     let scale = metering(ratio(1, 1000));
     assert_eq!(scaled(METERING, &records, &scale), ("power", 1500.0, "W"));
 }
 
 #[test]
 fn the_demand_is_left_out_when_the_device_has_electrical_measurement() {
-    let records = [record(0x0400, 0x2B, &[0xDC, 0x05, 0x00])];
+    let records = [record(0x0400, 0x2A, &[0xDC, 0x05, 0x00])];
     let scale = Scale {
         electrical: Some((ratio(1, 1), ratio(1, 1))),
         metering: Some(ratio(1, 1000)),
@@ -407,4 +407,17 @@ fn the_electrical_clusters_set_up_their_reporting_as_the_spec_says() {
         ),
         (0x0000, 60, 600)
     );
+}
+
+#[test]
+fn a_metering_plug_is_asked_to_report_its_demand_as_int24() {
+    // Without it, a plug with Metering only would never send its power (spec 048 R1, R3).
+    let metering = solite_core::radio::measures::reporting_cluster(0x0702).expect("metering");
+    let demand = metering
+        .attributes
+        .iter()
+        .find(|r| r.attribute == 0x0400)
+        .expect("InstantaneousDemand is configured");
+    assert_eq!(demand.data_type, 0x2A, "int24 is 0x2A in the ZCL");
+    assert!(metering.attributes.iter().any(|r| r.attribute == 0x0000));
 }

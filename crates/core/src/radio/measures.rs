@@ -20,7 +20,7 @@ const TYPE_UINT8: u8 = 0x20;
 const TYPE_UINT16: u8 = 0x21;
 const TYPE_INT16: u8 = 0x29;
 const TYPE_UINT48: u8 = 0x25;
-const TYPE_INT24: u8 = 0x2B;
+const TYPE_INT24: u8 = 0x2A; // ZCL: int8 0x28, int16 0x29, int24 0x2A, int32 0x2B
 
 const CLUSTER_POWER: u16 = 0x0001;
 const CLUSTER_ON_OFF: u16 = 0x0006;
@@ -502,13 +502,12 @@ pub const REPORTING: [ReportingCluster; 11] = [
     ReportingCluster {
         cluster: CLUSTER_METERING,
         name: "energy",
-        attributes: &[record(
-            ATTR_SUMMATION_DELIVERED,
-            TYPE_UINT48,
-            60,
-            600,
-            Some(1),
-        )],
+        attributes: &[
+            record(ATTR_SUMMATION_DELIVERED, TYPE_UINT48, 60, 600, Some(1)),
+            // The power of a plug with Metering only (spec 048 R1); a plug with Electrical
+            // Measurement takes its power from `0x0B04` and this one is not published.
+            record(ATTR_INSTANTANEOUS_DEMAND, TYPE_INT24, 10, 300, Some(1)),
+        ],
     },
 ];
 

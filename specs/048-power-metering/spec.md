@@ -43,7 +43,7 @@ already takes them: the stale delays of `power`, `energy`, `current`
 
 ### R3: reporting
 - Configure Reporting: ActivePower and RMSCurrent at most every 10 s, at least every 300 s, on a
-  change of 1 unit; CurrentSummationDelivered at most every 60 s, at least every 600 s.
+  change of 1 unit; InstantaneousDemand (int24, `0x2A`) the same, for a plug with Metering only; CurrentSummationDelivered at most every 60 s, at least every 600 s.
 
 ### R4: the simulator
 - A simulated plug (On/Off, `0x0B04`, `0x0702`) answers the scale reads and reports power,
@@ -64,7 +64,8 @@ already takes them: the stale delays of `power`, `energy`, `current`
 - [ ] A report before the scale is read publishes nothing (tested).
 - [ ] Divisor 0 or absent counts as 1 (tested).
 - [ ] A device with both clusters has one `power` (tested).
-- [ ] Sowel contract test updated (`crates/core/tests/sowel_contract.rs`).
+- [ ] Sowel contract: the three categories are words of the catalog, which `sowel_contract.rs`
+      checks against Sowel's `DataCategory` (no assertion of its own needed).
 - [ ] validate green.
 
 ## Edge cases
