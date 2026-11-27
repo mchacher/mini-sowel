@@ -150,8 +150,9 @@ describe("Sidebar, Plugins entry (spec 042, R5.4)", () => {
     await waitFor(() => expect(api.count("GET /api/v1/recipes/store")).toBe(1));
     expect(screen.queryByTestId("plugins-badge")).toBeNull();
     cleanup();
-    mockApi({ "GET /api/v1/recipes/store": { status: 500 } });
+    const failing = mockApi({ "GET /api/v1/recipes/store": { status: 500 } });
     show("plugins");
+    await waitFor(() => expect(failing.count("GET /api/v1/recipes/store")).toBe(1));
     expect(screen.getByRole("link", { name: "Plugins" })).toBeTruthy();
     expect(screen.queryByTestId("plugins-badge")).toBeNull();
   });

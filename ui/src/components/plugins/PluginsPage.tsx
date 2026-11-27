@@ -2,7 +2,8 @@
 // Cut to script recipes: Sowel's category filter (Integrations / Recipes), the integration rows
 // (status, devices, enable and disable), the detail sheet, the personal and community
 // confirmations, the personal sources section, the "update all" banner and the registry's refresh
-// button are cut (Solite installs no integration; the catalogue is read when the page opens). Kept:
+// button are cut (Solite installs no integration; the catalogue is read when the page opens; Remove
+// stays on the row, with Sowel's two-step confirmation, as there is no detail sheet). Kept:
 // the Installed and Store tabs with their counts, the search field, the row look (`card`), Install,
 // Update and Remove. Added: the "Upload a signed recipe" button, the files refused at start, the
 // error of the last read, and the server's own words for a refusal. The catalogue is Solite's
@@ -54,6 +55,8 @@ export function PluginsPage() {
   const [tab, setTab] = useState<Tab>("installed");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  /** The recipe whose Remove was clicked once: the next click uninstalls. */
+  const [confirming, setConfirming] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const upload = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
@@ -76,15 +79,27 @@ export function PluginsPage() {
 
   useEffect(() => {
     alive.current = true;
+    let read = false;
     // What the box holds first, then the read: a 429 (within a minute of the last) keeps the list.
     void getRecipeStore().then(
       (held) => alive.current && keep(held),
-      (err: unknown) => alive.current && setMessage({ text: serverText(err, t), error: true }),
+      (err: unknown) =>
+        alive.current && !read && setMessage({ text: serverText(err, t), error: true }),
     );
     void readFiles();
     void refreshRecipeStore().then(
-      (fresh) => alive.current && keep(fresh),
-      () => undefined,
+      (fresh) => {
+        if (!alive.current) return;
+        read = true;
+        keep(fresh);
+        setMessage(null);
+      },
+      (err: unknown) => {
+        // A 429 (paced) keeps the held list silently; any other refusal says why.
+        if (alive.current && !(err instanceof ApiError && err.status === 429)) {
+          setMessage({ text: serverText(err, t), error: true });
+        }
+      },
     );
     return () => {
       alive.current = false;
@@ -94,6 +109,7 @@ export function PluginsPage() {
   /** One action, then the list as the box holds it now. */
   const act = async (id: string, action: () => Promise<void>, done: string) => {
     setBusy(id);
+    setConfirming(null);
     setMessage(null);
     try {
       await action();
@@ -139,10 +155,21 @@ export function PluginsPage() {
     <button
       type="button"
       disabled={busy !== null}
-      onClick={() => act(id, () => uninstallRecipe(id), t("recipeStore.removed"))}
-      className={BUTTON_SECONDARY}
+      onClick={() => {
+        if (confirming !== id) {
+          setConfirming(id);
+          return;
+        }
+        void act(id, () => uninstallRecipe(id), t("recipeStore.removed"));
+      }}
+      onBlur={() => setConfirming((c) => (c === id ? null : c))}
+      className={
+        confirming === id
+          ? "px-4 py-2 text-small font-medium rounded-sm transition-colors cursor-pointer disabled:opacity-50 text-on-status bg-error"
+          : BUTTON_SECONDARY
+      }
     >
-      {t("recipeStore.remove")}
+      {confirming === id ? t("plugins.uninstallConfirm") : t("recipeStore.remove")}
     </button>
   );
 
@@ -198,7 +225,7 @@ export function PluginsPage() {
           </p>
         ),
       )}
-      <div className="flex items-center gap-1 shrink-0 px-4">
+      <div className="flex items-center justify-end gap-1 shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
         {hasUpdate(entry) && (
           <span className="text-micro px-1.5 py-0.5 bg-error/10 rounded-sm text-error font-mono shrink-0 flex items-center gap-0.5">
             <ArrowUpCircle size={10} />
@@ -235,7 +262,9 @@ export function PluginsPage() {
           )}
         </div>
       </div>
-      <div className="shrink-0 px-4">{removeButton(file.id)}</div>
+      <div className="flex justify-end shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
+        {removeButton(file.id)}
+      </div>
     </div>
   );
 
@@ -258,7 +287,7 @@ export function PluginsPage() {
           )}
         </>,
       )}
-      <div className="flex items-center gap-1 shrink-0 px-4">
+      <div className="flex items-center justify-end gap-1 shrink-0 basis-full sm:basis-auto px-4 pb-3 sm:pb-0">
         {entry.installed !== null ? (
           <>
             {hasUpdate(entry) && updateButton(entry)}
@@ -339,7 +368,7 @@ export function PluginsPage() {
           </div>
         </div>
 
-        <div className="flex gap-1 mb-4">
+        <div role="tablist" className="flex gap-1 mb-4">
           <TabButton
             active={tab === "installed"}
             onClick={() => setTab("installed")}
@@ -413,7 +442,7 @@ export function PluginsPage() {
             {listed.length === 0
               ? searching
                 ? noResults
-                : !store?.error && empty(t("recipeStore.empty"))
+                : !store?.error && store?.readAt && empty(t("recipeStore.empty"))
               : listed.map(storeRow)}
           </div>
         )}
@@ -436,6 +465,8 @@ function TabButton({
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={active}
       onClick={onClick}
       className={`px-4 py-2 text-small font-medium rounded-sm transition-colors cursor-pointer ${
         active
