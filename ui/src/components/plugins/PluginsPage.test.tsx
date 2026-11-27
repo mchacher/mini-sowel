@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecipeStore, Resources, StoreEntry } from "../../api";
 import { mockApi, resetStores } from "../../test-utils";
 import { resetRecipeUpdates } from "../layout/useRecipeUpdates";
+import { Sidebar } from "../layout/Sidebar";
 import { PluginsPage } from "./PluginsPage";
 
 const STORE = "GET /api/v1/recipes/store";
@@ -60,7 +61,13 @@ const resources = (refused: string[] = [], uploaded: string[] = []): Resources =
   })),
 });
 
-const tab = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name }));
+/** Remove asks a second click ("Confirm?") before it uninstalls. */
+const remove = (row: HTMLElement) => {
+  fireEvent.click(within(row).getByRole("button", { name: "Remove" }));
+  fireEvent.click(within(row).getByRole("button", { name: "Confirm?" }));
+};
+
+const tab = (name: RegExp) => fireEvent.click(screen.getByRole("tab", { name }));
 
 describe("PluginsPage", () => {
   it("lists the installed recipes first, with the counts of both tabs", async () => {
@@ -77,8 +84,8 @@ describe("PluginsPage", () => {
     expect(within(a).getByRole("button", { name: "Remove" })).toBeTruthy();
     expect(within(a).queryByRole("button", { name: "Update" })).toBeNull();
     expect(screen.queryByTestId("recipe-b")).toBeNull();
-    expect(screen.getByRole("button", { name: /^Installed/ }).textContent).toBe("Installed1");
-    expect(screen.getByRole("button", { name: /^Store/ }).textContent).toBe("Store2");
+    expect(screen.getByRole("tab", { name: /^Installed/ }).textContent).toBe("Installed1");
+    expect(screen.getByRole("tab", { name: /^Store/ }).textContent).toBe("Store2");
   });
 
   it("lists the catalogue in the Store tab, reading it again when the page opens", async () => {
@@ -154,7 +161,7 @@ describe("PluginsPage", () => {
     fireEvent.click(within(a).getByRole("button", { name: "Update" }));
     await screen.findByText("Recipe updated.");
     expect(api.count(UPDATE)).toBe(1);
-    fireEvent.click(within(screen.getByTestId("recipe-a")).getByRole("button", { name: "Remove" }));
+    remove(screen.getByTestId("recipe-a"));
     await screen.findByText("Recipe removed.");
     expect(api.count(UNINSTALL_A)).toBe(1);
   });
@@ -226,7 +233,7 @@ describe("PluginsPage", () => {
     render(<PluginsPage />);
     const mine = await screen.findByTestId("refused-mine");
     expect(mine.textContent).toContain("0.1.0");
-    fireEvent.click(within(mine).getByRole("button", { name: "Remove" }));
+    remove(mine);
     await screen.findByText("Recipe removed.");
     expect(api.count("POST /api/v1/recipes/mine/uninstall")).toBe(1);
   });
@@ -241,7 +248,7 @@ describe("PluginsPage", () => {
     render(<PluginsPage />);
     const bad = await screen.findByTestId("refused-bad");
     expect(bad.textContent).toContain("File refused: Invalid signature");
-    fireEvent.click(within(bad).getByRole("button", { name: "Remove" }));
+    remove(bad);
     await screen.findByText("Recipe removed.");
     expect(api.count(UNINSTALL_BAD)).toBe(1);
     await waitFor(() => expect(screen.queryByTestId("refused-bad")).toBeNull());
@@ -301,5 +308,80 @@ describe("PluginsPage", () => {
     fireEvent.input(field, { target: { value: "what b" } });
     expect(screen.queryByTestId("recipe-a")).toBeNull();
     expect(screen.getByTestId("recipe-b")).toBeTruthy();
+  });
+
+  it("uninstalls only on the second click of Remove", async () => {
+    const both = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+    const api = mockApi({
+      [STORE]: { body: both },
+      [REFRESH]: { body: both },
+      [RESOURCES]: { body: resources() },
+      [UNINSTALL_A]: { status: 204 },
+    });
+    render(<PluginsPage />);
+    const a = await screen.findByTestId("recipe-a");
+    fireEvent.click(within(a).getByRole("button", { name: "Remove" }));
+    expect(within(a).getByRole("button", { name: "Confirm?" })).toBeTruthy();
+    expect(api.count(UNINSTALL_A)).toBe(0);
+    fireEvent.focusOut(within(a).getByRole("button", { name: "Confirm?" }));
+    expect(await within(a).findByRole("button", { name: "Remove" })).toBeTruthy();
+    expect(api.count(UNINSTALL_A)).toBe(0);
+  });
+
+  it("says why when the refresh at opening is refused, not that the catalogue is empty", async () => {
+    const never: RecipeStore = { recipes: [], readAt: null, error: null };
+    mockApi({
+      [STORE]: { body: never },
+      [REFRESH]: { status: 503, body: { error: "Not enough memory for the catalogue" } },
+      [RESOURCES]: { body: resources() },
+    });
+    render(<PluginsPage />);
+    expect((await screen.findByRole("alert")).textContent).toContain("Not enough memory");
+    tab(/^Store/);
+    expect(screen.queryByText("The catalogue lists no recipe.")).toBeNull();
+  });
+
+  it("keeps the list silently when the refresh is paced (429)", async () => {
+    const held = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+    mockApi({
+      [STORE]: { body: held },
+      [REFRESH]: { status: 429, body: { error: "Too soon" } },
+      [RESOURCES]: { body: resources() },
+    });
+    render(<PluginsPage />);
+    await screen.findByTestId("recipe-a");
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("clears the error of the first read when the refresh succeeds", async () => {
+    const ok = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+    mockApi({
+      [STORE]: { status: 500, body: { error: "Held list unreadable" } },
+      [REFRESH]: { body: ok },
+      [RESOURCES]: { body: resources() },
+    });
+    render(<PluginsPage />);
+    await screen.findByTestId("recipe-a");
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("feeds the sidebar's badge: an Update takes the count down", async () => {
+    const before = store([entry("a", "2.0.0", { installed: "1.0.0" })]);
+    const after = store([entry("a", "2.0.0", { installed: "2.0.0" })]);
+    mockApi({
+      [STORE]: [{ body: before }, { body: before }, { body: after }],
+      [REFRESH]: { body: before },
+      [RESOURCES]: { body: resources() },
+      [UPDATE]: { status: 204 },
+    });
+    render(
+      <>
+        <Sidebar zones={[]} activeId={null} page="plugins" />
+        <PluginsPage />
+      </>,
+    );
+    expect((await screen.findByTestId("plugins-badge")).textContent).toBe("1");
+    fireEvent.click(await screen.findByRole("button", { name: "Update" }));
+    await waitFor(() => expect(screen.queryByTestId("plugins-badge")).toBeNull());
   });
 });

@@ -1539,7 +1539,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   upload, as a file of at most 16 KB signed with a recipe key of its own (magic `SOLITERS`, never the
   firmware's key: a leak of one does not give the other), kept as `scripts/<id>.srs`, checked at
   install and again at every start, admitted by the PSRAM free now (a runtime's 224 KB limit plus a
-  512 KB reserve) and by the internal RAM's largest block (a job thread and its TLS session). One
+  512 KB reserve) and by the internal RAM's largest block (a job thread and its TLS session; the uninstall, since 2026-11-27, needs only the thread's 20 KB). One
   job at a time, with the release check and pull (one TLS session). No flash access from a task whose
   stack is in PSRAM: the download, the write and the removal run on a `recipe` thread in internal
   RAM, the load and unload on the `script` thread. No script is built into the radio image. Not in
