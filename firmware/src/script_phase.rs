@@ -56,7 +56,7 @@ use super::{
     BASE, FatStorage, MEMORY_NAME, RunStorage, SCENARIO, SCENARIO_NAME, SPEED, STACK_BYTES,
     SimTransport, WaitedClock, Watched, fill, measure, memory, wall_ms,
 };
-use crate::job_thread::{self, FETCH_STACK_BYTES};
+use crate::job_thread::{self, FETCH_STACK_BYTES, StackPlace};
 use crate::scripts::{self, SCRIPT_THREAD_STACK_BYTES};
 
 /// QEMU's emulated CPU runs the engine far slower than the box's (the first load of a script, which
@@ -274,13 +274,15 @@ impl Pacing for StepPacing {
     }
 }
 
-/// A recipe job's script steps, on a `script` job thread (32 KB, internal RAM) as the box runs
+/// A recipe job's script steps, on a `script` job thread (32 KB, PSRAM) as the box runs
 /// them: the `recipe` thread's 20 KB cannot hold a script's stack.
 struct ScriptJobThread;
 
 impl ScriptThread for ScriptJobThread {
     fn run(&self, job: &mut dyn FnMut()) {
-        if let Err(e) = job_thread::run_borrowed(c"script", SCRIPT_THREAD_STACK_BYTES, job) {
+        if let Err(e) =
+            job_thread::run_borrowed(c"script", SCRIPT_THREAD_STACK_BYTES, StackPlace::Psram, job)
+        {
             log::error!("script phase: {e}");
         }
     }
@@ -304,29 +306,34 @@ fn job(
         .recipe_ticket(op, INSTALL_WALL_MS)
         .map_err(|f| format!("script phase: install: {} {}", f.status, f.message))?;
     let runtimes = Arc::clone(runtimes);
-    let ran = job_thread::run(c"recipe", FETCH_STACK_BYTES, move || {
-        let mut fetcher = fetcher;
-        let mut pacing = StepPacing(Instant::now());
-        let mut env = JobEnv {
-            fetcher: &mut fetcher,
-            pacing: &mut pacing,
-            storage: files,
-            runtimes,
-            clock: scripts::clock(),
-            script_thread: &ScriptJobThread,
-            check_limits: Limits::CHECK,
-            download_limits: Limits::DOWNLOAD,
-        };
-        let response = ticket.run(home, &mut env);
-        if response.status >= 300 {
-            log::error!(
-                "script phase: install: {} {}",
-                response.status,
-                response.body.as_deref().unwrap_or("")
-            );
-        }
-        response.status
-    })?;
+    let ran = job_thread::run(
+        c"recipe",
+        FETCH_STACK_BYTES,
+        StackPlace::Internal,
+        move || {
+            let mut fetcher = fetcher;
+            let mut pacing = StepPacing(Instant::now());
+            let mut env = JobEnv {
+                fetcher: &mut fetcher,
+                pacing: &mut pacing,
+                storage: files,
+                runtimes,
+                clock: scripts::clock(),
+                script_thread: &ScriptJobThread,
+                check_limits: Limits::CHECK,
+                download_limits: Limits::DOWNLOAD,
+            };
+            let response = ticket.run(home, &mut env);
+            if response.status >= 300 {
+                log::error!(
+                    "script phase: install: {} {}",
+                    response.status,
+                    response.body.as_deref().unwrap_or("")
+                );
+            }
+            response.status
+        },
+    )?;
     ran.ok_or_else(|| "script phase: the recipe thread panicked".to_string())
 }
 
@@ -507,26 +514,31 @@ pub fn run(
     let engine_unused = job_thread::stack_unused();
     delete_all(home, "depth-host");
     let body = format!(r#"{{"recipeId":"depth-host","params":{depth_params}}}"#);
-    let ran = job_thread::run(c"script", SCRIPT_THREAD_STACK_BYTES, || {
-        let mut random = |bytes: &mut [u8]| fill(bytes);
-        let request = Request {
-            method: "POST",
-            path: "/api/v1/recipe-instances",
-            host: Some("localhost:80"),
-            port: 80,
-            reach: Reach::Lan { name: "solite" },
-            content_type: Some("application/json"),
-            authorization: None,
-            content_length: Some(body.len() as u64),
-            body: body.as_bytes(),
-        };
-        let reply = handle_stream(&mut lock(home), &request, wall_ms(), &mut random);
-        let status = match reply {
-            Reply::Whole(response) => response.status,
-            _ => 0,
-        };
-        (status, job_thread::stack_unused())
-    })?;
+    let ran = job_thread::run(
+        c"script",
+        SCRIPT_THREAD_STACK_BYTES,
+        StackPlace::Psram,
+        || {
+            let mut random = |bytes: &mut [u8]| fill(bytes);
+            let request = Request {
+                method: "POST",
+                path: "/api/v1/recipe-instances",
+                host: Some("localhost:80"),
+                port: 80,
+                reach: Reach::Lan { name: "solite" },
+                content_type: Some("application/json"),
+                authorization: None,
+                content_length: Some(body.len() as u64),
+                body: body.as_bytes(),
+            };
+            let reply = handle_stream(&mut lock(home), &request, wall_ms(), &mut random);
+            let status = match reply {
+                Reply::Whole(response) => response.status,
+                _ => 0,
+            };
+            (status, job_thread::stack_unused())
+        },
+    )?;
     let (status, script_unused) = ran.ok_or("script phase: the script thread panicked")?;
     let id = lock(home)
         .recipes()

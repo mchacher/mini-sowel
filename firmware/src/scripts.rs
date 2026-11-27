@@ -78,11 +78,13 @@ pub fn load_one(
 /// storage figures last.
 #[cfg(feature = "radio")]
 pub fn load_installed(home: &mut Home) {
-    let (installs, line) = solite_core::recipes::install::RecipeInstalls::from_key_text(
+    let (mut installs, line) = solite_core::recipes::install::RecipeInstalls::from_key_text(
         RECIPE_PUBLIC_KEY,
         Arc::new(crate::memory::EspProbe),
     );
     log::info!("{line}");
+    // The `recipe` thread is made once, here, before the admission is told it is kept (spec 045).
+    installs.set_job_thread_kept(crate::http_server::start_recipe_thread());
     home.set_recipe_installs(installs);
     let clock = clock();
     for line in home.load_installed_scripts(&crate::storage::FatStorage::new(), &runtimes(), &clock)

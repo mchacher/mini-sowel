@@ -5,10 +5,11 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use esp_idf_svc::sys::{
-    WL_INVALID_HANDLE, esp_err_to_name, esp_vfs_fat_info, esp_vfs_fat_mount_config_t,
-    esp_vfs_fat_spiflash_mount_rw_wl, wl_handle_t,
+    WL_INVALID_HANDLE, esp_err_to_name, esp_ptr_external_ram, esp_vfs_fat_info,
+    esp_vfs_fat_mount_config_t, esp_vfs_fat_spiflash_mount_rw_wl, wl_handle_t,
 };
 use solite_core::engine::{
     Storage, WriteCounter, complete_name, flash_line, recover_interrupted_save, temporary_name,
@@ -26,6 +27,27 @@ static WRITES: WriteCounter = WriteCounter::new();
 pub(crate) fn counted<T>(result: T) -> T {
     log::info!("{}", flash_line(WRITES.record()));
     result
+}
+
+/// Set once the PSRAM-stack refusal has been logged (once per boot).
+static PSRAM_STACK_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// R2 (spec 045): a flash access, a read too, turns the caches and so the PSRAM off, and ESP-IDF
+/// stops the chip when the caller's stack is in PSRAM (D59). Every flash call of this file starts
+/// with this check: from such a stack it is an error, logged once per boot, not a crash. A guard
+/// for a future route; no path in use reaches it.
+#[allow(unsafe_code)]
+fn flash_allowed() -> Result<(), String> {
+    let local = 0u8;
+    // SAFETY: only reads the address of a local, to tell which memory it is in.
+    let in_psram = unsafe { esp_ptr_external_ram(std::ptr::from_ref(&local).cast()) };
+    if !in_psram {
+        return Ok(());
+    }
+    if !PSRAM_STACK_LOGGED.swap(true, Ordering::Relaxed) {
+        log::error!("storage: flash access from a PSRAM stack refused");
+    }
+    Err("flash access from a PSRAM stack refused".to_string())
 }
 
 /// The name of an ESP-IDF error code.
@@ -87,6 +109,7 @@ pub fn mount() -> Result<Mounted, String> {
 /// Bytes used and total of the mounted partition.
 #[allow(unsafe_code)]
 pub fn usage() -> Result<(u64, u64), String> {
+    flash_allowed()?;
     let base = CString::new(BASE).map_err(|e| e.to_string())?;
     let (mut total, mut free) = (0u64, 0u64);
     // SAFETY: `base` is a valid NUL-terminated string; `total` and `free` are valid for writes
@@ -167,6 +190,7 @@ fn finish_save(path: &Path, temporary: &Path) -> io::Result<()> {
 
 impl Storage for FatStorage {
     fn read(&self, name: &str) -> Result<Option<String>, String> {
+        flash_allowed()?;
         let path = self.dir.join(name);
         // A power cut between the delete and the rename of a save leaves only `<name>.new`.
         let complete = self.dir.join(complete_name(name));
@@ -196,6 +220,7 @@ impl Storage for FatStorage {
         name: &str,
         next: &mut dyn FnMut() -> io::Result<Option<String>>,
     ) -> Result<(), String> {
+        flash_allowed()?;
         let path = self.dir.join(name);
         let temporary = self.dir.join(temporary_name(name));
         counted(
@@ -209,6 +234,7 @@ impl Storage for FatStorage {
     }
 
     fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        flash_allowed()?;
         let path = self.dir.join(name);
         recover(&path)?;
         match fs::read(&path) {
@@ -219,6 +245,7 @@ impl Storage for FatStorage {
     }
 
     fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        flash_allowed()?;
         let path = self.dir.join(name);
         let temporary = with_suffix(&path, ".tmp");
         counted(
@@ -228,6 +255,7 @@ impl Storage for FatStorage {
     }
 
     fn remove(&self, name: &str) -> Result<(), String> {
+        flash_allowed()?;
         let path = self.dir.join(name);
         match fs::remove_file(&path) {
             Ok(()) => counted(Ok(())),
@@ -237,6 +265,7 @@ impl Storage for FatStorage {
     }
 
     fn list(&self, folder: &str) -> Result<Vec<String>, String> {
+        flash_allowed()?;
         let path = self.dir.join(folder);
         let names = |path: &Path| -> Result<Vec<String>, String> {
             match fs::read_dir(path) {
@@ -261,6 +290,7 @@ impl Storage for FatStorage {
     }
 
     fn usage(&self) -> Result<(u64, Option<u64>), String> {
+        flash_allowed()?;
         usage().map(|(used, total)| (used, Some(total)))
     }
 }
@@ -310,6 +340,7 @@ pub fn write_text(name: &str, text: &str) -> Result<(), String> {
 /// target goes first.
 #[cfg(feature = "radio")]
 pub fn rename(from: &str, to: &str) -> Result<(), String> {
+    flash_allowed()?;
     let (from_path, to_path) = (Path::new(BASE).join(from), Path::new(BASE).join(to));
     if fs::remove_file(&to_path).is_ok() {
         counted(());
@@ -324,6 +355,7 @@ pub fn rename(from: &str, to: &str) -> Result<(), String> {
 /// already absent is removed too, and that is not counted as a write.
 #[cfg(feature = "radio")]
 pub fn remove(name: &str) -> Result<(), String> {
+    flash_allowed()?;
     let path = Path::new(BASE).join(name);
     match fs::remove_file(&path) {
         Ok(()) => counted(Ok(())),
@@ -335,6 +367,7 @@ pub fn remove(name: &str) -> Result<(), String> {
 /// Writes an empty file in the data partition (the boot marker), counted.
 #[cfg(feature = "radio")]
 pub fn touch(name: &str) -> Result<(), String> {
+    flash_allowed()?;
     let path = Path::new(BASE).join(name);
     counted(fs::write(&path, b"").map_err(|e| format!("{}: cannot write: {e}", path.display())))
 }

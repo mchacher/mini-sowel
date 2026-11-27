@@ -174,13 +174,20 @@ impl Home {
     }
 
     /// R4.2: the largest block of internal RAM must hold a job's thread and its TLS session; an
-    /// uninstall (`tls` false) opens no session and needs only its thread's stack.
+    /// uninstall (`tls` false) opens no session and needs only its thread's stack. When the
+    /// program keeps the thread from the start (spec 045 R3), its stack is not counted: an
+    /// install needs the session's margin, an uninstall nothing.
     pub(crate) fn internal_refusal(&self, tls: bool) -> Option<Failure> {
         let reading = self.install.installs.probe().read()?;
-        let needed = if tls {
-            FETCH_STACK_BYTES + RECIPE_INTERNAL_MARGIN
+        let stack = if self.install.installs.job_thread_kept() {
+            0
         } else {
             FETCH_STACK_BYTES
+        };
+        let needed = if tls {
+            stack + RECIPE_INTERNAL_MARGIN
+        } else {
+            stack
         };
         (reading.stats.internal_largest < needed).then(|| {
             Failure::new(

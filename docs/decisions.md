@@ -1663,3 +1663,30 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: an encrypted volume on a disk (D64's first wording: one copy, in one place);
   the keys in the password manager only (typed back by hand, mode and path by hand); a secret store
   of a cloud service (one more account holding the keys).
+
+## D83: The `script` thread's stack in PSRAM, the `recipe` thread made once (replaces D74's internal stack for the script thread and D78's per-job recipe thread on the box, spec 045)
+
+- **Date**: 2026-11-27
+- **Choice**: the permanent `script` thread's 32 KB stack is in PSRAM (`MALLOC_CAP_SPIRAM`, as the
+  API workers', spec 023), and the `recipe` thread (20 KB, internal RAM) is made once at start and
+  runs the recipe jobs and the catalogue refreshes one at a time, instead of one thread per job.
+  The core's admission (`RecipeInstalls::job_thread_kept`) then counts only the TLS session's 16 KB
+  for an install, an update or a refresh, and nothing for an uninstall; the Mac and the QEMU run,
+  which make a thread per job, keep the 36 KB and the 20 KB. A thread that cannot be made at start
+  is logged and every recipe job answers 503 `Busy`. A PSRAM stack is allowed because nothing the
+  `script` thread runs touches the flash (D59: a flash access, a read too, turns the caches and so
+  the PSRAM off): the core's router for every non-`GET` request but `/auth/*` reaches no `Storage`
+  (the saves are written by the engine's saver), and the recipe jobs' load, swap and unload steps
+  are memory only. As a guard, every flash call of the box's storage (`storage.rs`) first checks
+  that the caller's stack is not in PSRAM (`esp_ptr_external_ram`) and returns the error `flash
+  access from a PSRAM stack refused`, logged once per boot, instead of the chip stopping.
+  `job_thread::run` and `spawn` take where the stack lives (`StackPlace`); every other thread stays
+  internal. `CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY` is set in `sdkconfig.defaults` too, so the
+  QEMU run measures the same PSRAM stack.
+- **Why**: measured on the box with two script recipes, the internal RAM fell to 44 KB (floor
+  64 KB, D27) and, after installs and uninstalls, the largest free block fell to 27 KB and an install
+  was refused (36 KB needed: the per-job 20 KB stack and 16 KB of TLS session). The `script` thread's
+  32 KB was the largest permanent share; the per-job 20 KB block the one that fragmentation refused.
+- **Alternatives**: the Rust side's small blocks of a script recipe or an instance in PSRAM
+  (`SPIRAM_MALLOC_ALWAYSINTERNAL`), only if the minimum falls under about 80 KB; the engine thread's
+  stack in PSRAM (it writes the flash: refused, D59).

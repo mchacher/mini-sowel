@@ -22,7 +22,7 @@ use solite_core::home::CLOCK_SET_AFTER_MS;
 use solite_core::update::release::{Fetched, Fetcher, Limits, Releases};
 use solite_core::update::{UpdateAdapter, Updates, Version, image_digest, signed_bytes};
 
-use crate::job_thread::{self, FETCH_STACK_BYTES, UPDATE_STACK_BYTES};
+use crate::job_thread::{self, FETCH_STACK_BYTES, StackPlace, UPDATE_STACK_BYTES};
 
 /// The image's size: a few chunks, the hash's loop runs.
 const IMAGE_BYTES: usize = 64 * 1024;
@@ -220,7 +220,7 @@ pub fn run() {
     image_changed[128 + IMAGE_BYTES / 2] ^= 1;
     let mut signature_changed = valid.clone();
     signature_changed[100] ^= 1;
-    let ran = job_thread::run(c"update", UPDATE_STACK_BYTES, || {
+    let ran = job_thread::run(c"update", UPDATE_STACK_BYTES, StackPlace::Internal, || {
         [
             install(&public_hex, &valid),
             install(&public_hex, &image_changed),
@@ -234,9 +234,12 @@ pub fn run() {
         Ok(None) => log::error!("update check: its thread panicked"),
         Err(e) => log::error!("update check: {e}"),
     }
-    let pulled = job_thread::run(c"update-pull", FETCH_STACK_BYTES, || {
-        pull(&public_hex, &valid)
-    });
+    let pulled = job_thread::run(
+        c"update-pull",
+        FETCH_STACK_BYTES,
+        StackPlace::Internal,
+        || pull(&public_hex, &valid),
+    );
     match pulled {
         Ok(Some(Some((status, resumes)))) => {
             log::info!("update pull check: status {status}, resumes {resumes}");
