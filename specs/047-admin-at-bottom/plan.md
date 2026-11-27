@@ -5,7 +5,7 @@
 - [x] 2. `Nav` and `AdminSection` (`Sidebar.tsx`).
 - [x] 3. Tests (`Sidebar.test.tsx`).
 - [ ] 4. Screenshots, Hybrid and Dark, desktop and drawer, 1 room and 10 rooms.
-- [ ] 5. validate; code review; demo.
+- [x] 5. validate; code review; demo (served on the Mac).
 
 Not applicable: core types, core logic, adapters, API (no change outside the interface).
 

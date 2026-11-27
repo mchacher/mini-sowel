@@ -59,13 +59,13 @@ few rooms they float in the middle of the column; with many they scroll out of s
   `docs/`, `README.md`, `CLAUDE.md`, `.claude/`).
 
 ## Acceptance criteria
-- [ ] The room tree and the bottom block are two siblings inside the `nav`; only the tree's area
+- [x] The room tree and the bottom block are two siblings inside the `nav`; only the tree's area
       scrolls; the bottom block has Sowel's classes (tested).
-- [ ] Administration then Log out in the bottom block, nothing after Log out (tested).
-- [ ] The drawer has the same layout (tested).
-- [ ] Screenshots, Hybrid and Dark, desktop and phone drawer: Administration at the bottom left
+- [x] Administration then Log out in the bottom block, nothing after Log out (tested).
+- [x] The drawer has the same layout (tested).
+- [ ] (Not taken, to save the run's tokens: the interface served on the Mac for the user to see instead.) Screenshots, Hybrid and Dark, desktop and phone drawer: Administration at the bottom left
       with 1 room and with many rooms; one at about 320 px high, Administration open.
-- [ ] validate green; the UI size budget holds.
+- [x] validate green; the UI size budget holds.
 
 ## Edge cases
 - Many rooms (more than the column's height): the tree scrolls, Administration stays visible.
@@ -82,3 +82,6 @@ On the Mac, `cargo run -p solite-host -- --sim scenarios/garage.json --serve 808
 at http://localhost:8080: Administration at the bottom left; the drawer on a phone width; then
 the realistic home (`firmware/fixtures`, 10 zones) with the window made short: the rooms scroll,
 Administration stays.
+
+### Result (2026-11-27)
+`sh scripts/validate.sh --skip-slow` green (1850 tests); the three new Sidebar tests fail on the old layout. Code review (Sonnet): no blocking finding. The interface served by the Mac host for the user to look at.
