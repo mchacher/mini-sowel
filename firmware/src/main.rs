@@ -279,6 +279,9 @@ fn safe_home(bare: bool) -> std::sync::Arc<std::sync::Mutex<solite_core::home::H
     ));
     supervisor::set_supervision(&mut home);
     ota::share_status(&mut home);
+    // The installed script recipes are shown refused (`Safe mode: not loaded`), and the uninstall
+    // stays the way out of one that breaks the engine (spec 042 R3.8).
+    scripts::load_installed(&mut home);
     let home = Arc::new(Mutex::new(home));
     supervisor::watch_home(&home);
     home

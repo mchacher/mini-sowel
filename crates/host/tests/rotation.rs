@@ -353,6 +353,10 @@ fn bridge_sup(old: &KeyedHost, new: &KeyedHost) -> Vec<u8> {
     .unwrap();
     let public_file = root.join("update-key.pub");
     fs::write(&public_file, format!("{}\n", new.public)).unwrap();
+    // The recipe key's public half (spec 042 R1.5): the script refuses to build without one; any
+    // 64 hexadecimal characters do for this fake build.
+    let recipe_file = root.join("recipe-key.pub");
+    fs::write(&recipe_file, format!("{}\n", "ab".repeat(32))).unwrap();
     let builder = root.join("builder.sh");
     fs::write(
         &builder,
@@ -369,6 +373,8 @@ fn bridge_sup(old: &KeyedHost, new: &KeyedHost) -> Vec<u8> {
         .arg(&new.key_file)
         .arg("--public-key-file")
         .arg(&public_file)
+        .arg("--recipe-key-file")
+        .arg(&recipe_file)
         .arg("--out")
         .arg(&out)
         .env("SOLITE_HOST_BIN", plain_binary())

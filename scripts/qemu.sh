@@ -175,6 +175,9 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     grep -a 'script phase: ' "$LOG" | tail -n 2
     grep -a 'script sizes: ' "$LOG" | tail -n 1
     REASON=$(fw_check_script_phase "$LOG") || show_failure "$REASON"
+    grep -a 'script phase: install ' "$LOG" | tail -n 1
+    grep -a 'recipe: thread stack ' "$LOG" | tail -n 1
+    REASON=$(fw_check_recipe_install "$LOG") || show_failure "$REASON"
     exit 0
   fi
   sleep 1

@@ -34,6 +34,10 @@ pub const UPDATE_STACK_BYTES: usize = 16 * 1024;
 /// `thread stack` line.
 pub const FETCH_STACK_BYTES: usize = 20 * 1024;
 
+// The core's admission rule counts the recipe job's thread at this size (spec 042 R4.2).
+#[cfg(feature = "scripts")]
+const _: () = assert!(FETCH_STACK_BYTES == solite_core::recipes::install::FETCH_STACK_BYTES);
+
 /// The calling task's unused stack, in bytes.
 #[allow(unsafe_code)]
 pub fn stack_unused() -> usize {
@@ -81,6 +85,40 @@ pub fn run<T: Send>(
     // Threads this caller starts later get the default configuration again.
     let _ = ThreadSpawnConfiguration::default().set();
     result
+}
+
+/// Runs a closure the caller borrows on a thread named `name` whose stack is in internal RAM, and
+/// waits for it (the `script` step of a recipe job in the image QEMU runs, spec 042). `Err` when
+/// the thread cannot start: `job` did not run.
+#[cfg(all(feature = "sim", feature = "scripts"))]
+#[allow(unsafe_code)]
+pub fn run_borrowed(
+    name: &'static CStr,
+    stack_bytes: usize,
+    job: &mut dyn FnMut(),
+) -> Result<Option<()>, String> {
+    /// The closure's address, for the thread that runs it.
+    struct Call(*mut (dyn FnMut() + 'static));
+
+    // SAFETY: the pointer is used by the one thread `run` starts, which `run` joins before it
+    // returns: the borrow the pointer stands for outlives every use of it.
+    unsafe impl Send for Call {}
+
+    impl Call {
+        /// Calls the closure (a method, so that a closure moves the whole `Call`, not its field).
+        #[allow(unsafe_code)]
+        fn invoke(self) {
+            // SAFETY: see above; the closure is called once, by one thread.
+            unsafe { (*self.0)() }
+        }
+    }
+
+    // SAFETY: only the lifetime of the trait object is erased; `run` joins the thread before the
+    // borrow ends.
+    let pointer =
+        unsafe { std::mem::transmute::<&mut dyn FnMut(), *mut (dyn FnMut() + 'static)>(job) };
+    let call = Call(pointer);
+    run(name, stack_bytes, move || call.invoke())
 }
 
 /// Starts `job` on a thread named `name` (stack in internal RAM, core 0) and does not wait for it

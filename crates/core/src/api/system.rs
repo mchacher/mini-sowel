@@ -27,11 +27,14 @@ pub fn route(home: &mut Home, segments: &[&str], request: &Request, now: u64) ->
         // `GET` and `POST /system/backup` are the streaming handler's (`Reply::BackupExport` and
         // `BackupRestore`, spec 035, D56): only its other methods are answered here.
         (["system", "supervisor"], "GET") => json(200, home.supervision()),
+        // The memories, the storage and the script recipes (spec 042 R5): Solite's own.
+        (["system", "resources"], "GET") => json(200, &home.resources()),
         (
             ["system", "version"]
             | ["system", "version", "check"]
             | ["system", "update"]
             | ["system", "supervisor"]
+            | ["system", "resources"]
             | ["system", "backup"],
             _,
         ) => method_not_allowed(),

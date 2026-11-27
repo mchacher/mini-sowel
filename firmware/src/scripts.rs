@@ -1,21 +1,38 @@
-//! Script recipes on the firmware (feature `scripts`, spec 041): the scripts of `recipes/scripts/`
-//! built into the image (`build.rs` lists them, `SCRIPT_FILES`) and loaded when the engine starts,
-//! each logging `recipes: script <id> <version> from built in (<KB> KB of source, <KB> KB in its
-//! runtime)`; and the `scripts:` lines printed with each `heap:` line of the radio image (R6.3).
-//! The runtimes live in PSRAM (`script_alloc.rs`).
+//! Script recipes on the firmware (feature `scripts`, spec 041, 042): no script is built into any
+//! image; the installed files of `scripts/` are loaded when the engine starts (or when the safe mode
+//! starts, where each is shown refused), each logging `recipes: script <id> <version> installed
+//! (<KB> KB of source, <KB> KB in its runtime)`; and the `scripts:` lines printed with each
+//! `heap:` line of the radio image (R6.3). The runtimes live in PSRAM (`script_alloc.rs`).
 
-use std::sync::Arc;
 #[cfg(feature = "radio")]
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use solite_core::home::Home;
 use solite_core::recipes::ScriptClock;
-use solite_core::recipes::script::{ScriptRuntimes, ScriptSummary};
+use solite_core::recipes::script::ScriptRuntimes;
+#[cfg(feature = "sim")]
+use solite_core::recipes::script::ScriptSummary;
 use solite_core::scripts_lines;
 
 use crate::script_alloc::EspRuntimes;
 
-include!(concat!(env!("OUT_DIR"), "/script_files.rs"));
+/// The recipe key of this build (spec 042 R1.5): 64 hexadecimal characters, or absent.
+#[cfg(feature = "radio")]
+const RECIPE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_RECIPE_PUBLIC_KEY");
+
+/// The monotonic clock of the scripts' time limits, in milliseconds since its first reading
+/// (taken at start-up): the engine's loads and the recipe jobs' share it.
+pub fn monotonic_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The clock the script runtimes are given.
+pub fn clock() -> ScriptClock {
+    Arc::new(monotonic_ms)
+}
 
 /// The stack of the `script` job thread: the JavaScript stack's 16 KB (`SCRIPT_STACK_BYTES`), the
 /// C frames of QuickJS and of the engine around it, and the router's frames above. The QEMU image
@@ -27,8 +44,9 @@ pub fn runtimes() -> Arc<dyn ScriptRuntimes> {
     Arc::new(EspRuntimes)
 }
 
-/// Loads one script; logs its line, or why it was refused (a script that does not load is not the
+/// Loads one script (the QEMU image's phase); logs its line, or why it was refused (a script that does not load is not the
 /// firmware's failure: the other recipes run).
+#[cfg(feature = "sim")]
 pub fn load_one(
     home: &mut Home,
     name: &str,
@@ -54,22 +72,23 @@ pub fn load_one(
     }
 }
 
-/// Loads every script built into the image, before the instances start.
+/// Gives the home the recipe key and the memory probe, then loads the installed files of
+/// `scripts/` as the start does (spec 042 R3.7): in the order of their ids, each logged, before the
+/// instances start. In the safe mode each is shown refused (`Safe mode: not loaded`). Reads the
+/// storage figures last.
 #[cfg(feature = "radio")]
-pub fn load_built_in(home: &mut Home, clock: &ScriptClock) {
-    let runtimes = runtimes();
-    for (name, source) in SCRIPT_FILES {
-        load_one(home, name, source, &runtimes, clock);
+pub fn load_installed(home: &mut Home) {
+    let (installs, line) = solite_core::recipes::install::RecipeInstalls::from_key_text(
+        RECIPE_PUBLIC_KEY,
+        Arc::new(crate::memory::EspProbe),
+    );
+    log::info!("{line}");
+    home.set_recipe_installs(installs);
+    let clock = clock();
+    for line in home.load_installed_scripts(&crate::storage::FatStorage::new(), &runtimes(), &clock)
+    {
+        log::info!("{line}");
     }
-}
-
-/// The source of a script built into the image, by its file name.
-#[cfg(feature = "sim")]
-pub fn built_in(name: &str) -> Option<&'static str> {
-    SCRIPT_FILES
-        .iter()
-        .find(|(file, _)| *file == name)
-        .map(|(_, source)| *source)
 }
 
 #[cfg(feature = "radio")]

@@ -1,6 +1,10 @@
 //! The script phase of the image QEMU runs (feature `scripts`, spec 041 R6.2), after the engine's
-//! own line (its gate, D27, is untouched: no script is loaded before it). On the realistic home
-//! the engine just ran:
+//! own line (its gate, D27, is untouched: no script is loaded before it). The image carries no
+//! script (spec 042 R3.10): the phase reads `recipes/scripts/motion-light-script.js` at build
+//! time, for itself only. First it makes an install (`install_step`): that file signed at boot
+//! with a throwaway key, installed through an in-memory fetcher on a `recipe` thread, loaded again
+//! as at start into a home of no use, and uninstalled; the thread logs `recipe: thread stack <n> of
+//! 20480 bytes never used`. On the realistic home the engine just ran:
 //!
 //! 1. loads `motion-light-script`, swaps the home's three `motion-light` instances for three
 //!    instances of it with the same settings, and plays the scenario again (a motion event);
@@ -19,17 +23,26 @@
 //! either stack keeps less than 2 KB unused.
 
 use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use ed25519_dalek::{Signer, SigningKey};
 use solite_core::api::{Reach, Reply, Request, handle_stream};
+use solite_core::backup::Pacing;
 use solite_core::devices::lock;
-use solite_core::engine::{self, Clocks, Saver};
+use solite_core::engine::{self, Clocks, Saver, Storage};
 use solite_core::home::Home;
 use solite_core::radio::Radio;
+use solite_core::recipes::install::catalogue::DEFAULT_CATALOGUE_URL;
+use solite_core::recipes::install::file::{digest, signed_bytes};
+use solite_core::recipes::install::{JobEnv, Op, RecipeInstalls, ScriptThread};
 use solite_core::script_phase_line;
+use solite_core::update::release::{Fetched, Fetcher, Limits};
+use solite_core::update::{HEADER_BYTES, Version};
 use solite_core::{
     ScriptPhase,
     recipes::{MAX_INSTANCES_PER_SCRIPT, ScriptClock},
@@ -40,7 +53,7 @@ use super::{
     BASE, FatStorage, MEMORY_NAME, RunStorage, SCENARIO, SCENARIO_NAME, SPEED, STACK_BYTES,
     SimTransport, WaitedClock, Watched, fill, measure, memory, wall_ms,
 };
-use crate::job_thread;
+use crate::job_thread::{self, FETCH_STACK_BYTES};
 use crate::scripts::{self, SCRIPT_THREAD_STACK_BYTES};
 
 /// QEMU's emulated CPU runs the engine far slower than the box's (the first load of a script, which
@@ -50,6 +63,8 @@ use crate::scripts::{self, SCRIPT_THREAD_STACK_BYTES};
 const QEMU_SLOWDOWN: u64 = 50;
 
 const MOTION_SCRIPT: &str = "motion-light-script";
+/// The script of the phase: read here, at build time, never carried by an image that is not this one.
+const MOTION_SCRIPT_SOURCE: &str = include_str!("../../recipes/scripts/motion-light-script.js");
 const DEPTH_SCRIPT: &str = include_str!("../fixtures/depth-host.js");
 /// The realistic home's zone and first light (`fixtures/recipes.json`): the depth script's slots.
 const ZONE: &str = "00000191-5a5a-4a5a-9a5a-5a5a5a5a5a5a";
@@ -164,11 +179,237 @@ fn stats_of(home: &Mutex<Home>, id: &str) -> Option<(usize, usize)> {
         .map(|(_, s)| (s.held, s.peak))
 }
 
+// ---- The install step (spec 042) ----
+
+/// The wall time the install step passes to the core: a clock that is set (the QEMU image's is not).
+const INSTALL_WALL_MS: u64 = 1_795_252_323_120;
+/// The recipe's address in the in-memory catalogue.
+const RECIPE_URL: &str = "https://recipes.example.test/motion-light-script.srs";
+
+/// The files of the install step, in memory: the flash is not the subject.
+#[derive(Default)]
+struct MemoryFiles {
+    files: Mutex<BTreeMap<String, Vec<u8>>>,
+}
+
+impl Storage for MemoryFiles {
+    fn read(&self, _name: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    fn write(
+        &self,
+        _name: &str,
+        _next: &mut dyn FnMut() -> std::io::Result<Option<String>>,
+    ) -> Result<(), String> {
+        Err("the install step writes bytes only".to_string())
+    }
+
+    fn locate(&self, name: &str) -> String {
+        format!("memory://{name}")
+    }
+
+    fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        Ok(lock(&self.files).get(name).cloned())
+    }
+
+    fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        lock(&self.files).insert(name.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn remove(&self, name: &str) -> Result<(), String> {
+        lock(&self.files).remove(name);
+        Ok(())
+    }
+
+    fn list(&self, folder: &str) -> Result<Vec<String>, String> {
+        let prefix = format!("{folder}/");
+        Ok(lock(&self.files)
+            .keys()
+            .filter_map(|key| key.strip_prefix(&prefix).map(str::to_string))
+            .collect())
+    }
+}
+
+/// The fetch adapter of the step: the catalogue and the signed file, in memory.
+struct InMemory {
+    catalogue: Vec<u8>,
+    file: Vec<u8>,
+}
+
+impl Fetcher for InMemory {
+    fn get(&mut self, url: &str, _idle_ms: u64) -> Result<Fetched, String> {
+        let body = |bytes: &[u8]| Fetched::Body {
+            length: Some(bytes.len() as u64),
+            etag: None,
+            body: Box::new(Cursor::new(bytes.to_vec())),
+        };
+        match url {
+            DEFAULT_CATALOGUE_URL => Ok(body(&self.catalogue)),
+            RECIPE_URL => Ok(body(&self.file)),
+            _ => Ok(Fetched::Status(404)),
+        }
+    }
+}
+
+/// The clock and the pause of the step, on std (the box's kind).
+struct StepPacing(Instant);
+
+impl Pacing for StepPacing {
+    fn now_ms(&mut self) -> u64 {
+        u64::try_from(self.0.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn pause(&mut self) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    fn wait_ms(&mut self, ms: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
+/// A recipe job's script steps, on a `script` job thread (32 KB, internal RAM) as the box runs
+/// them: the `recipe` thread's 20 KB cannot hold a script's stack.
+struct ScriptJobThread;
+
+impl ScriptThread for ScriptJobThread {
+    fn run(&self, job: &mut dyn FnMut()) {
+        if let Err(e) = job_thread::run_borrowed(c"script", SCRIPT_THREAD_STACK_BYTES, job) {
+            log::error!("script phase: {e}");
+        }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The answer's status of one recipe job on a `recipe` thread (`FETCH_STACK_BYTES`), the very
+/// thread the radio image runs it on: it logs `recipe: thread stack <n> of 20480 bytes never
+/// used`, which `scripts/qemu.sh` reads.
+fn job(
+    home: &Mutex<Home>,
+    op: Op,
+    files: &MemoryFiles,
+    fetcher: InMemory,
+    runtimes: &Arc<dyn solite_core::recipes::script::ScriptRuntimes>,
+) -> Result<u16, String> {
+    let ticket = lock(home)
+        .recipe_ticket(op, INSTALL_WALL_MS)
+        .map_err(|f| format!("script phase: install: {} {}", f.status, f.message))?;
+    let runtimes = Arc::clone(runtimes);
+    let ran = job_thread::run(c"recipe", FETCH_STACK_BYTES, move || {
+        let mut fetcher = fetcher;
+        let mut pacing = StepPacing(Instant::now());
+        let mut env = JobEnv {
+            fetcher: &mut fetcher,
+            pacing: &mut pacing,
+            storage: files,
+            runtimes,
+            clock: scripts::clock(),
+            script_thread: &ScriptJobThread,
+            check_limits: Limits::CHECK,
+            download_limits: Limits::DOWNLOAD,
+        };
+        let response = ticket.run(home, &mut env);
+        if response.status >= 300 {
+            log::error!(
+                "script phase: install: {} {}",
+                response.status,
+                response.body.as_deref().unwrap_or("")
+            );
+        }
+        response.status
+    })?;
+    ran.ok_or_else(|| "script phase: the recipe thread panicked".to_string())
+}
+
+/// Installs `motion-light-script`, signed now with a key made from the ESP32's random numbers (no
+/// key in any file), from an in-memory catalogue on a `recipe` thread; loads it again as the start
+/// does, into a home of no use; uninstalls it. Logs `script phase: install 201, boot load ok,
+/// uninstall 204`. The home is left as it was: the script phase's own measures follow.
+#[allow(unsafe_code)]
+fn install_step(home: &Mutex<Home>) -> Result<(), String> {
+    let mut seed = [0u8; 32];
+    // SAFETY: `seed` is valid for writes of its length for the duration of the call.
+    unsafe { esp_idf_svc::sys::esp_fill_random(seed.as_mut_ptr().cast(), seed.len()) };
+    let key = SigningKey::from_bytes(&seed);
+    let public_hex = hex(&key.verifying_key().to_bytes());
+    let source = MOTION_SCRIPT_SOURCE.as_bytes();
+    let version = Version::new(1, 0, 0);
+    let head = signed_bytes(
+        version,
+        u32::try_from(source.len()).map_err(|_| "script phase: script too large")?,
+        &digest(source),
+    );
+    let mut file = head.to_vec();
+    file.extend_from_slice(&key.sign(&head).to_bytes());
+    file.extend_from_slice(source);
+    debug_assert_eq!(file.len(), HEADER_BYTES + source.len());
+    let catalogue = format!(
+        r#"{{"format":1,"recipes":[{{"id":"{MOTION_SCRIPT}","version":"1.0.0","name":"Motion light","description":"The script recipe","size":{},"sha256":"{}","url":"{RECIPE_URL}"}}]}}"#,
+        file.len(),
+        hex(&digest(&file))
+    )
+    .into_bytes();
+    let (installs, line) =
+        RecipeInstalls::from_key_text(Some(&public_hex), Arc::new(crate::memory::EspProbe));
+    log::info!("script phase: {line}");
+    let runtimes = scripts::runtimes();
+    let files = MemoryFiles::default();
+    // The home that runs is given the throwaway key for the step, and gets the real one back.
+    let kept = lock(home).recipe_installs().clone();
+    lock(home).set_recipe_installs(installs.clone());
+    let installed = job(
+        home,
+        Op::Install {
+            id: MOTION_SCRIPT.to_string(),
+        },
+        &files,
+        InMemory {
+            catalogue: catalogue.clone(),
+            file: file.clone(),
+        },
+        &runtimes,
+    );
+    // As at start: the files read, checked again and loaded, into a home of no use.
+    let booted = {
+        let mut scratch = Home::new(INSTALL_WALL_MS);
+        scratch.set_recipe_installs(installs);
+        let lines = scratch.load_installed_scripts(&files, &runtimes, &scripts::clock());
+        lines
+            .iter()
+            .any(|l| l.starts_with(&format!("recipes: script {MOTION_SCRIPT} 1.0.0 installed")))
+    };
+    let removed = job(
+        home,
+        Op::Uninstall {
+            id: MOTION_SCRIPT.to_string(),
+        },
+        &files,
+        InMemory { catalogue, file },
+        &runtimes,
+    );
+    lock(home).set_recipe_installs(kept);
+    let (installed, removed) = (installed?, removed?);
+    log::info!(
+        "script phase: install {installed}, boot load {}, uninstall {removed}",
+        if booted { "ok" } else { "failed" }
+    );
+    if installed != 201 || !booted || removed != 204 {
+        return Err("script phase: the install step failed".to_string());
+    }
+    Ok(())
+}
+
 pub fn run(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), String> {
     log::info!(
         "script phase: engine stack {} of {STACK_BYTES} bytes unused before it",
         job_thread::stack_unused()
     );
+    install_step(home)?;
     let runtimes = scripts::runtimes();
     let real = Arc::clone(&clocks.monotonic);
     let clock: ScriptClock = Arc::new(move || real() / QEMU_SLOWDOWN);
@@ -180,11 +421,15 @@ pub fn run(home: &Mutex<Home>, clocks: &Clocks, start: Instant) -> Result<(), St
     let psram_before = before.psram.map_or(0, |p| p.free);
 
     let file = format!("{MOTION_SCRIPT}.js");
-    let source =
-        scripts::built_in(&file).ok_or("script phase: motion-light-script is not built in")?;
     let began = Instant::now();
-    let summary = scripts::load_one(&mut lock(home), &file, source, &runtimes, &clock)
-        .ok_or("script phase: motion-light-script did not load")?;
+    let summary = scripts::load_one(
+        &mut lock(home),
+        &file,
+        MOTION_SCRIPT_SOURCE,
+        &runtimes,
+        &clock,
+    )
+    .ok_or("script phase: motion-light-script did not load")?;
     log::info!(
         "script phase: loaded in {} ms of QEMU's time",
         began.elapsed().as_millis()

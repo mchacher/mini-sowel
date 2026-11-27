@@ -57,3 +57,7 @@ required-features = ["script-recipes"]
 [[test]]
 name = "script_memory"
 required-features = ["script-recipes"]
+
+[[test]]
+name = "recipe_install"
+required-features = ["script-recipes"]

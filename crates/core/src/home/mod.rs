@@ -8,9 +8,12 @@ mod auth_ops;
 mod cursor;
 mod equipment_ops;
 pub mod events;
+mod install_ops;
 pub mod pairing;
 mod recipe_ops;
 mod release_ops;
+#[cfg(feature = "script-recipes")]
+mod script_install;
 mod settings_ops;
 
 pub use cursor::{CHUNK_ITEMS, ListCursor};
@@ -121,7 +124,7 @@ pub struct Home {
     recomputed_at: u64,
     /// The pairing window (spec 017): what the API asked, what the radio loop did.
     pairing: PairingWindow,
-    /// The home's settings (spec 026): eight values at most.
+    /// The home's settings (spec 026): nine values at most.
     settings: Settings,
     settings_changed: bool,
     /// The sun data and the wall-clock minute it was computed for: one value, cleared by any
@@ -155,6 +158,9 @@ pub struct Home {
     /// The updates' installation and probation, for the restart route (spec 043): the program's
     /// `Updates` shares its own; idle until it does.
     update_status: Arc<UpdateStatus>,
+    /// The recipe installs (spec 042): the key, the catalogue held, the files refused, the storage
+    /// figures, the files to remove.
+    install: crate::recipes::install::InstallState,
 }
 
 /// The statuses are looked at again after this long with no recompute (a reading goes stale
@@ -282,6 +288,7 @@ impl Home {
             releases: Arc::new(Releases::default()),
             supervision: Status::default(),
             update_status: Arc::new(UpdateStatus::default()),
+            install: crate::recipes::install::InstallState::default(),
         }
     }
 

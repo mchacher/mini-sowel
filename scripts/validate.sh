@@ -133,8 +133,11 @@ if want firmware; then
   # $1 the image's name, $2 its ELF, $3 `with` or `without` QuickJS (spec 041: a symbol search; the
   # ELF is read before the next build overwrites it). The tools exist once the first build has
   # downloaded ESP-IDF.
+  # $4 `with` or `without` the source of `motion-light-script` (spec 042 R3.10): only the QEMU
+  # image's script build reads it, for its own phase.
   measure_image() {
     _why=$(fw_check_quickjs "$2" "$1" "$3") || { echo "validate: $_why" >&2; exit 1; }
+    _why=$(fw_check_script_source "$2" "$1" "$4") || { echo "validate: $_why" >&2; exit 1; }
     if [ ! -f "$sizes_dir/table.bin" ]; then
       fw_find_tools
       fw_build_table partitions.csv "$sizes_dir/table.bin"
@@ -145,20 +148,20 @@ if want firmware; then
   (
     cd firmware
     cargo build --release --quiet && cargo clippy --release --quiet -- -D warnings
-    measure_image box target/xtensa-esp32-espidf/release/solite-firmware without
+    measure_image box target/xtensa-esp32-espidf/release/solite-firmware without without
     cargo build --release --features sim --quiet && cargo clippy --release --features sim --quiet -- -D warnings
-    measure_image sim target/xtensa-esp32-espidf/release/solite-firmware without
+    measure_image sim target/xtensa-esp32-espidf/release/solite-firmware without without
     # The image QEMU runs: the sim image with the scripts (spec 041); the difference with `sim` is
     # what QuickJS and the scripts cost in flash.
     cargo build --release --features sim,scripts --quiet && cargo clippy --release --features sim,scripts --quiet -- -D warnings
-    measure_image sim+scripts target/xtensa-esp32-espidf/release/solite-firmware with
+    measure_image sim+scripts target/xtensa-esp32-espidf/release/solite-firmware with with
     cargo build --release --features flash-saves --quiet && cargo clippy --release --features flash-saves --quiet -- -D warnings
-    measure_image flash-saves target/xtensa-esp32-espidf/release/solite-firmware without
+    measure_image flash-saves target/xtensa-esp32-espidf/release/solite-firmware without without
     # The radio image has its own target folder and its own ESP-IDF settings (spec 021 R1.1): the
     # other images keep theirs.
     export CARGO_TARGET_DIR=target/radio ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults"
     cargo build --release --features radio --quiet && cargo clippy --release --features radio --quiet -- -D warnings
-    measure_image radio target/radio/xtensa-esp32-espidf/release/solite-firmware with
+    measure_image radio target/radio/xtensa-esp32-espidf/release/solite-firmware with without
     # The settings file was read: the UART interrupt is in internal RAM in the radio build, and
     # in none of the others.
     grep -aqs '^CONFIG_UART_ISR_IN_IRAM=y' target/radio/xtensa-esp32-espidf/release/build/esp-idf-sys-*/out/sdkconfig \

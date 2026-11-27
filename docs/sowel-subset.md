@@ -92,6 +92,7 @@ The events Solite sends on `/ws` (Sowel's `EngineEvent`); the others are not sen
 | `home.sunsetOffset` | motion-light's "Inactive during day" |
 | `update.manifestUrl` | Where the box reads the latest release's manifest (Solite's own, D67) |
 | `update.autoCheck` | The automatic check for a release, off by default (Solite's own, D67) |
+| `recipes.catalogue` | Where the box reads the catalogue of script recipes (Solite's own, D78) |
 
 ## Routes
 
@@ -149,6 +150,12 @@ interface's files).
 | `POST /api/v1/system/update` | Installs the signed update file in its body, or, with no body, pulls the latest release (Sowel's route takes no body, D53, D65) |
 | `POST /api/v1/system/restart` | Restarts the box (Sowel's route, Solite's answer, D79) |
 | `GET /api/v1/system/supervisor` | The supervisor's status: mode, boot cause, last incident, restarts (deviation, D58) |
+| `GET /api/v1/system/resources` | The memories, the storage and the script recipes' rows (deviation, D78) |
+| `GET /api/v1/recipes/store` | The catalogue of script recipes the box holds, with what is installed (deviation, D78) |
+| `POST /api/v1/recipes/store/refresh` | Reads the catalogue again (deviation, D78) |
+| `POST /api/v1/recipes/install` | Installs a script recipe from the catalogue (`{id}`) or from a signed file (deviation, D78) |
+| `POST /api/v1/recipes/:id/update` | Updates an installed script recipe to the catalogue's newer version (deviation, D78) |
+| `POST /api/v1/recipes/:id/uninstall` | Removes an installed script recipe, keeping its instances (deviation, D78) |
 
 ## Equipment types with behaviour
 
@@ -170,7 +177,7 @@ The types with Sowel's binding rules (`equipments::rules`) and proposed by recog
 
 Names Solite has and Sowel does not, each kept by a decision. Differences of value (bounds,
 error texts, fields refused) are listed in the decisions themselves (D13, D14, D16 to D18, D41 to
-D44, D47 to D49, D53, D56, D58, D65 to D67, D79, D80).
+D44, D47 to D49, D53, D56, D58, D65 to D67, D78 to D80).
 
 | Kind | Name | Decision |
 | ---- | ---- | -------- |
@@ -181,8 +188,15 @@ D44, D47 to D49, D53, D56, D58, D65 to D67, D79, D80).
 | route | `GET /api/v1/system/backup` | D56 |
 | route | `POST /api/v1/system/backup` | D56 |
 | route | `GET /api/v1/system/supervisor` | D58 |
+| route | `GET /api/v1/system/resources` | D78 |
+| route | `GET /api/v1/recipes/store` | D78 |
+| route | `POST /api/v1/recipes/store/refresh` | D78 |
+| route | `POST /api/v1/recipes/install` | D78 |
+| route | `POST /api/v1/recipes/:/update` | D78 |
+| route | `POST /api/v1/recipes/:/uninstall` | D78 |
 | setting | `update.manifestUrl` | D67 |
 | setting | `update.autoCheck` | D67 |
+| setting | `recipes.catalogue` | D78 |
 
 Differences of value in the authentication (D47 to D49), none a new name: one account, always
 `admin` (no other user, no `/me`, no `/users`, no API token, no MFA: `trustedDeviceToken` is
@@ -209,12 +223,15 @@ above the running version (Sowel has no such rule). The settings `update.manifes
 Differences of value in the restart (D79), none a new name or shape: `POST /api/v1/system/restart` is Sowel's
 route (it restarts Sowel's container through docker, answers `{success, message}` and refuses with 400, 403, 409 and 503
 of its own); Solite's restarts the box, answers the same shape, 200 `{"success": true, "message": "Restarting"}`, and refuses with 409 while an update, an
-update check, a backup or a probation is on (401 without a session, as every route).
+update check, a backup, a recipe install or a catalogue refresh (`Recipe install already in
+progress`, `Recipe catalogue refresh already in progress`) or a probation is on (401 without a
+session, as every route).
 
 Differences of value in the safe mode (D58), none a new name: while the supervisor holds the engine
 stopped, every request that is not a `GET` answers 503 `{"error": "Safe mode: the engine is
 stopped"}`, except the account's routes (`/auth/*`), `POST /api/v1/system/update` and `POST
-/api/v1/system/version/check` and `POST /api/v1/system/restart` (D79). Sowel has no
+/api/v1/system/version/check`, `POST /api/v1/system/restart` (D79) and `POST
+/api/v1/recipes/:id/uninstall` (D78, the way out of a script that breaks the engine). Sowel has no
 such mode.
 
 ## Script recipes
@@ -226,8 +243,10 @@ recipe routes, with Sowel's `RecipeInfo`, `RecipeSlotDef`, `RecipeInstance` and 
 What differs from the draft is the script API's own (this section is prose, not a table the contract
 test reads), each kept by D75 or D74:
 
-- **Added to the draft**: the script's `id` (1 to 64 characters among `a-z`, `0-9`, `-`; the draft
-  has none) and an optional `version` (shown in the start line only); `onMotionReport(fn)`, called
+- **Added to the draft**: the script's `id` (1 to 64 characters among `a-z`, `0-9`, `-`, 1 to 32
+  when installed; never `store` or `install`, which would meet `/recipes/store` and
+  `/recipes/install`; the draft has none) and an optional `version` (shown in the start line only;
+  `x.y.z` and the signed header's when installed, spec 042); `onMotionReport(fn)`, called
   with the value and the equipment's id on every motion report of a motion sensor of the zone, so
   that a safety auto-off can be reset by fresh motion; `cancel(id)` for the timers;
   `console.log` as `log`; `validate(params, home)` with a second argument, `home.equipment(id)` giving
@@ -254,3 +273,14 @@ test reads), each kept by D75 or D74:
   aggregate's current value, for `motion`, `luminosity` and `motionSensors`; **`get` and `order`**
   take a slot name only (never an id), read the data of category `light_state` first for the alias
   `state`, and send through a `light_toggle` or `toggle_power` binding first, as Sowel's helpers do.
+
+## Installed script recipes
+
+Script recipes installed from a catalogue or a signed file (spec 042, D78) are Solite's own: Sowel
+has no script distribution (its plugin store, `/plugins/store` and `/plugins/install` with `{ repo }`,
+serves TypeScript packages). The routes above (`/recipes/store`, `/recipes/install`,
+`/recipes/:id/update`, `/recipes/:id/uninstall`) take `{ id }` or a signed file, are the
+administrator's, and sit beside Sowel's `GET /api/v1/recipes/:recipeId`: the ids `store` and
+`install` are reserved so that they never meet it. The setting `recipes.catalogue` is Solite's, as
+`update.manifestUrl` (D67). The file format (`SOLITERS`, a header of 128 bytes signed with the recipe
+key) and the catalogue's (`recipes.json`) are Solite's; a Sowel issue proposes them as a common format.

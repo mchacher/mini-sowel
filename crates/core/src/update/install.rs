@@ -24,6 +24,8 @@ enum State {
     Installing,
     /// Written and made the next boot; the program waits for its restart.
     Installed,
+    /// A recipe job runs (spec 042): an upload is refused, as while an installation runs.
+    RecipeJob,
 }
 
 /// The probation, as `watch` sees it.
@@ -54,6 +56,33 @@ impl Default for UpdateStatus {
 }
 
 impl UpdateStatus {
+    /// A recipe job begins (spec 042 R3.1): 409 while an update is received or installed, or one
+    /// waits for the restart. Under the same lock as `Updates::claim`, so no upload slips between.
+    #[cfg_attr(not(feature = "script-recipes"), allow(dead_code))]
+    pub(crate) fn begin_recipe_job(&self) -> Result<(), Refusal> {
+        let mut state = lock(&self.state);
+        match *state {
+            State::Installing => Err(Refusal::new(409, "Update already in progress")),
+            State::Installed => Err(Refusal::new(
+                409,
+                "An update is installed and waits for the restart",
+            )),
+            State::RecipeJob => Err(Refusal::new(409, "Recipe install already in progress")),
+            State::Idle => {
+                *state = State::RecipeJob;
+                Ok(())
+            }
+        }
+    }
+
+    /// The recipe job ended.
+    pub(crate) fn end_recipe_job(&self) {
+        let mut state = lock(&self.state);
+        if *state == State::RecipeJob {
+            *state = State::Idle;
+        }
+    }
+
     /// Why a restart now would do harm (`None`: it can go on): an installation in progress, or the
     /// running image on probation (a reset then makes the bootloader roll the update back). An
     /// update installed and waiting for its restart does not refuse: the box restarts anyway.
@@ -174,6 +203,7 @@ impl Updates {
                     "An update is installed and waits for the restart",
                 ));
             }
+            State::RecipeJob => return Err(Refusal::new(409, "Update already in progress")),
             State::Idle => {}
         }
         *state = State::Installing;

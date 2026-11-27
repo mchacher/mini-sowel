@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flattenZones } from "../../zones";
 import { mockApi, resetStores, storeSession, zone } from "../../test-utils";
 import { useAuth } from "../../store/useAuth";
+import { resetRecipeUpdates } from "./useRecipeUpdates";
 import { MobileDrawer, Sidebar, type Page } from "./Sidebar";
 
 const flat = flattenZones([
@@ -15,6 +16,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetStores();
+  resetRecipeUpdates();
   vi.unstubAllGlobals();
 });
 
@@ -38,11 +40,12 @@ describe("Sidebar, Administration section", () => {
   it("opens and closes on a click of its title, entries in order", () => {
     show();
     fireEvent.click(title());
-    expect(entries().slice(-5)).toEqual([
+    expect(entries().slice(-6)).toEqual([
       "Devices",
       "Equipments",
       "Topology",
       "Discovery",
+      "Plugins",
       "Settings",
     ]);
     expect(title().getAttribute("aria-expanded")).toBe("true");
@@ -65,6 +68,7 @@ describe("Sidebar, Administration section", () => {
     ["equipments", "Equipments"],
     ["zones", "Topology"],
     ["discovery", "Discovery"],
+    ["plugins", "Plugins"],
     ["settings", "Settings"],
   ] as const)(
     "is open at %s with its entry marked, no room, and one mark in all",
@@ -100,6 +104,60 @@ describe("Sidebar, Administration section", () => {
   });
 });
 
+describe("Sidebar, Plugins entry (spec 042, R5.4)", () => {
+  const catalogue = (installed: [string, string][], newer: string[]) => ({
+    recipes: installed.map(([id, version]) => ({
+      id,
+      version: newer.includes(id) ? "2.0.0" : version,
+      name: id,
+      description: "",
+      size: 1,
+      sha256: "0".repeat(64),
+      url: "",
+      installed: version,
+      refused: null,
+      builtIn: false,
+    })),
+    readAt: null,
+    error: null,
+  });
+
+  it("shows the count of installed recipes the catalogue has newer, on the entry", async () => {
+    mockApi({
+      "GET /api/v1/recipes/store": {
+        body: catalogue(
+          [
+            ["a", "1.0.0"],
+            ["b", "1.0.0"],
+            ["c", "1.0.0"],
+          ],
+          ["a", "c"],
+        ),
+      },
+    });
+    show("plugins");
+    expect((await screen.findByTestId("plugins-badge")).textContent).toBe("2");
+    const entry = screen.getByRole("link", { name: /Plugins/ });
+    expect(entry.getAttribute("aria-current")).toBe("page");
+    expect(entry.textContent).toBe("Plugins2");
+  });
+
+  it("shows no badge when nothing is newer or the read fails", async () => {
+    const api = mockApi({
+      "GET /api/v1/recipes/store": { body: catalogue([["a", "1.0.0"]], []) },
+    });
+    show("plugins");
+    await waitFor(() => expect(api.count("GET /api/v1/recipes/store")).toBe(1));
+    expect(screen.queryByTestId("plugins-badge")).toBeNull();
+    cleanup();
+    const failing = mockApi({ "GET /api/v1/recipes/store": { status: 500 } });
+    show("plugins");
+    await waitFor(() => expect(failing.count("GET /api/v1/recipes/store")).toBe(1));
+    expect(screen.getByRole("link", { name: "Plugins" })).toBeTruthy();
+    expect(screen.queryByTestId("plugins-badge")).toBeNull();
+  });
+});
+
 describe("Sidebar, Log out", () => {
   it("sends the logout, clears the tokens and ends the session", async () => {
     storeSession("access-0", "refresh-0");
@@ -108,7 +166,7 @@ describe("Sidebar, Log out", () => {
     show();
     fireEvent.click(screen.getByRole("button", { name: "Log out" }));
     await waitFor(() => expect(useAuth.getState().isAuthenticated).toBe(false));
-    expect(api.calls[0]).toEqual({
+    expect(api.calls.find((c) => c.key === "POST /api/v1/auth/logout")).toEqual({
       key: "POST /api/v1/auth/logout",
       body: { refreshToken: "refresh-0" },
     });

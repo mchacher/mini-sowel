@@ -23,48 +23,13 @@ fn embed_interface() -> Result<(), String> {
     Ok(())
 }
 
-/// The script recipes of `../recipes/scripts/*.js` (spec 041 R4.2), written as the list
-/// `OUT_DIR/script_files.rs`, `SCRIPT_FILES`: (file name, source) in file name order, the source
-/// included with `include_str!`.
-fn list_scripts() -> Result<(), String> {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").map_err(|e| e.to_string())?;
-    let out_dir = std::env::var("OUT_DIR").map_err(|e| e.to_string())?;
-    let folder = Path::new(&manifest).join("../recipes/scripts");
-    println!("cargo:rerun-if-changed={}", folder.display());
-    let mut names: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(&folder).map_err(|e| format!("{}: {e}", folder.display()))? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().is_some_and(|e| e == "js")
-            && let Some(name) = path.file_name().and_then(|n| n.to_str())
-        {
-            println!("cargo:rerun-if-changed={}", path.display());
-            names.push(name.to_string());
-        }
-    }
-    names.sort();
-    let mut text = String::from("pub const SCRIPT_FILES: &[(&str, &str)] = &[\n");
-    for name in &names {
-        let path = folder.join(name);
-        text.push_str(&format!(
-            "    ({name:?}, include_str!({:?})),\n",
-            path.display().to_string()
-        ));
-    }
-    text.push_str("];\n");
-    std::fs::write(Path::new(&out_dir).join("script_files.rs"), text).map_err(|e| e.to_string())
-}
-
 fn main() {
     embuild::espidf::sysenv::output();
-    if std::env::var_os("CARGO_FEATURE_SCRIPTS").is_some()
-        && let Err(message) = list_scripts()
-    {
-        eprintln!("{message}");
-        println!("cargo:warning={message}");
-        std::process::exit(1);
-    }
-    // The update's public key is read with `option_env!` (spec 032 R2).
+    // The update's public key is read with `option_env!` (spec 032 R2), and the recipe key's the
+    // same way (spec 042 R1.5). No script recipe is built into any image: the scripts of the box
+    // are installed (spec 042 R3.10).
     println!("cargo:rerun-if-env-changed=SOLITE_UPDATE_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=SOLITE_RECIPE_PUBLIC_KEY");
     if std::env::var_os("CARGO_FEATURE_RADIO").is_some()
         && let Err(message) = embed_interface()
     {

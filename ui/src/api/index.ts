@@ -5,5 +5,6 @@ export * from "./equipments";
 export * from "./devices";
 export * from "./pairing";
 export * from "./recipes";
+export * from "./recipeStore";
 export * from "./settings";
 export * from "./auth";

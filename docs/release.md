@@ -20,6 +20,27 @@ A release holds `solite-<version>.sup` (the signed update file a running box ins
 3. Keep the private key: an entry in a password manager and an offline copy (an encrypted volume).
    A lost key means a box can only be updated by a USB flash.
 
+## The recipe key, once (spec 042, D78)
+
+The script recipes a box installs are signed with a **second key**, the recipe key, never the
+update key: a leak of one does not give the other. The image carries its public half; the private
+half signs the recipes (the user's computer, and a secret of `mchacher/solite-recipes`' CI, never in
+this repository).
+
+1. Make it **outside the repository**, as the signing key above:
+   `cargo run -p solite-host -- --update-keygen ~/keys/solite.recipe-key`.
+2. Commit its public half: 64 hex characters and a newline in `release/recipe-key.pub`, on a branch,
+   through a pull request. `scripts/release.sh` and the release workflow **refuse to build without
+   it** (`release: the recipe key's public file ... is missing`): no release until the key is made,
+   since a release that cannot install a recipe could never install any (no script is built into an
+   image). `scripts/box-session.sh` builds with it when the file exists.
+3. Sign a recipe: `cargo run -p solite-host -- --recipe-sign <script.js> --key
+   ~/keys/solite.recipe-key --out <script.srs>` (the version and id are read from the script, which
+   must declare `version: "x.y.z"`); check it with `--recipe-verify <script.srs> --public-key <64 hex>`.
+4. Keep the private key as the signing key's: a password manager and an offline copy. A recipe key
+   that leaks is replaced by a firmware that carries the new public key, and the scripts are signed
+   again (the rotation's design is a line of the roadmap's inbox).
+
 ## The GitHub environment and its secrets (typed by the user)
 
 The signing key reaches the CI as an **environment secret** of the environment `release`, which only
@@ -77,7 +98,7 @@ the merge commit of `main`, the CI. By hand, the same steps:
    `## X.Y.Z (date)` at the top of `release-notes.md`. A pull request, CI green, merged.
 2. On `main` at the merge commit: `git tag -a vX.Y.Z -m "<the notes>"`, then `git push origin
    vX.Y.Z`. The workflow refuses a tag that is not on `main`, an empty secret and a missing
-   `release/update-key.pub`; the tag and the public key are checked before the build, the secret
+   `release/update-key.pub` or `release/recipe-key.pub`; the tag and the public keys are checked before the build, the secret
    (the two secrets of a bridging release) by the `sign` job, after it.
 3. `gh run watch`; the release is at `https://github.com/<owner>/<repo>/releases/tag/vX.Y.Z`, and
    `releases/latest/download/manifest.json` points at it.

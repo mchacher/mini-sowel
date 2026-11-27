@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use solite_core::NoProbe;
 use solite_core::api::{
     ListCursor, MAX_BODY_BYTES, MAX_WORKERS, Reach, Reply, Request, Slots, handle_guarded,
     is_streamed_request, order_response,
@@ -31,6 +32,9 @@ use solite_core::devices::lock;
 use solite_core::engine::{self, Clocks, DEFINITION_DELAY_MS, Saver};
 use solite_core::home::Home;
 use solite_core::radio::{Radio, RadioTransport, identity_lines, network_line};
+use solite_core::recipes::ScriptClock;
+use solite_core::recipes::install::{Inline, JobEnv, RecipeInstalls};
+use solite_core::recipes::script::{ScriptRuntimes, SystemRuntimes};
 use solite_core::update::release::Limits;
 use solite_core::update::{Health as CoreHealth, MAX_UPLOAD_BYTES, Updates};
 use tiny_http::{Header, Response, Server};
@@ -47,6 +51,9 @@ use crate::{backup, clock};
 
 /// The update key of this build (spec 032, R2): 64 hexadecimal characters, or absent.
 const UPDATE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_UPDATE_PUBLIC_KEY");
+
+/// The recipe key of this build (spec 042, R1.5): 64 hexadecimal characters, or absent.
+const RECIPE_PUBLIC_KEY: Option<&str> = option_env!("SOLITE_RECIPE_PUBLIC_KEY");
 
 /// What the API's workers need for the two streamed routes: the update's state and files, and
 /// the data folder of the full backup.
@@ -256,10 +263,19 @@ fn answer(
         )
     };
     // A download holds no body to skip, but is streamed all the same.
-    if streaming || matches!(reply, Reply::BackupExport(_) | Reply::VersionCheck(_)) {
+    if streaming
+        || matches!(
+            reply,
+            Reply::BackupExport(_)
+                | Reply::VersionCheck(_)
+                | Reply::RecipeJob(_)
+                | Reply::CatalogueRefresh(_)
+        )
+    {
         return answer_streamed(
             request,
             reply,
+            home,
             update,
             content_type,
             random,
@@ -304,6 +320,8 @@ fn answer(
         | Reply::Update
         | Reply::UpdatePull(_)
         | Reply::VersionCheck(_)
+        | Reply::RecipeJob(_)
+        | Reply::CatalogueRefresh(_)
         | Reply::BackupExport(_)
         | Reply::BackupRestore { .. } => request.respond(Response::empty(500)),
         Reply::Whole(response) => match response.body {
@@ -352,6 +370,7 @@ fn send_archive(request: tiny_http::Request, reader: ArchiveReader) {
 fn answer_streamed(
     mut request: tiny_http::Request,
     reply: Reply,
+    home: &Mutex<Home>,
     update: &UpdateParts,
     content_type: &Header,
     random: &Mutex<SystemRandom>,
@@ -418,6 +437,26 @@ fn answer_streamed(
         }
         Reply::VersionCheck(ticket) => {
             ticket.check(&mut HttpFetcher::new(), &mut HostPacing, Limits::CHECK)
+        }
+        // A recipe job or a catalogue refresh (spec 042): on this thread, which has a stack large
+        // enough for a script; the home's lock is taken by the steps, never held across the
+        // download or the write.
+        Reply::RecipeJob(ticket) | Reply::CatalogueRefresh(ticket) => {
+            let store = FileStore::new(&update.data);
+            let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
+            let mut fetcher = HttpFetcher::new();
+            let mut pacing = HostPacing;
+            let mut env = JobEnv {
+                fetcher: &mut fetcher,
+                pacing: &mut pacing,
+                storage: &store,
+                runtimes,
+                clock: Arc::new(monotonic_ms),
+                script_thread: &Inline,
+                check_limits: Limits::CHECK,
+                download_limits: Limits::DOWNLOAD,
+            };
+            ticket.run(home, &mut env)
         }
         Reply::UpdatePull(ticket) => {
             let mut adapter = update.adapter.clone();
@@ -576,6 +615,20 @@ pub fn serve<T: RadioTransport>(
         // The script recipes are loaded before the instances start, so an instance of one
         // that was saved starts with the others.
         for line in load_scripts(&mut guard, scripts)? {
+            println!("{line}");
+        }
+        // The installed script recipes (spec 042 R3.7): checked again and loaded after those,
+        // still before any instance starts.
+        let (installs, key_line) =
+            RecipeInstalls::from_key_text(RECIPE_PUBLIC_KEY, Arc::new(NoProbe));
+        println!("{key_line}");
+        guard.set_recipe_installs(installs);
+        let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
+        for line in guard.load_installed_scripts(
+            &store,
+            &runtimes,
+            &(Arc::new(monotonic_ms) as ScriptClock),
+        ) {
             println!("{line}");
         }
         // The recipe instances start once the home is loaded: their start sync queues its

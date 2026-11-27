@@ -40,6 +40,7 @@ use solite_core::api::{
 use solite_core::backup::{BackupTicket, CHUNK_BYTES};
 use solite_core::devices::lock;
 use solite_core::home::Home;
+use solite_core::recipes::install::{JobEnv, RecipeTicket, ScriptThread};
 use solite_core::update::MAX_UPLOAD_BYTES;
 use solite_core::update::release::{Limits, ReleaseTicket};
 
@@ -52,6 +53,7 @@ use crate::live_ws;
 use crate::ota;
 use crate::radio_engine::{Shared, fill, wall_ms};
 use crate::scripts::SCRIPT_THREAD_STACK_BYTES;
+use crate::storage::FatStorage;
 use crate::ui_files::UI_FILES;
 
 /// Each worker's stack, in PSRAM (R9.4): the workers never touch the flash (a read neither: it
@@ -99,19 +101,58 @@ struct ScriptJob {
     reply: SyncSender<Reply>,
 }
 
+/// A step of a recipe job (spec 042): a closure the `recipe` thread lends to the `script` thread, which
+/// runs it and says so on `done`. Only the `recipe` thread's `on_script_thread` makes one.
+struct CallJob {
+    call: CallPointer,
+    done: SyncSender<()>,
+}
+
+/// The address of the lent closure, for the thread that runs it.
+struct CallPointer(*mut (dyn FnMut() + 'static));
+
+// SAFETY: the pointer is used by the `script` thread only, once, while the lending thread waits
+// for `done` (see `on_script_thread`): the closure it stands for outlives that use.
+#[allow(unsafe_code)]
+unsafe impl Send for CallPointer {}
+
+impl CallPointer {
+    /// Calls the closure (a method, so that a closure moves the whole pointer, not its field).
+    #[allow(unsafe_code)]
+    fn invoke(self) {
+        // SAFETY: see above; called once.
+        unsafe { (*self.0)() }
+    }
+}
+
+/// What the `script` thread is given: a request to route, or a step of a recipe job.
+enum Work {
+    Request(ScriptJob),
+    Call(CallJob),
+}
+
 /// The way to the `script` thread, set once it runs.
-static SCRIPT_JOBS: OnceLock<SyncSender<ScriptJob>> = OnceLock::new();
+static SCRIPT_JOBS: OnceLock<SyncSender<Work>> = OnceLock::new();
 
 /// The `script` thread's loop: one request at a time, as the router would answer it on a worker.
 /// The firmware is built with `panic = "abort"`: a panic reboots the chip (the supervisor reads
 /// it) instead of ending this thread, so the loop needs no `catch_unwind` and no restart; the
 /// thread ends only if its channel closes, which nothing does (`run_on_script_thread` then
 /// answers 503).
-fn script_loop(jobs: Receiver<ScriptJob>) {
+fn script_loop(jobs: Receiver<Work>) {
     let Some(api) = API.get() else {
         return;
     };
-    while let Ok(job) = jobs.recv() {
+    while let Ok(work) = jobs.recv() {
+        let job = match work {
+            Work::Request(job) => job,
+            // A step of a recipe job: a script's load, swap or unload, which needs this stack.
+            Work::Call(CallJob { call, done }) => {
+                call.invoke();
+                let _ = done.send(());
+                continue;
+            }
+        };
         let request = Request {
             method: &job.method,
             path: &job.path,
@@ -132,7 +173,7 @@ fn script_loop(jobs: Receiver<ScriptJob>) {
 
 /// Starts the `script` thread, its stack in internal RAM (`job_thread::spawn`), for the whole run.
 fn start_script_thread() -> Result<(), String> {
-    let (jobs, wait) = sync_channel::<ScriptJob>(0);
+    let (jobs, wait) = sync_channel::<Work>(0);
     job_thread::spawn(c"script", SCRIPT_THREAD_STACK_BYTES, move || {
         script_loop(wait)
     })?;
@@ -157,8 +198,37 @@ fn run_on_script_thread(request: &Request<'_>) -> Option<Reply> {
         body: request.body.to_vec(),
         reply,
     };
-    jobs.send(job).ok()?;
+    jobs.send(Work::Request(job)).ok()?;
     wait.recv().ok()
+}
+
+/// Runs `job` on the `script` thread and waits for it (one at a time with the requests): the
+/// recipe job's loads and unloads, whose JavaScript stack the `recipe` thread's 20 KB cannot hold.
+/// When the thread is not there, `job` does not run (the core answers 500).
+#[allow(unsafe_code)]
+fn on_script_thread(job: &mut dyn FnMut()) {
+    let Some(jobs) = SCRIPT_JOBS.get() else {
+        return;
+    };
+    let _one = SCRIPT_THREAD.lock().unwrap_or_else(PoisonError::into_inner);
+    let (done, wait) = sync_channel(1);
+    // SAFETY: only the lifetime of the trait object is erased: this function waits for `done`
+    // before it returns, so the closure outlives the `script` thread's one call of it.
+    let call = CallPointer(unsafe {
+        std::mem::transmute::<&mut dyn FnMut(), *mut (dyn FnMut() + 'static)>(job)
+    });
+    if jobs.send(Work::Call(CallJob { call, done })).is_ok() {
+        let _ = wait.recv();
+    }
+}
+
+/// The steps of a recipe job that run scripts, on the box.
+struct BoxScriptThread;
+
+impl ScriptThread for BoxScriptThread {
+    fn run(&self, job: &mut dyn FnMut()) {
+        on_script_thread(job);
+    }
 }
 
 /// The smallest unused stack of each worker since it started, in bytes (`heap:` line, R9.2).
@@ -454,6 +524,8 @@ extern "C" fn static_entry(request: *mut httpd_req_t) -> esp_err_t {
             | Reply::UpdatePull(_)
             | Reply::VersionCheck(_)
             | Reply::Restart
+            | Reply::RecipeJob(_)
+            | Reply::CatalogueRefresh(_)
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. },
         )
@@ -610,6 +682,29 @@ fn answer_pull(raw: &Raw, ticket: ReleaseTicket) -> bool {
     );
     raw.answer(&response, &[]);
     response.status == 200
+}
+
+/// `POST /api/v1/recipes/install`, `/recipes/:id/update`, `/recipes/:id/uninstall` or
+/// `/recipes/store/refresh`, once the core has let it through (spec 042): the download, the checks,
+/// the write and the removal. Runs on the `recipe` thread (`FETCH_STACK_BYTES`, its stack in internal
+/// RAM: the flash is never touched from a worker); the loads and unloads go to the `script`
+/// thread, and the home's lock is never held across a download or a write.
+fn answer_recipe(raw: &Raw, ticket: RecipeTicket, home: &Arc<Mutex<Home>>) {
+    let storage = FatStorage::new();
+    let mut fetcher = EspFetcher;
+    let mut pacing = BoxPacing;
+    let mut env = JobEnv {
+        fetcher: &mut fetcher,
+        pacing: &mut pacing,
+        storage: &storage,
+        runtimes: crate::scripts::runtimes(),
+        clock: crate::scripts::clock(),
+        script_thread: &BoxScriptThread,
+        check_limits: Limits::CHECK,
+        download_limits: Limits::DOWNLOAD,
+    };
+    let response = ticket.run(home, &mut env);
+    raw.answer(&response, &[]);
 }
 
 /// A request lent to a job's thread (`backup`, `update`, `update-check` or `update-pull`) for one job.
@@ -896,6 +991,14 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
                 answer_check(lent.get(), ticket);
             });
             after_job_thread(&raw, "update-check", ran);
+        }
+        Reply::RecipeJob(ticket) | Reply::CatalogueRefresh(ticket) => {
+            let lent = Lent(&raw);
+            let home = Arc::clone(&api.home);
+            let ran = job_thread::run(c"recipe", FETCH_STACK_BYTES, move || {
+                answer_recipe(lent.get(), ticket, &home);
+            });
+            after_job_thread(&raw, "recipe", ran);
         }
         Reply::UpdatePull(ticket) => {
             let lent = Lent(&raw);

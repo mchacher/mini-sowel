@@ -136,6 +136,23 @@ fn put(
     }
     file.sync_all()?;
     drop(file);
+    finish_save(path, temporary)
+}
+
+/// The same save for a whole file of bytes (an installed script recipe, spec 042).
+fn put_bytes(path: &Path, temporary: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder)?;
+    }
+    let mut file = File::create(temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    finish_save(path, temporary)
+}
+
+/// The tail of a save: the complete file takes its name (see `put`).
+fn finish_save(path: &Path, temporary: &Path) -> io::Result<()> {
     // The content is complete and on the partition: it takes the name `.new`, which only a
     // complete file bears. FAT refuses a rename onto an existing file, so the old file goes
     // first. A power cut between the delete and the last rename leaves only `.new`: `read`
@@ -190,6 +207,83 @@ impl Storage for FatStorage {
     fn locate(&self, name: &str) -> String {
         self.dir.join(name).display().to_string()
     }
+
+    fn read_bytes(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        let path = self.dir.join(name);
+        recover(&path)?;
+        match fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(format!("{}: cannot read: {e}", path.display())),
+        }
+    }
+
+    fn write_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let path = self.dir.join(name);
+        let temporary = with_suffix(&path, ".tmp");
+        counted(
+            put_bytes(&path, &temporary, bytes)
+                .map_err(|e| format!("{}: cannot write: {e}", path.display())),
+        )
+    }
+
+    fn remove(&self, name: &str) -> Result<(), String> {
+        let path = self.dir.join(name);
+        match fs::remove_file(&path) {
+            Ok(()) => counted(Ok(())),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => counted(Err(format!("{}: cannot remove: {e}", path.display()))),
+        }
+    }
+
+    fn list(&self, folder: &str) -> Result<Vec<String>, String> {
+        let path = self.dir.join(folder);
+        let names = |path: &Path| -> Result<Vec<String>, String> {
+            match fs::read_dir(path) {
+                Ok(entries) => Ok(entries
+                    .flatten()
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                    .collect()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(format!("{}: cannot list: {e}", path.display())),
+            }
+        };
+        // A lone `<name>.new` is a save a power cut interrupted: promoted first, never a `.tmp`.
+        for name in names(&path)? {
+            if let Some(base) = name.strip_suffix(".new") {
+                recover(&path.join(base))?;
+            }
+        }
+        let mut listed = names(&path)?;
+        listed.retain(|name| !name.ends_with(".tmp") && !name.ends_with(".new"));
+        listed.sort();
+        Ok(listed)
+    }
+
+    fn usage(&self) -> Result<(u64, Option<u64>), String> {
+        usage().map(|(used, total)| (used, Some(total)))
+    }
+}
+
+/// `path` and `suffix`: `a.srs` and `.tmp` make `a.srs.tmp`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Finishes a save a power cut interrupted (see `recover_interrupted_save`).
+fn recover(path: &Path) -> Result<(), String> {
+    recover_interrupted_save(
+        path,
+        &with_suffix(path, ".new"),
+        &with_suffix(path, ".tmp"),
+        Path::exists,
+        |from, to| counted(fs::rename(from, to)),
+        |file| counted(fs::remove_file(file)),
+    )
+    .map(|_| ())
+    .map_err(|e| format!("{}: cannot recover: {e}", path.display()))
 }
 
 /// Writes a whole file (the seed of the QEMU image, the radio image's Zigbee backup) in chunks of

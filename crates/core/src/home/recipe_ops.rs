@@ -39,7 +39,7 @@ impl Home {
 
     /// The time on the clock timers run on: the queue's monotonic clock when the host gave one,
     /// else `wall`.
-    fn mono(&self, wall: u64) -> u64 {
+    pub(super) fn mono(&self, wall: u64) -> u64 {
         self.orders.now().unwrap_or(wall)
     }
 
@@ -54,7 +54,7 @@ impl Home {
 
     /// The same, for a change of which instances run: the interest is then the running
     /// instances' as they are.
-    fn with_engine<R>(&mut self, f: impl FnOnce(&mut RecipeEngine, &Home) -> R) -> R {
+    pub(super) fn with_engine<R>(&mut self, f: impl FnOnce(&mut RecipeEngine, &Home) -> R) -> R {
         let result = self.engine_reads_home(f);
         self.interest = self.recipes.interest();
         result

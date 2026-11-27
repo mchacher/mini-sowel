@@ -32,6 +32,7 @@ use crate::devices::{Random, lock, to_json};
 use crate::failure::Failure;
 use crate::home::Home;
 use crate::orders::OrderWait;
+use crate::recipes::install::{Op, RecipeTicket};
 use crate::supervisor::Mode;
 use crate::update::release::ReleaseTicket;
 
@@ -75,6 +76,11 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/equipments/:id/order-bindings/:bindingId"),
     ("POST", "/api/v1/equipments/:id/orders/:alias"),
     ("GET", "/api/v1/recipes"),
+    ("GET", "/api/v1/recipes/store"),
+    ("POST", "/api/v1/recipes/store/refresh"),
+    ("POST", "/api/v1/recipes/install"),
+    ("POST", "/api/v1/recipes/:id/update"),
+    ("POST", "/api/v1/recipes/:id/uninstall"),
     ("GET", "/api/v1/recipes/:id"),
     ("GET", "/api/v1/recipe-instances"),
     ("POST", "/api/v1/recipe-instances"),
@@ -98,6 +104,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v1/system/factory-reset"),
     ("GET", "/api/v1/system/version"),
     ("GET", "/api/v1/system/supervisor"),
+    ("GET", "/api/v1/system/resources"),
     ("POST", "/api/v1/system/update"),
     ("POST", "/api/v1/system/version/check"),
     ("POST", "/api/v1/system/restart"),
@@ -173,6 +180,13 @@ pub enum Reply {
     /// `X-Backup-Password` and calls `BackupTicket::export`, then streams the archive it returns,
     /// the home's lock being released.
     BackupExport(BackupTicket),
+    /// `POST /recipes/install`, `/recipes/:id/update` or `/recipes/:id/uninstall` with its gate
+    /// passed (spec 042 R3): the caller runs `RecipeTicket::run` on its job thread, the home's lock
+    /// being released. The file of an upload is an ordinary body (at most 16 KB), in the ticket.
+    RecipeJob(RecipeTicket),
+    /// `POST /recipes/store/refresh` with its gate passed (spec 042 R2.4): the caller runs
+    /// `RecipeTicket::run`, as for a job.
+    CatalogueRefresh(RecipeTicket),
     /// `POST /system/backup` with its gate, content type, presence and pairing checks passed: the
     /// body is the archive, not read yet. The caller calls `BackupTicket::restore` with its
     /// reader, the lock being released. `wifi`: `?wifi=true` was given.
@@ -310,6 +324,7 @@ pub fn handle(home: &mut Home, request: &Request, now: u64, random: Random) -> R
             error(501, UPDATES_NEED_STREAMING)
         }
         Reply::Restart => error(501, RESTARTS_NEED_STREAMING),
+        Reply::RecipeJob(_) | Reply::CatalogueRefresh(_) => error(501, RECIPES_NEED_STREAMING),
         Reply::BackupExport(_) | Reply::BackupRestore { .. } => error(501, BACKUPS_NEED_STREAMING),
         Reply::List(mut cursor) => {
             let mut body = String::new();
@@ -393,6 +408,11 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
             Err(e) => Reply::Whole(failure(&e)),
         };
     }
+    // The recipe jobs and the refresh (spec 042): the ticket is taken here, under the lock, and the
+    // job runs with the lock released.
+    if let Some(reply) = recipe_job_reply(&guard, request, now) {
+        return reply;
+    }
     // The restart reads no body either (spec 043): refused while it would break an update, a
     // check, a backup or a probation, else the caller restarts.
     if is_restart_path(request.path) {
@@ -440,7 +460,9 @@ fn safe_mode_refusal(home: &Home, request: &Request) -> Option<Response> {
         .strip_prefix(PREFIX)
         .and_then(|rest| rest.strip_prefix('/'))?;
     let first = rest.split('/').next().unwrap_or("");
+    let segments: Vec<&str> = rest.split('/').collect();
     if first == "auth"
+        || matches!(segments.as_slice(), ["recipes", _, "uninstall"])
         || rest == "system/update"
         || rest == "system/version/check"
         || rest == "system/restart"
@@ -541,6 +563,74 @@ const UPDATES_NEED_STREAMING: &str = "Updates need the streaming handler";
 /// would interrupt.
 const RESTARTS_NEED_STREAMING: &str = "Restart needs the streaming handler";
 
+/// What the plain handlers answer to the recipe jobs: only the streaming handler takes the ticket.
+const RECIPES_NEED_STREAMING: &str = "Recipe installs need the streaming handler";
+
+/// The recipe job or refresh a path names (spec 042): `POST /recipes/install`, `/recipes/store/refresh`,
+/// `/recipes/:id/update` and `/recipes/:id/uninstall`, with or without a query.
+fn recipe_job_path(path: &str) -> Option<Op> {
+    let path = path.split(['?', '#']).next()?;
+    let rest = path.strip_prefix(PREFIX)?.strip_prefix('/')?;
+    match rest.split('/').collect::<Vec<_>>().as_slice() {
+        ["recipes", "install"] => Some(Op::Upload { bytes: Vec::new() }),
+        ["recipes", "store", "refresh"] => Some(Op::Refresh),
+        ["recipes", id, "update"] => Some(Op::Update {
+            id: (*id).to_string(),
+        }),
+        ["recipes", id, "uninstall"] => Some(Op::Uninstall {
+            id: (*id).to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// The reply of a recipe route after the gate (spec 042 R2.4, R3): the ticket under the lock, 405
+/// for another method, 413, 415 or 400 for an install's body. `None` for any other path.
+fn recipe_job_reply(home: &Home, request: &Request, now: u64) -> Option<Reply> {
+    let shape = recipe_job_path(request.path)?;
+    if request.method != "POST" {
+        return Some(Reply::Whole(method_not_allowed()));
+    }
+    let op = match shape {
+        Op::Upload { .. } => {
+            if request.body.len() > MAX_BODY_BYTES {
+                return Some(Reply::Whole(error(413, "Body too large")));
+            }
+            if octet_stream_content_type(request.content_type) {
+                Op::Upload {
+                    bytes: request.body.to_vec(),
+                }
+            } else if json_content_type(request.content_type) {
+                let id = serde_json::from_slice::<Value>(request.body)
+                    .ok()
+                    .and_then(|body| body.get("id").and_then(Value::as_str).map(str::to_string))
+                    .filter(|id| !id.is_empty());
+                match id {
+                    Some(id) => Op::Install { id },
+                    None => return Some(Reply::Whole(error(400, "Invalid body"))),
+                }
+            } else {
+                return Some(Reply::Whole(error(415, "Unsupported Media Type")));
+            }
+        }
+        other => other,
+    };
+    #[cfg(feature = "script-recipes")]
+    {
+        let refresh = op == Op::Refresh;
+        Some(match home.recipe_ticket(op, now) {
+            Ok(ticket) if refresh => Reply::CatalogueRefresh(ticket),
+            Ok(ticket) => Reply::RecipeJob(ticket),
+            Err(e) => Reply::Whole(failure(&e)),
+        })
+    }
+    #[cfg(not(feature = "script-recipes"))]
+    {
+        let _ = (home, op, now);
+        Some(Reply::Whole(error(501, "Script recipes are not built in")))
+    }
+}
+
 /// What the plain handlers answer to the backup routes: they cannot stream.
 const BACKUPS_NEED_STREAMING: &str = "Backups need the streaming handler";
 
@@ -599,6 +689,13 @@ fn dispatch(
     if is_restart_path(request.path) {
         return Reply::Whole(if request.method == "POST" {
             error(501, RESTARTS_NEED_STREAMING)
+        } else {
+            method_not_allowed()
+        });
+    }
+    if recipe_job_path(request.path).is_some() {
+        return Reply::Whole(if request.method == "POST" {
+            error(501, RECIPES_NEED_STREAMING)
         } else {
             method_not_allowed()
         });

@@ -226,12 +226,19 @@ impl Home {
         if self.pairing_in_progress() {
             return Err(Failure::new(409, "Pairing in progress"));
         }
+        if let Some(message) = self.releases.recipe_job_message() {
+            return Err(Failure::new(409, message));
+        }
         let recipes: Vec<Id> = self.recipes().instances().map(|i| i.id).collect();
         for id in recipes {
             if let Err(e) = self.delete_recipe_instance(&id.to_string()) {
                 log::warn!("factory reset: recipe instance {id}: {}", e.message);
             }
         }
+        // The installed script recipes go too: the runtimes are dropped here, their files are
+        // removed by the saver (spec 042 R3.9).
+        #[cfg(feature = "script-recipes")]
+        self.drop_installed_scripts(now);
         let equipments: Vec<Id> = self
             .equipments()
             .list()
@@ -313,6 +320,10 @@ impl Home {
     /// Starts a backup job: 409 `A restore waits for the restart` or `Backup already in
     /// progress`. The ticket ends the job when it is dropped.
     pub fn backup_begin(&self, restore: bool) -> Outcome<BackupTicket> {
+        // A recipe job and a backup do not run together (spec 042 R3.1).
+        if self.releases.recipe_job_message().is_some() {
+            return Err(Failure::new(409, "Backup already in progress"));
+        }
         self.backup.begin(restore)
     }
 }

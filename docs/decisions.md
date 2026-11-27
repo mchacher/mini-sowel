@@ -1531,6 +1531,34 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   wired as data lines, not checked on the Dongle Max); QuickJS compiled at `-O2` (a larger image,
   more cache misses; not measured); keeping 160 MHz and a slower limit per call.
 
+## D78: Script recipes installed from a catalogue or a signed file, checked at every start (spec 042)
+
+- **Date**: 2026-11-27
+- **Choice**: refines D76. A script recipe is installed from a catalogue (`recipes.json`, at
+  `mchacher/solite-recipes`' latest release by default, the setting `recipes.catalogue`) or from an
+  upload, as a file of at most 16 KB signed with a recipe key of its own (magic `SOLITERS`, never the
+  firmware's key: a leak of one does not give the other), kept as `scripts/<id>.srs`, checked at
+  install and again at every start, admitted by the PSRAM free now (a runtime's 224 KB limit plus a
+  512 KB reserve) and by the internal RAM's largest block (a job thread and its TLS session; the uninstall, since 2026-11-27, needs only the thread's 20 KB). One
+  job at a time, with the release check and pull (one TLS session). No flash access from a task whose
+  stack is in PSRAM: the download, the write and the removal run on a `recipe` thread in internal
+  RAM, the load and unload on the `script` thread. No script is built into the radio image. Not in
+  the backup (D54's old releases refuse an unknown file). The uninstall is allowed in safe mode (the
+  way out of a script that breaks the engine, as D79's restart). It deletes the recipe's instances
+  (settings and logs) with the file, as a delete does: kept and stopped, an instance stayed in its
+  zone as a ghost (the second box demo, 2026-11-27); the page's confirmation names their count. The routes are Solite's own, under
+  `/recipes/*`, and the ids `store` and `install` are reserved so that they never meet Sowel's
+  `/recipes/:recipeId`. The factory reset removes the installed recipes.
+- **Why**: a new recipe needed a new firmware (D76); the user ranked its removal first. Sowel's
+  plugin store serves TypeScript packages, not scripts, so its routes are not reused. A key of its
+  own lets a catalogue's CI sign recipes without holding the firmware's key.
+- **Alternatives**: scripts in the firmware's release (a release per recipe); one key for both
+  (a leaked recipe key would sign firmware); the signed file streamed (a new streamed route, which
+  the API's workers cannot take: their stacks are in PSRAM); the memory checked by the lowest free
+  since boot (it never comes back up after a passing peak); the scripts in the backup (D54).
+- **Deviations from Sowel**: the routes and the setting above (`docs/sowel-subset.md`); `GET
+  /api/v1/system/resources` (the Resources card).
+
 ## D79: A restart route, allowed in safe mode, refused during a probation; the probation checks the PSRAM (spec 043)
 
 - **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)

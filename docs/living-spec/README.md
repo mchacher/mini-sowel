@@ -110,6 +110,11 @@ Each of the three programs starts and says which tool it is, with its version:
   free); engine stack <n> of <n> unused; script thread stack <n> of <n> unused`; the run fails when
   that line is missing, the three instances' peak passes 75 % of a script's memory limit, the
   internal RAM minimum is under 64 KB, or either stack keeps less than 2 KB unused.
+  The script is the file `recipes/scripts/motion-light-script.js` read at build time by that
+  phase only (the radio image carries no script). The phase also signs that script at boot with a
+  throwaway key, installs it through an in-memory fetcher on a `recipe` thread of 20 KB, loads it
+  again as at start, and logs `recipe: thread stack <n> of 20480 bytes never used`; the run fails
+  when that line is missing or fewer than 2048 bytes stay unused.
   The measuring image (`flash-saves`) runs the same check at its boot, without the scripts. `sh scripts/validate.sh` runs it. The image
   holds the bootloader, the 16 MB partition table of `firmware/partitions.csv` (settings, two
   application slots of 4 MB, and a data partition of about 7.9 MB, blank at every run) and the
@@ -370,6 +375,8 @@ recipes"). The routes:
 | `GET /ws` (WebSocket) | live events (see "Live events" below) |
 | `GET /`, `GET /assets/<file>` | the interface (see "Shows the home in the browser") |
 | `/api/v1/recipes`, `/api/v1/recipe-instances` | the recipe and its instances (see "Runs the motion-light recipe") |
+| `GET /api/v1/recipes/store`, `POST /api/v1/recipes/store/refresh`, `POST /api/v1/recipes/install`, `POST /api/v1/recipes/:id/update`, `POST /api/v1/recipes/:id/uninstall` | Solite's catalogue of script recipes and their install, update and removal (see "Runs script recipes") |
+| `GET /api/v1/system/resources` | the memories, the storage and the script recipes' rows (see "Shows its resources") |
 
 Errors are `{"error": "<message>"}` (400, 401, 403, 404, 405, 409, 411, 413, 415, 426, 429; 500 `Update failed: <message>`, `Update check failed: <reason>` and `Download failed: <reason>`, and 501 on the update and check routes (501 on the backup routes too, through the plain handler); 502 for an order no device took; 503 `Busy` beyond 4 requests at
 once, or beyond 2 orders from the API at once, or for a 5th live client). A request with a body is refused with 415 unless it is sent as
@@ -436,7 +443,7 @@ except:
 - On the box the server is one task (ESP-IDF's): it waits at most 2 s for the next bytes of a request (an inactivity gap, so a large upload that keeps flowing is not cut), and a connection that sent its headers and never its body holds that task for 2 s, during which every other request waits. The task answers 408 and moves on.
 - In safe mode (see "Supervises its engine") every request that is not a `GET` answers 503
   `{"error": "Safe mode: the engine is stopped"}`, except the account's routes (`/auth/*`),
-  `POST /api/v1/system/update`, `POST /api/v1/system/version/check` and `POST /api/v1/system/restart`; a restore and a factory reset are refused too.
+  `POST /api/v1/system/update`, `POST /api/v1/system/version/check`, `POST /api/v1/system/restart` and `POST /api/v1/recipes/:id/uninstall` (the way out of a script that breaks the engine); a restore and a factory reset are refused too.
 - At most 12 connections are open; beyond, the least recently used is closed. At most 4 requests
   are answered at once; a 5th gets 503 `{"error":"Busy"}`.
 
@@ -505,8 +512,10 @@ and a person at the box confirms (decisions D47 to D49).
 - **`/ws`** needs the token too (see "Live events").
 - **Factory reset**: `POST /api/v1/system/factory-reset` (Solite's, an empty body or `{}`), behind
   the gate, then the confirmation (403 as above), then 409 `Pairing in progress` while the pairing
-  window is open or a device is still being set up. It erases, with their live events, every
-  recipe instance, equipment, device (forgotten: it stays in the Zigbee network) and zone but the
+  window is open or a device is still being set up, or 409 `Recipe install already in progress`
+  during a recipe job. It erases, with their live events, every
+  recipe instance, the installed script recipes (the runtimes dropped, the files removed by the
+  saver), equipment, device (forgotten: it stays in the Zigbee network) and zone but the
   root (its name and description back to a first start's), the settings, the account and every
   session, then answers 204; `auth.json` becomes `{"version":1}`. The API then answers 403 `Setup
   required`. It keeps the Zigbee network and its keys (`zigbee.json`), the Wi-Fi settings and the
@@ -604,7 +613,7 @@ under the root. A `zones.json`, `equipments.json` or `settings.json` that cannot
 The home's name, location, time zone and sun offsets, through Sowel's settings routes, and the sun
 times computed from them, as Sowel's sunlight manager does.
 
-- **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, eight
+- **Settings** (`GET /api/v1/settings`, `PUT /api/v1/settings`): Sowel's flat map of strings, nine
   keys: `home.name` (64 characters at most), `home.latitude` (−90 to 90) and `home.longitude`
   (−180 to 180), written `48.8566` (digits, an optional `-` and decimals; no exponent, `+` or
   `inf`), `home.timezone` (a key Sowel names among its global ones; a name of `GET
@@ -612,7 +621,9 @@ times computed from them, as Sowel's sunlight manager does.
   `home.sunriseOffset` and `home.sunsetOffset` (whole minutes, −180 to 180; 30 and 45 when unset),
   and Solite's own `update.manifestUrl` (a URL the box may fetch from, 512 characters at most; the
   GitHub address of the latest release's manifest when unset or `""`) and `update.autoCheck`
-  (`"true"` or `"false"`; off when unset), see "Updates itself from a signed file".
+  (`"true"` or `"false"`; off when unset), see "Updates itself from a signed file", and Solite's
+  own `recipes.catalogue` (the address of the script recipes' catalogue, the same rule and 512
+  characters at most; `""` or unset reads as the default), see "Runs script recipes".
   A PUT changes the keys it gives and keeps the others; `""` is kept and reads as unset (as Sowel); it is checked whole
   first: 400 `Invalid body`, `Unknown setting: <key>` or `Invalid value for <key>`, nothing
   changed; else `{"success":true}` and Sowel's `settings.changed` event with the keys. The settings
@@ -656,7 +667,11 @@ answers 404), behind the token:
   progress` when the pairing window is open and 409 `Backup already in progress`; then a declared
   length over 2 MiB is 413 `Backup too large` and a missing password 400 `Backup password
   required`. Another method: 405. While a restore waits for the restart (below) both routes answer
-  409 `A restore waits for the restart`.
+  409 `A restore waits for the restart`. During a recipe job (an install, update or uninstall of a
+  script recipe) both routes answer 409 `Backup already in progress`. The archive holds no script
+  recipe file: a restore on the same box leaves the files of `scripts/`, so the restored instances
+  start; on another box they stay stopped (`Failed to restore: Recipe not found: <id>`) until the
+  recipe is installed.
 - **What it holds**: `devices.json`, `zones.json`, `equipments.json`, `recipes.json` and
   `settings.json` (stored plain, the file's chunks authenticated), and the two secrets, the Zigbee
   network file and `wifi.json` (the box only), **encrypted**. Never in it: the account
@@ -747,7 +762,7 @@ line: `sowel contract: OK (...)`, naming what it was checked against.
 The host and the box run Sowel's `motion-light` recipe (the same id, settings, messages and
 behaviour as Sowel's 1.1.2), through Sowel's routes. It is built in. The host and the box also run
 recipes written as JavaScript scripts (next section), among them `motion-light-script`, a port of
-this recipe:
+this recipe (the box runs it once it is installed, never built in):
 
 - **What it does**: when motion is seen in its zone, it switches its lights on (`light_onoff`
   equipments of that zone); after the timeout (`10m` by default) with no motion, it switches them
@@ -808,8 +823,11 @@ the built-in recipes), its instances are made, changed, enabled, disabled and de
 same routes and from a room's page, with the same log, state and events.
 
 - **Its form**: `recipe({ api: 1, id, name, description, slots, icon?, i18n?, version?, validate?,
-  start })`, called once. `api` must be 1; `id` is 1 to 64 lower-case letters, digits and `-`, not a
-  built-in recipe's. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
+  start })`, called once. `api` must be 1; `id` is 1 to 64 lower-case letters, digits and `-` (1 to 32 for an installed
+  script), not a built-in recipe's, and never `store` or `install` (`Script recipe invalid: id <id>
+  is reserved`: `/recipes/store` and `/recipes/install` sit beside Sowel's `/recipes/:recipeId`). An
+  installed script must declare `version` as `x.y.z` (three numbers of 0 to 65535: `Script recipe
+  invalid: version must be x.y.z`); the version of a script given by `--recipe-script` stays free. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
   `boolean`, `select`), written as an object by slot id; the slot `zone` is added first when missing.
   The settings are checked by the program from the slots before the script runs (`Invalid params:
   <slot> is required`, `... must be a number between <min> and <max>`, `...: invalid duration`,
@@ -837,8 +855,90 @@ same routes and from a room's page, with the same log, state and events.
   2 times, loads each script before the instances start and prints `recipes: script <id> <version>
   from <file> (<KB> KB of source, <KB> KB in its runtime)`; a file that is missing or refused
   (`Script recipe invalid: <reason>`), a third script, or the flag without `--serve` stop the host
-  with exit status 2. The box's radio image carries the scripts of `recipes/scripts/` and loads them
-  at start. A script is not downloaded or signed yet.
+  with exit status 2. On both, a script is **installed**: a signed file (below) kept in the data
+  folder as `scripts/<id>.srs`, loaded at every start after any `--recipe-script` and before the
+  instances start. No script is built into the box's radio image.
+- **The signed file (`.srs`)**: a header of 128 bytes, then the script's UTF-8 source, the whole
+  at most 16 KB (16,384 bytes). Header: magic `SOLITERS`, format `1` (u32), the version (three
+  u16), 2 reserved bytes at zero, the source's length (u32), its SHA-256, 8 reserved bytes at
+  zero, and the Ed25519 signature (64 bytes) over the first 64. It is signed with the **recipe
+  key**, not the firmware's, whose public half is built in (`SOLITE_RECIPE_PUBLIC_KEY`, from
+  `release/recipe-key.pub`). Refused with 400, in this order: a length under 129 or over 16 KB,
+  the magic, the format (`format 2 is not supported`), the reserved bytes, the length field, the
+  SHA-256, the signature (`verify_strict`), then the script's own checks; its `version` must equal
+  the header's (`version differs from the signed one`). A build without a valid recipe key answers
+  every install, update and refresh with 503 `Recipe installs are not configured` (an invalid key
+  is logged `recipes: invalid recipe key, installs refused`). `solite-host --recipe-sign <file.js>
+  --key <file> --out <file.srs>` signs (exit 2 for a script with no `x.y.z` version),
+  `--recipe-verify <file.srs>` checks a file as the box does (exit 1 with the reason); the key
+  pair is made with `--update-keygen`.
+- **The catalogue**: `recipes.json`, unsigned (each file is signed and pinned by its SHA-256):
+  `{"format": 1, "recipes": [{id, version, name, description, i18n?, icon?, size, sha256, url,
+  minVersion?}]}`, at most 32 entries and 32 KB, `size` at most 16 KB; refused as a whole, the
+  last good list kept, when over a bound, not JSON, of another format, or an entry's `url` breaks
+  the update URL rule (https, or http on the home network). Its address is the setting
+  `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
+  means `https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json`). It is
+  held in RAM only.
+- **Routes** (Solite's own, administrator): `GET /api/v1/recipes/store` answers what is held,
+  never the network: `{"recipes": [<entry> + "installed", "refused", "builtIn"], "readAt",
+  "error"}` (`{"recipes": [], "readAt": null, "error": null}` before any read);
+  `POST /api/v1/recipes/store/refresh` reads it again (at most once a minute: 429; 503 `The clock
+  is not set yet: reading the recipe catalogue needs the date`; a failed read keeps the list and
+  answers it with `error`, 200); `POST /api/v1/recipes/install` with `{"id"}` (the catalogue's
+  entry) or an `application/octet-stream` body (a signed file of at most 16 KB), 201 with the
+  recipe's `RecipeInfo` and its `version`; `POST /api/v1/recipes/:id/update` (the catalogue's
+  version must be newer: 409 `<id> <x.y.z> is not newer than <x.y.z>`; an upload of a signed file
+  of an installed recipe updates it the same way; an upload's id is read from the `id: "..."` text of its `recipe({...})` call without loading it, 400 when there is none, and the load refuses a script that declares another; `POST /api/v1/recipes/:id/uninstall`, 204.
+  Install is refused, in order: the build's key (503), the one-job rule (409, below), the internal
+  RAM (503), a built-in id (409 `<id> is built in`), a loaded id (409 `<id> is installed: update
+  it`), two files on the flash (409 `Too many script recipes (at most 2)`), an id the catalogue
+  lacks (404 `Recipe not in the catalogue: <id>`), a `minVersion` above the firmware (409 `<id>
+  <x.y.z> needs Solite <minVersion> or later`), an unreachable catalogue or a failed download
+  (502 with the reason; the download is resumed as an update's, at most three times), a size,
+  SHA-256 or version that differs from the entry (400), the file's checks (400), the memory (409).
+- **One job at a time**: an install, update or uninstall (a **recipe job**) and a catalogue refresh
+  hold the release check's single session. A recipe job is refused with 409 while a recipe job
+  (`Recipe install already in progress`), a refresh (`Recipe catalogue refresh already in
+  progress`), an update check (`Update check already in progress`), a pull, an update received or
+  installed (`Update already in progress`), an update installed and waiting (`An update is
+  installed and waits for the restart`), a backup or a restore (`Backup already in progress`) or a
+  restore waiting (`A restore waits for the restart`) is under way; a refresh while a recipe job, a
+  refresh, a check or a pull. A check, a pull, an upload, a backup, a restore, a restart and a
+  factory reset are refused while a recipe job runs (a restart and a check also during a refresh),
+  each with its own text.
+- **Install, update, uninstall**: an install loads the script, writes `scripts/<id>.srs` (one
+  flash write) and starts the instances kept for that id (stopped by a restore or an
+  image that carries no such script, with `Failed to restore: Recipe not found: <id>`); a write
+  that fails unloads it again (500 `Could not save the recipe`). An update stops the instances,
+  drops the old runtime, loads the new file and writes it over the old one, then starts the
+  instances with their settings; a new version that does not load leaves the old one running (400
+  with the reason); a write that fails gives the old one back (500); an old file that does not
+  load again fails the recipe as a script that fails (500 with both reasons). An uninstall
+  deletes the recipe's instances, in every zone, with their settings and logs (as `DELETE
+  /recipe-instances/:id` does: `recipe.instance.removed` for each, `recipes.json` written by the
+  saver), drops the runtime and removes the file (a file that failed its checks too; 500 `Could not remove the recipe`), 404
+  without a file, 409 `<id> is built in` for a native recipe or a `--recipe-script`.
+- **At start** the files of `scripts/` are read in the order of their ids (a lone `<id>.srs.new`
+  left by a power cut is promoted, a `.tmp` ignored) and go through the same checks; the enabled
+  instances of the loaded recipes then start. A file refused (changed, format 2, a third file, a
+  built-in id, not enough memory) is left in place, logged `recipes: script <id>: <reason>` and
+  shown `refused` with its reason; an uninstall removes it, an install or an upload of that id
+  replaces it. In the safe mode no file is loaded (`Safe mode: not loaded`); the uninstall goes
+  through, install, update and refresh answer 503. The factory reset removes the installed
+  recipes: the runtimes dropped, the files removed by the saver.
+- **Admission by memory**: a recipe is admitted when the PSRAM free now, less a runtime's limit
+  (224 KB), is at least 512 KB (409 `Not enough memory for <id>: <n> KB free, <m> KB needed`;
+  checked at install, update and start); before a recipe job or a refresh starts its thread, the
+  largest block of internal RAM must hold the thread's 20 KB and 16 KB for the TLS session (503
+  `Not enough internal memory: largest free block <n> KB, <m> KB needed`); an uninstall opens no
+  TLS session and frees memory, so it needs only the thread's 20 KB. The Mac reads no memory:
+  its admission always passes.
+- **Where it runs on the box**: the download, the checks, the write and the removal run on a
+  `recipe` thread whose stack is in internal RAM (the flash is never touched from a task whose
+  stack is in PSRAM); the load and unload of a runtime on the `script` thread. The scripts are not
+  in the full backup: a restore on the same box leaves the files (the restored instances start),
+  on another box the restored instances stay stopped until the recipe is installed.
 - **`motion-light-script`**: the port of `motion-light` with the same slots and behaviour, the
   safety auto-off reset at each motion report. It differs from the built-in recipe in its validation
   texts, in what it does when a button loses its `action` binding (the instance is disabled, where
@@ -875,9 +975,24 @@ same routes and from a room's page, with the same log, state and events.
   .../enable` on one of its instances, a create or change of one, or a restart, which start all its
   enabled instances (a recipe that fails again at once answers 500 `Script recipe failed:
   <reason>`).
-- **On the box**: the radio image logs `recipes: script <id> ...` at start and, with each `heap:`
+- **On the box**: the radio image logs `recipes: script <id> ...` for each installed file at start and, with each `heap:`
   line, `scripts: <id> <n> instances, <n> calls, average <µs> µs, max <µs> µs, heap <KB> KB (peak
   <KB> KB)`.
+
+### Shows its resources
+
+`GET /api/v1/system/resources` (a Solite route, administrator) answers `{"internal": {"free",
+"minFree", "largestBlock"} | null, "psram": {"free", "minFree", "total", "reserve"} | null,
+"storage": {"used", "total" | null}, "scripts": [{"id", "version" | null, "source": "builtIn" |
+"installed", "state": "ready" | "failed" | "refused", "reason" | null, "held", "limit",
+"instances", "calls", "averageUs", "maxUs"}]}`, bytes and microseconds as numbers. `builtIn` is a
+script given by `--recipe-script`; a refused file has `held` 0. The Mac answers `internal` and
+`psram` `null` and `storage.total` `null` (`used`: the files of its data folder). The storage
+figures are never read by the request (a worker's stack is in PSRAM and must not touch the flash):
+they are read at start and after each write or removal, by the thread that did it, and kept.
+Settings has a "Resources" card (the two memories as a bar each, with the lowest free and the PSRAM
+reserve marked, the storage, a row per script recipe); the Plugins page of Administration lists
+the recipes (see "Shows the home in the browser").
 
 ### Shows the home in the browser
 
@@ -907,7 +1022,7 @@ copy embedded in the radio image at build time.
   token and reconnects.
 - **Sidebar**: on a phone, behind the top bar's menu button, in a drawer that closes when a room is
   picked; the Solite mark (Sowel's smiling house with an antenna) and the wordmark "solite" above the rooms as a tree, then, at its foot, the Administration section: Devices, Equipments,
-  Topology, Discovery, Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
+  Topology, Discovery, Plugins (with the count of installed recipes the catalogue has newer, as a badge), Settings; open on an administration page (also on an equipment's or a device's page, Equipments or Devices marked), opened or closed by its title; under it, **Log out** (`POST /auth/logout`, the tokens cleared, the login screen); the room shown is kept in the address
   (`#/zone/<id>`); at first the first room with equipments. The Solite mark is in the sidebar and the drawer, not in the phone's top bar.
 - **Top bar**: on every page of the home, the home's name (the Settings' name, "Home" when none, a
   grey placeholder while it loads) and where you are (the room's path, or the administration
@@ -1079,6 +1194,21 @@ copy embedded in the radio image at build time.
   `error` (danger token) under it; after a success, "The box restarts; reload the page in a
   minute." The upload is disabled during a pull or a check, and they are during an upload. The file
   goes as the body, `Content-Type: application/octet-stream`, with the bearer token. French and English labels.
+  The **Resources** card (Settings, after the Restart card) shows `GET /api/v1/system/resources` (the internal RAM and the PSRAM as a bar each, with the
+  lowest free and the PSRAM reserve marked, the storage used, one row per script recipe with its
+  version, source, memory held against its limit, instances and call times; a row hidden when its
+  figure is `null`). French and English.
+  The **Plugins** page (`#/plugins`, Administration, after Discovery; Sowel's page cut to script
+  recipes, with no category filter): two tabs with their counts, **Installed** (each installed
+  recipe with its name and version, Update when the catalogue holds a newer one, Remove, whose
+  second click says how many instances go with it: "Confirm? 2 instances will be deleted"; the
+  files refused at start with their reason, and the installed files the catalogue does not list,
+  with Remove) and **Store** (the catalogue, with Install, or the "Installed" mark and Update; a
+  recipe the program provides itself marked "Provided by Solite" with no button; the error of the
+  last read), a search field over the id, name and description of the tab shown, and an "Upload a
+  signed recipe" button (the file goes as `application/octet-stream`). It asks the refresh when it
+  opens and shows the list held when that answers 429; the server's own words show for a refusal.
+  French and English.
   The **Restart** card (after the Firmware update card): a "Restart" button, a confirmation ("Restart
   the box? It is back in about a minute."; Cancel sends nothing), then `POST /api/v1/system/restart`
   and a message while the box is away; the page polls `GET /api/v1/system/version` every 2 s (never
@@ -1181,7 +1311,10 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
 - **One at a time.** An installation in progress: 409 `Update already in progress`; an update
   installed and waiting for the restart: 409 `An update is installed and waits for the restart`;
   the running image still on probation: 409 `The running image is not confirmed yet` (the inactive
-  slot holds the image to fall back to). No key: 503.
+  slot holds the image to fall back to). No key: 503. A recipe job (see "Runs script recipes") or
+  a catalogue refresh shares the session: a check is refused while either runs (`Update check
+  already in progress`), a pull (`Update already in progress`), and an upload while a recipe job
+  runs (`Update already in progress`).
 - **Probation.** A newly booted image is on probation. It is confirmed (the running image is kept
   from then on, logged `update: running image confirmed`) once it has run healthy for 60 s without
   a break; a break restarts the minute. Healthy means the engine's loop is running, the API
@@ -1359,7 +1492,8 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   while a restart is under way is answered the same, and the box restarts once. Refused with 409: while
   an update is received or installed (`Update already in progress`), while an update check runs
   (`Update check already in progress`), while a backup or a restore runs (`Backup already in
-  progress`), and while the running image is on probation (`The update is being checked, restart in
+  progress`), while a recipe job (`Recipe install already in progress`) or a catalogue refresh
+  (`Recipe catalogue refresh already in progress`) runs, and while the running image is on probation (`The update is being checked, restart in
   a minute`: a reset would roll the update back). Allowed when an update is installed and waits for its restart, or a
   restore waits for its: the box is about to restart. The safe mode lets the route through (the way
   out of it; the engine is already stopped, no wait). An open pairing window is closed by the restart.
@@ -1403,8 +1537,9 @@ way in. Nothing of this writes the flash.
   the engine thread does not start (no radio reset, no loop, no saver, no boot marker, no pairing,
   no recipe). The home is loaded and served, so one can log in, look for a release and install an update; a home that
   cannot be loaded is replaced in RAM by an empty one (logged), and the stored files are never
-  touched. Every request that is not a `GET` is refused with 503 but the account's, the update's, the release check's (`POST /api/v1/system/version/check`)
-  and the restart's (`POST /api/v1/system/restart`, D79);
+  touched. Every request that is not a `GET` is refused with 503 but the account's, the update's, the release check's (`POST /api/v1/system/version/check`),
+  the restart's (`POST /api/v1/system/restart`, D79) and a script recipe's uninstall (`POST /api/v1/recipes/:id/uninstall`);
+  no installed script recipe is loaded (each is shown `refused`, `Safe mode: not loaded`);
   a restore and a factory reset need the presence a power-on gives, so they are refused too: the
   restart and the update are the ways out over the network (a restart asked for clears the safe
   mode), otherwise a USB flash or a power-on. The first-password
@@ -1481,7 +1616,8 @@ The steps a maintainer follows are in `docs/release.md` (the `/solite-release` s
    needs a key; a missing file is exit 2) and refuses (exit 1, `the prebuilt image does not carry
    <public key file>'s key`) an `app.bin` that does not hold the public key's 64 hex characters.
    The build is the radio image with `SOLITE_UPDATE_PUBLIC_KEY` set to
-   the public key, in `firmware/target/release-radio` (never `target/radio`), checked as
+   the public key and `SOLITE_RECIPE_PUBLIC_KEY` to the recipe key's (`release/recipe-key.pub`; the script and the
+   workflow refuse to build without that file: `release: release/recipe-key.pub is missing: make the recipe key first`, exit 2), in `firmware/target/release-radio` (never `target/radio`), checked as
    `box.sh flash --image radio` checks it, made into the application image (`esptool elf2image`,
    as `box.sh`) and a full-flash image (`esptool merge_bin`: bootloader at `0x1000`, partition
    table at `0x8000`, application at the `ota_0` offset, from `0x0` padded with `0xFF`). The
@@ -1685,7 +1821,7 @@ Without it nothing is flashed and nothing is written through the API: preflight,
 
 - **Steps** <!-- check-docs: allow -->, in a fixed order: P1 preflight (it warns when the working tree has changes under
   `crates/` or `firmware/`); P2 an update key made with `--update-keygen` in the run folder; P3 the
-  radio image built with that key; P4 a next version (patch + 1) and a rollback image (patch + 2,
+  radio image built with that key (and with the recipe key's public half when `release/recipe-key.pub` exists); P4 a next version (patch + 1) and a rollback image (patch + 2,
   panics at start) built in a copy of `HEAD` outside the repository, signed, and a copy with one
   signature byte flipped; P5 the radio image's size against the `ota_0` slot; B1 `identify`; B2
   `box.sh flash --image radio --keep-storage --backup <file>` (`storage` is never erased); B3
@@ -1695,8 +1831,11 @@ Without it nothing is flashed and nothing is written through the API: preflight,
   one banner, no token in the serial log); B6 `measure-api.sh` inside `saves --budget 5`; B7 the
   home checks inside `saves --budget 4`; B8 the update checks, outside `saves` (the box restarts);
   B9 `box.sh log --raw --seconds 300 --budget 1` and its `heap:` line; B10 the factory reset inside
-  `saves --budget 7`, only with `--factory-reset` (it erases the home). A step whose dependency
-  failed is `skipped (after <id> <outcome>)`.
+  `saves --budget 7`, only with `--factory-reset` (it erases the home); B11 the script group (a
+  script recipe's instances; when `motion-light-script` is not installed it uploads the signed file
+  given by `--recipe-file <file.srs>` and uninstalls it at the group's end, else is `skipped (not
+  installed: --recipe-file)`, and so is its serial-lines check). A step whose dependency failed is
+  `skipped (after <id> <outcome>)`.
 - **The checks**: authentication (status, setup or login, one login timed, at most 2 s, 401
   without a token, `/ws` closed 4001 without a token and live with it, the pairing route behind the
   token, the 429 of the 11th attempt in a minute); home (the full backup exported, and its restore with a wrong password refused (400, nothing
@@ -1770,7 +1909,10 @@ equipments of 8 bindings and 8192 bytes of Sowel's optional equipment fields, 16
 full queues, the orders queues full). Both are checked by tests on the Mac, whose 64-bit figures
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
-measuring image; they are written in `docs/memory-budget.md`, "On the box". The radio image logs
+measuring image; they are written in `docs/memory-budget.md`, "On the box". The recipe jobs
+(a download and its checks, a write, a removal) run on a `recipe` thread of 20 KB of internal RAM,
+one at a time, and an install is admitted only when the PSRAM and the largest internal block leave
+the reserves of "Runs script recipes". The radio image logs
 its own `heap:` line (the minimums since boot, the largest free block of each memory, the
 fragmentation's indicator, the engine stack's and the workers' stack's high-water marks) and, once, `memory-network:` (a snapshot with the server idle, for information),
 and `box.sh
@@ -1830,5 +1972,6 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 036 | The supervised engine: the box restarts when its engine ends on an error, with the reason kept in RTC memory; a boot-loop guard and a safe mode that keeps the API and updates up; the engine on the task watchdog; `GET /api/v1/system/supervisor` |
 | 038 | Release publication: `scripts/release.sh` and `.github/workflows/release.yml` make a signed release from a tag (the `.sup`, a full-flash image, `SHA256SUMS`, `manifest.json`); `solite-host --update-verify`; the key's custody in `docs/release.md` |
 | 041 | Script recipes: recipes in JavaScript, in Sowel's script-recipe format, run by QuickJS on the host and the box, reaching only their slots; `motion-light-script`; `--recipe-script`; bounds, a failing script recipe stopped then restarted; the cost measured on the Mac, in QEMU and on the box |
+| 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Plugins page; `motion-light-script` leaves the radio image |
 | 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |
 | 044 | Tighter bounds: 8 data a device, 8 data and 8 order bindings an equipment, 20 log lines a recipe instance; a home stored with the old bounds is cut at load, logged once |

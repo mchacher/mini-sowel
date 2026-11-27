@@ -29,6 +29,7 @@ import { ApiError } from "../../api/client";
 import { formErrorText } from "../../lib/form-error";
 import { compareVersions } from "../../lib/version";
 import { BUTTON_PRIMARY, BUTTON_SECONDARY, FIELD_LABEL, Modal } from "../ui/Modal";
+import { ResourcesCard } from "./ResourcesCard";
 import { RestartCard } from "./RestartCard";
 
 /** The backup password's length, in characters, as the host checks it (spec 035, R1). */
@@ -100,6 +101,7 @@ export function SettingsPage() {
         <BackupSection />
         <UpdateSection />
         <RestartCard />
+        <ResourcesCard />
         <FactoryResetSection />
       </div>
     </div>

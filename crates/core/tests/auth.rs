@@ -138,6 +138,8 @@ impl Server {
             | Reply::UpdatePull(_)
             | Reply::VersionCheck(_)
             | Reply::Restart
+            | Reply::RecipeJob(_)
+            | Reply::CatalogueRefresh(_)
             | Reply::BackupExport(_)
             | Reply::BackupRestore { .. } => (202, Value::Null),
         }

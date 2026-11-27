@@ -40,6 +40,10 @@ jobs:
             echo "::error::release/update-key.pub is absent: commit the public key first (see docs/release.md)"
             exit 1
           fi
+          if [ ! -f release/recipe-key.pub ]; then
+            echo "::error::release/recipe-key.pub is absent: no release until the recipe key is made and its public key committed (see docs/release.md)"
+            exit 1
+          fi
           git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "::error::the tag $GITHUB_REF_NAME is not on main: a release is tagged on the merge commit of main (see docs/release.md)"
@@ -92,6 +96,10 @@ jobs:
           unset SOLITE_UPDATE_KEY_PREVIOUS
           if [ ! -f release/update-key.pub ]; then
             echo "::error::release/update-key.pub is absent: commit the public key first (see docs/release.md)"
+            exit 1
+          fi
+          if [ ! -f release/recipe-key.pub ]; then
+            echo "::error::release/recipe-key.pub is absent: no release until the recipe key is made and its public key committed (see docs/release.md)"
             exit 1
           fi
           git fetch --no-tags origin main
@@ -162,6 +170,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dry"
           target/release/solite-host --update-keygen "$RUNNER_TEMP/dry/key" > "$RUNNER_TEMP/dry/keygen.txt"
           sed -n 's/^public key: //p' "$RUNNER_TEMP/dry/keygen.txt" > "$RUNNER_TEMP/dry/key.pub"
+          # The recipe key's public half is a throwaway one too (the real one is committed, spec 042).
+          target/release/solite-host --update-keygen "$RUNNER_TEMP/dry/recipe-key" > "$RUNNER_TEMP/dry/recipe-keygen.txt"
+          sed -n 's/^public key: //p' "$RUNNER_TEMP/dry/recipe-keygen.txt" > "$RUNNER_TEMP/dry/recipe-key.pub"
           echo "Dry run, nothing is published." > "$RUNNER_TEMP/dry/notes.md"
           version=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version *= *"\(.*\)"/\1/p;}' Cargo.toml | head -n 1)
           if [ -f release/update-key.bridge ]; then
@@ -176,11 +187,13 @@ jobs:
             sh scripts/release.sh "$version" --key-file "$RUNNER_TEMP/dry/key" \
               --next-key-file "$RUNNER_TEMP/dry/next-key" \
               --public-key-file "$RUNNER_TEMP/dry/next-key.pub" \
+              --recipe-key-file "$RUNNER_TEMP/dry/recipe-key.pub" \
               --bridge-file "$RUNNER_TEMP/dry/update-key.bridge" --notes "$RUNNER_TEMP/dry/notes.md" \
               --out "$RUNNER_TEMP/dry-release"
           else
             sh scripts/release.sh "$version" --key-file "$RUNNER_TEMP/dry/key" \
-              --public-key-file "$RUNNER_TEMP/dry/key.pub" --notes "$RUNNER_TEMP/dry/notes.md" \
+              --public-key-file "$RUNNER_TEMP/dry/key.pub" --recipe-key-file "$RUNNER_TEMP/dry/recipe-key.pub" \
+              --notes "$RUNNER_TEMP/dry/notes.md" \
               --out "$RUNNER_TEMP/dry-release"
           fi
 
