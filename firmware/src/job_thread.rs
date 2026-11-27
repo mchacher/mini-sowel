@@ -1,5 +1,6 @@
 //! The threads a heavy request runs on (D59, D60): started for the job, their stack in internal
-//! RAM, pinned to core 0 with the API workers, ended with the job. The worker that took the request
+//! RAM, or in PSRAM where the caller says so (`StackPlace`: the `script` threads, D83), pinned to core 0 with the API
+//! workers, ended with the job. The worker that took the request
 //! lends it and waits. An API worker's stack is 10 KB in PSRAM: a job that touches the flash (the
 //! backup's) or that needs more stack than a worker has left (the update's signature check) runs
 //! here. Each thread logs `<name>: thread stack <n> of <m> bytes never used` at its end.
@@ -45,12 +46,24 @@ pub fn stack_unused() -> usize {
     unsafe { uxTaskGetStackHighWaterMark2(std::ptr::null_mut()) as usize }
 }
 
-/// Runs `job` on a thread named `name` whose stack (`stack_bytes`) is in internal RAM, on core 0,
-/// and waits for it. `Err` when the thread cannot start (no internal RAM block of that size):
+/// Where a job thread's stack lives. PSRAM only for a thread that never touches the flash, a read
+/// neither (D59: a flash access turns the caches off, and ESP-IDF stops the chip when the caller's
+/// stack is in PSRAM; `storage.rs` refuses such a call).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StackPlace {
+    Internal,
+    /// Only the images with `scripts` make a thread with it (the `script` thread).
+    #[cfg_attr(not(feature = "scripts"), allow(dead_code))]
+    Psram,
+}
+
+/// Runs `job` on a thread named `name` whose stack (`stack_bytes`) is in `place`, on core 0,
+/// and waits for it. `Err` when the thread cannot start (no free block of that size there):
 /// `job` did not run. `Ok(None)` when `job` panicked.
 pub fn run<T: Send>(
     name: &'static CStr,
     stack_bytes: usize,
+    place: StackPlace,
     job: impl FnOnce() -> T + Send,
 ) -> Result<Option<T>, String> {
     let label = name.to_str().unwrap_or("job");
@@ -58,7 +71,10 @@ pub fn run<T: Send>(
         name: Some(name),
         stack_size: stack_bytes,
         pin_to_core: Some(Core::Core0),
-        stack_alloc_caps: MallocCap::Internal | MallocCap::Cap8bit,
+        stack_alloc_caps: match place {
+            StackPlace::Internal => MallocCap::Internal | MallocCap::Cap8bit,
+            StackPlace::Psram => MallocCap::Spiram | MallocCap::Cap8bit,
+        },
         ..Default::default()
     }
     .set();
@@ -87,7 +103,7 @@ pub fn run<T: Send>(
     result
 }
 
-/// Runs a closure the caller borrows on a thread named `name` whose stack is in internal RAM, and
+/// Runs a closure the caller borrows on a thread named `name` whose stack is in `place`, and
 /// waits for it (the `script` step of a recipe job in the image QEMU runs, spec 042). `Err` when
 /// the thread cannot start: `job` did not run.
 #[cfg(all(feature = "sim", feature = "scripts"))]
@@ -95,6 +111,7 @@ pub fn run<T: Send>(
 pub fn run_borrowed(
     name: &'static CStr,
     stack_bytes: usize,
+    place: StackPlace,
     job: &mut dyn FnMut(),
 ) -> Result<Option<()>, String> {
     /// The closure's address, for the thread that runs it.
@@ -118,16 +135,17 @@ pub fn run_borrowed(
     let pointer =
         unsafe { std::mem::transmute::<&mut dyn FnMut(), *mut (dyn FnMut() + 'static)>(job) };
     let call = Call(pointer);
-    run(name, stack_bytes, move || call.invoke())
+    run(name, stack_bytes, place, move || call.invoke())
 }
 
-/// Starts `job` on a thread named `name` (stack in internal RAM, core 0) and does not wait for it
+/// Starts `job` on a thread named `name` (stack in `place`, core 0) and does not wait for it
 /// (the automatic check, spec 039 R6): it logs the same `thread stack` line at its end. `Err`
 /// when the thread cannot start: `job` did not run (and is dropped, with what it holds).
 #[cfg(feature = "radio")]
 pub fn spawn(
     name: &'static CStr,
     stack_bytes: usize,
+    place: StackPlace,
     job: impl FnOnce() + Send + 'static,
 ) -> Result<(), String> {
     let label = name.to_str().unwrap_or("job");
@@ -135,7 +153,10 @@ pub fn spawn(
         name: Some(name),
         stack_size: stack_bytes,
         pin_to_core: Some(Core::Core0),
-        stack_alloc_caps: MallocCap::Internal | MallocCap::Cap8bit,
+        stack_alloc_caps: match place {
+            StackPlace::Internal => MallocCap::Internal | MallocCap::Cap8bit,
+            StackPlace::Psram => MallocCap::Spiram | MallocCap::Cap8bit,
+        },
         ..Default::default()
     }
     .set();

@@ -22,6 +22,11 @@ CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
+# A thread may ask for its stack in PSRAM (spec 045: the `script` thread's 32 KB, the API workers').
+# Only a thread that never touches the flash, a read neither (D59; `storage.rs` refuses a call
+# from such a stack). The radio image sets it too (`sdkconfig.radio.defaults`).
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
 # Partition table (decision D25): `partitions.csv` next to this file. esp-idf-sys does not read a
 # custom table from here (its README says to leave CONFIG_PARTITION_TABLE_* out), so the table
 # reaches the box through `scripts/box.sh flash`, and QEMU through

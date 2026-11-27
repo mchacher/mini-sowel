@@ -43,6 +43,10 @@ pub const MAX_REFUSED: usize = 8;
 pub struct RecipeInstalls {
     key: Option<VerifyingKey>,
     probe: Arc<dyn MemoryProbe>,
+    /// The program keeps the thread a recipe job runs on from the start (the box's permanent
+    /// `recipe` thread, spec 045): the admission then counts only the TLS session, not the
+    /// thread's stack.
+    job_thread_kept: bool,
 }
 
 impl Default for RecipeInstalls {
@@ -50,6 +54,7 @@ impl Default for RecipeInstalls {
         RecipeInstalls {
             key: None,
             probe: Arc::new(NoProbe),
+            job_thread_kept: false,
         }
     }
 }
@@ -80,12 +85,30 @@ impl RecipeInstalls {
                 ),
             },
         };
-        (RecipeInstalls { key, probe }, line)
+        (
+            RecipeInstalls {
+                key,
+                probe,
+                job_thread_kept: false,
+            },
+            line,
+        )
     }
 
     /// The key that signs the recipes, `None` when the build has no valid one.
     pub fn key(&self) -> Option<&VerifyingKey> {
         self.key.as_ref()
+    }
+
+    /// Says that the thread a recipe job runs on is made once, at the start: an install, an update
+    /// or a refresh then needs only `RECIPE_INTERNAL_MARGIN` of internal RAM, an uninstall none.
+    pub fn set_job_thread_kept(&mut self, kept: bool) {
+        self.job_thread_kept = kept;
+    }
+
+    /// Whether the job's thread is kept (see `set_job_thread_kept`).
+    pub fn job_thread_kept(&self) -> bool {
+        self.job_thread_kept
     }
 
     /// The memory probe.

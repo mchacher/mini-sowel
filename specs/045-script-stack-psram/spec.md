@@ -1,0 +1,113 @@
+# Spec 045: The script thread's stack in PSRAM, the recipe thread made once
+
+Assumes the recommended answers given to the user on 2026-11-27 (scope B, the box check below,
+the watchdog watched); the user asked for an autonomous run and allowed the box work, flash
+included (2026-11-27). Not merged before the user's yes.
+
+## Context
+The roadmap line "Spec 045, after F2" (2026-11-27). Measured on the box: with 2 script recipes the
+internal RAM fell to 44 KB at its lowest (floor 64 KB, D27); after a few installs and uninstalls
+the largest free internal block fell to 27 KB and an install was refused (`Not enough internal
+memory`, 36 KB needed: the `recipe` thread's 20 KB stack, made per job, plus 16 KB for the TLS
+session) until a restart. Two causes: the permanent `script` thread's 32 KB stack in internal RAM
+(`firmware/src/http_server.rs:174-181`, D74), and a 20 KB block the `recipe` thread needs whole at
+each job (`firmware/src/http_server.rs:998`, D78).
+
+## Goals
+- The internal RAM 32 KB higher at its lowest, during a recipe job (the script thread's stack in
+  PSRAM; the `recipe` thread's 20 KB, now held for the whole run, makes it about 12 KB higher when
+  no job runs).
+- An install no longer needs a whole 20 KB block at the time of the job.
+
+## Out of scope
+- The engine thread's 32 KB stack (it writes the flash: internal, D59).
+- The Rust side's small blocks of a script recipe or an instance (`SPIRAM_MALLOC_ALWAYSINTERNAL`,
+  the roadmap line: only if the minimum falls under about 80 KB).
+- The interrupt-watchdog bug (roadmap inbox): watched during the box check; seen again, this
+  spec's PSRAM stack is reconsidered before the merge.
+
+## Requirements
+
+### R1: the `script` thread's stack in PSRAM
+- The `script` thread (made once at boot) gets its 32 KB stack in PSRAM
+  (`MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT`), as the API workers' (spec 023).
+- Allowed because nothing it runs touches the flash (D59: a flash access, a read too, turns the
+  caches and so the PSRAM off, and ESP-IDF stops the chip when the caller's stack is in PSRAM).
+  What it runs, checked one by one: the core's router for every non-GET `/api/v1/*` request but
+  `/auth/*` (the handlers reach no `Storage`: the saves are written by the engine's saver; the
+  streamed routes, update and backup, answer a ticket and run on job threads in internal RAM);
+  the recipe jobs' load, swap and unload steps (memory only: the script's bytes are passed in).
+  The boot load of the installed scripts reads the flash but runs on the main and engine
+  threads, not this one.
+
+### R2: a flash access from a PSRAM stack is refused, not a crash
+- The box's storage (`firmware/src/storage.rs`, every read, write, list, remove, rename and
+  usage) first checks that the calling task's stack is not in PSRAM
+  (`esp_ptr_external_ram` on a local's address); if it is, the call returns an error
+  `flash access from a PSRAM stack refused` and logs it once per boot, instead of the chip
+  stopping. A guard for a future route, never a path in use.
+
+### R3: the `recipe` thread made once
+- The `recipe` thread (20 KB, internal RAM, core 0) is made once at boot, like `script`, and runs
+  the recipe jobs and the catalogue refreshes one at a time (the one-job rule, 409, unchanged).
+- The internal RAM admission of an install, update or refresh then needs only the TLS session's
+  16 KB (`RECIPE_INTERNAL_MARGIN`); an uninstall needs nothing. The text is unchanged
+  (`Not enough internal memory: largest free block <n> KB, <m> KB needed`).
+- When the thread cannot be made at boot (no 20 KB block), the box logs it, and each recipe job
+  runs on a thread made for it as before spec 045, the admission counting its 20 KB (so an
+  uninstall, safe mode's way out of a bad recipe, still runs).
+- The Mac host and the QEMU phase keep a job thread per job (their admission keeps the 36 KB).
+
+### R4: QEMU
+- The QEMU image puts its `script` thread's stack in PSRAM too (`CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`
+  in its config), so the `script thread stack N of 32768 unused` check (at least 2 KB) measures
+  the PSRAM stack; its `internal ... (min ... free)` figure is written in the memory budget.
+
+## Living spec delta
+
+### docs/living-spec/README.md
+- 965 and the admission paragraph: on the box an install, update or refresh needs a 16 KB block of
+  internal RAM (its TLS session); an uninstall needs none; the Mac's needs stay 36 and 20 KB.
+- The `script` thread sentence (where the living spec says where scripts run): its stack is in
+  PSRAM.
+
+### No longer true
+- `docs/memory-budget.md` 90 (the `script` thread's 32 KB in internal RAM, "added"), 94-95 (the
+  transient `recipe` thread, the overlap), 106 (the room).
+- `firmware/src/http_server.rs:173` comment (`its stack in internal RAM`).
+- Decisions: a new D83 replaces D74's "every call into a script runs on a stack in internal RAM"
+  (the `script` thread's calls) and D78's per-job `recipe` thread on the box.
+- `docs/roadmap.md` 245 (the line goes: done).
+
+## Acceptance criteria
+- [x] Tests (core): the admission with the thread kept (16 KB; uninstall never refused) and without
+      it (36 and 20 KB, unchanged).
+- [x] validate green, QEMU included, `script thread stack` at least 2 KB unused in PSRAM.
+- [x] Box: 2 recipes, 8 instances of each, then 5 uninstall-install cycles of one recipe: every
+      install accepted, the internal minimum at least 64 KB (B11.6), the garage still running.
+
+## Edge cases
+- No 20 KB block at boot for the `recipe` thread: logged, each recipe job on a thread of its own.
+- A storage call from a PSRAM stack (none today): an error, logged, the chip keeps running.
+- Two recipe jobs at once: the second is 409 as today (one job at a time).
+
+## Sowel contract
+None: no type, field or route.
+
+## How the user will check it
+The box check above, its figures written here; `GET /system/resources` before and after.
+
+### Result (2026-11-27, the Dongle Max, autonomous run)
+- The image of this branch installed over Wi-Fi as a signed update (a test build numbered 0.1.2,
+  `--update-sign`, the update key; the USB flash needs a person at the terminal, D6), confirmed
+  after its probation.
+- Two script recipes (`motion-light` 1.1.2 and a copy of it under the id `motion-light-b`, both
+  signed with the recipe key), 8 instances of each on the garage's light, then 5 cycles of
+  uninstall, install and 8 new instances of the second: every install accepted (201), every
+  uninstall 204.
+- Internal RAM: at its lowest 66,144 bytes (64.6 KB, the floor of 64 KB held by 608 bytes; 44 KB
+  before this spec); the largest free block 38 KB through the cycles and 47 KB at rest (27 KB
+  before, when an install was refused). No restart of the box during the run (the watchdog bug not
+  seen).
+- Left on the box: `motion-light` with one instance on the garage (a zone `Garage` made again, its
+  two equipments moved to it: they pointed to a zone that no longer existed).

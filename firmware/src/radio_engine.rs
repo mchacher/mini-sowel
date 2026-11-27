@@ -56,7 +56,7 @@ use solite_core::update::release::Limits;
 use crate::backup_files::{BoxPacing, data_files};
 use crate::fetch::EspFetcher;
 use crate::http_server;
-use crate::job_thread::{self, FETCH_STACK_BYTES};
+use crate::job_thread::{self, FETCH_STACK_BYTES, StackPlace};
 use crate::memory;
 use crate::ota::ENGINE_RUNNING;
 use crate::radio_uart::{UartTransport, reset_radio};
@@ -572,10 +572,14 @@ fn start_pair_watch(home: &Arc<Mutex<Home>>) {
                     // The ticket is taken under the lock and the lock let go before the thread.
                     let ticket = lock(&home).auto_check_ticket(wall_ms(), pacing.now_ms());
                     if let Some(ticket) = ticket
-                        && let Err(e) =
-                            job_thread::spawn(c"update-check", FETCH_STACK_BYTES, move || {
+                        && let Err(e) = job_thread::spawn(
+                            c"update-check",
+                            FETCH_STACK_BYTES,
+                            StackPlace::Internal,
+                            move || {
                                 ticket.check_auto(&mut EspFetcher, &mut BoxPacing, Limits::CHECK);
-                            })
+                            },
+                        )
                     {
                         log::warn!("{e}");
                         lock(&home).auto_check_postpone(pacing.now_ms());

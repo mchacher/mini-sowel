@@ -9,8 +9,8 @@
 //! stack than a worker has: their answer runs on a thread started for the job (`job_thread.rs`),
 //! its stack in internal RAM, while the worker waits for it. The handler of every request that is not a
 //! `GET` (it can start or call a script recipe, spec 041) runs on the `script` thread, made once at
-//! boot (its 32 KB of internal RAM are taken while the memory is whole, not per request), one request
-//! at a time: a worker's 10 KB cannot hold the script's 16 KB stack.
+//! boot, its 32 KB stack in PSRAM (nothing it runs touches the flash, D83), one request at a time: a
+//! worker's 10 KB cannot hold the script's 16 KB stack.
 
 use std::ffi::{CStr, CString};
 use std::io::Read;
@@ -47,7 +47,7 @@ use solite_core::update::release::{Limits, ReleaseTicket};
 use crate::backup_files::{BoxPacing, data_files};
 use crate::fetch::EspFetcher;
 use crate::job_thread::{
-    self, BACKUP_STACK_BYTES, FETCH_STACK_BYTES, UPDATE_STACK_BYTES, stack_unused,
+    self, BACKUP_STACK_BYTES, FETCH_STACK_BYTES, StackPlace, UPDATE_STACK_BYTES, stack_unused,
 };
 use crate::live_ws;
 use crate::ota;
@@ -171,15 +171,112 @@ fn script_loop(jobs: Receiver<Work>) {
     }
 }
 
-/// Starts the `script` thread, its stack in internal RAM (`job_thread::spawn`), for the whole run.
+/// Starts the `script` thread, its stack in PSRAM (`job_thread::spawn`, spec 045 R1), for the
+/// whole run. In PSRAM because nothing it runs touches the flash, a read neither (D59, and
+/// `storage.rs` refuses such a call from a PSRAM stack).
 fn start_script_thread() -> Result<(), String> {
     let (jobs, wait) = sync_channel::<Work>(0);
-    job_thread::spawn(c"script", SCRIPT_THREAD_STACK_BYTES, move || {
-        script_loop(wait)
-    })?;
+    job_thread::spawn(
+        c"script",
+        SCRIPT_THREAD_STACK_BYTES,
+        StackPlace::Psram,
+        move || script_loop(wait),
+    )?;
     SCRIPT_JOBS
         .set(jobs)
         .map_err(|_| "the script thread is already started".to_string())
+}
+
+/// A recipe job or a catalogue refresh handed to the `recipe` thread: the request it answers on
+/// (lent: the worker waits for `done`), the core's ticket, the home, and where to say it is over.
+struct RecipeWork {
+    raw: *const Raw,
+    ticket: RecipeTicket,
+    home: Arc<Mutex<Home>>,
+    done: SyncSender<()>,
+}
+
+// SAFETY: the worker that owns the request lends it to the `recipe` thread and waits for `done`
+// before it uses the request again (`run_on_recipe_thread`): one task at a time uses it, as
+// ESP-IDF allows for an asynchronous request.
+#[allow(unsafe_code)]
+unsafe impl Send for RecipeWork {}
+
+/// The way to the permanent `recipe` thread, set once it runs.
+static RECIPE_JOBS: OnceLock<SyncSender<RecipeWork>> = OnceLock::new();
+
+/// Held by the worker whose job runs on the `recipe` thread: one job at a time (the core's own
+/// one-job rule answers 409 before this).
+static RECIPE_THREAD: Mutex<()> = Mutex::new(());
+
+/// The `recipe` thread's loop: one job at a time. The firmware is built with `panic = "abort"`,
+/// as for `script_loop`: no `catch_unwind`; the thread ends only if its channel closes.
+fn recipe_loop(jobs: Receiver<RecipeWork>) {
+    while let Ok(work) = jobs.recv() {
+        let RecipeWork {
+            raw,
+            ticket,
+            home,
+            done,
+        } = work;
+        // SAFETY: the worker lent the request and waits for `done` below.
+        #[allow(unsafe_code)]
+        let raw = unsafe { &*raw };
+        answer_recipe(raw, ticket, &home);
+        log::info!(
+            "recipe: thread stack {} of {FETCH_STACK_BYTES} bytes never used",
+            stack_unused()
+        );
+        let _ = done.send(());
+    }
+}
+
+/// Starts the `recipe` thread (`FETCH_STACK_BYTES`, internal RAM, core 0) once, for the whole run
+/// (spec 045 R3): the recipe jobs no longer need a whole block of internal RAM at the time of the
+/// job. Called before the installed scripts are loaded (`scripts::load_installed`), which tells the
+/// core's admission whether it runs; calling it again does nothing. When it cannot start, logged:
+/// every recipe job then answers 503 `Busy`.
+pub fn start_recipe_thread() -> bool {
+    if RECIPE_JOBS.get().is_some() {
+        return true;
+    }
+    let (jobs, wait) = sync_channel::<RecipeWork>(0);
+    let started = job_thread::spawn(
+        c"recipe",
+        FETCH_STACK_BYTES,
+        StackPlace::Internal,
+        move || recipe_loop(wait),
+    );
+    match started {
+        Ok(()) => RECIPE_JOBS.set(jobs).is_ok(),
+        Err(e) => {
+            log::error!("recipe: {e}, recipe jobs answer 503");
+            false
+        }
+    }
+}
+
+/// Runs a recipe job on the `recipe` thread and waits for it. `Err` when the thread is not there
+/// (it could not start, or it ended): the job did not run.
+fn run_on_recipe_thread(
+    raw: &Raw,
+    ticket: RecipeTicket,
+    home: Arc<Mutex<Home>>,
+) -> Result<Option<()>, String> {
+    let jobs = RECIPE_JOBS
+        .get()
+        .ok_or_else(|| "recipe: its thread is not running".to_string())?;
+    let _one = RECIPE_THREAD.lock().unwrap_or_else(PoisonError::into_inner);
+    let (done, wait) = sync_channel(1);
+    let work = RecipeWork {
+        raw: std::ptr::from_ref(raw),
+        ticket,
+        home,
+        done,
+    };
+    jobs.send(work)
+        .map_err(|_| "recipe: its thread ended".to_string())?;
+    Ok(wait.recv().ok())
 }
 
 /// Runs the request on the `script` thread and waits for its reply (one at a time). `None` when
@@ -686,8 +783,8 @@ fn answer_pull(raw: &Raw, ticket: ReleaseTicket) -> bool {
 
 /// `POST /api/v1/recipes/install`, `/recipes/:id/update`, `/recipes/:id/uninstall` or
 /// `/recipes/store/refresh`, once the core has let it through (spec 042): the download, the checks,
-/// the write and the removal. Runs on the `recipe` thread (`FETCH_STACK_BYTES`, its stack in internal
-/// RAM: the flash is never touched from a worker); the loads and unloads go to the `script`
+/// the write and the removal. Runs on the permanent `recipe` thread (`FETCH_STACK_BYTES`, its stack in
+/// internal RAM: the flash is never touched from a worker); the loads and unloads go to the `script`
 /// thread, and the home's lock is never held across a download or a write.
 fn answer_recipe(raw: &Raw, ticket: RecipeTicket, home: &Arc<Mutex<Home>>) {
     let storage = FatStorage::new();
@@ -884,8 +981,8 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         handle_guarded(&api.home, &request, wall_ms(), &mut random)
     };
     // A request that changes something can start a script (an instance's start, a settle, a
-    // validation): its handler runs on the `script` thread, made at boot, its stack in internal
-    // RAM and sized for the script's own, never on this worker's 10 KB in PSRAM (spec 041 R3.4).
+    // validation): its handler runs on the `script` thread, made at boot, its 32 KB stack in PSRAM
+    // and sized for the script's own (D83), never on this worker's 10 KB (spec 041 R3.4).
     // One at a time: the home's lock serialises them anyway. A `GET` never reaches a script, nor
     // do the account's routes (`/api/v1/auth/*`: the login's password hash must not hold every
     // other write behind it); they stay on this worker, as they were before scripts.
@@ -956,18 +1053,26 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         Reply::BackupExport(ticket) => {
             let password = raw.header(c"X-Backup-Password");
             let lent = Lent(&raw);
-            let ran = job_thread::run(c"backup", BACKUP_STACK_BYTES, move || {
-                answer_export(lent.get(), ticket, password.as_deref());
-            });
+            let ran = job_thread::run(
+                c"backup",
+                BACKUP_STACK_BYTES,
+                StackPlace::Internal,
+                move || {
+                    answer_export(lent.get(), ticket, password.as_deref());
+                },
+            );
             after_job_thread(&raw, "backup", ran);
         }
         Reply::BackupRestore { ticket, wifi } => {
             let password = raw.header(c"X-Backup-Password");
             let length = head.length;
             let lent = Lent(&raw);
-            let ran = job_thread::run(c"backup", BACKUP_STACK_BYTES, move || {
-                answer_restore(lent.get(), ticket, wifi, length, password.as_deref())
-            });
+            let ran = job_thread::run(
+                c"backup",
+                BACKUP_STACK_BYTES,
+                StackPlace::Internal,
+                move || answer_restore(lent.get(), ticket, wifi, length, password.as_deref()),
+            );
             restart = after_job_thread(&raw, "backup", ran).unwrap_or(false);
         }
         Reply::Order(_) | Reply::Static(_) => {
@@ -987,32 +1092,55 @@ fn answer(job: Job, buffer: &mut [u8], api: &Api) {
         }
         Reply::VersionCheck(ticket) => {
             let lent = Lent(&raw);
-            let ran = job_thread::run(c"update-check", FETCH_STACK_BYTES, move || {
-                answer_check(lent.get(), ticket);
-            });
+            let ran = job_thread::run(
+                c"update-check",
+                FETCH_STACK_BYTES,
+                StackPlace::Internal,
+                move || {
+                    answer_check(lent.get(), ticket);
+                },
+            );
             after_job_thread(&raw, "update-check", ran);
         }
         Reply::RecipeJob(ticket) | Reply::CatalogueRefresh(ticket) => {
-            let lent = Lent(&raw);
             let home = Arc::clone(&api.home);
-            let ran = job_thread::run(c"recipe", FETCH_STACK_BYTES, move || {
-                answer_recipe(lent.get(), ticket, &home);
-            });
+            // The `recipe` thread made at boot; when it could not be made, a thread for this job
+            // (the admission then counts its 20 KB stack, spec 045 R3), so an uninstall, safe
+            // mode's way out of a bad recipe, still runs.
+            let ran = if RECIPE_JOBS.get().is_some() {
+                run_on_recipe_thread(&raw, ticket, home)
+            } else {
+                let lent = Lent(&raw);
+                job_thread::run(
+                    c"recipe",
+                    FETCH_STACK_BYTES,
+                    StackPlace::Internal,
+                    move || {
+                        answer_recipe(lent.get(), ticket, &home);
+                    },
+                )
+            };
             after_job_thread(&raw, "recipe", ran);
         }
         Reply::UpdatePull(ticket) => {
             let lent = Lent(&raw);
-            let ran = job_thread::run(c"update-pull", FETCH_STACK_BYTES, move || {
-                answer_pull(lent.get(), ticket)
-            });
+            let ran = job_thread::run(
+                c"update-pull",
+                FETCH_STACK_BYTES,
+                StackPlace::Internal,
+                move || answer_pull(lent.get(), ticket),
+            );
             restart = after_job_thread(&raw, "update-pull", ran).unwrap_or(false);
         }
         Reply::Update => {
             let length = head.length;
             let lent = Lent(&raw);
-            let ran = job_thread::run(c"update", UPDATE_STACK_BYTES, move || {
-                answer_update(lent.get(), length)
-            });
+            let ran = job_thread::run(
+                c"update",
+                UPDATE_STACK_BYTES,
+                StackPlace::Internal,
+                move || answer_update(lent.get(), length),
+            );
             restart = after_job_thread(&raw, "update", ran).unwrap_or(false);
         }
     }

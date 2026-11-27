@@ -476,6 +476,14 @@ impl World {
         World::build_with(home, signing, Some(&key), now)
     }
 
+    /// The program keeps the recipe job's thread from the start, as the box does (spec 045).
+    fn keep_job_thread(&mut self) {
+        let mut home = self.home.lock().unwrap();
+        let mut installs = home.recipe_installs().clone();
+        installs.set_job_thread_kept(true);
+        home.set_recipe_installs(installs);
+    }
+
     fn build(signing: SigningKey, key: Option<&str>, now: u64) -> World {
         World::build_with(Home::new(T0), signing, key, now)
     }
@@ -2622,6 +2630,59 @@ fn an_uninstall_needs_only_its_threads_stack_of_internal_ram() {
             (FETCH_STACK_BYTES - 1) / 1024,
             FETCH_STACK_BYTES / 1024
         )
+    );
+}
+
+#[test]
+fn with_the_job_thread_kept_an_install_needs_only_the_tls_margin() {
+    let mut world = World::new();
+    world.keep_job_thread();
+    let a = signed(&world.signing.clone(), "a", "1.0.0");
+    world.serve(&[("a", "1.0.0", &a)]);
+    // 15 KB: under the margin, refused with the 16 KB figure.
+    world.probe.set(15 * 1024, 1_500_000);
+    let answer = world.install_id("a");
+    assert_eq!(answer.0, 503, "{}", answer.1);
+    assert_eq!(
+        error_of(&answer),
+        "Not enough internal memory: largest free block 15 KB, 16 KB needed"
+    );
+    assert!(world.fetch.log.is_empty());
+    // 17 KB: far under the 36 KB of a thread made per job, and admitted.
+    world.probe.set(17 * 1024, 1_500_000);
+    assert_eq!(world.install_id("a").0, 201);
+}
+
+#[test]
+fn with_the_job_thread_kept_an_uninstall_is_never_refused_for_internal_ram() {
+    let mut world = World::new();
+    world.probe.set(64 * 1024, 1_500_000);
+    world.installed("a", "1.0.0");
+    world.keep_job_thread();
+    world.probe.set(1024, 1_500_000);
+    assert_eq!(world.uninstall("a").0, 204);
+}
+
+#[test]
+fn without_the_job_thread_kept_the_figures_stay_36_and_20_kb() {
+    let mut world = World::new();
+    let a = signed(&world.signing.clone(), "a", "1.0.0");
+    world.serve(&[("a", "1.0.0", &a)]);
+    world.probe.set(35 * 1024, 1_500_000);
+    let answer = world.install_id("a");
+    assert_eq!(answer.0, 503, "{}", answer.1);
+    assert_eq!(
+        error_of(&answer),
+        "Not enough internal memory: largest free block 35 KB, 36 KB needed"
+    );
+    world.probe.set(64 * 1024, 1_500_000);
+    world.installed("b", "1.0.0");
+    world.probe.set(19 * 1024, 1_500_000);
+    let answer = world.uninstall("b");
+    assert_eq!(answer.0, 503, "{}", answer.1);
+    assert_eq!(
+        error_of(&answer),
+        "Not enough internal memory: largest free block 19 KB, 20 KB needed"
     );
 }
 

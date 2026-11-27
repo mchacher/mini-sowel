@@ -107,7 +107,8 @@ Each of the three programs starts and says which tool it is, with its version:
   instances (stopped until then with `Recipe not found: motion-light`, as on a box that has not
   installed the recipe, and kept with their settings), runs the home's motion scenario again, then
   a script that recurses as deep as its stack allows, calling the engine at its
-  deepest, on the engine thread and on a `script` job thread, and logs `recipes: script
+  deepest, on the engine thread and on a `script` job thread whose stack is in PSRAM as the
+  box's, and logs `recipes: script
   motion-light <KB> KB source; psram +<KB> KB (peak +<KB> KB); internal +<KB> KB (min <KB> KB
   free); engine stack <n> of <n> unused; script thread stack <n> of <n> unused; heap peak <KB> KB`;
   the run fails when that line is missing, the three instances' peak passes 75 % of a script's
@@ -961,13 +962,16 @@ same routes and from a room's page, with the same log, state and events.
 - **Admission by memory**: a recipe is admitted when the PSRAM free now, less a runtime's limit
   (224 KB), is at least 512 KB (409 `Not enough memory for <id>: <n> KB free, <m> KB needed`;
   checked at install, update and start); before a recipe job or a refresh starts its thread, the
-  largest block of internal RAM must hold the thread's 20 KB and 16 KB for the TLS session (503
-  `Not enough internal memory: largest free block <n> KB, <m> KB needed`); an uninstall opens no
-  TLS session and frees memory, so it needs only the thread's 20 KB. The Mac reads no memory:
-  its admission always passes.
-- **Where it runs on the box**: the download, the checks, the write and the removal run on a
-  `recipe` thread whose stack is in internal RAM (the flash is never touched from a task whose
-  stack is in PSRAM); the load and unload of a runtime on the `script` thread. The scripts are not
+  largest block of internal RAM must hold 16 KB for the TLS session (503 `Not enough internal
+  memory: largest free block <n> KB, <m> KB needed`); on the box the `recipe` thread (20 KB) is
+  made once at start, so an install, an update or a refresh needs only those 16 KB and an uninstall,
+  which opens no TLS session, needs none; where a thread is made for each job (the QEMU run), the
+  thread's 20 KB count too (36 KB, 20 KB for an uninstall). When the box's `recipe` thread could
+  not be made at start (no 20 KB block), it logs it, and each recipe job runs on a thread made for it, the admission then counting its 20 KB (36 KB for an install, update or refresh, 20 KB for an uninstall). The Mac reads no memory: its admission always passes.
+- **Where it runs on the box**: the download, the checks, the write and the removal run on the
+  `recipe` thread, made once at start, whose stack is in internal RAM (the flash is never touched
+  from a task whose stack is in PSRAM), one job at a time; the load and unload of a runtime on the
+  `script` thread, whose stack is in PSRAM (nothing it runs touches the flash). The scripts are not
   in the full backup: a restore on the same box leaves the files (the restored instances start),
   on another box the restored instances stay stopped until the recipe is installed.
 - **Bounds**: 2 scripts of at most 16 KB, at most 8 instances of each (a ninth is refused: 400 `Too
@@ -986,8 +990,11 @@ same routes and from a room's page, with the same log, state and events.
   a script that makes it otherwise fails the recipe. A ninth instance never runs, whichever way it
   is started (a restart after a failure leaves it stopped, `Failed to restart: Too many instances
   of <recipe id> (max 8)`). On the box the scripts' memory is in PSRAM and every call into a script
-  runs on a stack in internal RAM (the engine thread, or the `script` thread, made at boot, for
-  the API's requests that change something, but the account's routes `/api/v1/auth/*`, which stay on the worker).
+  runs on a stack of 32 KB: the engine thread's, in internal RAM, or the `script` thread's, made at
+  boot, in PSRAM, for the API's requests that change something, but the account's routes
+  `/api/v1/auth/*`, which stay on the worker. The box's storage refuses a flash access made from a
+  PSRAM stack (`flash access from a PSRAM stack refused`, logged once per boot) instead of letting
+  the chip stop.
 - **When a script fails** (a call that throws): `Script error: <message>` in the instance's log, and
   the instance runs on (`Failed to start: Script error: ...` if it was the start); a throw inside a
   promise's `then` that no `catch` handled is `Script error: <message>` too, and a stack overflow
@@ -1943,8 +1950,8 @@ full queues, the orders queues full). Both are checked by tests on the Mac, whos
 are upper estimates of the ESP32's; a test fails when a bound is added to the core without being
 counted in the worst case. The tooling measures the engine's figures on the Dongle Max with the
 measuring image; they are written in `docs/memory-budget.md`, "On the box". The recipe jobs
-(a download and its checks, a write, a removal) run on a `recipe` thread of 20 KB of internal RAM,
-one at a time, and an install is admitted only when the PSRAM and the largest internal block leave
+(a download and its checks, a write, a removal) run on the `recipe` thread of 20 KB of internal RAM,
+made once at start, one job at a time, and an install is admitted only when the PSRAM and the largest internal block leave
 the reserves of "Runs script recipes". The radio image logs
 its own `heap:` line (the minimums since boot, the largest free block of each memory, the
 fragmentation's indicator, the engine stack's and the workers' stack's high-water marks) and, once, `memory-network:` (a snapshot with the server idle, for information),
