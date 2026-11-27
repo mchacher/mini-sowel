@@ -2,7 +2,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RecipeStore, Resources, StoreEntry } from "../../api";
 import { mockApi, resetStores } from "../../test-utils";
-import { RecipesCard } from "./RecipesCard";
+import { resetRecipeUpdates } from "../layout/useRecipeUpdates";
+import { PluginsPage } from "./PluginsPage";
 
 const STORE = "GET /api/v1/recipes/store";
 const REFRESH = "POST /api/v1/recipes/store/refresh";
@@ -15,6 +16,7 @@ const RESOURCES = "GET /api/v1/system/resources";
 afterEach(() => {
   cleanup();
   resetStores();
+  resetRecipeUpdates();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -39,16 +41,16 @@ const store = (recipes: StoreEntry[], error: string | null = null): RecipeStore 
   error,
 });
 
-const resources = (refused: string[] = []): Resources => ({
+const resources = (refused: string[] = [], uploaded: string[] = []): Resources => ({
   internal: null,
   psram: null,
   storage: { used: 0, total: null },
-  scripts: refused.map((id) => ({
+  scripts: [...refused, ...uploaded].map((id) => ({
     id,
-    version: null,
+    version: refused.includes(id) ? null : "0.1.0",
     source: "installed",
-    state: "refused",
-    reason: "Invalid signature",
+    state: refused.includes(id) ? "refused" : "ready",
+    reason: refused.includes(id) ? "Invalid signature" : null,
     held: 0,
     limit: 0,
     instances: 0,
@@ -58,8 +60,28 @@ const resources = (refused: string[] = []): Resources => ({
   })),
 });
 
-describe("RecipesCard", () => {
-  it("lists the catalogue, reading it again when it opens", async () => {
+const tab = (name: RegExp) => fireEvent.click(screen.getByRole("button", { name }));
+
+describe("PluginsPage", () => {
+  it("lists the installed recipes first, with the counts of both tabs", async () => {
+    const both = store([entry("a", "1.0.0", { installed: "1.0.0" }), entry("b", "2.0.0")]);
+    mockApi({
+      [STORE]: { body: both },
+      [REFRESH]: { body: both },
+      [RESOURCES]: { body: resources() },
+    });
+    render(<PluginsPage />);
+    const a = await screen.findByTestId("recipe-a");
+    expect(a.textContent).toContain("Recipe a");
+    expect(a.textContent).toContain("1.0.0");
+    expect(within(a).getByRole("button", { name: "Remove" })).toBeTruthy();
+    expect(within(a).queryByRole("button", { name: "Update" })).toBeNull();
+    expect(screen.queryByTestId("recipe-b")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Installed/ }).textContent).toBe("Installed1");
+    expect(screen.getByRole("button", { name: /^Store/ }).textContent).toBe("Store2");
+  });
+
+  it("lists the catalogue in the Store tab, reading it again when the page opens", async () => {
     const held = store([entry("a", "1.0.0")]);
     const fresh = store([entry("a", "1.0.0"), entry("b", "2.0.0")]);
     const api = mockApi({
@@ -67,15 +89,14 @@ describe("RecipesCard", () => {
       [REFRESH]: { body: fresh },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
     expect(await screen.findByTestId("recipe-b")).toBeTruthy();
     expect(api.count(REFRESH)).toBe(1);
     const a = screen.getByTestId("recipe-a");
-    expect(a.textContent).toContain("Recipe a");
     expect(a.textContent).toContain("What a does");
-    expect(a.textContent).toContain("Not installed");
     expect(within(a).getByRole("button", { name: "Install" })).toBeTruthy();
-    expect(within(a).queryByRole("button", { name: "Remove" })).toBeNull();
   });
 
   it("shows the list held when the refresh answers 429", async () => {
@@ -84,13 +105,14 @@ describe("RecipesCard", () => {
       [REFRESH]: { status: 429, body: { error: "Please wait 42s before refreshing again" } },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
     expect(await screen.findByTestId("recipe-a")).toBeTruthy();
-    await waitFor(() => expect(screen.getByTestId("recipe-a")).toBeTruthy());
     expect(screen.queryByText(/Please wait/)).toBeNull();
   });
 
-  it("installs a recipe and shows the answer's list", async () => {
+  it("installs a recipe from the Store tab and shows it installed", async () => {
     const after = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
     const api = mockApi({
       [STORE]: [{ body: store([entry("a", "1.0.0")]) }, { body: after }],
@@ -98,14 +120,21 @@ describe("RecipesCard", () => {
       [INSTALL]: { status: 201, body: { id: "a", version: "1.0.0" } },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
-    const a = await screen.findByTestId("recipe-a");
-    fireEvent.click(within(a).getByRole("button", { name: "Install" }));
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
+    fireEvent.click(
+      within(await screen.findByTestId("recipe-a")).getByRole("button", { name: "Install" }),
+    );
     await screen.findByText("Recipe installed.");
     expect(api.calls.find((c) => c.key === INSTALL)?.body).toEqual({ id: "a" });
     await waitFor(() =>
-      expect(screen.getByTestId("recipe-a").textContent).toContain("Installed: 1.0.0"),
+      expect(
+        within(screen.getByTestId("recipe-a")).queryByRole("button", { name: "Install" }),
+      ).toBeNull(),
     );
+    expect(screen.getByTestId("recipe-a").textContent).toContain("Installed");
+    tab(/^Installed/);
     expect(
       within(screen.getByTestId("recipe-a")).getByRole("button", { name: "Remove" }),
     ).toBeTruthy();
@@ -120,9 +149,8 @@ describe("RecipesCard", () => {
       [UNINSTALL_A]: { status: 204 },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
     const a = await screen.findByTestId("recipe-a");
-    expect(within(a).queryByRole("button", { name: "Install" })).toBeNull();
     fireEvent.click(within(a).getByRole("button", { name: "Update" }));
     await screen.findByText("Recipe updated.");
     expect(api.count(UPDATE)).toBe(1);
@@ -131,16 +159,20 @@ describe("RecipesCard", () => {
     expect(api.count(UNINSTALL_A)).toBe(1);
   });
 
-  it("shows no Update when the installed version is the catalogue's", async () => {
-    const same = store([entry("a", "1.0.0", { installed: "1.0.0" })]);
+  it("offers Update in the Store tab too, beside the Installed mark", async () => {
+    const newer = store([entry("a", "1.0.1", { installed: "1.0.0" })]);
     mockApi({
-      [STORE]: { body: same },
-      [REFRESH]: { body: same },
+      [STORE]: { body: newer },
+      [REFRESH]: { body: newer },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
-    const a = await screen.findByTestId("recipe-a");
-    expect(within(a).queryByRole("button", { name: "Update" })).toBeNull();
+    render(<PluginsPage />);
+    await screen.findByTestId("recipe-a");
+    tab(/^Store/);
+    const a = screen.getByTestId("recipe-a");
+    expect(within(a).getByRole("button", { name: "Update" })).toBeTruthy();
+    expect(a.textContent).toContain("Installed");
+    expect(within(a).queryByRole("button", { name: "Install" })).toBeNull();
   });
 
   it("shows the server's reason when an install is refused", async () => {
@@ -153,7 +185,9 @@ describe("RecipesCard", () => {
       },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
     fireEvent.click(
       within(await screen.findByTestId("recipe-a")).getByRole("button", { name: "Install" }),
     );
@@ -169,8 +203,8 @@ describe("RecipesCard", () => {
       [INSTALL]: { status: 201, body: { id: "a", version: "1.0.0" } },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
-    await screen.findByText("The catalogue lists no recipe.");
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
     const file = new File([new Uint8Array([1, 2, 3])], "a.srs", {
       type: "application/octet-stream",
     });
@@ -182,6 +216,21 @@ describe("RecipesCard", () => {
     expect(screen.getByRole("button", { name: "Upload a signed recipe" })).toBeTruthy();
   });
 
+  it("lists an uploaded recipe the catalogue lacks, and removes it", async () => {
+    const api = mockApi({
+      [STORE]: { body: store([]) },
+      [REFRESH]: { body: store([]) },
+      [RESOURCES]: [{ body: resources([], ["mine"]) }, { body: resources() }],
+      "POST /api/v1/recipes/mine/uninstall": { status: 204 },
+    });
+    render(<PluginsPage />);
+    const mine = await screen.findByTestId("refused-mine");
+    expect(mine.textContent).toContain("0.1.0");
+    fireEvent.click(within(mine).getByRole("button", { name: "Remove" }));
+    await screen.findByText("Recipe removed.");
+    expect(api.count("POST /api/v1/recipes/mine/uninstall")).toBe(1);
+  });
+
   it("lists a refused file with its reason and removes it", async () => {
     const api = mockApi({
       [STORE]: { body: store([]) },
@@ -189,7 +238,7 @@ describe("RecipesCard", () => {
       [RESOURCES]: [{ body: resources(["bad"]) }, { body: resources() }],
       [UNINSTALL_BAD]: { status: 204 },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
     const bad = await screen.findByTestId("refused-bad");
     expect(bad.textContent).toContain("File refused: Invalid signature");
     fireEvent.click(within(bad).getByRole("button", { name: "Remove" }));
@@ -198,13 +247,15 @@ describe("RecipesCard", () => {
     await waitFor(() => expect(screen.queryByTestId("refused-bad")).toBeNull());
   });
 
-  it("shows the error of the last read and keeps the list", async () => {
+  it("shows the error of the last read in the Store tab and keeps the list", async () => {
     mockApi({
       [STORE]: { body: store([entry("a", "1.0.0")], "no route to host") },
       [REFRESH]: { body: store([entry("a", "1.0.0")], "no route to host") },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
     expect((await screen.findByTestId("read-error")).textContent).toBe(
       "The catalogue could not be read: no route to host",
     );
@@ -218,9 +269,37 @@ describe("RecipesCard", () => {
       [REFRESH]: { body: native },
       [RESOURCES]: { body: resources() },
     });
-    render(<RecipesCard />);
+    render(<PluginsPage />);
+    await screen.findByText("No plugins installed");
+    tab(/^Store/);
     const row = await screen.findByTestId("recipe-motion-light");
     expect(row.textContent).toContain("Provided by Solite");
     expect(within(row).queryByRole("button")).toBeNull();
+  });
+
+  it("searches the list of the active tab by id, name and description", async () => {
+    const both = store([
+      entry("a", "1.0.0", { installed: "1.0.0" }),
+      entry("b", "1.0.0", { installed: "1.0.0", name: "Night light" }),
+    ]);
+    mockApi({
+      [STORE]: { body: both },
+      [REFRESH]: { body: both },
+      [RESOURCES]: { body: resources() },
+    });
+    render(<PluginsPage />);
+    await screen.findByTestId("recipe-a");
+    const field = screen.getByLabelText("Search plugins...");
+    fireEvent.input(field, { target: { value: "night" } });
+    expect(screen.queryByTestId("recipe-a")).toBeNull();
+    expect(screen.getByTestId("recipe-b")).toBeTruthy();
+    fireEvent.input(field, { target: { value: "zzz" } });
+    expect(screen.getByText('No plugins match "zzz"')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(screen.getByTestId("recipe-a")).toBeTruthy();
+    tab(/^Store/);
+    fireEvent.input(field, { target: { value: "what b" } });
+    expect(screen.queryByTestId("recipe-a")).toBeNull();
+    expect(screen.getByTestId("recipe-b")).toBeTruthy();
   });
 });

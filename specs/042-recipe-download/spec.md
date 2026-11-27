@@ -119,7 +119,7 @@ of spec 041 (load, bounds, failure and restart).
 4. `POST /api/v1/recipes/store/refresh` reads it again and answers as R2.3: at most once a minute
    (429 otherwise, as the version check); 503 while the clock is not set (`The clock is not set yet:
    reading the recipe catalogue needs the date`, as `release_ticket`); R3.1's 409s; R4.2's 503; a
-   read that fails keeps the last list and answers it with `error` (200). The Recipes card asks it
+   read that fails keeps the last list and answers it with `error` (200). The Plugins page's Store tab asks it
    when it opens (a 429 then shows the list held).
 5. The routes are Solite's, under `/recipes/*` (decided 2026-11-27): Sowel's plugin store
    (`/plugins/store`, `/plugins/install` with `{ repo }`) serves TypeScript packages, not scripts.
@@ -215,7 +215,9 @@ of spec 041 (load, bounds, failure and restart).
    internal RAM must be at least `FETCH_STACK_BYTES` (20 KB, the job's thread) plus
    `RECIPE_INTERNAL_MARGIN` (16 KB: the HTTP client's 5 KB and mbedTLS's 8 KB of small internal
    allocations, rounded up), else 503 `Not enough internal memory: largest free block <n> KB, <m> KB
-   needed`.
+   needed`. An **uninstall** opens no TLS session and frees memory: it needs only
+   `FETCH_STACK_BYTES` (its thread), so it passes when a download would be refused (revised after
+   the box demo of 2026-11-27, where a 27 KB largest block refused the removal of a second recipe).
 3. Instances: the 8 of D74 stay the bound; a runtime that reaches its limit fails its recipe as in
    spec 041. No rule of its own.
 4. The memory is read through an adapter of the core, `MemoryProbe`, over the types
@@ -239,9 +241,17 @@ of spec 041 (load, bounds, failure and restart).
    thread), and kept.
 3. Settings gets a "Resources" card (Sowel's `card`, tokens and text sizes): the two memories as a
    bar each (used, lowest free and the PSRAM reserve marked), the storage, and a row per script
-   recipe; a "Recipes" card beside it lists the catalogue with Install, Update and Remove, the
-   refused files with their reason and Remove, the error of the last read, and an "Upload a signed
-   recipe" button. A row hidden when its figure is `null`. French and English texts. The interface's
+   recipe.
+4. **A "Plugins" page in Administration, as Sowel's** (`../sowel/ui/src/pages/PluginsPage.tsx`,
+   entry `nav.plugins`, icon `Package`, after Discovery as Sowel puts it after Integrations; revised
+   after the box demo of 2026-11-27, replacing the Recipes card of Settings): Sowel's two tabs,
+   "Installed" (each installed recipe: name, version, Update when the catalogue holds a newer one,
+   Remove; the refused files with their reason and Remove) and "Store" (the catalogue: Install, or
+   "Installed"/Update; the error of the last read; Sowel's search field), the "Upload a signed
+   recipe" button, and Sowel's update badge on the sidebar entry (the count of installed recipes
+   the held catalogue has newer). Recipes only: Solite installs no integration, so Sowel's category
+   filter is cut. Ported through `preact/compat` where Sowel's components fit; the cut parts are
+   named in the file's header. A row hidden when its figure is `null`. French and English texts. The interface's
    budget (170 KB gzip) holds; the added size is written in `docs/design-system.md`.
 
 ### R6: Bounds and cost
@@ -303,7 +313,7 @@ One pass (D39), the user present, after their yes to flash (D6, their own `--yes
   refused during a recipe job; the safe mode's routes let through gain the uninstall.
 - "Updates itself from a signed file": "One at a time" and "Restarts on request" gain R3.1's rows.
 - "Supervises its engine": in safe mode no installed script is loaded, the uninstall goes through.
-- "Shows the home in the browser": the Resources and Recipes cards.
+- "Shows the home in the browser": the Resources card of Settings and the Plugins page of Administration.
 - "Publishing a release": the image carries the recipe key; `release.sh` and the release workflow
   refuse to build without `release/recipe-key.pub`.
 - "Runs a box session in one command": B11 with `--recipe-file` (the F2 group of R7 is built with the box run, plan step 13).

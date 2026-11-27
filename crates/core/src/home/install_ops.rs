@@ -173,10 +173,15 @@ impl Home {
         })
     }
 
-    /// R4.2: the largest block of internal RAM must hold a job's thread and its TLS session.
-    pub(crate) fn internal_refusal(&self) -> Option<Failure> {
+    /// R4.2: the largest block of internal RAM must hold a job's thread and its TLS session; an
+    /// uninstall (`tls` false) opens no session and needs only its thread's stack.
+    pub(crate) fn internal_refusal(&self, tls: bool) -> Option<Failure> {
         let reading = self.install.installs.probe().read()?;
-        let needed = FETCH_STACK_BYTES + RECIPE_INTERNAL_MARGIN;
+        let needed = if tls {
+            FETCH_STACK_BYTES + RECIPE_INTERNAL_MARGIN
+        } else {
+            FETCH_STACK_BYTES
+        };
         (reading.stats.internal_largest < needed).then(|| {
             Failure::new(
                 503,

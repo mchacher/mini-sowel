@@ -30,5 +30,6 @@ describe("admin-nav-items addresses (spec 030, R1)", () => {
     expect(adminPageFromHash("#/zone/x")).toBeNull();
     expect(adminPageFromHash("#/discovery/solite")).toBe("discovery");
     expect(adminPageFromHash("#/settings")).toBe("settings");
+    expect(adminPageFromHash("#/plugins")).toBe("plugins");
   });
 });

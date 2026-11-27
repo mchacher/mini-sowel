@@ -7,6 +7,7 @@ import { SidebarItem } from "./SidebarItem";
 import { SoliteLogo } from "./SoliteLogo";
 import { ZoneTree } from "./ZoneTree";
 import { useAuth } from "../../store/useAuth";
+import { useRecipeUpdates } from "./useRecipeUpdates";
 
 /** The page shown: an administration page, or `null` for a room's page. */
 export type Page = AdminPage;
@@ -25,6 +26,7 @@ function Brand() {
 function AdminSection({ page, onPick }: { page: Page | null; onPick?: () => void }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(page !== null);
+  const recipeUpdateCount = useRecipeUpdates();
   useEffect(() => {
     if (page !== null) setExpanded(true);
   }, [page]);
@@ -50,16 +52,36 @@ function AdminSection({ page, onPick }: { page: Page | null; onPick?: () => void
       </button>
       {expanded && (
         <div className="mt-0.5 ml-3 space-y-0.5">
-          {ADMIN_NAV_ITEMS.map(({ to, page: entry, labelKey, icon: Icon }) => (
-            <SidebarItem
-              key={entry}
-              to={to}
-              label={t(labelKey)}
-              icon={<Icon size={16} strokeWidth={1.5} />}
-              active={page === entry}
-              onClick={onPick}
-            />
-          ))}
+          {ADMIN_NAV_ITEMS.map(({ to, page: entry, labelKey, icon: Icon }) => {
+            const showBadge = entry === "plugins" && recipeUpdateCount > 0;
+            return (
+              <SidebarItem
+                key={entry}
+                to={to}
+                label={t(labelKey)}
+                icon={
+                  <span className="relative">
+                    <Icon size={16} strokeWidth={1.5} />
+                    {showBadge && (
+                      <span className="absolute -top-1 -right-1 w-2 h-2 bg-error rounded-full" />
+                    )}
+                  </span>
+                }
+                badge={
+                  showBadge ? (
+                    <span
+                      data-testid="plugins-badge"
+                      className="text-micro font-medium text-error bg-error/10 px-1.5 py-0.5 rounded-full"
+                    >
+                      {recipeUpdateCount}
+                    </span>
+                  ) : undefined
+                }
+                active={page === entry}
+                onClick={onPick}
+              />
+            );
+          })}
         </div>
       )}
     </div>
