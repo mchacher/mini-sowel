@@ -147,18 +147,13 @@
 //! - `supervisor.rs::MAX_KEPT`: six restart times (48 bytes) in the supervisor's record, which
 //!   lives in RTC memory (96 bytes in all), not in the heap: nothing to drive here.
 
-use std::borrow::Cow;
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+mod worst_case;
 
 use peak_alloc::PeakAlloc;
-use serde_json::{Value, json};
-use solite_core::api::{Reach, Reply, Request, handle, handle_stream};
+use serde_json::json;
+use solite_core::api::{Reply, handle, handle_stream};
 use solite_core::backup::{MAX_ARCHIVE_BYTES, MAX_FILE_BYTES};
-use solite_core::devices::{
-    Device, DeviceData, DeviceOrder, DeviceStatus, DeviceWithDetails, Devices, Id, MAX_DATA,
-    MAX_DEVICES, MAX_ORDERS, PowerSource, Route, ValueType,
-};
+use solite_core::devices::{DeviceWithDetails, Devices, Id, MAX_DEVICES};
 use solite_core::equipments::{
     Alias, Extras, Field, MAX_BINDINGS, MAX_EXTRAS_BYTES, MAX_EXTRAS_TOTAL_BYTES, MAX_ID_CHARS,
     Piece, RawObject,
@@ -175,16 +170,16 @@ use solite_core::radio::{MeasureEvent, Sender};
 use solite_core::recipes::{MAX_INSTANCES, MAX_INSTANCES_PER_SCRIPT, MAX_LOG_ENTRIES};
 use solite_core::settings::MAX_HOME_NAME_CHARS;
 use solite_core::zones::MAX_ZONES;
+use worst_case::{T0, created_id, device, key, request};
 
+/// The process counts every thread's bytes: this file holds the engine's test alone, so that no
+/// other test's thread (its end, its output, its frees) moves the peak; the checks that share its
+/// home are in `memory_worst_case_checks.rs`.
 #[global_allocator]
 static ALLOCATOR: PeakAlloc = PeakAlloc;
 
-/// Serialises the two tests of this file.
-static LOCK: Mutex<()> = Mutex::new(());
-
 /// The ceiling of the engine with every bound at its maximum, decision D23.
 const CEILING_BYTES: usize = 1024 * 1024;
-const T0: u64 = 1_795_252_323_120;
 const MAX_EQUIPMENTS_API: usize = 64;
 /// HTTP workers of the host, each reading one body at most `api::MAX_BODY_BYTES` long.
 const HTTP_WORKERS: usize = 4;
@@ -198,112 +193,6 @@ const RADIO_ESTIMATE_BYTES: usize = 48 * 1024;
 /// its 32 entries held (about 48 KB), one job's signed file and source (64 KB), the refused
 /// files' names and reasons (under 2 KB). Rounded up to 152 KB (spec 053: 128 KB before the files grew to 32 KB; the sum is 146 KB).
 const INSTALL_ESTIMATE_BYTES: usize = 152 * 1024;
-
-fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
-    Request {
-        method,
-        path,
-        host: Some("127.0.0.1:8080"),
-        port: 8080,
-        reach: Reach::Loopback,
-        content_type: Some("application/json"),
-        authorization: None,
-        content_length: None,
-        body,
-    }
-}
-
-/// A key of exactly 32 characters, unique per device and rank.
-fn key(prefix: &str, device: usize, rank: usize) -> String {
-    format!("{:_<32}", format!("{prefix}{device:02}_{rank:02}"))
-}
-
-/// A UUID that no other call gives, for the devices built by hand.
-fn id(counter: &mut u32) -> Id {
-    *counter += 1;
-    let mut bytes = [0x77u8; 16];
-    bytes[..4].copy_from_slice(&counter.to_be_bytes());
-    Id::from_random(bytes)
-}
-
-/// A device with `MAX_DATA` data (the last one of a light a four-field colour) and `MAX_ORDERS` orders. Devices 0 to 31 have `voltage` first
-/// (the button's data and the live events'), devices 0 to 15 `state` as first order (the
-/// lights'); the other keys are unique, so aliases never collide between the devices an
-/// equipment binds.
-fn device(index: usize, counter: &mut u32) -> DeviceWithDetails {
-    let data = (0..MAX_DATA)
-        .map(|rank| {
-            let name = if rank == 0 && index < 32 {
-                Cow::Borrowed("voltage")
-            } else {
-                Cow::Owned(key("data", index, rank))
-            };
-            // The last data of each light (devices 0 to 15, those with a `state` order) is a
-            // colour: Zigbee2MQTT's object with its four fields, the largest value the radio can
-            // give a data (spec 031). A colour object costs 632 bytes (one B-tree node); only a
-            // light has a Color Control cluster, so only the 16 lights hold one.
-            let colour = rank == MAX_DATA - 1 && index < 16;
-            DeviceData {
-                id: id(counter),
-                key: name,
-                value_type: if colour {
-                    ValueType::Json
-                } else {
-                    ValueType::Number
-                },
-                category: Cow::Borrowed(if colour { "light_color" } else { "measure" }),
-                value: if colour {
-                    json!({"x": 0.3127, "y": 0.329, "hue": 359, "saturation": 100})
-                } else {
-                    json!(3000)
-                },
-                unit: (!colour).then_some(Cow::Borrowed("mV")),
-                last_updated: Some(T0),
-                last_changed: Some(T0),
-            }
-        })
-        .collect();
-    let orders = (0..MAX_ORDERS)
-        .map(|rank| {
-            let name = if rank == 0 && index < 16 {
-                Cow::Borrowed("state")
-            } else {
-                Cow::Owned(key("order", index, rank))
-            };
-            DeviceOrder {
-                id: id(counter),
-                key: name,
-                value_type: ValueType::Boolean,
-                category: Some(Cow::Borrowed("light")),
-                min: None,
-                max: None,
-                value_on: Some(Cow::Borrowed("ON")),
-                value_off: Some(Cow::Borrowed("OFF")),
-            }
-        })
-        .collect();
-    DeviceWithDetails {
-        device: Device {
-            id: id(counter),
-            source_device_id: format!("0x00124b00123456{index:02x}").into_boxed_str(),
-            name: format!("{:D<64}", format!("Device {index:02}")).into_boxed_str(),
-            manufacturer: Some("Manufacturer".into()),
-            model: Some("Model".into()),
-            zone_id: None,
-            status: DeviceStatus::Online,
-            power_source: PowerSource::Mains,
-            last_seen: Some(T0),
-            created_at: T0,
-            updated_at: T0,
-        },
-        data,
-        orders,
-        route: Route {
-            nwk: Some(0x1234),
-            endpoint: Some(1),
-        },
-    }
-}
 
 fn eui(index: usize) -> [u8; 8] {
     [
@@ -331,14 +220,8 @@ fn voltage(device: usize, value: f64) -> MeasureEvent {
     }
 }
 
-fn created_id(reply: &solite_core::api::Response) -> String {
-    let value: Value = serde_json::from_str(reply.body.as_ref().unwrap()).unwrap();
-    value["id"].as_str().unwrap().to_string()
-}
-
 #[test]
 fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
-    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut calls = 0u32;
     let mut random = move |buffer: &mut [u8]| -> Result<(), String> {
         calls += 1;
@@ -830,207 +713,4 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     );
     assert!(settings_json.len() < 1024, "{settings_json}");
     assert!(worst < CEILING_BYTES, "worst case {worst} bytes");
-}
-
-/// Every `.rs` file under `dir`.
-fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap().flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            sources(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-}
-
-#[test]
-fn every_memory_bound_is_listed_in_the_header() {
-    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let header: String = include_str!("memory_worst_case.rs")
-        .lines()
-        .take_while(|l| l.starts_with("//!"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    // The core's own sources, named from `crates/core/src`; the recipe SDK and the recipes, named
-    // from `crates/` (`recipe-sdk/src/bounds.rs`).
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let roots = [
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        crates.join("recipe-sdk/src"),
-    ];
-    let mut missing = Vec::new();
-    let mut found = 0;
-    for root in roots {
-        let base = if root.starts_with(Path::new(env!("CARGO_MANIFEST_DIR")).join("src")) {
-            root.clone()
-        } else {
-            crates.clone()
-        };
-        let mut files = Vec::new();
-        sources(&root, &mut files);
-        for file in files {
-            let text = std::fs::read_to_string(&file).unwrap();
-            let relative = file
-                .strip_prefix(&base)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            for line in text.lines() {
-                let Some(rest) = line.trim_start().strip_prefix("pub const MAX_") else {
-                    continue;
-                };
-                found += 1;
-                let name: String = rest
-                    .chars()
-                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
-                    .collect();
-                let entry = format!("`{relative}::MAX_{name}`");
-                if !header.contains(&entry) {
-                    missing.push(entry);
-                }
-            }
-        }
-    }
-    assert!(found > 20, "only {found} bounds found: the scan is broken");
-    assert!(
-        missing.is_empty(),
-        "a `pub const MAX_*` is missing from the header of memory_worst_case.rs: {missing:?}"
-    );
-}
-
-/// `MAX_SCRIPT_RECIPES` script recipes pushed to their memory limit, `MAX_INSTANCES_PER_SCRIPT`
-/// instances in each (spec 041, R6.5): their memory, QuickJS's own, on its own line.
-#[cfg(feature = "script-recipes")]
-#[test]
-fn scripts_pushed_to_their_limit_with_four_instances_each() {
-    use solite_core::recipes::native::{NativeHost, RecipeName};
-    use solite_core::recipes::script::{
-        SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes, SystemRuntimes,
-    };
-    use solite_core::recipes::{MAX_SCRIPT_RECIPES, ScriptClock};
-    use solite_recipe_sdk::{Clock, Recipe};
-    use std::sync::Arc;
-
-    let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut calls = 0u32;
-    let mut random = move |buffer: &mut [u8]| -> Result<(), String> {
-        calls += 1;
-        buffer.fill(0x5A);
-        buffer[..4].copy_from_slice(&calls.to_be_bytes());
-        Ok(())
-    };
-    // A zone with 16 lights, for the instances.
-    let mut counter = 0u32;
-    let list: Vec<DeviceWithDetails> = (0..16).map(|i| device(i, &mut counter)).collect();
-    let devices = Devices::from_list(list);
-    let device_ids: Vec<String> = devices
-        .list()
-        .iter()
-        .map(|d| d.device.id.to_string())
-        .collect();
-    let mut home = Home::from_devices(devices, T0);
-    let created = handle(
-        &mut home,
-        &request("POST", "/api/v1/zones", br#"{"name":"Garage"}"#),
-        T0,
-        &mut random,
-    );
-    assert_eq!(created.status, 201, "{created:?}");
-    let zone = created_id(&created);
-    let lights: Vec<String> = device_ids
-        .iter()
-        .enumerate()
-        .map(|(i, device)| {
-            let body = json!({
-                "name": format!("Light {i}"), "type": "light_onoff",
-                "zoneId": zone, "deviceIds": [device],
-            })
-            .to_string();
-            let created = handle(
-                &mut home,
-                &request("POST", "/api/v1/equipments", body.as_bytes()),
-                T0,
-                &mut random,
-            );
-            assert_eq!(created.status, 201, "{created:?}");
-            created_id(&created)
-        })
-        .collect();
-
-    let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(SystemRuntimes);
-    let clock: ScriptClock = Arc::new(|| 0);
-    let params = json!({"zone": zone, "lights": lights, "timeout": "20s", "maxOnDuration": "5m"});
-    let script = include_str!("../../../recipes/scripts/motion-light.js");
-    // What a script of this size holds with its instances, with no ballast.
-    let per_recipe = MAX_INSTANCES_PER_SCRIPT;
-    let names = |k: usize| RecipeName {
-        id: format!("motion-light-{k}").into(),
-        name: "Motion Light".into(),
-    };
-    let source = |k: usize, ballast: usize| {
-        let text = script.replace("id: \"motion-light\"", &format!("id: \"motion-light-{k}\""));
-        format!("{text}\nvar ballast = \"x\".repeat({ballast});\n")
-    };
-    let started = |k: usize, ballast: usize| -> ScriptRecipe {
-        let (mut recipe, _) = ScriptRecipe::load(&source(k, ballast), &runtimes, &clock).unwrap();
-        let name = names(k);
-        let host = NativeHost::new(&home, Id::ROOT_ZONE, &name, T0, T0);
-        for handle in 0..per_recipe {
-            let clock = Clock { mono: T0, wall: T0 };
-            recipe
-                .start(&host, u32::try_from(handle).unwrap(), &params, clock)
-                .unwrap();
-        }
-        recipe
-    };
-    let bare = started(0, 0).held_bytes();
-    // The ballast takes each runtime to about 85 % of its limit (a runtime that still holds 90 %
-    // after a collection has failed).
-    let target = SYSTEM_MEMORY_LIMIT / 100 * 85;
-    let ballast = target - bare;
-    let recipes: Vec<ScriptRecipe> = (0..MAX_SCRIPT_RECIPES)
-        .map(|k| started(k, ballast))
-        .collect();
-    let instances: usize = recipes.iter().map(ScriptRecipe::instance_count).sum();
-    assert_eq!(instances, MAX_SCRIPT_RECIPES * MAX_INSTANCES_PER_SCRIPT);
-    let held: Vec<usize> = recipes.iter().map(ScriptRecipe::held_bytes).collect();
-    let total: usize = held.iter().sum();
-    println!(
-        "script memory: {MAX_SCRIPT_RECIPES} scripts at their limit, {instances} instances: {held:?}, {total} B in all (the Mac's limit is {SYSTEM_MEMORY_LIMIT} B each, the box's limit 224 KB each)"
-    );
-    for bytes in &held {
-        assert!(*bytes <= SYSTEM_MEMORY_LIMIT / 100 * 90, "{held:?}");
-        assert!(*bytes >= SYSTEM_MEMORY_LIMIT / 100 * 80, "{held:?}");
-    }
-    assert!(total < MAX_SCRIPT_RECIPES * SYSTEM_MEMORY_LIMIT, "{total}");
-
-    // A script of about 32 KB of real code (spec 053), loaded with no ballast and 4 instances: the
-    // source, its bytecode and the instances stay under one runtime's limit.
-    let big = include_str!("fixtures/scripts/big-recipe.js");
-    assert!(
-        big.len() > 32_000 && big.len() <= 32 * 1024,
-        "{}",
-        big.len()
-    );
-    let (mut recipe, _) = ScriptRecipe::load(big, &runtimes, &clock).unwrap();
-    let loaded = recipe.held_bytes();
-    let name = RecipeName {
-        id: "big-recipe".into(),
-        name: "Big Recipe".into(),
-    };
-    let host = NativeHost::new(&home, Id::ROOT_ZONE, &name, T0, T0);
-    for handle in 0..per_recipe {
-        let clock = Clock { mono: T0, wall: T0 };
-        recipe
-            .start(&host, u32::try_from(handle).unwrap(), &params, clock)
-            .unwrap();
-    }
-    assert_eq!(recipe.instance_count(), MAX_INSTANCES_PER_SCRIPT);
-    let held = recipe.held_bytes();
-    println!(
-        "big script memory: {} B of source, loaded {loaded} B, {MAX_INSTANCES_PER_SCRIPT} instances {held} B (the limit is {SYSTEM_MEMORY_LIMIT} B)",
-        big.len()
-    );
-    assert!(held < SYSTEM_MEMORY_LIMIT / 100 * 90, "{held}");
 }
