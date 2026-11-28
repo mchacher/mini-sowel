@@ -5,7 +5,7 @@
 - [x] 2. Catalog, measures, reporting.
 - [x] 3. ZCL commands and order resolution.
 - [x] 4. Simulator shutter and scenario; tests; validate.
-- [ ] 5. Review.
+- [x] 5. Review.
 
 Not applicable: interface (the equipment page shows any order and data).
 

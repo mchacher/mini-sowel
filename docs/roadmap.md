@@ -539,4 +539,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-27: spec 045 done (D83): the box's `script` thread's stack in PSRAM, the `recipe` thread made once; on the box, two recipes of 8 instances and 5 install cycles, internal RAM at least 64.6 KB, every install accepted.
 - 2026-11-27: spec 048 done (I1, first part): `power`, `energy`, `current` of a metering plug, their scale read once; buttons, shutters, thermostats and `contact_window` remain in I1.
 - 2026-11-28: spec 049 done (I1, second part): a button's `action` from its On/Off, Level and Scenes commands (generic names); shutters, thermostats and `contact_window` remain in I1.
-- 2026-11-28: spec 050 built (I1, third part): a shutter's `position` and its `state` and `position` orders (Window Covering); Solite has no zone orders (`allShuttersClose`), so none reaches the shutter; thermostats and `contact_window` remain in I1.
+- 2026-11-28: spec 050 done (I1, third part): a shutter's `position` and its `state` and `position` orders (Window Covering); Solite has no zone orders (`allShuttersClose`), so none reaches the shutter; thermostats and `contact_window` remain in I1.

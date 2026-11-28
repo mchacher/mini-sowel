@@ -69,3 +69,6 @@ orders: the Window Covering cluster (`0x0102`) appears in no code.
 ## How the user will check it
 `--sim` with a shutter scenario (`scenarios/shutter.json`): the equipment page opens, closes,
 stops and sets a position, the position following.
+
+### Result (2026-11-28)
+`validate --skip-slow` green (1887 tests). Code review (Sonnet): no finding to fix; noted: a device with both a light cluster and Window Covering would have two `state` orders (no such device known), and a shutter that does not report keeps its last position after an order. Not run with a real shutter: none on the box.
