@@ -105,6 +105,9 @@ pub struct WriteResponse {
     pub tsn: u8,
     /// The single status byte 0x00: everything was written. Any other answer is a refusal.
     pub written: bool,
+    /// The first status byte: 0x00 when written, else the device's refusal (0x86 unsupported
+    /// attribute, 0x87 invalid value, 0x88 read only...).
+    pub status: u8,
 }
 
 /// Reads a Write Attributes Response (global command 0x04).
@@ -120,6 +123,7 @@ pub fn parse_write_attributes_response(frame: &[u8]) -> Result<WriteResponse, Zc
     Ok(WriteResponse {
         tsn: header.tsn,
         written: payload == [STATUS_SUCCESS],
+        status: payload[0],
     })
 }
 

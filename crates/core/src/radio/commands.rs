@@ -295,7 +295,12 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 zcl::DefaultResponse {
                     tsn: written.tsn,
                     command: 0x02,
-                    status: if written.written { 0 } else { 0x01 },
+                    // The device's own refusal code, logged and reported as it is.
+                    status: if written.written {
+                        0
+                    } else {
+                        written.status.max(0x01)
+                    },
                 }
             }
         };

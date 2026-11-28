@@ -732,3 +732,15 @@ fn a_setpoint_write_is_a_global_write_attributes_of_0x0012_int16_on_the_thermost
     );
     assert_eq!((write.cluster(), write.id()), (0x0201, 0x02));
 }
+
+#[test]
+fn a_refused_write_keeps_the_device_s_own_status() {
+    use solite_core::radio::zcl::parse_write_attributes_response;
+    // Unsupported attribute (0x86) for 0x0012 (spec 051): the code is kept, not 0x01.
+    let refused = parse_write_attributes_response(&[0x18, 0x07, 0x04, 0x86, 0x12, 0x00]).unwrap();
+    assert!(!refused.written);
+    assert_eq!(refused.status, 0x86);
+    let written = parse_write_attributes_response(&[0x18, 0x08, 0x04, 0x00]).unwrap();
+    assert!(written.written);
+    assert_eq!(written.status, 0x00);
+}

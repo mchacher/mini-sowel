@@ -49,17 +49,18 @@ valve or thermostat (Sonoff TRVZB, Danfoss Ally, Bosch, Hive) is a `0x0201` serv
 - The roadmap's I1 counts and its note on `thermostat`.
 
 ## Acceptance criteria
-- [ ] LocalTemperature 2150: `local_temperature` 21.5 °C; 0x8000 dropped (tested).
-- [ ] OccupiedHeatingSetpoint 1900: `setpoint` 19 °C (tested).
-- [ ] Order `setpoint` 20.5: Write Attributes `0x0012` int16 2050 (tested).
-- [ ] Order 4 or 31 or "a": refused (tested).
-- [ ] The simulated thermostat takes the write and reports it (tested).
-- [ ] validate green.
+- [x] LocalTemperature 2150: `local_temperature` 21.5 °C; 0x8000 dropped (tested).
+- [x] OccupiedHeatingSetpoint 1900: `setpoint` 19 °C (tested).
+- [x] Order `setpoint` 20.5: Write Attributes `0x0012` int16 2050 (tested).
+- [x] Order 4 or 31 or "a": refused (tested).
+- [x] The simulated thermostat takes the write and reports it (tested).
+- [x] validate green.
 
 ## Edge cases
 - `0x8000` (invalid) on either attribute: dropped.
-- A write the device refuses (its Write Attributes Response not success): logged; the setpoint
-  stays what the device reports.
+- A write the device refuses (its Write Attributes Response not success): logged with the
+  device's own status (0x86, 0x87, 0x88...); the setpoint stays what the device reports.
+- Rounding to 0.1 °C is half away from zero (20.25 → 20.3).
 - Limits of the device (MinHeatSetpointLimit `0x0015`, Max `0x0016`) narrower than 5..30: the
   device refuses; not read in this part.
 
@@ -70,3 +71,6 @@ valve or thermostat (Sonoff TRVZB, Danfoss Ally, Bosch, Hive) is a `0x0201` serv
 ## How the user will check it
 `--sim` with a thermostat scenario (`scenarios/thermostat.json`): the equipment page shows the
 temperature and the setpoint, and setting 20.5 °C is followed by the report.
+
+### Result (2026-11-28)
+`validate --skip-slow` green (1894 tests). Code review (Sonnet): no blocking finding; a refused write reported 0x01 instead of the device's code (fixed, tested). Not run with a real thermostat: none on the box.

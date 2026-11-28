@@ -542,4 +542,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-27: spec 048 done (I1, first part): `power`, `energy`, `current` of a metering plug, their scale read once; buttons, shutters, thermostats and `contact_window` remain in I1.
 - 2026-11-28: spec 049 done (I1, second part): a button's `action` from its On/Off, Level and Scenes commands (generic names); shutters, thermostats and `contact_window` remain in I1.
 - 2026-11-28: spec 050 done (I1, third part): a shutter's `position` and its `state` and `position` orders (Window Covering); Solite has no zone orders (`allShuttersClose`), so none reaches the shutter; thermostats and `contact_window` remain in I1.
-- 2026-11-28: spec 051 built (I1, fourth part): a thermostat's `local_temperature` and `setpoint`, and the `setpoint` order as a Write Attributes (Thermostat); `contact_window` remains in I1.
+- 2026-11-28: spec 051 done (I1, fourth part): a thermostat's `local_temperature` and `setpoint`, and the `setpoint` order as a Write Attributes (Thermostat); `contact_window` remains in I1.

@@ -1,11 +1,11 @@
 # Plan: Spec 051
 
 ## Steps
-- [ ] 1. Living spec, Sowel subset, roadmap.
-- [ ] 2. Catalog, measures, reporting.
-- [ ] 3. The setpoint write and its order.
-- [ ] 4. Simulator thermostat and scenario; tests; validate.
-- [ ] 5. Review.
+- [x] 1. Living spec, Sowel subset, roadmap.
+- [x] 2. Catalog, measures, reporting.
+- [x] 3. The setpoint write and its order.
+- [x] 4. Simulator thermostat and scenario; tests; validate.
+- [x] 5. Review.
 
 Not applicable: interface.
 
