@@ -616,7 +616,7 @@ dependencies = [
 
 [[package]]
 name = "solite-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chacha20",
  "ed25519-dalek",
@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "solite-host"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ctrlc",
  "ed25519-dalek",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "solite-recipe-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "solite-sim"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "log",
  "peak_alloc",
@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "solite-ui-embed"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
 ]
