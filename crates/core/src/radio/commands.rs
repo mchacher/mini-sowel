@@ -267,7 +267,10 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
     pub(super) fn note_route_of(&mut self, message: &IncomingMessage, eui64: [u8; 8]) {
         let light_cluster = matches!(
             message.aps.cluster,
-            zcl::CLUSTER_ON_OFF | zcl::CLUSTER_LEVEL_CONTROL | zcl::CLUSTER_COLOR_CONTROL
+            zcl::CLUSTER_ON_OFF
+                | zcl::CLUSTER_LEVEL_CONTROL
+                | zcl::CLUSTER_COLOR_CONTROL
+                | zcl::CLUSTER_WINDOW_COVERING
         );
         let endpoint = light_cluster.then_some(message.aps.source_endpoint);
         self.commands.note_route(eui64, message.sender, endpoint);
@@ -311,8 +314,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 count,
             }
         };
-        self.commands
-            .push_read(read(zcl::CLUSTER_ON_OFF, &[zcl::ATTRIBUTE_ON_OFF]));
+        // A shutter has no On/Off and is still moving: its reports give the position (spec 050).
+        if command.cluster() != zcl::CLUSTER_WINDOW_COVERING {
+            self.commands
+                .push_read(read(zcl::CLUSTER_ON_OFF, &[zcl::ATTRIBUTE_ON_OFF]));
+        }
         let colour: &[u16] = match command {
             zcl::Command::MoveToColorTemperature(_) => &[zcl::ATTRIBUTE_COLOR_TEMPERATURE],
             zcl::Command::MoveToColor { .. } => {

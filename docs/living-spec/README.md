@@ -350,13 +350,20 @@ gets `action` (category `action`, type `text`): the generic name of the command 
 `off`, `toggle`, `brightness_move_up`, `brightness_move_down`, `brightness_step_up`,
 `brightness_step_down`, `brightness_stop` or `recall_<scene>`; every command is a
 `device.data.updated` event, even the same one twice. The names of a model's own buttons
-(`single`, `double`...) are not known. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
+(`single`, `double`...) are not known. A shutter (Window Covering `0x0102`) gets `position`
+(shutter_position, %, 100 open, 0 closed: `100 - CurrentPositionLiftPercentage`; a lift above 100
+is dropped), reported at most every 1 s, at least every 300 s, on a change of 1. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
 and `saturation` (0 to 100): the colour measures of one message replace their fields once (one
 `device.data.updated`), and a message carrying X/Y and no hue/saturation drops hue and saturation
 (and the reverse), so the object never mixes two colours. Its orders (`DeviceOrder`): `state`
 (light_toggle, `ON` / `OFF`) for an on/off device, `brightness` (set_brightness, 0 to 254) for a
 dimmable one, `color_temp` (set_color_temp, 150 to 500) and `color` (set_color, type `json`) for a
-colour one (every device with the colour cluster, a tunable white bulb included). A colour bulb
+colour one (every device with the colour cluster, a tunable white bulb included), and for a
+shutter `state` (shutter_move, type `text`: `OPEN`, `CLOSE` or `STOP`, any case; anything else is
+`Invalid value for state`) and `position` (set_shutter_position, 0 to 100 with 100 open: a whole
+number, refused otherwise). They send the Window Covering commands Up, Down, Stop and Go To Lift
+Percentage with `100 - value`; no position is published after an order, the shutter's reports
+give it. A colour bulb
 paired before this was possible keeps only its on/off and level data until paired again. A device
 paired again keeps its id and name. Alarm devices (IAS zone: motion, contact, water leak, smoke sensors) also get the data of their
 zone: `occupancy` (motion), `contact` (contact_door, true when closed), `water_leak`, `smoke`, and
@@ -1292,12 +1299,13 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `relay` | SONOFF ZBMINIR2 | `light_state on` / `off` after an On, Off or Toggle command |
 | `color-light` | TEST CLR01 (synthetic colour bulb, mains) | `light_state`, `light_brightness`, `light_color_temp`, `color_x`/`color_y` (and `color_hue`/`color_saturation` when read) after its commands (on/off, level, colour temperature, XY, hue and saturation, applied even when off); a report takes `light_state`, `color_temp` (150 to 500) and `color` (`{"x", "y"}`, 0 to 1, one message) |
 | `button` | TEST BTN01 (synthetic remote, battery, output clusters On/Off and Level) | once bound, the command a report's `action` names (`on`, `off`, `toggle`, `brightness_move_up`, `brightness_move_down`), the same one twice if the scenario says so |
+| `shutter` | TEST SHT01 (synthetic shutter, mains) | answers Up, Down, Stop and Go To Lift Percentage by moving 10 points a second towards its target (1 s of scenario time, shortened by `--speed`), reporting each step; starts closed; a report takes `position` (0 to 100, 100 open) and puts it there at once |
 | `plug` | TEST PLG01 (synthetic metering plug, mains) | `light_state` after its commands; answers the reads of the scale (power divisor 10, current and energy divisor 1000, multipliers 1); a report takes `light_state`, `power` (W), `current` (A) and `energy` (kWh) |
 
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
-relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote) and `scenarios/plug.json` (one metering plug).
+relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote), `scenarios/plug.json` (one metering plug) and `scenarios/shutter.json` (one shutter).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing

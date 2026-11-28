@@ -1,0 +1,11 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE654323", "network": "none" },
+  "devices": [
+    { "id": "shutter", "kind": "shutter", "eui64": "00124B00C0102041" }
+  ],
+  "events": [
+    { "at": "2s", "device": "shutter", "do": "join" },
+    { "at": "30s", "device": "shutter", "do": "report", "position": 100 },
+    { "at": "40s", "device": "shutter", "do": "report", "position": 60 }
+  ]
+}

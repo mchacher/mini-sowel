@@ -2494,3 +2494,76 @@ fn a_report_before_the_scale_is_known_publishes_nothing_and_the_next_one_carries
         "{second:?}"
     );
 }
+
+// ---- A shutter (spec 050) ----
+
+fn shutter() -> SimDevice {
+    let mut device = SimDevice::of_kind(Kind::Shutter, RELAY_WIRE, None, None);
+    device.nwk = RELAY_NWK;
+    device.auto_join = true;
+    device
+}
+
+fn position_lines(events: &[PairingEvent]) -> Vec<String> {
+    measure_events(events)
+        .iter()
+        .flat_map(|e| e.measures.iter().map(ToString::to_string))
+        .filter(|l| l.starts_with("shutter_position"))
+        .collect()
+}
+
+#[test]
+fn a_shutter_has_its_position_reporting_set_up_and_moves_10_points_a_second_reporting_each() {
+    let (mut h, events) = paired(shutter());
+    assert_eq!(reporting(&events), vec![(vec![0x0102], vec![], false)]);
+    // Reporting of attribute 0x0008, uint8, 1 s to 300 s, change 1.
+    let configure = sends_on(&h, 0x0104, 0x0102);
+    let configure = configure.iter().find(|m| m.message[2] == 0x06).unwrap();
+    assert_eq!(
+        configure.message[3..],
+        [0x00, 0x08, 0x00, 0x20, 0x01, 0x00, 0x2C, 0x01, 0x01]
+    );
+    // From closed (lift 100) to lift 70: three steps, a second apart.
+    h.radio
+        .send_command(target(None), Command::GoToLiftPercentage(70), 12_000)
+        .unwrap();
+    let (events, outcomes) = poll_commands(&mut h, 5_000);
+    assert_eq!(outcomes.len(), 1);
+    assert!(outcomes[0].1.is_ok(), "{outcomes:?}");
+    assert_eq!(
+        position_lines(&events),
+        vec![
+            "shutter_position 10 %",
+            "shutter_position 20 %",
+            "shutter_position 30 %"
+        ]
+    );
+    // No On/Off state is read back from a shutter.
+    assert!(sends_on(&h, 0x0104, ON_OFF).is_empty());
+}
+
+#[test]
+fn a_stop_halts_a_moving_shutter_and_open_runs_it_to_the_end() {
+    let (mut h, _) = paired(shutter());
+    h.radio
+        .send_command(target(None), Command::ShutterOpen, 12_000)
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 2_500);
+    assert_eq!(
+        position_lines(&events),
+        vec!["shutter_position 10 %", "shutter_position 20 %"]
+    );
+    h.radio
+        .send_command(target(None), Command::ShutterStop, 12_000)
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 5_000);
+    assert!(position_lines(&events).is_empty(), "stopped");
+    h.radio
+        .send_command(target(None), Command::ShutterOpen, 12_000)
+        .unwrap();
+    let (events, _) = poll_commands(&mut h, 12_000);
+    let lines = position_lines(&events);
+    // It went on from where it stopped (position 20: lift 80).
+    assert_eq!(lines.first().unwrap(), "shutter_position 30 %");
+    assert_eq!(lines.last().unwrap(), "shutter_position 100 %");
+}

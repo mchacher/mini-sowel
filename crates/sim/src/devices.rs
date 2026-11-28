@@ -23,6 +23,9 @@ pub enum Kind {
     /// (spec 048). It answers the reads of the scale: power divisor 10, current and energy
     /// divisor 1000, multipliers 1.
     Plug,
+    /// A mains-powered shutter (Window Covering, spec 050): Up, Down, Stop and Go To Lift
+    /// Percentage, moving 10 points a second towards its target and reporting each step.
+    Shutter,
 }
 
 impl Kind {
@@ -36,6 +39,7 @@ impl Kind {
             Kind::ColorLight => "color-light",
             Kind::Button => "button",
             Kind::Plug => "plug",
+            Kind::Shutter => "shutter",
         }
     }
 
@@ -49,6 +53,7 @@ impl Kind {
             Kind::ColorLight,
             Kind::Button,
             Kind::Plug,
+            Kind::Shutter,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -64,6 +69,7 @@ impl Kind {
             Kind::ColorLight => 0x010D,
             Kind::Button => 0x0006,
             Kind::Plug => 0x0051,
+            Kind::Shutter => 0x0202,
         }
     }
 }
@@ -90,6 +96,8 @@ pub struct DeviceReport {
     pub current: Option<f64>,
     /// Kilowatt-hours, `plug` only.
     pub energy: Option<f64>,
+    /// How open a `shutter` is, 0 to 100 (100 open): it is there at once and stays.
+    pub position: Option<u8>,
 }
 
 /// A character attribute of the simulated device.
@@ -226,6 +234,14 @@ pub fn metering_report(tsn: u8, kilowatt_hours: f64) -> Vec<u8> {
     report_frame(tsn, &[(0x0000, 0x25, raw.to_le_bytes()[..6].to_vec())])
 }
 
+/// A Window Covering report: CurrentPositionLiftPercentage (uint8, 100 is closed).
+pub fn lift_report(tsn: u8, lift: u8) -> Vec<u8> {
+    report_frame(tsn, &[(0x0008, 0x20, vec![lift])])
+}
+
+/// A shutter's travel: points of lift it covers in one second.
+pub const SHUTTER_POINTS_PER_SECOND: u8 = 10;
+
 /// An IAS Zone Status Change Notification (cluster-specific, server to client): the alarm bit
 /// is set or cleared.
 pub fn zone_notification(tsn: u8, alarm: bool) -> Vec<u8> {
@@ -328,6 +344,11 @@ pub struct SimDevice {
     pub configured_attributes: Vec<(u16, u16)>,
     pub(crate) reports_sent: bool,
     pub(crate) relay_on: bool,
+    /// A shutter's CurrentPositionLiftPercentage (0 open, 100 closed) and where it is going.
+    pub(crate) lift: u8,
+    pub(crate) lift_target: Option<u8>,
+    /// When its next step is due (the radio's time, in milliseconds).
+    pub(crate) lift_step_at: u64,
     /// The level of a dimmer (0 to 254).
     pub(crate) level: u8,
     /// The colour state of a colour light, in ZCL's raw units: mireds, CurrentX, CurrentY, hue and
@@ -425,6 +446,9 @@ impl SimDevice {
             configured_attributes: Vec::new(),
             reports_sent: false,
             relay_on: false,
+            lift: 100,
+            lift_target: None,
+            lift_step_at: 0,
             level: 0,
             color_temp: DEFAULT_COLOR_TEMP,
             color_x: DEFAULT_COLOR_X,
@@ -494,6 +518,12 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0006, 0x0702, 0x0B04],
                 false,
             ),
+            Kind::Shutter => (
+                "TEST",
+                "SHT01",
+                vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0102],
+                false,
+            ),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
@@ -508,7 +538,7 @@ impl SimDevice {
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
         if matches!(
             kind,
-            Kind::Relay | Kind::Dimmer | Kind::ColorLight | Kind::Plug
+            Kind::Relay | Kind::Dimmer | Kind::ColorLight | Kind::Plug | Kind::Shutter
         ) {
             device.capability = CAPABILITY_MAINS;
         }

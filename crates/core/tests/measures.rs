@@ -218,8 +218,8 @@ fn the_colour_measures_are_shown_with_their_unit() {
 }
 
 #[test]
-fn the_reporting_setup_has_eleven_entries_with_colour_after_level_and_before_power() {
-    assert_eq!(REPORTING.len(), 11);
+fn the_reporting_setup_has_twelve_entries_with_colour_after_level_and_before_power() {
+    assert_eq!(REPORTING.len(), 12);
     let clusters: Vec<u16> = REPORTING.iter().map(|r| r.cluster).collect();
     let position = |cluster| clusters.iter().position(|c| *c == cluster).unwrap();
     assert_eq!(position(COLOR), position(LEVEL) + 1);
@@ -420,4 +420,14 @@ fn a_metering_plug_is_asked_to_report_its_demand_as_int24() {
         .expect("InstantaneousDemand is configured");
     assert_eq!(demand.data_type, 0x2A, "int24 is 0x2A in the ZCL");
     assert!(metering.attributes.iter().any(|r| r.attribute == 0x0000));
+}
+
+#[test]
+fn a_lift_percentage_of_30_is_a_position_of_70_and_above_100_is_no_measure() {
+    let lift = |value| decode(0x0102, 0x0008, 0x20, &[value]);
+    assert_eq!(number(lift(30)), ("shutter_position", 70.0, "%"));
+    assert_eq!(number(lift(0)), ("shutter_position", 100.0, "%"));
+    assert_eq!(number(lift(100)), ("shutter_position", 0.0, "%"));
+    assert!(lift(101).is_none());
+    assert!(lift(0xFF).is_none());
 }

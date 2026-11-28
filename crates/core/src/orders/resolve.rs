@@ -122,6 +122,31 @@ fn color_command(value: &Value) -> Option<Command> {
     })
 }
 
+/// The command of a `shutter_move` order: `OPEN`, `CLOSE` or `STOP` (trimmed, any case); nothing
+/// else, not even an empty value.
+fn shutter_move_command(value: &Value) -> Option<Command> {
+    match value.as_str()?.trim().to_uppercase().as_str() {
+        "OPEN" => Some(Command::ShutterOpen),
+        "CLOSE" => Some(Command::ShutterClose),
+        "STOP" => Some(Command::ShutterStop),
+        _ => None,
+    }
+}
+
+/// The command of a `set_shutter_position` order: a whole number from 0 to 100, 100 open, inside
+/// the order's bounds; the ZCL counts the other way (`100 - value`).
+fn shutter_position_command(value: &Value, min: Option<i64>, max: Option<i64>) -> Option<Command> {
+    let number = whole_number(value)?;
+    if !(0.0..=100.0).contains(&number) {
+        return None;
+    }
+    // A whole number from 0 to 100: nothing is lost.
+    let position = number as u8;
+    let in_bounds = min.is_none_or(|m| i64::from(position) >= m)
+        && max.is_none_or(|m| i64::from(position) <= m);
+    in_bounds.then_some(Command::GoToLiftPercentage(100 - position))
+}
+
 /// The command of an order for a value, chosen by the order's category (`set_color_temp`,
 /// `set_color`), else by its type.
 fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
@@ -130,6 +155,10 @@ fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
             color_temp_command(value, order.min, order.max)
         }
         (Some("set_color"), ValueType::Json) => color_command(value),
+        (Some("shutter_move"), ValueType::Text) => shutter_move_command(value),
+        (Some("set_shutter_position"), ValueType::Number) => {
+            shutter_position_command(value, order.min, order.max)
+        }
         (_, ValueType::Boolean) => {
             state_command(value, order.value_on.as_deref(), order.value_off.as_deref())
         }

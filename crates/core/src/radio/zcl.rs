@@ -129,6 +129,8 @@ pub const CLUSTER_LEVEL_CONTROL: u16 = 0x0008;
 /// On/Off attribute: the state (boolean). Level Control attribute: the current level (uint8).
 pub const ATTRIBUTE_ON_OFF: u16 = 0x0000;
 pub const ATTRIBUTE_CURRENT_LEVEL: u16 = 0x0000;
+/// The Window Covering cluster.
+pub const CLUSTER_WINDOW_COVERING: u16 = 0x0102;
 /// The Color Control cluster.
 pub const CLUSTER_COLOR_CONTROL: u16 = 0x0300;
 /// Color Control attribute: CurrentHue (uint8, 0..=254).
@@ -159,6 +161,15 @@ pub enum Command {
     MoveToColor { x: u16, y: u16 },
     /// Color Control cluster, Move to Hue and Saturation (0x06): hue and saturation 0..=254.
     MoveToHueSaturation { hue: u8, saturation: u8 },
+    /// Window Covering cluster, Up/Open (0x00): the shutter opens.
+    ShutterOpen,
+    /// Window Covering cluster, Down/Close (0x01): the shutter closes.
+    ShutterClose,
+    /// Window Covering cluster, Stop (0x02).
+    ShutterStop,
+    /// Window Covering cluster, Go To Lift Percentage (0x05): 0 is open, 100 is closed (the ZCL's
+    /// way; Sowel's position is `100 - lift`).
+    GoToLiftPercentage(u8),
 }
 
 impl Command {
@@ -170,6 +181,10 @@ impl Command {
             Command::MoveToColorTemperature(_)
             | Command::MoveToColor { .. }
             | Command::MoveToHueSaturation { .. } => CLUSTER_COLOR_CONTROL,
+            Command::ShutterOpen
+            | Command::ShutterClose
+            | Command::ShutterStop
+            | Command::GoToLiftPercentage(_) => CLUSTER_WINDOW_COVERING,
         }
     }
 
@@ -183,6 +198,10 @@ impl Command {
             Command::MoveToHueSaturation { .. } => 0x06,
             Command::MoveToColor { .. } => 0x07,
             Command::MoveToColorTemperature(_) => 0x0A,
+            Command::ShutterOpen => 0x00,
+            Command::ShutterClose => 0x01,
+            Command::ShutterStop => 0x02,
+            Command::GoToLiftPercentage(_) => 0x05,
         }
     }
 
@@ -207,7 +226,13 @@ impl Command {
             Command::MoveToHueSaturation { hue, saturation } => {
                 frame.extend_from_slice(&[hue, saturation, 0, 0, 0, 0]);
             }
-            Command::On | Command::Off | Command::Toggle => {}
+            Command::GoToLiftPercentage(lift) => frame.push(lift),
+            Command::On
+            | Command::Off
+            | Command::Toggle
+            | Command::ShutterOpen
+            | Command::ShutterClose
+            | Command::ShutterStop => {}
         }
         frame
     }
