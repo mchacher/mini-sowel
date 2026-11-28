@@ -870,6 +870,32 @@ the wall clock.
   most 8 levels deep (deeper: `Invalid params: params nested too deeply`), 128 events waiting for
   the recipes.
 
+### Runs the switch-light recipe
+
+`switch-light` is a script recipe, the port of Sowel's `sowel-recipe-switch-light` 1.0.0
+(`recipes/scripts/switch-light.js`): Sowel's id, name, icon, settings, French texts, validation
+texts and behaviour, version `1.0.0`, from the catalogue (or a signed file), or on the Mac through
+`--recipe-script recipes/scripts/switch-light.js`.
+
+- **Settings**: `zone`, `lights` (`light_onoff`, `light_dimmable` or `light_color` equipments of
+  the zone, each with a `state` order binding), `buttons` (button equipments with an `action` data
+  binding), and the optional `maxOnDuration`.
+- **What it does**: each press of one of its buttons (an `action` event, spec 049: a remote's
+  `toggle`, `on`, `off`...) switches its lights off when any is on, on when none is; each press is
+  one toggle, two presses in a row toggle twice. A button that is not in its settings is ignored.
+  With `maxOnDuration`, the lights it switched on, or that came on, are forced off after that
+  duration (warning `Failsafe: lights forced off after <duration> max on duration`); a light
+  switched off by any means with none left on cancels the countdown. The countdown is shown as the
+  instance's `failsafeExpiresAt` state. Nothing is sent when the instance starts.
+- **Validation texts** (Sowel's, in its order): `Zone parameter is required`, `Zone not found:
+  <id>`, `At least one light is required`, `Light equipment not found: <id>`, `Light "<name>" does
+  not belong to the selected zone`, `Light "<name>" has no "state" order binding`, `At least one
+  button is required`, `Button equipment not found: <id>`, `Button "<name>" has no "action" data
+  binding`, `Invalid duration format: <v>. Use e.g. "10m", "30s", "1h"`; a light of another type
+  is refused by the slot's constraint.
+- **Bounds**: those of any script recipe (8 instances, 16 KB of source, 224 KB of memory); 8
+  instances use about 200 KB on the Mac.
+
 ### Runs script recipes
 
 A recipe can also be a **script**: one JavaScript text in Sowel's script-recipe format (Sowel's
@@ -1314,7 +1340,7 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
-relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote), `scenarios/plug.json` (one metering plug) `scenarios/shutter.json` (one shutter) and `scenarios/thermostat.json` (one thermostat).
+relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote), `scenarios/button-light.json` (a remote and a relay, for `switch-light`), `scenarios/plug.json` (one metering plug) `scenarios/shutter.json` (one shutter) and `scenarios/thermostat.json` (one thermostat).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing
