@@ -7,6 +7,18 @@ alone or `## <version>` followed by a space and more text (`## 0.2.0` and `## 0.
 `## 0.2.01`) as the text of the GitHub release and of `manifest.json`. A release with no section here is
 refused before anything is built.
 
+## 0.3.1 (2026-11-28)
+
+More memory to spare with four recipes installed.
+
+- **Four recipes, with room left**: the box keeps much more of its fast internal memory free
+  while recipes are installed, updated or removed (the small blocks of memory now go to the
+  larger memory where they fit), so that Wi-Fi and the radio never run short.
+- **The recipe catalogue** is read once into a compact form, and its texts in every language are
+  served whole, as Sowel's (groups and choices included).
+- **The box's log** gives the memory free at each step of a recipe's install, update or
+  removal, failed steps included.
+
 ## 0.3.0 (2026-11-28)
 
 Five more of Sowel's recipes, and room for larger ones.
