@@ -22,6 +22,11 @@ pub enum SlotKind {
     Time,
     Boolean,
     Select,
+    /// Free text (Sowel's `text`): its value is checked by the recipe's own `validate`.
+    Text,
+    /// A data alias of the equipment chosen in the recipe's first single `equipment` slot (Sowel's
+    /// `data-key`): a text like `Text`; the recipe's own `validate` checks the alias exists.
+    DataKey,
 }
 
 impl SlotKind {
@@ -34,6 +39,8 @@ impl SlotKind {
             "time" => SlotKind::Time,
             "boolean" => SlotKind::Boolean,
             "select" => SlotKind::Select,
+            "text" => SlotKind::Text,
+            "data-key" => SlotKind::DataKey,
             _ => return None,
         })
     }
@@ -47,6 +54,8 @@ impl SlotKind {
             SlotKind::Time => "time",
             SlotKind::Boolean => "boolean",
             SlotKind::Select => "select",
+            SlotKind::Text => "text",
+            SlotKind::DataKey => "data-key",
         }
     }
 }
@@ -71,7 +80,17 @@ pub struct SlotDef {
     pub max: Option<f64>,
     pub cross_zone: bool,
     pub include_descendants: bool,
+    /// Sowel's `group`: the form shows the slots of one group together (a text, served as given).
+    pub group: Option<String>,
+    /// Sowel's `hiddenWhen` (`{ slot, equals }`, `equals` a text or a list of texts): the form hides
+    /// the slot while the named slot holds one of them. Kept as given, served in the info; the
+    /// host does nothing with it.
+    pub hidden_when: Option<Box<Value>>,
 }
+
+/// The longest value of a `text` slot, in bytes (a bound: a value is stored in the instance's
+/// settings, and Sowel has none; its words, such as `open`, are short).
+pub const MAX_TEXT_BYTES: usize = 64;
 
 fn text_of(value: Option<&Value>, default: &str) -> Result<String, ()> {
     match value {
@@ -109,9 +128,6 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
         let type_text = raw.get("type").and_then(Value::as_str).unwrap_or("");
         let kind = match SlotKind::parse(type_text) {
             Some(kind) => kind,
-            None if matches!(type_text, "text" | "data-key") => {
-                return Err(bad(&format!("type \"{type_text}\" is not supported")));
-            }
             None => return Err(bad(&format!("unknown type \"{type_text}\""))),
         };
         if matches!(kind, SlotKind::Equipment | SlotKind::Zone)
@@ -163,6 +179,30 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
             Some(_) => return Err(bad("options must be a list")),
         };
         let number = |key: &str| from_constraints(key).and_then(Value::as_f64);
+        let hidden_when = match raw.get("hiddenWhen") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(rule)) => {
+                let slot = rule.get("slot").and_then(Value::as_str);
+                let equals = match rule.get("equals") {
+                    Some(Value::String(one)) => Some(json!(one)),
+                    Some(Value::Array(list)) if list.iter().all(Value::is_string) => {
+                        Some(Value::Array(list.clone()))
+                    }
+                    _ => None,
+                };
+                match (slot, equals) {
+                    (Some(slot), Some(equals)) => {
+                        Some(Box::new(json!({"slot": slot, "equals": equals})))
+                    }
+                    _ => {
+                        return Err(bad(
+                            "hiddenWhen is {slot: a slot id, equals: a text or a list of texts}",
+                        ));
+                    }
+                }
+            }
+            Some(_) => return Err(bad("hiddenWhen is {slot, equals}")),
+        };
         defs.push(SlotDef {
             id: id.clone(),
             name,
@@ -185,6 +225,8 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
                 from_constraints("includeDescendants"),
                 Some(Value::Bool(true))
             ),
+            group: raw.get("group").and_then(Value::as_str).map(str::to_string),
+            hidden_when,
         });
     }
     match defs.iter().find(|d| d.id == "zone") {
@@ -209,6 +251,8 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
                 max: None,
                 cross_zone: false,
                 include_descendants: false,
+                group: None,
+                hidden_when: None,
             },
         ),
     }
@@ -268,6 +312,12 @@ pub fn info_slots(defs: &[SlotDef]) -> Value {
                 }
                 if !constraints.is_empty() {
                     slot.insert("constraints".into(), Value::Object(constraints));
+                }
+                if let Some(group) = &def.group {
+                    slot.insert("group".into(), json!(group));
+                }
+                if let Some(rule) = &def.hidden_when {
+                    slot.insert("hiddenWhen".into(), (**rule).clone());
                 }
                 Value::Object(slot)
             })
@@ -361,6 +411,13 @@ pub fn validate_params(defs: &[SlotDef], host: &dyn Host, params: &Value) -> Res
                     return Err(format!("{} must be true or false", def.id));
                 }
             }
+            SlotKind::Text | SlotKind::DataKey => match value.as_str() {
+                Some(text) if text.len() <= MAX_TEXT_BYTES => {}
+                Some(_) => {
+                    return Err(format!("{}: at most {MAX_TEXT_BYTES} bytes", def.id));
+                }
+                None => return Err(format!("{} must be a text", def.id)),
+            },
             SlotKind::Select => {
                 let allowed = value
                     .as_str()

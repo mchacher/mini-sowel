@@ -1150,6 +1150,18 @@ pub(super) fn register<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
             },
         ),
     )?;
+    // The home's offset from UTC at an instant, in seconds east (`now().localTime`).
+    host.set(
+        "offset",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx<'js>, utc_ms: f64| -> rquickjs::Result<f64> {
+                with_call(&ctx, |cx| {
+                    Ok(cx.host.utc_offset_seconds(utc_ms as u64) as f64)
+                })
+            },
+        ),
+    )?;
     host.set(
         "atNext",
         Function::new(

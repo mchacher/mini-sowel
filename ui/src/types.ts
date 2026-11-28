@@ -558,6 +558,8 @@ export interface RecipeSlotDef {
   list?: boolean;
   defaultValue?: unknown;
   options?: { value: string; label: string }[];
+  /** Hide this slot in the form when a sibling slot's value matches (Sowel's `hiddenWhen`). */
+  hiddenWhen?: { slot: string; equals: string | string[] };
   constraints?: {
     equipmentType?: EquipmentType | EquipmentType[];
     min?: number;

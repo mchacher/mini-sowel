@@ -1,0 +1,81 @@
+# Spec 055: four of Sowel's recipes as scripts, in one batch (F3)
+
+Written in an autonomous run (user, 2026-11-28: "continue en autonomie"; recipes "par paquet",
+one CI loop and one box install for several). The user's rule (2026-11-27): Solite's recipes are
+Sowel's (the same id, settings and texts); only their performance is adapted to the box.
+
+## Context
+F3, after `motion-light-dimmable` (spec 054). Four of Sowel's recipes (`../sowel/plugins/registry.json`),
+ported as `motion-light-dimmable.js` was:
+- `schedule-on-off` (`mchacher/sowel-recipe-schedule-on-off`): on and off for on/off equipments at a
+  fixed time, sunrise or sunset, up to 3 windows a day;
+- `state-trigger-light` (`mchacher/sowel-recipe-state-trigger-light`): lights on for a fixed
+  duration when a watched equipment's state turns to a target value;
+- `presence-thermostat` (`mchacher/sowel-recipe-presence-thermostat`): a thermostat's setpoint by
+  the zone's presence, with night mode, preheat and cocoon;
+- `state-watch` (`mchacher/sowel-recipe-state-watch`): an alarm when an equipment's data stays in a
+  watched state.
+
+## Goals
+- Each of the four installed from the catalogue, set up like Sowel's, behaving as Sowel's.
+
+## Out of scope
+- `presence-heater`: it needs the `heater` equipment type (I2).
+
+## Requirements
+### R1: the scripts
+- `recipes/scripts/<id>.js` for each, in Sowel's script-recipe format: Sowel's id, version, name,
+  description, icon, i18n, slots and validation texts, in Sowel's order.
+- Behaviour: Sowel's, line for line, through the script API. The local time is
+  `api.now().localTime` (spec 054). Where a recipe needs more of the home's local calendar (the
+  weekday, the date), `api.now()` gains it the same way (`localWeekday` 0 = Sunday as
+  `Date.getDay()`, `localDate` "YYYY-MM-DD"), in the home's time zone.
+- Each fits the script limits (32 KB of source, 224 KB of memory with 4 instances, 200 ms a call).
+### R3: the slot types `text` and `data-key` and the slot field `hiddenWhen` (added 2026-11-28, with the user's yes through the session)
+`state-trigger-light` has a `text` slot (`stateValue`) and `schedule-on-off` hides slots with
+`hiddenWhen`; the script API refused the first and ignored the second (`docs/sowel-subset.md`).
+- Slot type `text` (Sowel's `RecipeSlotDef.type`, `src/shared/types.ts`): served as `"text"`; the host
+  checks a text of at most 64 bytes (`<slot> must be a text`, `<slot>: at most 64 bytes`; Sowel
+  checks nothing, the recipe's own `validate` decides the rest). 
+- Slot type `data-key` (same file; added 2026-11-28, the session's decision, for `state-watch`): the data
+  alias of the equipment chosen in the recipe's first single `equipment` slot. Served as `"data-key"`;
+  checked as a `text` (at most 64 bytes); the recipe's own `validate` checks the alias exists.
+  The recipe form offers the data bindings' aliases of the chosen equipment, as Sowel's form does.
+- Slot field `hiddenWhen: { slot, equals: string | string[] }` (same file): kept as given and served
+  in the info; a malformed one is refused when the script loads. The host does nothing with it.
+- The recipe form (`ui/`) hides a slot while the slot it names holds one of `equals` (its value, or
+  its `defaultValue` while the form has none), as Sowel's `isSlotHidden` (`ui/src/lib/recipe-slots.ts`);
+  a hidden slot is never required and goes out empty. A `text` slot is a text field.
+
+### R2: published
+- Signed with the recipe key and added to the catalogue in one release with the other recipes.
+
+## Living spec delta
+### docs/living-spec/README.md
+- The recipes section: the four recipes, Sowel's, installed from the catalogue; what each does.
+- The script API: any field added to `api.now()`; `now().localTime` is `null` while the clock is not
+  set; the slot type `text` and the slot field `hiddenWhen` (R3); `docs/sowel-subset.md`.
+### No longer true
+- The roadmap's F3 line and `docs/roadmap.html`: the four recipes done.
+
+## Acceptance criteria
+- [x] Each recipe's info matches a pinned file generated from Sowel's `createRecipe()` (tested).
+- [x] Each of Sowel's validation refusals answers Sowel's text (tested).
+- [x] Each recipe's main behaviour on the Mac with the simulated clock (tested): a window's on and
+      off; a state change turning lights on for the duration; the setpoint by presence; the alarm
+      after the watched duration.
+- [x] Each under 32 KB; 4 instances of each under 224 KB (the Mac's count).
+- [x] A `text` slot is bounded and served; `hiddenWhen` is served as given and hides the slot in the
+      recipe form (tested, Rust and Vitest).
+- [ ] Signed, in the catalogue's release; the box lists them and installs them.
+- [x] validate green.
+
+## Edge cases
+- A deleted equipment: the generic settle. A time zone other than UTC: the local slots.
+- A window or slot crossing midnight: Sowel's behaviour.
+
+## Sowel contract
+The four repositories above: ids, slots, info and texts.
+
+## How the user will check it
+Installed from the catalogue on the box, or `--recipe-script recipes/scripts/<id>.js` on the Mac.

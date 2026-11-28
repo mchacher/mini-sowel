@@ -896,6 +896,135 @@ texts and behaviour, version `1.0.0`, from the catalogue (or a signed file), or 
 - **Bounds**: those of any script recipe (4 instances, 32 KB of source, 224 KB of memory); 4
   instances of a script of 32 KB use about 242 KB on the Mac.
 
+### Runs the motion-light-dimmable recipe
+
+`motion-light-dimmable` is a script recipe, the port of Sowel's `sowel-recipe-motion-light-dimmable`
+1.0.2 (`recipes/scripts/motion-light-dimmable.js`): Sowel's id, name, icon, settings (a slot may
+carry Sowel's `group`, served in the info, with the French `groups`), French texts, validation
+texts and behaviour, version `1.0.2`, from the catalogue (or a signed file), or on the Mac through
+`--recipe-script recipes/scripts/motion-light-dimmable.js`. It is `motion-light`'s behaviour for
+dimmable lights (`light_dimmable` or `light_color`), with a brightness.
+
+- **Settings**: those of `motion-light` (`zone`, `lights`, `timeout`, `luxThreshold`,
+  `maxOnDuration`, `buttons`, `disableWhenDaylight`), and `brightness` (1 to 254, the level when
+  no slot matches) and three time slots `slotNStart`, `slotNEnd` (`HH:MM`) and `slotNBrightness`
+  (all three or none).
+- **What it does**: motion in its zone switches its lights on, then sets their brightness to that
+  of the first slot that holds the time (a slot can pass midnight; `end` is excluded), else to
+  `brightness`; with no `brightness` nothing but the switch-on is sent. The time is the home's
+  (`now().localTime`, its time zone: the one adaptation of Sowel's behaviour, which reads the
+  server's clock). The brightness is chosen when the lights are switched on, not while they stay
+  on. The off timer, the lux threshold, the safety auto-off, the daylight rule, the buttons and
+  the override are `motion-light`'s (the echo window is 5 s); a brightness reported with the
+  lights on, other than the one sent and after the window, puts the instance in override. While
+  the clock is not set (the box before its first sync) `now().localTime` is `null` and no slot
+  holds the time: the plain `brightness` is used.
+- **Validation texts** (Sowel's, in its order): those of `motion-light` for the zone, the lights
+  (`... requires light_dimmable or light_color`), the duration, `luxThreshold` and the buttons,
+  then `brightness must be between 1 and 254`, `Slot <n>: start, end, and brightness must all be
+  provided or all omitted`, `slot<n>Start must be in HH:MM format`, `slot<n>End must be in HH:MM
+  format`, `slot<n>Brightness must be between 1 and 254`.
+- **Bounds**: those of any script recipe; 4 instances use about 218 KB on the Mac.
+
+### Runs the schedule-on-off recipe
+
+`schedule-on-off` is a script recipe, the port of Sowel's `sowel-recipe-schedule-on-off` 2.0.2
+(`recipes/scripts/schedule-on-off.js`): Sowel's id, name, icon `CalendarClock`, settings (with their
+`group`s `slot1` to `slot3` and `hiddenWhen`), French texts, validation texts and behaviour, version
+`2.0.2`.
+
+- **Settings**: `zone`, `equipments` (on/off equipments: `switch`, `light_onoff`, `light_dimmable`,
+  `light_color`, `water_valve`, `pool_pump`, `water_heater`) and, for each of up to 3 windows N, a
+  start and an end: `slotN_start_kind` / `slotN_end_kind` (`time`, `sunrise` or `sunset`), `slotN_*_time`
+  (`HH:MM`, for a fixed time) and `slotN_*_offset` (minutes, -180 to 180, for the sun); window 1 is
+  required, windows 2 and 3 take both ends or none.
+- **What it does**: at the start of a window every equipment gets `state` `ON`, at its end `OFF`
+  (a window may pass midnight); the instance's state holds `status` (`idle` or `running`),
+  `currentSlot`, `nextStart` and `nextEnd`. Times are the home's (its time zone). A sun boundary uses
+  the day's sunrise or sunset plus its offset, read again when it fires and at midnight; where the
+  sun gives no time that day it is skipped, with a warning logged once. Equipments are named by the
+  first 8 characters of their id in the log (a script does not read names).
+- **Validation texts** (Sowel's, in its order): `Zone is required`, `At least one equipment is
+  required`, `Slot 1 start and end are required (a fixed time, or sunrise/sunset)`, `Slot <n> start
+  and end must both be set`.
+
+### Runs the state-trigger-light recipe
+
+`state-trigger-light` is a script recipe, the port of Sowel's `sowel-recipe-state-trigger-light`
+0.2.3 (`recipes/scripts/state-trigger-light.js`): Sowel's id, name, icon `Bell`, settings, French
+texts, validation texts and behaviour, version `0.2.3`.
+
+- **Settings**: `zone`, `trigger` (an equipment of any zone, with a `state` data), `stateValue` (a
+  text), `lights` (`light_onoff`, in the zone or its sub-zones), `duration` (default `5m`) and
+  `nightOnly` (default true).
+- **What it does**: when the trigger's `state` turns to exactly `stateValue` (after any other value:
+  a re-report of the target does not fire), and it is night (no daylight, or the sun unknown) unless
+  `nightOnly` is off, and no light is already on, the lights are switched on for `duration`, then
+  off; a light switched off by hand (after the 2 s echo window) cancels the timer; the end time is
+  kept in the state as `expiresAt` and an instance started again resumes it.
+- **Validation texts** (Sowel's, in its order): `Zone is required`, `Zone not found`, `Trigger
+  equipment is required`, `Trigger equipment not found`, `Trigger "<name>" has no "state" data
+  binding`, `Target state value is required`, `At least one light is required`, `Light <id> not
+  found`, `"<name>" is not a light_onoff equipment`, `Trigger equipment cannot also be a light
+  controlled by this recipe`, the duration texts and `Duration must be > 0`.
+
+### Runs the presence-thermostat recipe
+
+`presence-thermostat` is a script recipe, the port of Sowel's `sowel-recipe-presence-thermostat`
+1.2.0 (`recipes/scripts/presence-thermostat.js`): Sowel's id, name, icon `Thermometer`, settings
+(with their `group`s `night`, `preheat` and `cocoon`), French and English texts, validation texts and
+behaviour, version `1.2.0`. The `set_mode` action of Sowel's thermostat card does not exist (the
+info has no `actions`; `POST .../actions` is ignored).
+
+- **Settings**: `zone`, `thermostat` (a `thermostat` equipment of the zone with a `setpoint`
+  order), `comfortTemp`, `ecoTemp`, `timeout` (default `30m`), and optionally a night window
+  (`nightTemp`, `nightStart`, `nightEnd`, all three), a weekday preheat window (`preheatStart`,
+  `preheatEnd`), a weekend one (`weekendPreheatStart`, `weekendPreheatEnd`) and the cocoon
+  (`buttons`, `button` equipments with an `action` data, and `cocoonTemp`, both).
+- **What it does**: the setpoint is `comfortTemp` while the zone has motion, `ecoTemp` after `timeout`
+  with none; at the start it is set to what the zone calls for. A night window holds `nightTemp`
+  whatever the presence and ends with comfort (preheat or motion) or eco. The weekday window (Monday
+  to Friday) and the weekend window (Saturday, Sunday) hold comfort without motion, checked every
+  minute; a button press holds `cocoonTemp` until the next press (it never times out). A setpoint
+  changed by hand (neither the recipe's echo nor within 5 s of its order) suspends the recipe until
+  the zone has been still for `timeout`, which ends with eco. The state holds `currentMode` (`eco`,
+  `comfort`, `cocoon`, `night`), `overrideMode`, `cocoonMode` and `timerExpiresAt`. Hours and
+  weekdays are the home's (`now().localTime`, `localWeekday`); while the clock is not set no night or
+  preheat window is active.
+- **Validation texts** (Sowel's, in its order): `Zone parameter is required`, `Zone not found:
+  <id>`, `Thermostat parameter is required`, `Thermostat equipment not found: <id>`, `Thermostat
+  "<name>" does not belong to the selected zone`, `Thermostat "<name>" has no "setpoint" order
+  binding`, `comfortTemp is required` and `must be a number` (and `ecoTemp`), the duration text, the
+  night, preheat and cocoon texts (`nightTemp requires nightStart and nightEnd`, `preheatStart and
+  preheatEnd must both be provided or both omitted`, `cocoonTemp is required when buttons are
+  configured`...), `Button equipment not found: <id>`, `Button "<name>" has no "action" data
+  binding`.
+
+### Runs the state-watch recipe
+
+`state-watch` is a script recipe, the port of Sowel's `sowel-recipe-state-watch` 3.1.0
+(`recipes/scripts/state-watch.js`): Sowel's id, name, icon `Eye`, settings, French texts, validation
+texts and behaviour, version `3.1.0`.
+
+- **Settings**: `zone`, `equipment` (of the zone), `dataKey` (a data alias of the equipment, a
+  `data-key` slot), `watchValue` (a text, compared with the value as text: `true`, `open`),
+  optionally `delay` and a check window `checkStart` / `checkEnd` (both or none, it may pass
+  midnight, the home's time).
+- **What it does**: while the data equals `watchValue` and the time is inside the window (always,
+  with none), an alarm is raised once the `delay` has passed (at once with none): the state holds
+  `alarm`, `alarmSince`, `watchStartedAt` (during the delay) and `summary`, a French line
+  (`<key> : <value>`, with `après 10 min` and `de 21:00 à 06:00`, `... en alarme` while the
+  alarm lasts; `Erreur A01` for a value `error_A01`). A value that leaves, or a window that closes,
+  clears it. The window's edges re-evaluate. While the clock is not set the window counts as
+  closed. The summary does not use the data's category (a script cannot read it): Sowel's labels
+  by category (`Sur batterie`, `Ouvert`...) are not used.
+- **Validation texts** (Sowel's, in its order): `Zone parameter is required`, `Zone not found:
+  <id>`, `Equipment parameter is required`, `Equipment not found: <id>`, `Equipment "<name>" does
+  not belong to the selected zone`, `Data key parameter is required`, `Equipment "<name>" has no
+  data binding with alias "<key>"`, `Watch value parameter is required`, the duration text, `The
+  check window needs both a start and an end time`, `Invalid start time: <v>. Use HH:MM (e.g.,
+  "21:00")`, `Invalid end time: ...`.
+
 ### Runs script recipes
 
 A recipe can also be a **script**: one JavaScript text in Sowel's script-recipe format (Sowel's
@@ -910,7 +1039,9 @@ same routes and from a room's page, with the same log, state and events.
   is reserved`: `/recipes/store` and `/recipes/install` sit beside Sowel's `/recipes/:recipeId`). An
   installed script must declare `version` as `x.y.z` (three numbers of 0 to 65535: `Script recipe
   invalid: version must be x.y.z`); the version of a script given by `--recipe-script` stays free. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
-  `boolean`, `select`), written as an object by slot id; the slot `zone` is added first when missing.
+  `boolean`, `select`, `text` and `data-key`: a text of at most 64 bytes, `Invalid params: <slot> must be a text` or
+  `<slot>: at most 64 bytes`; a `data-key` names a data of the equipment of the recipe's first single `equipment` slot, which the form offers and the script's `validate` checks), written as an object by slot id, each with Sowel's optional `group`
+  and `hiddenWhen` (`{slot, equals}`, served in the info, used by the interface to hide a field); the slot `zone` is added first when missing.
   The settings are checked by the script's own `validate` first, if it has one, so that a refusal
   it makes carries its text (spec 046); then by the program from the slots (`Invalid params:
   <slot> is required`, `... must be a number between <min> and <max>`, `...: invalid duration`,
@@ -924,8 +1055,8 @@ same routes and from a room's page, with the same log, state and events.
   `motionSensors`); `onMotionReport(fn)` at each report of a motion sensor of the zone, which
   Sowel's draft does not have; `get(slot, alias)`; `order(slot, alias, value)`, to every enabled
   equipment of the slot, answering the ones refused; timers `after` (at least 100 ms), `every` (at
-  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (time, sun);
-  `state.set/get/delete` (at most 512 bytes, served as the instance's `state`); `log`, `log.warn`,
+  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (`time`, the home's time of day `localTime` as `HH:MM` in its time zone (UTC when it has none, `null` while the clock is not set) and its weekday `localWeekday` (0 = Sunday, as `Date.getDay()`, `null` then too), and the sun);
+  `state.set/get/delete` (at most 512 bytes, served as the instance's `state`, kept in memory only: it goes when the instance stops, as Sowel's `stop()` clears it, and a script has no stop hook); `log`, `log.warn`,
   `log.error`, `console.log` (at most 20 lines per call). It names equipments only through its
   slots: a call with another name answers `Unknown slot`, and a script has no way to reach an
   equipment the user did not put in its settings. Instances of the same script recipe share its

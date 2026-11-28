@@ -1,6 +1,6 @@
 // Ported from Sowel ui/src/components/recipes/AddRecipeForm.tsx and the form of RecipeSettings.tsx
 // (Sowel commit 5da84dc1, UI 1.87.0), as one form for create and edit (spec 024, R2). Cuts: slot
-// groups, the zone-first equipment pickers, `data-key` and `time` pickers (a text field), the
+// groups, the zone-first equipment pickers and the `time` picker (a text field), the
 // bottom sheet and the "changed" counters. The params logic is in `lib/recipe-form.ts`.
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -15,6 +15,7 @@ import { useEquipments } from "../../store/useEquipments";
 import { useRecipes } from "../../store/useRecipes";
 import { apiErrorText } from "../../lib/api-error";
 import {
+  dataKeyAliases,
   defaultValues,
   equipmentCandidates,
   missingSlots,
@@ -141,6 +142,23 @@ export function RecipeForm({
         </select>
       );
     }
+    if (slot.type === "data-key") {
+      return (
+        <select
+          id={id}
+          value={text}
+          onChange={(e) => set(slot, (e.target as HTMLSelectElement).value)}
+          className={FIELD_INPUT}
+        >
+          <option value="">{t("recipes.select")}</option>
+          {dataKeyAliases(recipe, values, equipments).map((alias) => (
+            <option key={alias} value={alias}>
+              {alias}
+            </option>
+          ))}
+        </select>
+      );
+    }
     if (slot.type === "duration") {
       return (
         <DurationInput
@@ -210,7 +228,7 @@ export function RecipeForm({
   return (
     <form onSubmit={(e) => void submit(e)} noValidate className="space-y-3">
       <p className="text-small text-text-secondary">{recipeDescription(recipe, lang)}</p>
-      {shownSlots(recipe, ctx).map((slot) => (
+      {shownSlots(recipe, ctx, values).map((slot) => (
         <div key={slot.id}>
           {slot.type !== "boolean" && (
             <label htmlFor={`recipe-slot-${slot.id}`} className={FIELD_LABEL}>

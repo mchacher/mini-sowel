@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { equipment, light, motionLightRecipe } from "../test-utils";
+import type { RecipeInfo } from "../types";
 import {
+  dataKeyAliases,
   defaultValues,
   durationMinutesText,
+  isSlotHidden,
   equipmentCandidates,
   instanceEquipmentNames,
   missingSlots,
@@ -50,7 +53,7 @@ describe("recipe-form", () => {
       zone: "garage",
       lights: ["a", "b"],
       timeout: "20m",
-      luxThreshold: "50",
+      luxThreshold: 50,
       buttons: [],
       dark: true,
       note: "hi",
@@ -60,6 +63,19 @@ describe("recipe-form", () => {
     expect(params.lights).toEqual([]);
     expect(params.timeout).toBe("");
     expect(params.dark).toBe(false);
+  });
+
+  it("a number slot sends a number, an empty one an empty text", () => {
+    const base = { ...defaultValues(recipe, "g"), lights: ["a"] };
+    expect(
+      paramsFromValues(recipe, { ...base, luxThreshold: " 21.5 " }, "g", both).luxThreshold,
+    ).toBe(21.5);
+    expect(paramsFromValues(recipe, { ...base, luxThreshold: "0" }, "g", both).luxThreshold).toBe(
+      0,
+    );
+    expect(paramsFromValues(recipe, { ...base, luxThreshold: "" }, "g", both).luxThreshold).toBe(
+      "",
+    );
   });
 
   it("a hidden slot sends an empty text, or an empty list", () => {
@@ -126,5 +142,109 @@ describe("recipe-form", () => {
     const names = instanceEquipmentNames(recipe, { lights: ["a", "b", "c", "d", "gone"] }, all);
     expect(names).toEqual(["A", "B", "C", "D"]);
     expect(shortNameList(names)).toEqual({ text: "A, B, C", more: 1 });
+  });
+});
+
+// A recipe with Sowel's `hiddenWhen`, as `schedule-on-off` has it: a fixed-time picker hidden
+// by sunrise or sunset, an offset hidden by a fixed time.
+const scheduled: RecipeInfo = {
+  id: "sched",
+  name: "Sched",
+  description: "",
+  slots: [
+    { id: "zone", name: "Zone", description: "", type: "zone", required: true },
+    {
+      id: "kind",
+      name: "Start",
+      description: "",
+      type: "select",
+      required: true,
+      defaultValue: "time",
+      options: [
+        { value: "time", label: "Fixed time" },
+        { value: "sunrise", label: "Sunrise" },
+      ],
+    },
+    {
+      id: "at",
+      name: "Time",
+      description: "",
+      type: "time",
+      required: true,
+      hiddenWhen: { slot: "kind", equals: ["sunrise", "sunset"] },
+    },
+    {
+      id: "offset",
+      name: "Offset",
+      description: "",
+      type: "number",
+      required: false,
+      hiddenWhen: { slot: "kind", equals: "time" },
+    },
+  ],
+};
+
+describe("recipe-form hiddenWhen", () => {
+  it("a slot is hidden when the sibling's value, or its default, is one of equals", () => {
+    const ids = (kind: string | null) =>
+      shownSlots(scheduled, neither, kind === null ? {} : { kind }).map((s) => s.id);
+    expect(ids(null)).toEqual(["kind", "at"]); // the default "time" hides the offset
+    expect(ids("sunrise")).toEqual(["kind", "offset"]);
+    expect(isSlotHidden(scheduled.slots[2], { kind: "sunrise" }, scheduled.slots)).toBe(true);
+    expect(isSlotHidden(scheduled.slots[1], { kind: "sunrise" }, scheduled.slots)).toBe(false);
+  });
+
+  it("a hidden slot is never required and goes out empty", () => {
+    const values = { ...defaultValues(scheduled, "g"), kind: "sunrise" };
+    expect(missingSlots(scheduled, values, neither)).toEqual([]); // `at` is required but hidden
+    expect(missingSlots(scheduled, { ...values, kind: "time" }, neither).map((s) => s.id)).toEqual([
+      "at",
+    ]);
+    expect(paramsFromValues(scheduled, { ...values, at: "07:30" }, "g", neither)).toEqual({
+      zone: "g",
+      kind: "sunrise",
+      at: "",
+      offset: "",
+    });
+  });
+});
+
+describe("recipe-form data-key", () => {
+  const watch: RecipeInfo = {
+    id: "watch",
+    name: "Watch",
+    description: "",
+    slots: [
+      { id: "zone", name: "Zone", description: "", type: "zone", required: true },
+      { id: "many", name: "Many", description: "", type: "equipment", required: false, list: true },
+      { id: "equipment", name: "Equipment", description: "", type: "equipment", required: true },
+      { id: "dataKey", name: "Key", description: "", type: "data-key", required: true },
+    ],
+  };
+  const lamp = light("l1", "Lamp", "g", true);
+  const remote = equipment("r1", "Remote", "button", "g", {
+    dataBindings: [
+      ...lamp.dataBindings.map((b) => ({ ...b, alias: "action" })),
+      ...lamp.dataBindings,
+    ],
+  });
+
+  it("offers the data aliases of the equipment chosen in the first single equipment slot", () => {
+    const home = [lamp, remote];
+    expect(dataKeyAliases(watch, { equipment: "l1" }, home)).toEqual(["state"]);
+    expect(dataKeyAliases(watch, { equipment: "r1" }, home)).toEqual(["action", "state"]);
+    // The list slot is not the one; none chosen, or one the room lacks: no alias.
+    expect(dataKeyAliases(watch, { many: ["l1"] }, home)).toEqual([]);
+    expect(dataKeyAliases(watch, { equipment: "gone" }, home)).toEqual([]);
+  });
+
+  it("a data-key goes out as its text", () => {
+    const values = { ...defaultValues(watch, "g"), equipment: "l1", dataKey: "state" };
+    expect(paramsFromValues(watch, values, "g", neither)).toEqual({
+      zone: "g",
+      many: [],
+      equipment: "l1",
+      dataKey: "state",
+    });
   });
 });

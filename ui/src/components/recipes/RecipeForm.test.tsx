@@ -116,3 +116,123 @@ describe("RecipeForm", () => {
     });
   });
 });
+
+describe("RecipeForm, a text slot and a slot hidden by hiddenWhen", () => {
+  const info = {
+    id: "text-recipe",
+    name: "Text recipe",
+    description: "Watches a state.",
+    slots: [
+      { id: "zone", name: "Zone", description: "", type: "zone" as const, required: true },
+      {
+        id: "stateValue",
+        name: "Target value",
+        description: "",
+        type: "text" as const,
+        required: true,
+      },
+      {
+        id: "kind",
+        name: "Start",
+        description: "",
+        type: "select" as const,
+        required: true,
+        defaultValue: "time",
+        options: [
+          { value: "time", label: "Fixed time" },
+          { value: "sunrise", label: "Sunrise" },
+        ],
+      },
+      {
+        id: "at",
+        name: "Start time",
+        description: "",
+        type: "time" as const,
+        required: false,
+        hiddenWhen: { slot: "kind", equals: ["sunrise", "sunset"] },
+      },
+    ],
+  };
+
+  it("a text slot is a text field, and a slot hides and shows with the select it names", async () => {
+    const api = mockApi({
+      "POST /api/v1/recipe-instances": { status: 201, body: recipeInstance("i2", {}) },
+      "GET /api/v1/recipe-instances": { body: [] },
+    });
+    const onClose = vi.fn();
+    render(
+      <RecipeForm
+        recipe={info}
+        zoneId="garage"
+        equipments={room}
+        aggregate={undefined}
+        onClose={onClose}
+      />,
+    );
+    const target = screen.getByLabelText(/Target value/) as HTMLInputElement;
+    expect(target.type).toBe("text");
+    fireEvent.input(target, { target: { value: "open" } });
+    expect(screen.getByLabelText("Start time")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^Start( \*)?$/), { target: { value: "sunrise" } });
+    expect(screen.queryByLabelText("Start time")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(api.calls[0].body).toEqual({
+      recipeId: "text-recipe",
+      params: { zone: "garage", stateValue: "open", kind: "sunrise", at: "" },
+    });
+  });
+});
+
+describe("RecipeForm, a data-key slot", () => {
+  const info = {
+    id: "watch",
+    name: "Watch",
+    description: "Watches a data.",
+    slots: [
+      { id: "zone", name: "Zone", description: "", type: "zone" as const, required: true },
+      {
+        id: "equipment",
+        name: "Equipment",
+        description: "",
+        type: "equipment" as const,
+        required: true,
+      },
+      {
+        id: "dataKey",
+        name: "Data key",
+        description: "",
+        type: "data-key" as const,
+        required: true,
+      },
+    ],
+  };
+
+  it("offers the aliases of the chosen equipment and sends the one picked", async () => {
+    const api = mockApi({
+      "POST /api/v1/recipe-instances": { status: 201, body: recipeInstance("i3", {}) },
+      "GET /api/v1/recipe-instances": { body: [] },
+    });
+    const onClose = vi.fn();
+    render(
+      <RecipeForm
+        recipe={info}
+        zoneId="garage"
+        equipments={room}
+        aggregate={undefined}
+        onClose={onClose}
+      />,
+    );
+    const key = screen.getByLabelText(/Data key/) as HTMLSelectElement;
+    expect(Array.from(key.options).map((o) => o.value)).toEqual([""]); // no equipment yet
+    fireEvent.change(screen.getByLabelText(/^Equipment/), { target: { value: "l1" } });
+    expect(Array.from(key.options).map((o) => o.value)).toEqual(["", "state"]);
+    fireEvent.change(key, { target: { value: "state" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(api.calls[0].body).toEqual({
+      recipeId: "watch",
+      params: { zone: "garage", equipment: "l1", dataKey: "state" },
+    });
+  });
+});
