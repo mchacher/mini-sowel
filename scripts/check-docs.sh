@@ -123,4 +123,16 @@ if [ -n "$paths" ]; then
   printf '%s\n' "$paths" | sed 's/^/  /' >&2
   status=1
 fi
+# docs/roadmap.html, the roadmap for its users: dated no earlier than the last spec of the index.
+if [ -f docs/specs-index.md ]; then
+  last=$(grep -oE '^\| *[0-9]{3} *\|.*\| *(20[0-9]{2}-[0-9]{2}-[0-9]{2}) *\|' docs/specs-index.md \
+    | grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}' | sort | tail -n 1)
+  shown=$(grep -oE 'Updated 20[0-9]{2}-[0-9]{2}-[0-9]{2}' docs/roadmap.html 2>/dev/null | grep -oE '20[0-9-]+')
+  if [ -z "$shown" ] || [ "$shown" \< "$last" ]; then
+    echo "check-docs: docs/roadmap.html is dated ${shown:-nowhere}, before the last spec ($last)." >&2
+    echo "  Update its rows to what is built and planned, and its 'Updated <date>' line." >&2
+    status=1
+  fi
+fi
+
 exit $status

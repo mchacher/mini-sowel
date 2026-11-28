@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solite roadmap</title>
+<style>
+  body { font: 15px/1.45 -apple-system, system-ui, sans-serif; color: #1f2937; background: #f9fafb; margin: 0; padding: 32px 16px; }
+  main { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .lead { color: #4b5563; margin: 0 0 24px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid #e5e7eb; }
+  th { background: #f3f4f6; font-size: 13px; color: #4b5563; font-weight: 600; }
+  tr.group td { background: #eef2ff; font-weight: 600; color: #3730a3; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; }
+  td.what { font-weight: 600; width: 26%; }
+  td.ref { color: #6b7280; font-size: 13px; white-space: nowrap; }
+  .st { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .done { background: #dcfce7; color: #166534; }
+  .wip  { background: #fef3c7; color: #92400e; }
+  .next { background: #dbeafe; color: #1e40af; }
+  .later { background: #f3f4f6; color: #4b5563; }
+  footer { color: #6b7280; font-size: 13px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Solite roadmap</h1>
+<p class="lead">A small home-automation box (a Sonoff Dongle Max) that runs an annex or a small home on its own,
+with no server and no cloud, and joins Sowel when there is one. Goal: pair a sensor, pick its room, and the box
+proposes a fitting automation.</p>
+
+<table>
+<thead><tr><th>Feature</th><th>What you can do</th><th>Status</th><th>Specs</th></tr></thead>
+<tbody>
+
+<tr class="group"><td colspan="4">Done</td></tr>
+<tr><td class="what">Zigbee sensors</td><td>Pair a sensor and see its readings: temperature, humidity, battery, motion, door contact, water leak, smoke.</td><td><span class="st done">Done</span></td><td class="ref">004–009</td></tr>
+<tr><td class="what">Rooms and equipments</td><td>Make rooms, put lights, sensors and switches in them; each room shows its average temperature and whether someone is there.</td><td><span class="st done">Done</span></td><td class="ref">010</td></tr>
+<tr><td class="what">Lights and relays</td><td>Switch lights and relays on and off and dim them, from the interface.</td><td><span class="st done">Done</span></td><td class="ref">011, 031</td></tr>
+<tr><td class="what">Colour bulbs</td><td>Set a bulb's colour and its warm-to-cold white.</td><td><span class="st done">Done</span></td><td class="ref">031</td></tr>
+<tr><td class="what">Live interface</td><td>Open the box's page in a browser and see every change as it happens, in Sowel's look.</td><td><span class="st done">Done</span></td><td class="ref">013, 014, 037, 047</td></tr>
+<tr><td class="what">The box on its own</td><td>The box runs the home by itself, computer off, over Wi-Fi, and serves its own interface.</td><td><span class="st done">Done</span></td><td class="ref">020–023</td></tr>
+<tr><td class="what">Set up from the browser</td><td>Add a device, make rooms and equipments, set the automations: all from the interface, no command line.</td><td><span class="st done">Done</span></td><td class="ref">017–019, 024, 030</td></tr>
+<tr><td class="what">Home settings</td><td>Give the home's location and time zone; automations know sunrise and sunset (for example, no light by day).</td><td><span class="st done">Done</span></td><td class="ref">026</td></tr>
+<tr><td class="what">Password</td><td>The box is protected by your own password, set at first start; factory reset.</td><td><span class="st done">Done</span></td><td class="ref">029</td></tr>
+<tr><td class="what">Backup</td><td>Save the whole box (devices, rooms, automations, Zigbee network, Wi-Fi) to one encrypted file and restore it.</td><td><span class="st done">Done</span></td><td class="ref">035</td></tr>
+<tr><td class="what">Updates</td><td>Update the box from the interface with one click from the latest public release; a bad update rolls back by itself.</td><td><span class="st done">Done</span></td><td class="ref">032, 038–040, 043</td></tr>
+<tr><td class="what">Self-repair</td><td>On a serious error the box restarts by itself, and stops in a safe mode if it keeps failing.</td><td><span class="st done">Done</span></td><td class="ref">036</td></tr>
+<tr><td class="what">Automations from a catalogue</td><td>Install, update and remove automations ("recipes") from an online catalogue, with no new firmware. They are Sowel's own recipes.</td><td><span class="st done">Done</span></td><td class="ref">041, 042, 045, 046</td></tr>
+<tr><td class="what">Recipe: light on motion</td><td>A light turns on when someone moves, and off after a delay; not by day if you choose.</td><td><span class="st done">Done</span></td><td class="ref">012, 046</td></tr>
+<tr><td class="what">More kinds of devices</td><td>Smart plugs with power and energy, buttons and remotes, roller shutters, thermostats and radiator valves, recognised from the Zigbee standard, with no list of models.</td><td><span class="st done">Done</span></td><td class="ref">048–051</td></tr>
+<tr><td class="what">Recipe: button for a light</td><td>A press on a button toggles its lights.</td><td><span class="st done">Done</span></td><td class="ref">052</td></tr>
+
+
+<tr><td class="what">Bigger recipes, more of them</td><td>Up to 4 different recipes, each used up to 4 times (16 in all); room for Sowel's larger recipes.</td><td><span class="st done">Done</span></td><td class="ref">053</td></tr>
+
+<tr class="group"><td colspan="4">Next: Sowel's recipes on the box</td></tr>
+<tr><td class="what">Dimmable light on motion</td><td>Like light on motion, for dimmable lights: a brightness per time slot.</td><td><span class="st next">Next</span></td><td class="ref"></td></tr>
+<tr><td class="what">Schedule on and off</td><td>Turn an equipment on and off at set times or at sunrise and sunset, up to 3 windows a day.</td><td><span class="st next">Planned</span></td><td class="ref"></td></tr>
+<tr><td class="what">Light on a state</td><td>Turn lights on for a set time when an equipment changes state (the gate opens at night).</td><td><span class="st next">Planned</span></td><td class="ref"></td></tr>
+<tr><td class="what">Thermostat on presence</td><td>Set a thermostat to comfort when someone is in the room, lower when it is empty; night mode and preheating.</td><td><span class="st next">Planned</span></td><td class="ref"></td></tr>
+<tr><td class="what">Watch a state</td><td>Raise an alarm when something stays in a state too long (a door left open).</td><td><span class="st next">Planned</span></td><td class="ref"></td></tr>
+
+<tr class="group"><td colspan="4">Later, in this order</td></tr>
+<tr><td class="what">Same API as Sowel</td><td>Every address of the box's API is Sowel's, so a tool or script made for Sowel works with the box as it is; recipes first, under Sowel's plugins.</td><td><span class="st next">Planned</span></td><td class="ref"></td></tr>
+<tr><td class="what">Wi-Fi with no computer</td><td>A new box opens its own Wi-Fi hotspot; pick your network from a phone. Ethernet cable as an alternative.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">More equipment types</td><td>Water heater, electric heater, water valve, ventilation; with the heater, the "heater on presence" recipe.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Modes</td><td>Day, night and away modes that recipes follow.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">The box proposes</td><td>Pair a sensor, pick its room, and the box proposes a recipe that fits; accept it in one click.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Link with Sowel</td><td>The box's equipments appear in a full Sowel installation.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Monitoring</td><td>A health card in the interface; you are told when an update is available, running or failed.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Daily use</td><td>24-hour history, MQTT export, an app on the phone's home screen, more languages, radio firmware update, recipe journals kept across a restart.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Even more devices</td><td>Brand-specific devices (Tuya, Philips, Legrand, Sonoff, Aqara, Schneider Electric) and more alarm sensors.</td><td><span class="st later">Later</span></td><td class="ref"></td></tr>
+<tr><td class="what">Notifications</td><td>Messages on Telegram or the phone.</td><td><span class="st later">Not a priority</span></td><td class="ref"></td></tr>
+
+<tr class="group"><td colspan="4">Goal</td></tr>
+<tr><td class="what">A month on its own</td><td>A box runs a real annex for a month with no intervention.</td><td><span class="st later">Target</span></td><td class="ref"></td></tr>
+</tbody>
+</table>
+<footer>Updated 2026-11-28. Details: docs/roadmap.md and docs/specs-index.md.</footer>
+</main>
+</body>
+</html>

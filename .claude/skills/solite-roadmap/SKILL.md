@@ -31,6 +31,10 @@ yes, whatever the permission mode.
 
 The file is `docs/roadmap.md`: the current milestone and its increments, the next milestones in
 one line each, the **inbox** of new needs not yet placed, what is done, and a log of every change.
+Its view for users is `docs/roadmap.html`: one table, a row per feature in the words of an end
+user (what they can do), its status (done, in progress, next, later) and its specs; past and
+future, short, no jargon. It follows `docs/roadmap.md` in every change of it, and its
+`Updated <date>` line is checked against the last spec of the index (`scripts/check-docs.sh`).
 It is the place for the future and for how far the work has got: a planned block or capability
 is written here, never in the docs that describe the tool (rule in `CLAUDE.md`, "Docs say what is
 true today").
@@ -126,7 +130,7 @@ Write `docs/roadmap.md` and add a line to its log (date, what changed, why), on 
 
 ```bash
 git checkout main && git checkout -b docs/roadmap-<milestone>
-git add docs/roadmap.md scripts/check-docs.sh && git commit -m "docs(roadmap): <milestone>"
+git add docs/roadmap.md docs/roadmap.html scripts/check-docs.sh && git commit -m "docs(roadmap): <milestone>"
 ```
 
 Ask "Shall I merge the roadmap into main?" Only after an explicit yes:
@@ -142,6 +146,7 @@ Called at the end of every feature (before its commit, so the roadmap is updated
 change), or when the user brings a new need. Keep it short.
 
 1. **Done**: mark the increment just built as done, with its spec number.
+   Update `docs/roadmap.html` the same way (the row, its status, its spec, the `Updated` date).
 2. **Ask**, in one message, at most two questions:
    - "Did this feature give you a new need, or change one?" (the demo often does);
    - "Is the next increment still the right one, and are we still heading toward the true
