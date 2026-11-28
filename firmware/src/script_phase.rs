@@ -18,7 +18,7 @@
 //! 3. logs `recipes: script motion-light ...` (the memory taken by the phase, the lowest free
 //!    internal RAM, the two stacks), and the `scripts:` line the radio image prints.
 //!
-//! Then, outside that line's window, the same with `MAX_INSTANCES_PER_SCRIPT` instances (8, the most one
+//! Then, outside that line's window, the same with `MAX_INSTANCES_PER_SCRIPT` instances (6, the most one
 //! script recipe holds), to read the script's memory at the bound: `script sizes: ...`.
 //!
 //! `scripts/qemu.sh` fails when the line is missing, the three instances' peak (the `scripts:`
@@ -68,6 +68,9 @@ const QEMU_SLOWDOWN: u64 = 50;
 const MOTION_SCRIPT: &str = "motion-light";
 /// The script of the phase: read here, at build time, never carried by an image that is not this one.
 const MOTION_SCRIPT_SOURCE: &str = include_str!("../../recipes/scripts/motion-light.js");
+/// A script of about 32 KB (spec 053), `crates/core/tests/fixtures/scripts/big-recipe.js`: its memory
+/// at the source bound, with `MAX_INSTANCES_PER_SCRIPT` instances (the `script sizes: big-recipe` line).
+const BIG_SCRIPT: &str = include_str!("../../crates/core/tests/fixtures/scripts/big-recipe.js");
 const DEPTH_SCRIPT: &str = include_str!("../fixtures/depth-host.js");
 /// The realistic home's zone and first light (`fixtures/recipes.json`): the depth script's slots.
 const ZONE: &str = "00000191-5a5a-4a5a-9a5a-5a5a5a5a5a5a";
@@ -582,5 +585,28 @@ pub fn run(
     for line in scripts::lines_of(&lock(home)) {
         log::info!("{line}");
     }
+
+    // 5. A script at the source bound (32 KB), with as many instances: a third script recipe
+    // beside `motion-light` and the depth script, its memory read the same way.
+    delete_all(home, MOTION_SCRIPT);
+    let big = scripts::load_one(
+        &mut lock(home),
+        "big-recipe.js",
+        BIG_SCRIPT,
+        &runtimes,
+        &clock,
+    )
+    .ok_or("script phase: big-recipe did not load")?;
+    for i in 0..MAX_INSTANCES_PER_SCRIPT {
+        let (_, params) = &originals[i % originals.len()];
+        create(home, "big-recipe", params)?;
+    }
+    replay(home, clocks, start)?;
+    let (held_big, peak_big) = stats_of(home, "big-recipe").ok_or("script phase: no counters")?;
+    log::info!(
+        "script sizes: big-recipe {} B of source, loaded {} B, {MAX_INSTANCES_PER_SCRIPT} instances {held_big} B (peak {peak_big} B)",
+        big.source_bytes,
+        big.runtime_bytes,
+    );
     Ok(())
 }

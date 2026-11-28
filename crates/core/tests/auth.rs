@@ -1097,7 +1097,7 @@ fn the_gate_comes_before_the_body_the_413_and_the_415() {
     // An unauthenticated POST without a content type: 401, not 415.
     let (status, body) = server.send("POST", "/api/v1/zones", None, None, "{}");
     assert_eq!((status, error(&body)), (401, "Authentication required"));
-    let big = "x".repeat(20_000);
+    let big = "x".repeat(40_000);
     let (status, _) = server.send(
         "POST",
         "/api/v1/zones",

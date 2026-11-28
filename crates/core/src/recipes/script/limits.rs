@@ -10,14 +10,15 @@ use rquickjs::Runtime;
 
 use crate::recipes::ScriptClock;
 
-/// Source text of one script recipe, at most. Worst case: 2 scripts of 16 KB kept as text (the
+/// Source text of one script recipe, at most. Worst case: 2 scripts of 32 KB kept as text (the
 /// source stays, for the runtime to be made again).
-pub const MAX_SCRIPT_BYTES: usize = 16 * 1024;
+pub const MAX_SCRIPT_BYTES: usize = 32 * 1024;
 /// The memory limit per runtime on the box: the allocator's (`PsramAllocator` counts the usable
 /// size of each block and refuses past it; QuickJS itself is given no limit there). On the Mac
 /// QuickJS's own limit holds, `SYSTEM_MEMORY_LIMIT` below.
-/// Worst case: 2 runtimes (`MAX_SCRIPT_RECIPES`) of 224 KB, 448 KB (under the 512 KB ceiling), on
-/// their own line of the memory budget. It holds `MAX_INSTANCES_PER_SCRIPT` instances (measured
+/// Worst case: 4 runtimes (`MAX_SCRIPT_RECIPES`) of 224 KB, 896 KB, on their own line of the memory
+/// budget (spec 053; a script of 32 KB with 4 instances holds 180,668 bytes in QEMU, and its load
+/// ran out of memory at 208 KB: the limit stays 224 KB, D85). It holds `MAX_INSTANCES_PER_SCRIPT` instances (measured
 /// in QEMU: about 8-10 KB each, on a runtime of about 107 KB).
 pub const SCRIPT_MEMORY_LIMIT: usize = 224 * 1024;
 /// The same limit on the Mac (`SystemRuntimes`), twice the box's, 448 KB: QuickJS's objects hold

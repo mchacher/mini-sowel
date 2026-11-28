@@ -1417,7 +1417,7 @@ fn the_other_methods_and_paths_of_equipments_are_refused() {
         assert_eq!(rig.refused("GET", &path, "").0, 404, "{path}");
     }
     // The foreign host and the big bodies are refused on the new routes as on the old ones.
-    let big = "x".repeat(16 * 1024 + 1);
+    let big = "x".repeat(32 * 1024 + 128 + 1);
     assert_eq!(
         rig.refused("POST", "/api/v1/equipments", &big),
         (413, "Body too large".to_string())

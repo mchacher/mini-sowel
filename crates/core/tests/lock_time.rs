@@ -169,7 +169,7 @@ fn a_motion_event_through_the_script_with_three_instances() {
 #[test]
 #[ignore = "slow: a measurement, run in release with --nocapture; figures in docs/memory-budget.md"]
 fn one_motion_event_to_the_most_instances() {
-    // A script recipe holds at most 8 instances (D74, spec 046).
+    // A script recipe holds at most 6 instances (D85).
     let count = solite_core::recipes::MAX_INSTANCES_PER_SCRIPT;
     let mut built = with_instances(count);
     let (mean, longest) = motion_batches(&mut built.home);

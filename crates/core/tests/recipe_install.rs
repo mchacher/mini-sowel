@@ -844,7 +844,7 @@ fn a_file_is_refused_for_each_thing_that_is_wrong_with_it() {
     let mut changed = good.clone();
     changed[20] ^= 1;
     assert_eq!(reason(&changed), "Recipe length differs from the header");
-    // A header alone, and a file over 16 KB.
+    // A header alone, and a file over 32 KB and a header.
     assert_eq!(reason(&good[..HEADER_BYTES]), "Recipe file too short");
     let big = vec![b' '; MAX_FILE_BYTES + 1 - HEADER_BYTES];
     let over = signed_with(&signing, "1.0.0", std::str::from_utf8(&big).unwrap());
@@ -882,7 +882,7 @@ fn the_firmwares_header_is_not_a_recipe_file_and_the_recipe_key_does_not_sign_fi
 }
 
 #[test]
-fn an_upload_over_16_kb_is_413_and_an_upload_of_exactly_16_kb_is_checked() {
+fn an_upload_over_32_kb_is_413_and_an_upload_of_exactly_32_kb_is_checked() {
     let mut world = World::new();
     let signing = world.signing.clone();
     let big = vec![b' '; MAX_FILE_BYTES + 1 - HEADER_BYTES];
@@ -1443,13 +1443,14 @@ fn an_install_with_the_network_down_or_a_download_cut_for_good_is_502() {
 }
 
 #[test]
-fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknown_id_or_a_third_file()
+fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknown_id_or_a_fifth_file()
  {
     let mut world = World::new();
     let signing = world.signing.clone();
     let a = signed(&signing, "a", "1.0.0");
     let b = signed(&signing, "b", "1.0.0");
     let c = signed(&signing, "c", "1.0.0");
+    let d = signed(&signing, "d", "1.0.0");
     let local = signed(&signing, "local", "1.0.0");
     let old = signed(&signing, "old", "1.0.0");
     world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b), ("c", "1.0.0", &c)]);
@@ -1464,6 +1465,7 @@ fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknow
         ("a", "1.0.0", &a),
         ("b", "1.0.0", &b),
         ("c", "1.0.0", &c),
+        ("d", "1.0.0", &d),
     ]);
     refused(world.install_id("local"), 409, "local is built in");
     // The catalogue does not list it.
@@ -1475,27 +1477,33 @@ fn an_install_is_refused_for_a_script_the_program_carries_an_installed_or_unknow
     // The id of a loaded file.
     assert_eq!(world.install_id("a").0, 201);
     refused(world.install_id("a"), 409, "a is installed: update it");
-    // A script given by `--recipe-script` and a file make two: a third is refused.
+    // A script given by `--recipe-script` and three files make four: a fifth is refused.
+    assert_eq!(world.install_id("b").0, 201);
+    assert_eq!(world.install_id("c").0, 201);
     refused(
-        world.install_id("b"),
+        world.install_id("d"),
         409,
-        "Too many script recipes (at most 2)",
+        &format!("Too many script recipes (at most {MAX_SCRIPT_RECIPES})"),
     );
     let _ = old;
 
-    // Two files on the flash, none of them a built-in's: a third id.
+    // Four files on the flash, none of them a built-in's: a fifth id.
     let mut world = World::new();
     let signing = world.signing.clone();
-    let (a, b, c) = (
-        signed(&signing, "a", "1.0.0"),
-        signed(&signing, "b", "1.0.0"),
-        signed(&signing, "c", "1.0.0"),
-    );
-    world.serve(&[("a", "1.0.0", &a), ("b", "1.0.0", &b), ("c", "1.0.0", &c)]);
-    assert_eq!(world.install_id("a").0, 201);
-    assert_eq!(world.install_id("b").0, 201);
+    let files: Vec<(String, Vec<u8>)> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|id| (id.to_string(), signed(&signing, id, "1.0.0")))
+        .collect();
+    let entries: Vec<(&str, &str, &[u8])> = files
+        .iter()
+        .map(|(id, bytes)| (id.as_str(), "1.0.0", bytes.as_slice()))
+        .collect();
+    world.serve(&entries);
+    for id in ["a", "b", "c", "d"] {
+        assert_eq!(world.install_id(id).0, 201, "{id}");
+    }
     refused(
-        world.install_id("c"),
+        world.install_id("e"),
         409,
         &format!("Too many script recipes (at most {MAX_SCRIPT_RECIPES})"),
     );
@@ -1992,7 +2000,7 @@ fn at_boot_the_files_are_read_in_id_order_and_a_changed_file_is_refused_and_left
 }
 
 #[test]
-fn at_boot_a_format_2_file_a_third_file_and_a_file_over_the_memory_rule_are_refused() {
+fn at_boot_a_format_2_file_a_fifth_file_and_a_file_over_the_memory_rule_are_refused() {
     let mut world = World::new();
     let signing = world.signing.clone();
     let mut two = signed(&signing, "a", "1.0.0");
@@ -2004,23 +2012,29 @@ fn at_boot_a_format_2_file_a_third_file_and_a_file_over_the_memory_rule_are_refu
     world
         .storage
         .put("scripts/c.srs", &signed(&signing, "c", "1.0.0"));
-    world
-        .storage
-        .put("scripts/d.srs", &signed(&signing, "d", "1.0.0"));
+    for id in ["d", "e", "f", "g"] {
+        world
+            .storage
+            .put(&format!("scripts/{id}.srs"), &signed(&signing, id, "1.0.0"));
+    }
     let lines = world.boot();
     assert!(lines[0].contains("format 2 is not supported"), "{lines:?}");
     assert!(
         lines[1].starts_with("recipes: script b 1.0.0 installed"),
         "{lines:?}"
     );
-    assert!(
-        lines[2].contains("Too many script recipes (at most 2)"),
-        "{lines:?}"
-    );
-    assert!(
-        lines[3].contains("Too many script recipes (at most 2)"),
-        "{lines:?}"
-    );
+    // The refused file takes a place of the four: three installed, then the others refused.
+    for line in &lines[1..=3] {
+        assert!(line.contains(" installed"), "{lines:?}");
+    }
+    for line in &lines[4..=6] {
+        assert!(
+            line.contains(&format!(
+                "Too many script recipes (at most {MAX_SCRIPT_RECIPES})"
+            )),
+            "{lines:?}"
+        );
+    }
 
     // Over the memory rule.
     let mut world = World::new();
@@ -2747,7 +2761,7 @@ fn an_upload_that_updates_follows_the_catalogues_rules_with_one_new_runtime() {
 }
 
 #[test]
-fn an_upload_is_refused_for_a_third_file_before_any_load_or_memory_check() {
+fn an_upload_is_refused_for_a_fifth_file_before_any_load_or_memory_check() {
     let (mut world, counting, needed) = counting_world();
     let signing = world.signing.clone();
     // The memory is short for any new runtime: a load or the memory rule would say so.
@@ -2756,18 +2770,29 @@ fn an_upload_is_refused_for_a_third_file_before_any_load_or_memory_check() {
     world.probe.set(64 * 1024, needed + 200 * 1024);
     let b = signed(&signing, "b", "1.0.0");
     let c = signed(&signing, "c", "1.0.0");
+    let d = signed(&signing, "d", "1.0.0");
+    let e = signed(&signing, "e", "1.0.0");
     assert_eq!(world.upload(&b).0, 201);
+    // Each runtime held takes 200 KB of the PSRAM the probe reads: the rule is met each time.
+    world.probe.set(64 * 1024, needed + 400 * 1024);
+    assert_eq!(world.upload(&c).0, 201);
+    world.probe.set(64 * 1024, needed + 600 * 1024);
+    assert_eq!(world.upload(&d).0, 201);
     world.probe.set(64 * 1024, 1024);
-    refused(world.upload(&c), 409, "Too many script recipes (at most 2)");
+    refused(
+        world.upload(&e),
+        409,
+        &format!("Too many script recipes (at most {MAX_SCRIPT_RECIPES})"),
+    );
     assert_eq!(
         counting.made.load(Ordering::SeqCst),
-        made + 1,
-        "only b's runtime was made"
+        made + 3,
+        "only the runtimes of b, c and d were made"
     );
     // A script whose id cannot be read is 400 and loads nothing.
     let odd = signed_with(&signing, "1.0.0", "recipe(makeIt());");
     assert_eq!(world.upload(&odd).0, 400);
-    assert_eq!(counting.made.load(Ordering::SeqCst), made + 1);
+    assert_eq!(counting.made.load(Ordering::SeqCst), made + 3);
 }
 
 #[test]

@@ -1093,9 +1093,9 @@ fn the_plain_handler_cannot_stream_an_update_and_answers_501() {
 }
 
 #[test]
-fn another_route_still_refuses_a_20_kb_json_body() {
+fn another_route_still_refuses_a_40_kb_json_body() {
     let (server, token) = Server::with_token();
-    let body = vec![b' '; 20 * 1024];
+    let body = vec![b' '; 40 * 1024];
     let (status, _) = whole(server.send(
         "POST",
         "/api/v1/zones",

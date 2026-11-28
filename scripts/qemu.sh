@@ -57,7 +57,7 @@ case "$1" in
   *) fail "usage: sh scripts/qemu.sh [--box]" ;;
 esac
 # Time allowed: the blank partition is formatted, then 12 s of scenario time on a slow emulator.
-# The script phase plays the scenario twice more (3 and 8 instances).
+# The script phase plays the scenario twice more (3 and 6 instances), then a script of 32 KB with 6.
 if [ "$MODE" = sim ]; then TIMEOUT=600; else TIMEOUT=60; fi
 
 # QEMU's system libraries on macOS (Homebrew).
@@ -152,7 +152,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
   # A script phase that ended in an error never logs its last line: say so now, not at the timeout.
   [ "$MODE" = sim ] && grep -aqE '^E \([0-9]+\) .*script phase' "$LOG" \
     && show_failure "the script phase failed: $(grep -aE '^E \([0-9]+\) .*script phase' "$LOG" | tail -n 1)"
-  if ok && { [ "$MODE" != sim ] || grep -aq 'script sizes: motion-light' "$LOG"; }; then
+  if ok && { [ "$MODE" != sim ] || grep -aq 'script sizes: big-recipe' "$LOG"; }; then
     # A short grace period: a reboot right after the banner must not pass.
     sleep 3
     broken && show_failure "the firmware panicked or rebooted."
@@ -173,7 +173,7 @@ while [ "$elapsed" -lt "$TIMEOUT" ]; do
     REASON=$(fw_check_update_stack "$LOG") || show_failure "$REASON"
     grep -a 'recipes: script ' "$LOG" | tail -n 3
     grep -a 'script phase: ' "$LOG" | tail -n 2
-    grep -a 'script sizes: ' "$LOG" | tail -n 1
+    grep -a 'script sizes: ' "$LOG" | tail -n 2
     REASON=$(fw_check_script_phase "$LOG") || show_failure "$REASON"
     grep -a 'script phase: install ' "$LOG" | tail -n 1
     grep -a 'recipe: thread stack ' "$LOG" | tail -n 1

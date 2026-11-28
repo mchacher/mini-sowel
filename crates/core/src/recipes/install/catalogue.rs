@@ -31,7 +31,7 @@ pub struct Entry {
     pub i18n: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
-    /// The signed file's size, in bytes: at most 16 KB.
+    /// The signed file's size, in bytes: at most 32 KB and a header.
     pub size: u64,
     /// The signed file's SHA-256, 64 hexadecimal characters.
     pub sha256: String,

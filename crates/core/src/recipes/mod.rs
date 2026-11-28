@@ -54,12 +54,12 @@ pub const MAX_PARAMS_BYTES: usize = 2048;
 // measures the params of 16 adversarial instances at about 2.5 KB each. It fits the box's PSRAM
 // (2 MB); a home of a few instances holds a few KB.
 
-/// Script recipes loaded at once (spec 041, R3.3). Worst case: 2 runtimes of at most
-/// `SCRIPT_MEMORY_LIMIT` (224 KB) each, 448 KB, counted on their own line of the memory budget.
-pub const MAX_SCRIPT_RECIPES: usize = 2;
+/// Script recipes loaded at once (spec 041, R3.3). Worst case: 4 runtimes of at most
+/// `SCRIPT_MEMORY_LIMIT` (224 KB) each, 896 KB, counted on their own line of the memory budget.
+pub const MAX_SCRIPT_RECIPES: usize = 4;
 /// Instances of one script recipe, at most (they share its runtime, which is bounded: about 10 KB
-/// each on the box). A ninth is refused (400); `MAX_INSTANCES` still bounds all recipes together.
-pub const MAX_INSTANCES_PER_SCRIPT: usize = 8;
+/// each on the box). A fifth is refused (400); `MAX_INSTANCES` still bounds all recipes together.
+pub const MAX_INSTANCES_PER_SCRIPT: usize = 4;
 /// A failed script recipe comes back by itself this long after the failure (R3.6).
 pub const SCRIPT_RESTART_DELAY_MS: u64 = 60_000;
 /// ... at most this many times in a sliding window of `SCRIPT_RESTART_WINDOW_MS` (24 hours); after

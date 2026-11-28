@@ -546,7 +546,7 @@ pub(crate) fn download_file(
         resumes: 0,
         pacing,
     };
-    // Bound: the catalogue's `size` (at most 16 KB), plus the one byte that shows a longer body.
+    // Bound: the catalogue's `size` (at most 32 KB and a header), plus the one byte that shows a longer body.
     let mut data: Vec<u8> = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
     let mut chunk = [0u8; 1024];
     loop {

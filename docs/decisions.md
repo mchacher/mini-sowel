@@ -1442,7 +1442,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   (cannot hold motion-light's state machine; rejected by Sowel's own draft); native recipes delivered
   by firmware updates only (no recipe without a release).
 
-## D74: One QuickJS runtime per script recipe, its bounds and where it lives on the box (spec 041; the `script` thread's internal stack: replaced by D83)
+## D74: One QuickJS runtime per script recipe, its bounds and where it lives on the box (spec 041; the `script` thread's internal stack: replaced by D83; 16 KB of source, 2 recipes and 8 instances: replaced by D85)
 
 - **Date**: 2026-11-26 (decided in an autonomous run, for the user's review)
 - **Choice**: one runtime and one context per script recipe, shared by its instances (Sowel's draft:
@@ -1531,7 +1531,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   wired as data lines, not checked on the Dongle Max); QuickJS compiled at `-O2` (a larger image,
   more cache misses; not measured); keeping 160 MHz and a slower limit per call.
 
-## D78: Script recipes installed from a catalogue or a signed file, checked at every start (spec 042; the per-job `recipe` thread on the box: replaced by D83)
+## D78: Script recipes installed from a catalogue or a signed file, checked at every start (spec 042; the per-job `recipe` thread on the box: replaced by D83; the 16 KB file: replaced by D85)
 
 - **Date**: 2026-11-27
 - **Choice**: refines D76. A script recipe is installed from a catalogue (`recipes.json`, at
@@ -1600,7 +1600,7 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   raising the 1 MiB ceiling (the PSRAM is shared with the radio's and the script recipes' shares);
   a bound of 12 (about half the gain).
 
-## D81: No recipe is built in: `motion-light` is a script recipe, Sowel's 1.1.2 (replaces D17's native recipes and D46's pruned button, spec 046)
+## D81: No recipe is built in: `motion-light` is a script recipe, Sowel's 1.1.2 (replaces D17's native recipes and D46's pruned button, spec 046; the 8 instances: replaced by D85)
 
 - **Date**: 2026-11-27
 - **Choice**: the native (Rust) `motion-light` recipe and its crate are removed; the engine
@@ -1710,3 +1710,27 @@ Newest last. A decision is never edited: a new one replaces it and says so.
   saved); the release built from the CI's artifact (the build must stay in the job with no
   secret, D63).
 
+
+## D85: Script recipes up to 32 KB, 4 recipes of 4 instances each (replaces D74's and D78's 16 KB, and D74's 2 recipes and 8 instances, spec 053)
+
+- **Date**: 2026-11-28
+- **Choice**: a script recipe's source is at most 32 KB (`MAX_SCRIPT_BYTES`); a request body at most
+  32 KB and the 128 bytes of the signed file's header (`MAX_BODY_BYTES` = 32 KB + `HEADER_BYTES`,
+  so that a signed file of 32 KB of source passes; `MAX_FILE_BYTES` is the body bound and
+  `MAX_SOURCE_BYTES` 32 KB), the catalogue's `size` at most that file; at most 4 script recipes
+  loaded (`MAX_SCRIPT_RECIPES`, 2 before), each with at most 4 instances
+  (`MAX_INSTANCES_PER_SCRIPT`, 8 before), 16 in all (`MAX_INSTANCES`, unchanged = 4 x 4). The memory
+  limit of one runtime stays 224 KB (D74).
+- **Why**: Sowel's larger recipes ported to scripts are about 17 to 26 KB (`motion-light` is 15.3 KB,
+  at the old bound). More, larger scripts with fewer instances each is the user's choice
+  (2026-11-28). The limit was tried at 208 KB, to make 4 runtimes fit the PSRAM budget (4 x 224 KB
+  is 54 KB over on paper): the 32 KB script then ran out of memory when loaded (QEMU), though it
+  holds 139,992 bytes once loaded and 180,668 (peak 183,828) with 4 instances, so the load itself
+  peaks between 208 and 224 KB.
+- **Measured**: the engine's worst case (16 instances, 4 bodies of 32 KB, installs estimated at
+  152 KB) 842 KB peak, 1019 KB with the log entries and the estimates, under the 1 MiB ceiling by
+  4.9 KB (the installs' estimate, a sum of 146 KB, was rounded to 160 KB at first, which crossed the
+  ceiling); the PSRAM arithmetic of the 4 runtimes at their limit: `docs/memory-budget.md`.
+- **Alternatives**: a limit under 224 KB (the load of a 32 KB script needs more); 3 recipes (the
+  arithmetic would fit: 3 x 224 KB); the installs' admission rule (a runtime's limit and a 512 KB
+  reserve free in PSRAM) keeps the real PSRAM from running out meanwhile.

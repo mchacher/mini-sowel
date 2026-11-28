@@ -539,7 +539,7 @@ and a person at the box confirms (decisions D47 to D49).
   required`; a token that is not a live access token 401 `Invalid or expired token`. The interface's
   files need no token. The `Host` check comes first (403 `Forbidden host`). The Mac host and the
   box apply the same rules, except that the box answers what it decides from the request's head
-  before the gate: 411 `Length required`, 413 for a body announced over 16 KB, 408 for a body that
+  before the gate: 411 `Length required`, 413 for a body announced over 32 KB and 128 bytes, 408 for a body that
   stops (see "Serves Sowel's API from the box").
 - **Brute force.** Setup and login together: at most 10 attempts per minute for the whole box (the
   core does not see addresses), then 429 `Rate limit exceeded, retry in 1 minute` without hashing.
@@ -865,7 +865,7 @@ the wall clock.
   no longer validate answers 400 `Invalid params: <reason>` and leaves it disabled.
 - **From the interface**: the instances are made, changed, enabled, disabled and deleted, and
   their log read, from a room's page (see "Shows the home in the browser").
-- **Bounds**: 8 instances of `motion-light`, all zones together (D74; the 16 instances of all
+- **Bounds**: 4 instances of `motion-light`, all zones together (D85; the 16 instances of all
   recipes together stay the bound of the engine), 16 lights and 16 buttons each, settings of at most 2 KB and nested at
   most 8 levels deep (deeper: `Invalid params: params nested too deeply`), 128 events waiting for
   the recipes.
@@ -893,8 +893,8 @@ texts and behaviour, version `1.0.0`, from the catalogue (or a signed file), or 
   button is required`, `Button equipment not found: <id>`, `Button "<name>" has no "action" data
   binding`, `Invalid duration format: <v>. Use e.g. "10m", "30s", "1h"`; a light of another type
   is refused by the slot's constraint.
-- **Bounds**: those of any script recipe (8 instances, 16 KB of source, 224 KB of memory); 8
-  instances use about 200 KB on the Mac.
+- **Bounds**: those of any script recipe (4 instances, 32 KB of source, 224 KB of memory); 4
+  instances of a script of 32 KB use about 242 KB on the Mac.
 
 ### Runs script recipes
 
@@ -944,11 +944,11 @@ same routes and from a room's page, with the same log, state and events.
   folder as `scripts/<id>.srs`, loaded at every start after any `--recipe-script` and before the
   instances start. No script is built into the box's radio image.
 - **The signed file (`.srs`)**: a header of 128 bytes, then the script's UTF-8 source, the whole
-  at most 16 KB (16,384 bytes). Header: magic `SOLITERS`, format `1` (u32), the version (three
+  at most 32 KB of source and the header (32,896 bytes). Header: magic `SOLITERS`, format `1` (u32), the version (three
   u16), 2 reserved bytes at zero, the source's length (u32), its SHA-256, 8 reserved bytes at
   zero, and the Ed25519 signature (64 bytes) over the first 64. It is signed with the **recipe
   key**, not the firmware's, whose public half is built in (`SOLITE_RECIPE_PUBLIC_KEY`, from
-  `release/recipe-key.pub`). Refused with 400, in this order: a length under 129 or over 16 KB,
+  `release/recipe-key.pub`). Refused with 400, in this order: a length under 129 or over 32,896 bytes,
   the magic, the format (`format 2 is not supported`), the reserved bytes, the length field, the
   SHA-256, the signature (`verify_strict`), then the script's own checks; its `version` must equal
   the header's (`version differs from the signed one`). A build without a valid recipe key answers
@@ -959,7 +959,7 @@ same routes and from a room's page, with the same log, state and events.
   pair is made with `--update-keygen`.
 - **The catalogue**: `recipes.json`, unsigned (each file is signed and pinned by its SHA-256):
   `{"format": 1, "recipes": [{id, version, name, description, i18n?, icon?, size, sha256, url,
-  minVersion?}]}`, at most 32 entries and 32 KB, `size` at most 16 KB; refused as a whole, the
+  minVersion?}]}`, at most 32 entries and 32 KB, `size` at most 32,896 bytes; refused as a whole, the
   last good list kept, when over a bound, not JSON, of another format, or an entry's `url` breaks
   the update URL rule (https, or http on the home network). Its address is the setting
   `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
@@ -971,13 +971,13 @@ same routes and from a room's page, with the same log, state and events.
   `POST /api/v1/recipes/store/refresh` reads it again (at most once a minute: 429; 503 `The clock
   is not set yet: reading the recipe catalogue needs the date`; a failed read keeps the list and
   answers it with `error`, 200); `POST /api/v1/recipes/install` with `{"id"}` (the catalogue's
-  entry) or an `application/octet-stream` body (a signed file of at most 16 KB), 201 with the
+  entry) or an `application/octet-stream` body (a signed file of at most 32,896 bytes: 32 KB of source and its header), 201 with the
   recipe's `RecipeInfo` and its `version`; `POST /api/v1/recipes/:id/update` (the catalogue's
   version must be newer: 409 `<id> <x.y.z> is not newer than <x.y.z>`; an upload of a signed file
   of an installed recipe updates it the same way; an upload's id is read from the `id: "..."` text of its `recipe({...})` call without loading it, 400 when there is none, and the load refuses a script that declares another; `POST /api/v1/recipes/:id/uninstall`, 204.
   Install is refused, in order: the build's key (503), the one-job rule (409, below), the internal
   RAM (503), the id of a `--recipe-script` (409 `<id> is built in`), a loaded id (409 `<id> is installed: update
-  it`), two files on the flash (409 `Too many script recipes (at most 2)`), an id the catalogue
+  it`), four script recipes loaded (409 `Too many script recipes (at most 4)`), an id the catalogue
   lacks (404 `Recipe not in the catalogue: <id>`), a `minVersion` above the firmware (409 `<id>
   <x.y.z> needs Solite <minVersion> or later`), an unreachable catalogue or a failed download
   (502 with the reason; the download is resumed as an update's, at most three times), a size,
@@ -1027,8 +1027,8 @@ same routes and from a room's page, with the same log, state and events.
   `script` thread, whose stack is in PSRAM (nothing it runs touches the flash). The scripts are not
   in the full backup: a restore on the same box leaves the files (the restored instances start),
   on another box the restored instances stay stopped until the recipe is installed.
-- **Bounds**: 2 scripts of at most 16 KB, at most 8 instances of each (a ninth is refused: 400 `Too
-  many instances of <recipe id> (max 8)`; on restore the ninth and later fail to restore with that
+- **Bounds**: 4 scripts of at most 32 KB, at most 4 instances of each (a fifth is refused: 400 `Too
+  many instances of <recipe id> (max 4)`; on restore the fifth and later fail to restore with that
   text and stay stopped); each runs in its own QuickJS runtime of at most 224 KB on the box (448 KB
   on the Mac, whose pointers are twice as large), shared by its instances; loading a script stops
   after 1000 ms (`Script recipe invalid: the script took more than 1000 ms when loaded`); a call
@@ -1040,9 +1040,9 @@ same routes and from a room's page, with the same log, state and events.
   the runtime over 85 % of its memory limit, or 32 KB more than the last collection left, is
   followed by a garbage collection. The engine checks the end of each call (the state is a JSON
   object of at most 512 bytes, at most 16 timers, aliases of at most 64 bytes, at most 21 log lines):
-  a script that makes it otherwise fails the recipe. A ninth instance never runs, whichever way it
+  a script that makes it otherwise fails the recipe. A fifth instance never runs, whichever way it
   is started (a restart after a failure leaves it stopped, `Failed to restart: Too many instances
-  of <recipe id> (max 8)`). On the box the scripts' memory is in PSRAM and every call into a script
+  of <recipe id> (max 4)`). On the box the scripts' memory is in PSRAM and every call into a script
   runs on a stack of 32 KB: the engine thread's, in internal RAM, or the `script` thread's, made at
   boot, in PSRAM, for the API's requests that change something, but the account's routes
   `/api/v1/auth/*`, which stay on the worker. The box's storage refuses a flash access made from a
@@ -1440,7 +1440,7 @@ application image of the slot, as `esptool elf2image` writes it, the same as `sc
   as `application/octet-stream` (415 `Unsupported Media Type` otherwise), **or** an empty body
   (`Content-Length: 0`, or neither `Content-Length` nor `Transfer-Encoding`; any content type),
   which pulls the latest release (a deviation from Sowel's route, which takes no body, decisions
-  D53 and D65). Another method on any of them: 405. The 16 KB body limit does not apply to the
+  D53 and D65). Another method on any of them: 405. The body limit (32 KB and 128 bytes) does not apply to the
   update route; a declared `Content-Length` over 128 bytes + 4 MB + 1 is 413 before any read, and
   on the box a chunked upload is 411. The body ends at `Content-Length` bytes, so the check for a
   longer file never waits on the socket. Every refusal of this route that leaves body bytes unread
@@ -1999,7 +1999,7 @@ In the emulated ESP32 it stays under 350 KB for the realistic home with the fixt
 playing on the simulated radio inside the image (no network, no HTTP client, logs as the scenario
 fills them). The same image pulls a release from an in-memory fetch adapter on a thread of 20 KB
 and must leave 8 KB of that stack unused, the room for the TLS handshake the box runs. Script
-recipes have a ceiling of their own, 512 KB for the 2 of them at their limit (224 KB each), counted beside the
+recipes have a ceiling of their own, 896 KB for the 4 of them at their limit (224 KB each), counted beside the
 engine's in both the realistic home and the worst case. It stays
 under 1 MB with every bound of the core at its maximum (64 devices of 8 data, 32 zones, 64
 equipments of 8 bindings and 8192 bytes of Sowel's optional equipment fields, 16 recipe instances of 16 lights and 16 buttons, 4 live clients with
@@ -2072,4 +2072,4 @@ live events and the interface over Wi-Fi, behind the home's password.
 | 042 | Script recipes installed, updated and removed without a new firmware: a signed `.srs` file (the recipe key), a catalogue, admission by memory, a Resources card and a Plugins page; the script leaves the radio image |
 | 043 | A Restart button and route (`POST /api/v1/system/restart`, allowed in safe mode, refused during a probation, 501 on the host); the update's probation confirms an image only with its PSRAM and logs why it is not healthy; the OTA thread starts without PSRAM |
 | 044 | Tighter bounds: 8 data a device, 8 data and 8 order bindings an equipment, 20 log lines a recipe instance; a home stored with the old bounds is cut at load, logged once |
-| 046 | The native `motion-light` recipe removed: no recipe is built in, `motion-light` is Sowel's 1.1.2 as a script recipe (Sowel's id, info and validation texts, at most 8 instances), the memory ceilings measure scripts, the Mac launchers pass `--recipe-script` |
+| 046 | The native `motion-light` recipe removed: no recipe is built in, `motion-light` is Sowel's 1.1.2 as a script recipe (Sowel's id, info and validation texts, at most 4 instances since spec 053), the memory ceilings measure scripts, the Mac launchers pass `--recipe-script` |
