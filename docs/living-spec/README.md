@@ -1091,11 +1091,18 @@ same routes and from a room's page, with the same log, state and events.
 - **The catalogue**: `recipes.json`, unsigned (each file is signed and pinned by its SHA-256):
   `{"format": 1, "recipes": [{id, version, name, description, i18n?, icon?, size, sha256, url,
   minVersion?}]}`, at most 32 entries and 32 KB, `size` at most 32,896 bytes; refused as a whole, the
-  last good list kept, when over a bound, not JSON, of another format, or an entry's `url` breaks
+  last good list kept, when over a bound, not JSON, of another format, an entry's `i18n` is not a JSON object, or an entry's `url` breaks
   the update URL rule (https, or http on the home network). Its address is the setting
   `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
   means `https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json`). It is
-  held in RAM only.
+  held in RAM only, as entries read once per catalogue read (each entry's `i18n` kept as its raw JSON text and served
+  as it came, `groups` and `options` included; any other unknown field dropped), not parsed again at each request.
+- **The install's steps in the log** (the box): each step of a recipe job logs `recipe install:
+  <step> internal <free>/<lowest>`, the internal RAM free now and its lowest since boot (on the box; QEMU's figures are per-phase minima), in bytes; a step that fails logs its line too;
+  the steps are `catalogue downloaded`, `catalogue read`, `download`, `check`, `load`, `store` (an
+  install), `update load`, `update store` (an update), `removal unloaded`, `removal stored` (a
+  removal). The engine's allocations of 512 bytes or less stay in internal RAM, larger ones are in
+  PSRAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512`, D86).
 - **Routes** (Solite's own, administrator): `GET /api/v1/recipes/store` answers what is held,
   never the network: `{"recipes": [<entry> + "installed", "refused", "builtIn"], "readAt",
   "error"}` (`{"recipes": [], "readAt": null, "error": null}` before any read);

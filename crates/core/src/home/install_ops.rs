@@ -2,8 +2,6 @@
 //! tickets of the recipe jobs taken under the lock (R3.1), the steps a job takes on the engine, the
 //! boot load of the installed files (R3.7), `GET /system/resources` and the figures it reads.
 
-use serde_json::{Value, json};
-
 use super::Home;
 use crate::devices::format_iso;
 use crate::failure::Failure;
@@ -16,6 +14,26 @@ use crate::recipes::install::{
     Refused, SCRIPT_PSRAM_RESERVE,
 };
 use crate::settings;
+
+/// One entry of `GET /recipes/store`: the catalogue's entry and what the box adds to it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreEntry<'a> {
+    #[serde(flatten)]
+    entry: &'a Entry,
+    installed: Option<String>,
+    refused: Option<&'a str>,
+    built_in: bool,
+}
+
+/// The answer of `GET /recipes/store`, borrowed from the home.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreView<'a> {
+    recipes: Vec<StoreEntry<'a>>,
+    read_at: Option<String>,
+    error: Option<&'a str>,
+}
 
 /// The unit of the figures in the messages: KiB, the needed rounded up and the free rounded down.
 #[cfg_attr(not(feature = "script-recipes"), allow(dead_code))]
@@ -75,7 +93,7 @@ impl Home {
 
     /// Keeps a catalogue read: the list, when, and no error.
     pub(crate) fn keep_catalogue(&mut self, entries: Vec<Entry>, wall: u64) {
-        self.install.catalogue = CatalogueState::new(&entries, wall);
+        self.install.catalogue = CatalogueState::new(entries, wall);
     }
 
     /// A read that failed: the last list is kept, with the reason.
@@ -88,8 +106,9 @@ impl Home {
         self.install
             .catalogue
             .entries()
-            .into_iter()
+            .iter()
             .find(|entry| entry.id == id)
+            .cloned()
     }
 
     /// True when a catalogue read is held (even an empty list).
@@ -108,43 +127,40 @@ impl Home {
         }
     }
 
-    /// `GET /recipes/store` (R2.3): what the box holds, never the network.
-    pub fn recipe_store(&self) -> Value {
+    /// `GET /recipes/store` (R2.3): what the box holds, never the network. Serialised straight
+    /// into the answer's body, no value tree.
+    pub fn recipe_store(&self) -> StoreView<'_> {
         let state = &self.install;
-        let recipes: Vec<Value> = state
+        let recipes = state
             .catalogue
             .entries()
             .iter()
-            .map(|entry| {
-                let mut value = serde_json::to_value(entry).unwrap_or(Value::Null);
-                if let Value::Object(map) = &mut value {
-                    let refused = state
-                        .refused
-                        .iter()
-                        .find(|refused| refused.id == entry.id)
-                        .map(|refused| refused.reason.clone());
-                    map.insert("installed".into(), self.installed_text(&entry.id));
-                    map.insert("refused".into(), json!(refused));
-                    map.insert("builtIn".into(), json!(self.is_built_in_recipe(&entry.id)));
-                }
-                value
+            .map(|entry| StoreEntry {
+                entry,
+                installed: self.installed_text(&entry.id),
+                refused: state
+                    .refused
+                    .iter()
+                    .find(|refused| refused.id == entry.id)
+                    .map(|refused| refused.reason.as_str()),
+                built_in: self.is_built_in_recipe(&entry.id),
             })
             .collect();
-        json!({
-            "recipes": recipes,
-            "readAt": state.catalogue.read_at.map(format_iso),
-            "error": state.catalogue.error,
-        })
+        StoreView {
+            recipes,
+            read_at: state.catalogue.read_at.map(format_iso),
+            error: state.catalogue.error.as_deref(),
+        }
     }
 
     #[cfg(feature = "script-recipes")]
-    fn installed_text(&self, id: &str) -> Value {
-        json!(self.recipes.installed_version(id).map(|v| v.to_string()))
+    fn installed_text(&self, id: &str) -> Option<String> {
+        self.recipes.installed_version(id).map(|v| v.to_string())
     }
 
     #[cfg(not(feature = "script-recipes"))]
-    fn installed_text(&self, _id: &str) -> Value {
-        Value::Null
+    fn installed_text(&self, _id: &str) -> Option<String> {
+        None
     }
 
     #[cfg(feature = "script-recipes")]

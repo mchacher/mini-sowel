@@ -1088,6 +1088,53 @@ fn a_valid_catalogue_is_kept_and_served_with_what_is_installed() {
 }
 
 #[test]
+fn the_store_serves_the_i18n_of_a_sowel_catalogue_whole_with_groups_and_options() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    let mut with = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    let i18n = json!({
+        "fr": {
+            "name": "Lumi\u{e8}re", "description": "Allume",
+            "groups": {"main": "Principal"},
+            "slots": {"zone": {"name": "Zone", "description": "La zone",
+                "options": {"on": "Allum\u{e9}", "off": "\u{c9}teint"}}}
+        },
+        "en": {"name": "Light"}
+    });
+    with["i18n"] = i18n.clone();
+    world
+        .fetch
+        .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[with])));
+    let (status, body) = world.refresh();
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["error"], Value::Null, "{body}");
+    assert_eq!(body["recipes"][0]["i18n"], i18n);
+    let (_, again) = world.get("/api/v1/recipes/store");
+    assert_eq!(again["recipes"][0]["i18n"], i18n);
+}
+
+#[test]
+fn an_i18n_that_is_not_an_object_refuses_the_catalogue_and_keeps_the_last_list() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let a = signed(&signing, "a", "1.0.0");
+    world.serve(&[("a", "1.0.0", &a)]);
+    assert_eq!(world.refresh().0, 200);
+    let mut bad = entry("a", "1.0.0", &a, &file_url("a", "1.0.0"));
+    bad["i18n"] = json!({"fr": "x"}).get("fr").unwrap().clone();
+    world.now.set(world.now.get() + 61 * SECOND);
+    world.clock.set(world.clock.get() + 61 * SECOND);
+    world
+        .fetch
+        .serve(DEFAULT_CATALOGUE_URL, Answer::Body(catalogue_of(&[bad])));
+    let (status, answer) = world.refresh();
+    assert_eq!(status, 200, "{answer}");
+    assert_eq!(answer["error"], "Invalid catalogue: a: i18n");
+    assert_eq!(answer["recipes"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn the_store_marks_an_installed_recipe_a_refused_file_and_the_id_of_a_script_the_program_carries() {
     let mut world = World::new();
     let signing = world.signing.clone();
