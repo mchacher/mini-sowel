@@ -118,6 +118,10 @@ name = "memory_worst_case"
 required-features = ["script-recipes"]
 
 [[test]]
+name = "memory_worst_case_checks"
+required-features = ["script-recipes"]
+
+[[test]]
 name = "memory"
 required-features = ["script-recipes"]
 
