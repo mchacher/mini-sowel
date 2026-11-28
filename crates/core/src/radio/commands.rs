@@ -271,6 +271,7 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
                 | zcl::CLUSTER_LEVEL_CONTROL
                 | zcl::CLUSTER_COLOR_CONTROL
                 | zcl::CLUSTER_WINDOW_COVERING
+                | zcl::CLUSTER_THERMOSTAT
         );
         let endpoint = light_cluster.then_some(message.aps.source_endpoint);
         self.commands.note_route(eui64, message.sender, endpoint);
@@ -283,8 +284,25 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         if self.commands.in_flight.is_empty() {
             return;
         }
-        let Ok(response) = zcl::parse_default_response(&message.payload) else {
-            return;
+        // A write is answered by a Write Attributes Response (spec 051), any other command by a
+        // Default Response; a device may answer a write with either.
+        let response = match zcl::parse_default_response(&message.payload) {
+            Ok(response) => response,
+            Err(_) => {
+                let Ok(written) = zcl::parse_write_attributes_response(&message.payload) else {
+                    return;
+                };
+                zcl::DefaultResponse {
+                    tsn: written.tsn,
+                    command: 0x02,
+                    // The device's own refusal code, logged and reported as it is.
+                    status: if written.written {
+                        0
+                    } else {
+                        written.status.max(0x01)
+                    },
+                }
+            }
         };
         let Some(index) = self.commands.in_flight.iter().position(|c| {
             c.sent.contains(&(response.tsn, message.sender))
@@ -296,6 +314,10 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
         let command = self.commands.in_flight[index].command;
         let endpoint = self.commands.in_flight[index].target.endpoint;
         if response.status != 0 {
+            log::warn!(
+                "the device refused a command (status 0x{:02X})",
+                response.status
+            );
             self.commands
                 .finish(index, Err(CommandFailure::Refused(response.status)));
             return;
@@ -315,7 +337,11 @@ impl<T: RadioTransport, C: FnMut() -> u64> Radio<T, C> {
             }
         };
         // A shutter has no On/Off and is still moving: its reports give the position (spec 050).
-        if command.cluster() != zcl::CLUSTER_WINDOW_COVERING {
+        // A thermostat has no On/Off either: its report gives the setpoint (spec 051).
+        if !matches!(
+            command.cluster(),
+            zcl::CLUSTER_WINDOW_COVERING | zcl::CLUSTER_THERMOSTAT
+        ) {
             self.commands
                 .push_read(read(zcl::CLUSTER_ON_OFF, &[zcl::ATTRIBUTE_ON_OFF]));
         }

@@ -722,3 +722,25 @@ fn a_shutters_commands_are_up_down_stop_and_go_to_lift_percentage_on_the_window_
     assert_eq!(go_to.frame(0x0A), vec![0x01, 0x0A, 0x05, 75]);
     assert_eq!((go_to.cluster(), go_to.id()), (0x0102, 0x05));
 }
+
+#[test]
+fn a_setpoint_write_is_a_global_write_attributes_of_0x0012_int16_on_the_thermostat() {
+    let write = Command::WriteHeatingSetpoint(2050);
+    assert_eq!(
+        write.frame(0x0B),
+        vec![0x00, 0x0B, 0x02, 0x12, 0x00, 0x29, 0x02, 0x08]
+    );
+    assert_eq!((write.cluster(), write.id()), (0x0201, 0x02));
+}
+
+#[test]
+fn a_refused_write_keeps_the_device_s_own_status() {
+    use solite_core::radio::zcl::parse_write_attributes_response;
+    // Unsupported attribute (0x86) for 0x0012 (spec 051): the code is kept, not 0x01.
+    let refused = parse_write_attributes_response(&[0x18, 0x07, 0x04, 0x86, 0x12, 0x00]).unwrap();
+    assert!(!refused.written);
+    assert_eq!(refused.status, 0x86);
+    let written = parse_write_attributes_response(&[0x18, 0x08, 0x04, 0x00]).unwrap();
+    assert!(written.written);
+    assert_eq!(written.status, 0x00);
+}

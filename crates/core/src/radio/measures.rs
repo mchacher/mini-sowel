@@ -35,7 +35,11 @@ const CLUSTER_ON_OFF: u16 = 0x0006;
 const CLUSTER_LEVEL: u16 = 0x0008;
 /// Window Covering attribute CurrentPositionLiftPercentage (uint8, 100 is closed).
 const ATTR_LIFT_PERCENTAGE: u16 = 0x0008;
+/// Thermostat attributes: LocalTemperature and OccupiedHeatingSetpoint (int16, 0.01 °C).
+const ATTR_LOCAL_TEMPERATURE: u16 = 0x0000;
+const ATTR_HEATING_SETPOINT: u16 = 0x0012;
 const CLUSTER_COLOR: u16 = CLUSTER_COLOR_CONTROL;
+const CLUSTER_THERMOSTAT: u16 = 0x0201;
 const CLUSTER_ILLUMINANCE: u16 = 0x0400;
 const CLUSTER_PRESSURE: u16 = 0x0403;
 const CLUSTER_TEMPERATURE: u16 = 0x0402;
@@ -278,6 +282,23 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
             let lift = u8_value()?;
             (lift <= 100).then(|| number("shutter_position", f64::from(100 - lift), "%"))?
         }
+        // A thermostat's measured temperature and heating setpoint, to 0.1 °C; 0x8000 is invalid.
+        (CLUSTER_THERMOSTAT, ATTR_LOCAL_TEMPERATURE | ATTR_HEATING_SETPOINT, TYPE_INT16) => {
+            let raw = i16_value()?;
+            if raw == i16::MIN {
+                return None;
+            }
+            let degrees = (f64::from(raw) / 10.0).round() / 10.0;
+            if !(-50.0..=150.0).contains(&degrees) {
+                return None;
+            }
+            let kind = if attribute == ATTR_LOCAL_TEMPERATURE {
+                "local_temperature"
+            } else {
+                "setpoint"
+            };
+            number(kind, degrees, "°C")
+        }
         (CLUSTER_COLOR, ATTRIBUTE_COLOR_TEMPERATURE, TYPE_UINT16) => {
             let mireds = u16_value()?;
             (1..=1000)
@@ -480,9 +501,9 @@ const fn record(
 }
 
 /// The clusters set up on pairing, in the order they are set up: a sleepy device is awake for a
-/// few seconds only, so the measures that matter most come first. Twelve entries: the bound of
+/// few seconds only, so the measures that matter most come first. Thirteen entries: the bound of
 /// the setup's work per device.
-pub const REPORTING: [ReportingCluster; 12] = [
+pub const REPORTING: [ReportingCluster; 13] = [
     ReportingCluster {
         cluster: CLUSTER_TEMPERATURE,
         name: "temperature",
@@ -557,6 +578,14 @@ pub const REPORTING: [ReportingCluster; 12] = [
         cluster: CLUSTER_WINDOW_COVERING,
         name: "shutter_position",
         attributes: &[record(ATTR_LIFT_PERCENTAGE, TYPE_UINT8, 1, 300, Some(1))],
+    },
+    ReportingCluster {
+        cluster: CLUSTER_THERMOSTAT,
+        name: "thermostat",
+        attributes: &[
+            record(ATTR_LOCAL_TEMPERATURE, TYPE_INT16, 30, 600, Some(10)),
+            record(ATTR_HEATING_SETPOINT, TYPE_INT16, 1, 600, Some(10)),
+        ],
     },
 ];
 

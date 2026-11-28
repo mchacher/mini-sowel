@@ -147,6 +147,16 @@ fn shutter_position_command(value: &Value, min: Option<i64>, max: Option<i64>) -
     in_bounds.then_some(Command::GoToLiftPercentage(100 - position))
 }
 
+/// The command of a `set_setpoint` order: a number (not a string) in degrees inside the order's
+/// bounds, written in hundredths of a degree.
+fn setpoint_command(value: &Value, min: Option<i64>, max: Option<i64>) -> Option<Command> {
+    let degrees = value.as_f64().filter(|d| d.is_finite())?;
+    let in_bounds =
+        min.is_none_or(|m| degrees >= m as f64) && max.is_none_or(|m| degrees <= m as f64);
+    // Inside 5..=30 (or the bounds): the hundredths fit an i16.
+    in_bounds.then(|| Command::WriteHeatingSetpoint((degrees * 100.0).round() as i16))
+}
+
 /// The command of an order for a value, chosen by the order's category (`set_color_temp`,
 /// `set_color`), else by its type.
 fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
@@ -156,6 +166,7 @@ fn command_for(order: &DeviceOrder, value: &Value) -> Option<Command> {
         }
         (Some("set_color"), ValueType::Json) => color_command(value),
         (Some("shutter_move"), ValueType::Text) => shutter_move_command(value),
+        (Some("set_setpoint"), ValueType::Number) => setpoint_command(value, order.min, order.max),
         (Some("set_shutter_position"), ValueType::Number) => {
             shutter_position_command(value, order.min, order.max)
         }

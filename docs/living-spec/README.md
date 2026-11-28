@@ -221,7 +221,7 @@ box (`radio-stopped`). A radio that answers at no speed in a restart restarts th
   next speaks; enrollment requests are answered in every mode;
 - after identification, the host sets up the device's reporting: it binds each standard cluster
   the device has (temperature, humidity, pressure, illuminance, occupancy, on/off, level, colour,
-  power)
+  power, thermostat)
   to itself and asks for reports (`reporting: <address> temperature, humidity, battery`, or
   `reporting: <address> failed: <clusters>`, both parts when some succeed and some fail,
   `reporting: <address> none` when the device has none of them); a failed setup is tried once more when the device
@@ -352,7 +352,12 @@ gets `action` (category `action`, type `text`): the generic name of the command 
 `device.data.updated` event, even the same one twice. The names of a model's own buttons
 (`single`, `double`...) are not known. A shutter (Window Covering `0x0102`) gets `position`
 (shutter_position, %, 100 open, 0 closed: `100 - CurrentPositionLiftPercentage`; a lift above 100
-is dropped), reported at most every 1 s, at least every 300 s, on a change of 1. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
+is dropped), reported at most every 1 s, at least every 300 s, on a change of 1. A thermostat
+(Thermostat `0x0201`) gets `local_temperature` (category temperature, °C: LocalTemperature, 0.01 °C
+rounded to 0.1; `0x8000` dropped; a device that also has the Temperature cluster keeps its
+`temperature` apart) and `setpoint` (category setpoint, °C: OccupiedHeatingSetpoint, same
+rounding), reported every 30 to 600 s on a change of 0.1 °C for the first, every 1 to 600 s on a
+change of 0.1 °C for the second. `color` is Zigbee2MQTT's colour object, at most `x`, `y` (0 to 1), `hue` (0 to 360)
 and `saturation` (0 to 100): the colour measures of one message replace their fields once (one
 `device.data.updated`), and a message carrying X/Y and no hue/saturation drops hue and saturation
 (and the reverse), so the object never mixes two colours. Its orders (`DeviceOrder`): `state`
@@ -363,7 +368,10 @@ shutter `state` (shutter_move, type `text`: `OPEN`, `CLOSE` or `STOP`, any case;
 `Invalid value for state`) and `position` (set_shutter_position, 0 to 100 with 100 open: a whole
 number, refused otherwise). They send the Window Covering commands Up, Down, Stop and Go To Lift
 Percentage with `100 - value`; no position is published after an order, the shutter's reports
-give it. A colour bulb
+give it. A thermostat has the order `setpoint` (set_setpoint, a number from 5 to 30 °C, any
+step, else `Invalid value for setpoint`): a Write Attributes of OccupiedHeatingSetpoint (int16,
+value x 100), answered by a Write Attributes Response (or a Default Response); a refusal is the
+order's error, and no setpoint is published after an order, the device's report gives it. A colour bulb
 paired before this was possible keeps only its on/off and level data until paired again. A device
 paired again keeps its id and name. Alarm devices (IAS zone: motion, contact, water leak, smoke sensors) also get the data of their
 zone: `occupancy` (motion), `contact` (contact_door, true when closed), `water_leak`, `smoke`, and
@@ -1300,12 +1308,13 @@ pairing is open) and `report` (measures by Sowel category, allowed per kind), at
 | `color-light` | TEST CLR01 (synthetic colour bulb, mains) | `light_state`, `light_brightness`, `light_color_temp`, `color_x`/`color_y` (and `color_hue`/`color_saturation` when read) after its commands (on/off, level, colour temperature, XY, hue and saturation, applied even when off); a report takes `light_state`, `color_temp` (150 to 500) and `color` (`{"x", "y"}`, 0 to 1, one message) |
 | `button` | TEST BTN01 (synthetic remote, battery, output clusters On/Off and Level) | once bound, the command a report's `action` names (`on`, `off`, `toggle`, `brightness_move_up`, `brightness_move_down`), the same one twice if the scenario says so |
 | `shutter` | TEST SHT01 (synthetic shutter, mains) | answers Up, Down, Stop and Go To Lift Percentage by moving 10 points a second towards its target (1 s of scenario time, shortened by `--speed`), reporting each step; starts closed; a report takes `position` (0 to 100, 100 open) and puts it there at once |
+| `thermostat` | TEST THM01 (synthetic thermostat, mains) | answers the read of its temperature and setpoint and the Write Attributes of the setpoint (the write is answered, then reported); a report takes `temperature` (the measured one) and `setpoint` (5 to 30 °C) |
 | `plug` | TEST PLG01 (synthetic metering plug, mains) | `light_state` after its commands; answers the reads of the scale (power divisor 10, current and energy divisor 1000, multipliers 1); a report takes `light_state`, `power` (W), `current` (A) and `energy` (kWh) |
 
 The simulated radio keeps its network and its devices in `solite-data/sim/` (or `--data`),
 apart from the real dongle's backup, so a second run resumes. Shipped scenarios:
 `scenarios/snzb02.json` (one sensor), `scenarios/garage.json` (a sensor, a motion sensor, a
-relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote), `scenarios/plug.json` (one metering plug) and `scenarios/shutter.json` (one shutter).
+relay), `scenarios/color-light.json` (one colour bulb), `scenarios/button.json` (one remote), `scenarios/plug.json` (one metering plug) `scenarios/shutter.json` (one shutter) and `scenarios/thermostat.json` (one thermostat).
 
 `SOLITE_PASSWORD=<password> sh scripts/demo-garage.sh [<port> | <address>[:<port>]]` sets the garage up through the API (the two scripts read the password from `SOLITE_PASSWORD`, never from an argument, and the user name from `SOLITE_USER`, `admin` when unset: they ask `/auth/status`, set the account up when it is required (display name = user name), else log in, and send the token on every request; without `SOLITE_PASSWORD`: `<script>: set SOLITE_PASSWORD (the password of the box)`, exit 2; a refused login or setup prints the host's text, exit 1; the password is never printed): a
 number alone is a port on `127.0.0.1`, anything else an address (port 80 by default); nothing

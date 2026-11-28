@@ -218,8 +218,8 @@ fn the_colour_measures_are_shown_with_their_unit() {
 }
 
 #[test]
-fn the_reporting_setup_has_twelve_entries_with_colour_after_level_and_before_power() {
-    assert_eq!(REPORTING.len(), 12);
+fn the_reporting_setup_has_thirteen_entries_with_colour_after_level_and_before_power() {
+    assert_eq!(REPORTING.len(), 13);
     let clusters: Vec<u16> = REPORTING.iter().map(|r| r.cluster).collect();
     let position = |cluster| clusters.iter().position(|c| *c == cluster).unwrap();
     assert_eq!(position(COLOR), position(LEVEL) + 1);
@@ -430,4 +430,19 @@ fn a_lift_percentage_of_30_is_a_position_of_70_and_above_100_is_no_measure() {
     assert_eq!(number(lift(100)), ("shutter_position", 0.0, "%"));
     assert!(lift(101).is_none());
     assert!(lift(0xFF).is_none());
+}
+
+#[test]
+fn a_thermostat_gives_its_temperature_and_setpoint_and_drops_the_invalid() {
+    let local = |raw: i16| decode(0x0201, 0x0000, 0x29, &raw.to_le_bytes());
+    let setpoint = |raw: i16| decode(0x0201, 0x0012, 0x29, &raw.to_le_bytes());
+    assert_eq!(number(local(2150)), ("local_temperature", 21.5, "°C"));
+    assert_eq!(number(local(-250)), ("local_temperature", -2.5, "°C"));
+    assert!(local(i16::MIN).is_none(), "0x8000 is invalid");
+    assert_eq!(number(setpoint(1900)), ("setpoint", 19.0, "°C"));
+    assert!(setpoint(i16::MIN).is_none());
+    assert!(
+        decode(0x0201, 0x0012, 0x20, &[19]).is_none(),
+        "not an int16"
+    );
 }

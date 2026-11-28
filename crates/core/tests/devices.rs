@@ -172,6 +172,46 @@ fn every_row_of_the_cluster_table_gives_its_data() {
             )
         ]
     );
+    // A thermostat (spec 051): its temperature, setpoint and the setpoint order.
+    assert_eq!(
+        data_for_cluster(0x0201)
+            .iter()
+            .map(|d| (d.key, d.category, d.unit))
+            .collect::<Vec<_>>(),
+        vec![
+            ("local_temperature", "temperature", Some("\u{b0}C")),
+            ("setpoint", "setpoint", Some("\u{b0}C"))
+        ]
+    );
+    assert_eq!(
+        orders_for_cluster(0x0201)
+            .iter()
+            .map(|o| (o.key, o.value_type, o.category, o.min, o.max))
+            .collect::<Vec<_>>(),
+        vec![(
+            "setpoint",
+            ValueType::Number,
+            "set_setpoint",
+            Some(5),
+            Some(30)
+        )]
+    );
+}
+
+#[test]
+fn a_device_with_a_thermostat_and_a_temperature_cluster_has_both_temperatures() {
+    let mut devices = Devices::new();
+    let mut random = counter();
+    devices
+        .identified(EUI, Some("TEST"), Some("THM01"), T0, &mut random)
+        .unwrap();
+    devices
+        .reporting_configured(EUI, &[0x0402, 0x0201], T0, &mut random)
+        .unwrap();
+    assert_eq!(
+        keys(&devices.list()[0]),
+        ["temperature", "local_temperature", "setpoint"]
+    );
 }
 
 #[test]
@@ -1376,15 +1416,17 @@ fn a_colour_device_gets_the_colour_data_and_orders_in_the_table_order() {
 fn a_colour_bulb_has_exactly_max_orders_and_no_cluster_could_add_one_that_does_not_fit() {
     assert_eq!(colour_bulb().list()[0].orders.len(), MAX_ORDERS);
     // The orders of the light clusters together stay within the bound; the shutter's (spec 050)
-    // are its own, a device with both keeps the first four of the table (`order_rank`).
+    // are its own, a device with both keeps the first four of the table (`order_rank`); so are
+    // the thermostat's (spec 051).
     let lights: usize = [0x0006, 0x0008, 0x0300]
         .iter()
         .map(|c| orders_for_cluster(*c).len())
         .sum();
     assert!(lights <= MAX_ORDERS, "{lights} orders of the lights");
     assert!(orders_for_cluster(0x0102).len() <= MAX_ORDERS);
+    assert!(orders_for_cluster(0x0201).len() <= MAX_ORDERS);
     let others: usize = (0..=u16::MAX)
-        .filter(|c| ![0x0006, 0x0008, 0x0300, 0x0102].contains(c))
+        .filter(|c| ![0x0006, 0x0008, 0x0300, 0x0102, 0x0201].contains(c))
         .map(|c| orders_for_cluster(c).len())
         .sum();
     assert_eq!(others, 0, "a cluster whose orders no test bounds");

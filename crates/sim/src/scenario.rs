@@ -116,6 +116,7 @@ struct RawEvent {
     #[serde(rename = "action")]
     press: Option<Value>,
     position: Option<Value>,
+    setpoint: Option<Value>,
     power: Option<Value>,
     current: Option<Value>,
     energy: Option<Value>,
@@ -290,7 +291,7 @@ fn devices_of(values: Vec<Value>) -> Result<Vec<DeviceSpec>, String> {
         let kind_text = required_text(spec.kind, &format!("{prefix}kind"))?;
         let kind = Kind::from_name(&kind_text).ok_or_else(|| {
             format!(
-                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light, button, plug or shutter)"
+                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light, button, plug, shutter or thermostat)"
             )
         })?;
         let eui_path = format!("{prefix}eui64");
@@ -322,6 +323,7 @@ fn allows(kind: Kind, field: &str) -> bool {
         Kind::ColorLight => matches!(field, "light_state" | "color_temp" | "color"),
         Kind::Button => field == "action",
         Kind::Shutter => field == "position",
+        Kind::Thermostat => matches!(field, "temperature" | "setpoint"),
     }
 }
 
@@ -376,6 +378,7 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
         ("color", spec.color),
         ("action", spec.press),
         ("position", spec.position),
+        ("setpoint", spec.setpoint),
         ("power", spec.power),
         ("current", spec.current),
         ("energy", spec.energy),
@@ -401,6 +404,7 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
                     "temperature" => {
                         report.temperature = Some(number_in(&value, -50.0, 150.0, &path)?);
                     }
+                    "setpoint" => report.setpoint = Some(number_in(&value, 5.0, 30.0, &path)?),
                     "humidity" => report.humidity = Some(number_in(&value, 0.0, 100.0, &path)?),
                     "battery" => {
                         report.battery = Some(

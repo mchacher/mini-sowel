@@ -2567,3 +2567,57 @@ fn a_stop_halts_a_moving_shutter_and_open_runs_it_to_the_end() {
     assert_eq!(lines.first().unwrap(), "shutter_position 30 %");
     assert_eq!(lines.last().unwrap(), "shutter_position 100 %");
 }
+
+// ---- A thermostat (spec 051) ----
+
+fn thermostat() -> SimDevice {
+    let mut device = SimDevice::of_kind(Kind::Thermostat, RELAY_WIRE, None, None);
+    device.nwk = RELAY_NWK;
+    device.auto_join = true;
+    device
+}
+
+fn thermostat_lines(events: &[PairingEvent]) -> Vec<String> {
+    measure_events(events)
+        .iter()
+        .flat_map(|e| e.measures.iter().map(ToString::to_string))
+        .filter(|l| l.starts_with("setpoint") || l.starts_with("local_temperature"))
+        .collect()
+}
+
+#[test]
+fn a_thermostat_takes_the_setpoint_write_answers_it_and_reports_the_new_setpoint() {
+    let (mut h, events) = paired(thermostat());
+    assert_eq!(reporting(&events), vec![(vec![0x0201], vec![], false)]);
+    let handle = h
+        .radio
+        .send_command(target(None), Command::WriteHeatingSetpoint(2050), 12_000)
+        .unwrap();
+    let (events, outcomes) = poll_commands(&mut h, 1_000);
+    assert_eq!(outcomes, vec![(handle, Ok(()))]);
+    assert_eq!(thermostat_lines(&events), vec!["setpoint 20.5 °C"]);
+    // The write is a Write Attributes; no On/Off state is read back from a thermostat.
+    let write = sends_on(&h, 0x0104, 0x0201)
+        .into_iter()
+        .find(|m| m.message[2] == 0x02)
+        .expect("a Write Attributes");
+    assert_eq!(write.message[3..], [0x12, 0x00, 0x29, 0x02, 0x08]);
+    assert!(sends_on(&h, 0x0104, ON_OFF).is_empty());
+}
+
+#[test]
+fn a_thermostat_that_refuses_the_write_fails_the_command_and_reports_nothing() {
+    let mut device = thermostat();
+    device.refuse_commands = Some(0x86);
+    let (mut h, _) = paired(device);
+    h.radio
+        .send_command(target(None), Command::WriteHeatingSetpoint(2050), 12_000)
+        .unwrap();
+    let (events, outcomes) = poll_commands(&mut h, 1_000);
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        matches!(outcomes[0].1, Err(CommandFailure::Refused(_))),
+        "{outcomes:?}"
+    );
+    assert!(thermostat_lines(&events).is_empty());
+}

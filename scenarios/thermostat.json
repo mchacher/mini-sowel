@@ -1,0 +1,11 @@
+{
+  "radio": { "ezsp": 13, "stack": "7.4.4.0", "eui64": "8C6FB9FFFE654323", "network": "none" },
+  "devices": [
+    { "id": "thermostat", "kind": "thermostat", "eui64": "00124B00C0102051" }
+  ],
+  "events": [
+    { "at": "2s", "device": "thermostat", "do": "join" },
+    { "at": "30s", "device": "thermostat", "do": "report", "temperature": 18.5, "setpoint": 19 },
+    { "at": "40s", "device": "thermostat", "do": "report", "temperature": 19.5 }
+  ]
+}
