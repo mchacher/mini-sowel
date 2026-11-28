@@ -1409,7 +1409,7 @@ fn a_header_that_disagrees_with_the_manifest_is_refused_before_begin() {
     assert_eq!(world.adapter.count("begin"), 0);
     // The header's version differs from the manifest's.
     let mut world = World::new();
-    let sup = file(&world.signing, Version::new(0, 3, 0), &image(5000));
+    let sup = file(&world.signing, Version::new(9, 8, 0), &image(5000));
     world.serve_release_file(NEWER, &sup);
     is_error(&world.pull(), 400, "Download does not match the manifest");
     assert_eq!(world.adapter.count("begin"), 0);

@@ -346,7 +346,7 @@ fn a_signed_file_of_64_kb_is_streamed_installed_and_booted_on_probation() {
         "update: 9.9.0 written to slot 1; restart the host to put it on probation"
     );
     // Another file before the restart: refused, and nothing changes.
-    let again = serving.upload(&sign(&bytes, "0.3.0"), true);
+    let again = serving.upload(&sign(&bytes, "9.9.1"), true);
     assert_eq!(again.status, 409, "{}", again.body);
     assert!(
         again
@@ -369,7 +369,7 @@ fn a_signed_file_of_64_kb_is_streamed_installed_and_booted_on_probation() {
         "{:?}",
         restarted.shown
     );
-    let refused = restarted.upload(&sign(&bytes, "0.3.0"), true);
+    let refused = restarted.upload(&sign(&bytes, "9.9.1"), true);
     assert_eq!(refused.status, 409, "{}", refused.body);
     assert!(
         refused

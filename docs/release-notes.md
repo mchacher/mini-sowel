@@ -7,6 +7,25 @@ alone or `## <version>` followed by a space and more text (`## 0.2.0` and `## 0.
 `## 0.2.01`) as the text of the GitHub release and of `manifest.json`. A release with no section here is
 refused before anything is built.
 
+## 0.3.0 (2026-11-28)
+
+Five more of Sowel's recipes, and room for larger ones.
+
+- **New recipes from the catalogue**, Sowel's own (same settings and texts):
+  - `motion-light-dimmable`: dimmable lights on motion, a brightness per time slot;
+  - `schedule-on-off`: on and off at set times or at sunrise and sunset, up to 3 windows a day;
+  - `state-trigger-light`: lights on for a set time when an equipment changes state (the gate
+    opens at night);
+  - `presence-thermostat`: a thermostat at comfort when someone is in the room, lower when it is
+    empty, with night mode and preheating (its mode switch on the card comes later);
+  - `state-watch`: an alarm when something stays in a state too long (a door left open).
+- **Larger recipes, more of them**: a recipe may be 32 KB; up to 4 different recipes are
+  installed, each used up to 4 times (16 in all). The box refuses an install it has no memory for.
+- **Recipes know the home's local time and weekday**, from its time zone.
+- **The recipe form** takes text settings, a data of an equipment to watch, and hides the settings
+  that do not apply, as Sowel's; number settings are sent as numbers.
+- **Fixes**: a radio that closes at once is reported as closed on macOS too.
+
 ## 0.2.1 (2026-11-28)
 
 Recipes become scripts you install without a new firmware, and the box recognises many more kinds
