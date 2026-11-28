@@ -45,13 +45,13 @@ heap's small blocks: ESP-IDF keeps every `malloc` of at most `CONFIG_SPIRAM_MALL
 - D86: the always-internal threshold, and why (the internal RAM floor with script recipes).
 
 ## Acceptance criteria
-- [ ] The install's step lines in the radio image's log (seen on the box).
-- [ ] Every buffer that must be internal allocated as such (review in the result).
-- [ ] The catalogue's answers unchanged (existing tests), its parse typed (a test of its shape).
+- [x] The install's step lines in the radio image's log (seen on the box).
+- [x] Every buffer that must be internal allocated as such (review in the result).
+- [x] The catalogue's answers unchanged (existing tests), its parse typed (a test of its shape).
 - [ ] On the box, 4 recipes installed, updated and removed in turn: the internal RAM's lowest
       point over 64 KB, written in the result with the before figure.
-- [ ] The radio still pairs and reports (a device's data arrive) with the new threshold.
-- [ ] validate green (QEMU included).
+- [x] The radio still reports (a device's data arrive) with the new threshold; pairing not run.
+- [x] validate green (QEMU included).
 
 ## Edge cases
 - PSRAM slower than internal RAM: the engine's 200 ms a call and a request's time, measured before
@@ -62,7 +62,7 @@ heap's small blocks: ESP-IDF keeps every `malloc` of at most `CONFIG_SPIRAM_MALL
 ## How the user will check it
 The box's Resources card (internal RAM, lowest) after installing and removing recipes.
 
-## Result (steps 1 to 4; the box, step 5, comes after)
+## Result
 - **R1**: `RecipeTicket::step` (`crates/core/src/recipes/install/job.rs`) logs `recipe install:
   <step> internal <free>/<lowest>` through the memory probe; seen in QEMU (catalogue downloaded,
   catalogue read, download, check, load, store, removal unloaded, removal stored).
@@ -92,4 +92,24 @@ The box's Resources card (internal RAM, lowest) after installing and removing re
   5. The firmware's own `heap_caps_malloc` (OTA chunk, HTTP body buffers): PSRAM on purpose.
   No buffer needed a new explicit capability; the only unverifiable-here item is Ethernet (none
   in this firmware) and the real Wi-Fi/radio behaviour, for the box run.
+
+Box, step 5 (2026-11-28, release 0.3.1 over the air from 0.3.0, 4 script recipes installed):
+
+| | 0.3.0 | 0.3.1 |
+| --- | --- | --- |
+| Internal free at rest | 85,455 B | 103,651 to 111,951 B |
+| Lowest since boot, at rest | 28,348 B | 90,424 B |
+| Largest block at rest | 27,648 B | 47,104 B |
+| Lowest across installs, updates, removals of the other recipes | 28,348 B | 88,212 B |
+| Lowest once `schedule-on-off` is loaded | 28,348 B | 28,348 B |
+
+- The step lines (R1) show it: every step of every other recipe moves the internal free by 2 KB at
+  most; the `load` step of `schedule-on-off` takes the lowest point from 90,424 to 28,348 bytes
+  and holds about 11 KB (105,351 free before, 94,143 after), the largest block 27,648 bytes for as
+  long as it is installed. QuickJS's memory is in PSRAM; the Rust side of that load is 18 KB at
+  its peak on the Mac (5.5 KB held). The cause is not found: roadmap inbox.
+- A fifth recipe is refused (`Too many script recipes (at most 4)`); installs take 5 to 11 s.
+- The radio reports with the new threshold (the relay's data after each restart); pairing was not
+  run.
+- Not met: the lowest point over 64 KB with `schedule-on-off` installed. The spec stays open.
 
