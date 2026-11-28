@@ -309,6 +309,8 @@ is the framing note, `inputs/note-de-cadrage-mini-sowel.md`.
 | 2026-11-26 | Revisit the default of `update.autoCheck` (off, D67) once the TLS session's memory is measured on the box | spec 039 |
 | 2026-11-27 | **The script recipes' small Rust blocks to PSRAM**: with two script recipes of 8 instances each the box's internal RAM reaches 64.6 KB at its lowest (spec 045's box check), 608 bytes over the 64 KB floor; the Rust side's blocks (about 4 KB a script recipe, 3 to 5 KB an instance, kept internal by `SPIRAM_MALLOC_ALWAYSINTERNAL` 4096) go to PSRAM | Spec 045, box 2026-11-27 |
 | 2026-11-27 | **The box runs a test build numbered 0.1.2** (spec 045's image, installed as a signed update): the next release is 0.1.3 or later, or the box is flashed over USB first, since an update must be newer than the running version | Spec 045, box 2026-11-27 |
+| 2026-11-28 | **Schneider Electric devices** (Wiser, Odace: plugs, switches, dimmers, thermostats and radiator valves): measure first what the generic ZCL recognition (I1) already covers with `tools/z2m-coverage`, then add only the manufacturer-specific parts (their own clusters and quirks) | User, 2026-11-28 |
+| 2026-11-28 | **A script call of 306 ms on the box** (`GET /system/resources`: `motion-light`, `maxUs` 306,251, average 9.4 ms, against the 200 ms call limit): find which call it was (a load has its own 1 s limit; the 5 install cycles of spec 045's box check ran just before) and whether the limit is applied to it | Box, 2026-11-28 |
 
 ## Sowel issues to open
 
