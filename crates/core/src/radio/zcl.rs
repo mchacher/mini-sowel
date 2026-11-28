@@ -32,6 +32,7 @@ pub const COMMAND_READ_ATTRIBUTES_RESPONSE: u8 = 0x01;
 const COMMAND_WRITE_ATTRIBUTES: u8 = 0x02;
 const COMMAND_WRITE_ATTRIBUTES_RESPONSE: u8 = 0x04;
 const TYPE_EUI64: u8 = 0xF0;
+const TYPE_INT16: u8 = 0x29;
 /// IAS Zone, from the coordinator: Zone Enroll Response.
 const COMMAND_ZONE_ENROLL_RESPONSE: u8 = 0x00;
 const COMMAND_CONFIGURE_REPORTING: u8 = 0x06;
@@ -131,6 +132,10 @@ pub const ATTRIBUTE_ON_OFF: u16 = 0x0000;
 pub const ATTRIBUTE_CURRENT_LEVEL: u16 = 0x0000;
 /// The Window Covering cluster.
 pub const CLUSTER_WINDOW_COVERING: u16 = 0x0102;
+/// The Thermostat cluster.
+pub const CLUSTER_THERMOSTAT: u16 = 0x0201;
+/// Thermostat attribute: OccupiedHeatingSetpoint (int16, 0.01 °C).
+pub const ATTRIBUTE_HEATING_SETPOINT: u16 = 0x0012;
 /// The Color Control cluster.
 pub const CLUSTER_COLOR_CONTROL: u16 = 0x0300;
 /// Color Control attribute: CurrentHue (uint8, 0..=254).
@@ -170,6 +175,9 @@ pub enum Command {
     /// Window Covering cluster, Go To Lift Percentage (0x05): 0 is open, 100 is closed (the ZCL's
     /// way; Sowel's position is `100 - lift`).
     GoToLiftPercentage(u8),
+    /// Thermostat cluster, not a cluster command: a Write Attributes (global command 0x02) of
+    /// OccupiedHeatingSetpoint (0x0012, int16) in hundredths of a degree (spec 051).
+    WriteHeatingSetpoint(i16),
 }
 
 impl Command {
@@ -185,6 +193,7 @@ impl Command {
             | Command::ShutterClose
             | Command::ShutterStop
             | Command::GoToLiftPercentage(_) => CLUSTER_WINDOW_COVERING,
+            Command::WriteHeatingSetpoint(_) => CLUSTER_THERMOSTAT,
         }
     }
 
@@ -202,6 +211,7 @@ impl Command {
             Command::ShutterClose => 0x01,
             Command::ShutterStop => 0x02,
             Command::GoToLiftPercentage(_) => 0x05,
+            Command::WriteHeatingSetpoint(_) => COMMAND_WRITE_ATTRIBUTES,
         }
     }
 
@@ -211,6 +221,14 @@ impl Command {
     /// options override 0), as Zigbee2MQTT sends it. The colour commands end the same way:
     /// `<mireds LE16> 00 00 00 00`, `<X LE16> <Y LE16> 00 00 00 00`, `<hue> <sat> 00 00 00 00`.
     pub fn frame(self, tsn: u8) -> Vec<u8> {
+        if let Command::WriteHeatingSetpoint(hundredths) = self {
+            // Global frame, a Default Response asked for: `00 <tsn> 02 12 00 29 <int16 LE>`.
+            let mut frame = vec![FRAME_TYPE_GLOBAL, tsn, COMMAND_WRITE_ATTRIBUTES];
+            frame.extend_from_slice(&ATTRIBUTE_HEATING_SETPOINT.to_le_bytes());
+            frame.push(TYPE_INT16);
+            frame.extend_from_slice(&hundredths.to_le_bytes());
+            return frame;
+        }
         let mut frame = vec![FRAME_TYPE_CLUSTER, tsn, self.id()];
         match self {
             Command::MoveToLevel(level) => frame.extend_from_slice(&[level, 0, 0, 0, 0]),
@@ -232,7 +250,8 @@ impl Command {
             | Command::Toggle
             | Command::ShutterOpen
             | Command::ShutterClose
-            | Command::ShutterStop => {}
+            | Command::ShutterStop
+            | Command::WriteHeatingSetpoint(_) => {}
         }
         frame
     }

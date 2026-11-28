@@ -26,6 +26,9 @@ pub enum Kind {
     /// A mains-powered shutter (Window Covering, spec 050): Up, Down, Stop and Go To Lift
     /// Percentage, moving 10 points a second towards its target and reporting each step.
     Shutter,
+    /// A mains-powered thermostat (Thermostat cluster, spec 051): it reports its temperature and
+    /// heating setpoint, and takes a Write Attributes of the setpoint.
+    Thermostat,
 }
 
 impl Kind {
@@ -40,6 +43,7 @@ impl Kind {
             Kind::Button => "button",
             Kind::Plug => "plug",
             Kind::Shutter => "shutter",
+            Kind::Thermostat => "thermostat",
         }
     }
 
@@ -54,6 +58,7 @@ impl Kind {
             Kind::Button,
             Kind::Plug,
             Kind::Shutter,
+            Kind::Thermostat,
         ]
         .into_iter()
         .find(|kind| kind.name() == name)
@@ -70,6 +75,7 @@ impl Kind {
             Kind::Button => 0x0006,
             Kind::Plug => 0x0051,
             Kind::Shutter => 0x0202,
+            Kind::Thermostat => 0x0301,
         }
     }
 }
@@ -98,6 +104,8 @@ pub struct DeviceReport {
     pub energy: Option<f64>,
     /// How open a `shutter` is, 0 to 100 (100 open): it is there at once and stays.
     pub position: Option<u8>,
+    /// The heating setpoint in degrees, `thermostat` only (`temperature` is its measured one).
+    pub setpoint: Option<f64>,
 }
 
 /// A character attribute of the simulated device.
@@ -239,6 +247,12 @@ pub fn lift_report(tsn: u8, lift: u8) -> Vec<u8> {
     report_frame(tsn, &[(0x0008, 0x20, vec![lift])])
 }
 
+/// A Thermostat report of one attribute: LocalTemperature (0x0000) or OccupiedHeatingSetpoint
+/// (0x0012), int16 in hundredths of a degree.
+pub fn thermostat_report(tsn: u8, attribute: u16, hundredths: i16) -> Vec<u8> {
+    report_frame(tsn, &[(attribute, 0x29, hundredths.to_le_bytes().to_vec())])
+}
+
 /// A shutter's travel: points of lift it covers in one second.
 pub const SHUTTER_POINTS_PER_SECOND: u8 = 10;
 
@@ -349,6 +363,9 @@ pub struct SimDevice {
     pub(crate) lift_target: Option<u8>,
     /// When its next step is due (the radio's time, in milliseconds).
     pub(crate) lift_step_at: u64,
+    /// A thermostat's LocalTemperature and OccupiedHeatingSetpoint, in hundredths of a degree.
+    pub(crate) local_temperature: i16,
+    pub(crate) heating_setpoint: i16,
     /// The level of a dimmer (0 to 254).
     pub(crate) level: u8,
     /// The colour state of a colour light, in ZCL's raw units: mireds, CurrentX, CurrentY, hue and
@@ -449,6 +466,8 @@ impl SimDevice {
             lift: 100,
             lift_target: None,
             lift_step_at: 0,
+            local_temperature: 2000,
+            heating_setpoint: 2000,
             level: 0,
             color_temp: DEFAULT_COLOR_TEMP,
             color_x: DEFAULT_COLOR_X,
@@ -524,6 +543,12 @@ impl SimDevice {
                 vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0102],
                 false,
             ),
+            Kind::Thermostat => (
+                "TEST",
+                "THM01",
+                vec![0x0000, 0x0003, 0x0004, 0x0005, 0x0201],
+                false,
+            ),
         };
         let text = |value: &str| Attr::Text(value.as_bytes().to_vec());
         device.manufacturer = text(manufacturer.unwrap_or(default_manufacturer));
@@ -538,7 +563,12 @@ impl SimDevice {
         device.sleepy_ms = sleepy.then_some(AWAKE_MS);
         if matches!(
             kind,
-            Kind::Relay | Kind::Dimmer | Kind::ColorLight | Kind::Plug | Kind::Shutter
+            Kind::Relay
+                | Kind::Dimmer
+                | Kind::ColorLight
+                | Kind::Plug
+                | Kind::Shutter
+                | Kind::Thermostat
         ) {
             device.capability = CAPABILITY_MAINS;
         }

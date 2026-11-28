@@ -2090,7 +2090,7 @@ fn the_catalog_lists_every_data_and_order_spec() {
     use solite_core::devices::{all_data, all_orders, data_for_cluster, orders_for_cluster};
     let data: Vec<&str> = all_data().map(|d| d.key).collect();
     for cluster in [
-        0x0001, 0x0006, 0x0008, 0x0102, 0x0300, 0x0400, 0x0402, 0x0403, 0x0405, 0x0406,
+        0x0001, 0x0006, 0x0008, 0x0102, 0x0201, 0x0300, 0x0400, 0x0402, 0x0403, 0x0405, 0x0406,
     ] {
         for spec in data_for_cluster(cluster) {
             assert!(data.contains(&spec.key), "{}", spec.key);
@@ -2107,6 +2107,7 @@ fn the_catalog_lists_every_data_and_order_spec() {
             + orders_for_cluster(0x0008).len()
             + orders_for_cluster(0x0300).len()
             + orders_for_cluster(0x0102).len()
+            + orders_for_cluster(0x0201).len()
     );
     assert!(orders.contains(&"state") && orders.contains(&"brightness"));
     assert!(orders.contains(&"color_temp") && orders.contains(&"color"));

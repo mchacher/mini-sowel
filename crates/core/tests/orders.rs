@@ -1396,3 +1396,57 @@ fn a_bulb_that_refuses_a_colour_command_is_a_502_with_the_status_and_a_silent_on
         Err("device did not answer".to_string())
     );
 }
+
+/// A thermostat: the Thermostat cluster (spec 051).
+fn thermostat_equipment() -> (Rig, String) {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Salon");
+    let e = eui(0x7D);
+    rig.home.devices.announced(e, 0x8D, rig.now);
+    rig.home
+        .devices
+        .identified(e, Some("TEST"), Some("THM01"), rig.now, &mut *rig.random)
+        .unwrap();
+    rig.home
+        .devices
+        .reporting_configured(e, &[0x0201], rig.now, &mut *rig.random)
+        .unwrap();
+    let device = rig.device(0x7D);
+    let id = rig.equipment("Thermostat", "thermostat", &zone, &[&device]);
+    (rig, id)
+}
+
+#[test]
+fn a_thermostats_setpoint_is_a_write_of_the_heating_setpoint_in_hundredths() {
+    let (mut rig, id) = thermostat_equipment();
+    for (body, hundredths) in [
+        (r#"{"value":20.5}"#, 2050),
+        (r#"{"value":5}"#, 500),
+        (r#"{"value":30}"#, 3000),
+        (r#"{"value":19}"#, 1900),
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "setpoint", body),
+            Ok(vec![Command::WriteHeatingSetpoint(hundredths)]),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_thermostat_refuses_a_setpoint_out_of_5_to_30_or_not_a_number() {
+    let (mut rig, id) = thermostat_equipment();
+    for body in [
+        r#"{"value":4}"#,
+        r#"{"value":31}"#,
+        r#"{"value":"a"}"#,
+        r#"{"value":true}"#,
+        r#"{}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "setpoint", body),
+            Err((400, "Invalid value for setpoint".to_string())),
+            "{body:?}"
+        );
+    }
+}

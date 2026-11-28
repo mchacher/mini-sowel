@@ -10,7 +10,8 @@ use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, PLUG_SCALE,
     SHUTTER_POINTS_PER_SECOND, SimDevice, battery_report, button_command, color_raw,
     color_temp_report, color_xy_report, electrical_report, humidity_report, level_report,
-    lift_report, metering_report, on_off_report, temperature_report, zone_notification,
+    lift_report, metering_report, on_off_report, temperature_report, thermostat_report,
+    zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -149,8 +150,8 @@ const SL_FAIL: u32 = 1;
 const FIRST_NWK: u16 = 0x2000;
 
 /// The clusters the host sets up reporting for.
-const REPORTABLE: [u16; 10] = [
-    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0300, 0x0001, 0x0102,
+const REPORTABLE: [u16; 11] = [
+    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0300, 0x0001, 0x0102, 0x0201,
 ];
 
 /// An EZSP callback frame (extended format, asynchronous callback flag).
@@ -408,6 +409,17 @@ impl Ncp {
         let mut clear_alarm = false;
         if let Some(device) = self.devices.get_mut(index) {
             if let Some(value) = report.temperature
+                && device.kind == Kind::Thermostat
+            {
+                device.local_temperature = (value * 100.0).round() as i16;
+                if device.reports_attribute(0x0201, 0x0000) {
+                    let tsn = device.next_tsn();
+                    frames.push((
+                        0x0201,
+                        thermostat_report(tsn, 0x0000, device.local_temperature),
+                    ));
+                }
+            } else if let Some(value) = report.temperature
                 && device.reports_attribute(0x0402, 0x0000)
             {
                 let tsn = device.next_tsn();
@@ -415,6 +427,16 @@ impl Ncp {
                     0x0402,
                     temperature_report(tsn, (value * 100.0).round() as i16),
                 ));
+            }
+            if let Some(value) = report.setpoint {
+                device.heating_setpoint = (value * 100.0).round() as i16;
+                if device.reports_attribute(0x0201, 0x0012) {
+                    let tsn = device.next_tsn();
+                    frames.push((
+                        0x0201,
+                        thermostat_report(tsn, 0x0012, device.heating_setpoint),
+                    ));
+                }
             }
             if let Some(value) = report.humidity
                 && device.reports_attribute(0x0405, 0x0000)
@@ -1147,6 +1169,70 @@ impl Ncp {
             {
                 device.enrolled = true;
                 self.dirty = true;
+            }
+        } else if sent.profile == 0x0104
+            && device.kind == Kind::Thermostat
+            && sent.cluster == 0x0201
+            && control & 0x03 == 0x00
+            && matches!(message.get(2), Some(0x00 | 0x02))
+        {
+            // Read Attributes (0x00) and Write Attributes (0x02) of the setpoint (spec 051).
+            let (Some(tsn), Some(command)) = (message.get(1).copied(), message.get(2).copied())
+            else {
+                reply.after.push(message_sent);
+                return;
+            };
+            if device.silent {
+                reply.after.push(message_sent);
+                return;
+            }
+            if command == 0x00 {
+                let mut frame = vec![0x18, tsn, 0x01];
+                for pair in message.get(3..).unwrap_or(&[]).as_chunks::<2>().0 {
+                    let attribute = u16::from_le_bytes(*pair);
+                    frame.extend_from_slice(&attribute.to_le_bytes());
+                    let value = match attribute {
+                        0x0000 => Some(device.local_temperature),
+                        0x0012 => Some(device.heating_setpoint),
+                        _ => None,
+                    };
+                    match value {
+                        Some(value) => {
+                            frame.extend_from_slice(&[0x00, 0x29]);
+                            frame.extend_from_slice(&value.to_le_bytes());
+                        }
+                        None => frame.push(0x86),
+                    }
+                }
+                answers.push(self.incoming(device.nwk, 0x0104, 0x0201, 1, &frame));
+            } else {
+                // `<attribute LE> <type> <int16 LE>`: only the setpoint is writable.
+                let written = match message.get(3..) {
+                    Some([0x12, 0x00, 0x29, low, high, ..]) => {
+                        Some(i16::from_le_bytes([*low, *high]))
+                    }
+                    _ => None,
+                };
+                let status =
+                    device
+                        .refuse_commands
+                        .unwrap_or(if written.is_some() { 0x00 } else { 0x86 });
+                let mut frame = vec![0x18, tsn, 0x04, status];
+                if status != 0x00 {
+                    frame.extend_from_slice(&[0x12, 0x00]);
+                }
+                answers.push(self.incoming(device.nwk, 0x0104, 0x0201, 1, &frame));
+                if let (0x00, Some(value), Some(d)) = (status, written, self.devices.get_mut(index))
+                {
+                    d.heating_setpoint = value;
+                    if d.reports_attribute(0x0201, 0x0012) {
+                        let tsn = d.next_tsn();
+                        let nwk = d.nwk;
+                        let report = thermostat_report(tsn, 0x0012, value);
+                        let message = self.incoming(nwk, 0x0104, 0x0201, 1, &report);
+                        self.scheduled.push((self.now, message));
+                    }
+                }
             }
         } else if sent.profile == 0x0104
             && device.kind == Kind::Shutter

@@ -722,3 +722,13 @@ fn a_shutters_commands_are_up_down_stop_and_go_to_lift_percentage_on_the_window_
     assert_eq!(go_to.frame(0x0A), vec![0x01, 0x0A, 0x05, 75]);
     assert_eq!((go_to.cluster(), go_to.id()), (0x0102, 0x05));
 }
+
+#[test]
+fn a_setpoint_write_is_a_global_write_attributes_of_0x0012_int16_on_the_thermostat() {
+    let write = Command::WriteHeatingSetpoint(2050);
+    assert_eq!(
+        write.frame(0x0B),
+        vec![0x00, 0x0B, 0x02, 0x12, 0x00, 0x29, 0x02, 0x08]
+    );
+    assert_eq!((write.cluster(), write.id()), (0x0201, 0x02));
+}
