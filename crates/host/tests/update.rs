@@ -561,11 +561,10 @@ fn digest_hex(bytes: &[u8]) -> String {
 
 /// A server of a release `version` whose file is `sup`, behind two redirects; its port.
 fn serve_release(sup: &[u8], version: &str) -> u16 {
-    // The port is not known before the listener exists: the manifest's URL is a path of the
-    // same server, which a redirect from `/m.json`'s neighbour `/a` resolves.
+    // The listener is kept from its bind to its serving: the manifest names its own port, and no
+    // other test can take the port in between.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    drop(listener);
     let manifest = json!({
         "format": 1, "version": version, "minVersion": null,
         "image": {
@@ -583,8 +582,6 @@ fn serve_release(sup: &[u8], version: &str) -> u16 {
         ("/b", answer(302, &["Location: /c".to_string()], b"")),
         ("/c", answer(200, &[], sup)),
     ];
-    // The same port, bound again: nothing else takes it in these few lines.
-    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     thread::spawn(move || {
         for mut stream in listener.incoming().map_while(Result::ok) {
             let routes = routes.clone();

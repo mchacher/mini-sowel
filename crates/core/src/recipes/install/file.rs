@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 
 use crate::update::{HEADER_BYTES, Version};
 
-/// The whole file is at most this long (the API's body limit), so a source is at most 16,256
-/// bytes.
+/// The whole file is at most this long (the API's body limit), so a source is at most 32 KB
+/// (the body bound counts the header).
 pub const MAX_FILE_BYTES: usize = crate::api::MAX_BODY_BYTES;
 /// The longest source a file holds.
 pub const MAX_SOURCE_BYTES: usize = MAX_FILE_BYTES - HEADER_BYTES;

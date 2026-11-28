@@ -11,7 +11,7 @@ about 150 lines**: a subject that grows moves to `docs/` or becomes a check.
 | What the tool does today (source of truth)   | [docs/living-spec/](docs/living-spec/README.md) |
 | How the code is organised                    | [docs/architecture.md](docs/architecture.md) |
 | Why it is built this way                     | [docs/decisions.md](docs/decisions.md)      |
-| What comes next                              | [docs/roadmap.md](docs/roadmap.md)          |
+| What comes next                              | [docs/roadmap.md](docs/roadmap.md) (users' view: `docs/roadmap.html`) |
 | Every change ever specified                  | [docs/specs-index.md](docs/specs-index.md)  |
 | The design of one change                     | `specs/NNN-name/{spec,architecture,plan}.md` |
 | The documents the project started from       | [inputs/](inputs/README.md)                 |

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solite roadmap</title>
+<!--
+  The roadmap for its users: one row per feature, in an end user's words.
+  Kept current with docs/roadmap.md (skills solite-roadmap and solite-feature); scripts/check-docs.sh
+  refuses it when its "Updated" date is before the last spec of docs/specs-index.md, or when a spec
+  of the index is in no row's "Specs" cell (a range such as 004–009 counts).
+  A row: <tr data-status="done|wip|next|later"> feature, what you can do, status, specs.
+-->
+<style>
+  :root { --bg:#f8fafc; --card:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --head:#f1f5f9;
+          --done:#16a34a; --done-bg:#dcfce7; --done-ink:#166534; --wip:#d97706; --wip-bg:#fef3c7; --wip-ink:#92400e;
+          --next:#2563eb; --next-bg:#dbeafe; --next-ink:#1e40af; --later:#94a3b8; --later-bg:#f1f5f9; --later-ink:#475569;
+          --accent:#4f46e5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0b1120; --card:#111827; --ink:#e5e7eb; --muted:#94a3b8; --line:#1f2937; --head:#0f172a;
+            --done-bg:#14532d; --done-ink:#bbf7d0; --wip-bg:#78350f; --wip-ink:#fde68a; --next-bg:#1e3a8a; --next-ink:#bfdbfe;
+            --later-bg:#1f2937; --later-ink:#cbd5e1; --accent:#818cf8; }
+  }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink);
+         background: var(--bg); margin: 0; }
+  main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 48px; }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -.01em; }
+  .lead { color: var(--muted); margin: 0 0 20px; max-width: 760px; }
+  .progress { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--line); margin: 0 0 8px; }
+  .progress span { display: block; height: 100%; }
+  .legend { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .toolbar { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 10px 0; display: flex; flex-wrap: wrap;
+             gap: 8px; align-items: center; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .chip { border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 999px; padding: 5px 12px;
+          font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .chip .n { color: var(--muted); font-weight: 500; }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .chip[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .search { margin-left: auto; min-width: 200px; flex: 0 1 260px; border: 1px solid var(--line); background: var(--card);
+            color: var(--ink); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 14px; }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border: 1px solid var(--line);
+          border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  tbody tr:last-child td { border-bottom: 0; }
+  th { background: var(--head); font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  tr.group td { background: var(--head); font-weight: 700; font-size: 12px; color: var(--accent); text-transform: uppercase;
+                letter-spacing: .05em; padding: 8px 14px; }
+  tbody tr:not(.group):hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  td:nth-child(1) { font-weight: 600; width: 24%; }
+  td:nth-child(3) { width: 1%; white-space: nowrap; }
+  td:nth-child(4) { width: 1%; white-space: nowrap; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  tr[data-status="done"] td:nth-child(1) { border-left: 3px solid var(--done); }
+  tr[data-status="wip"] td:nth-child(1) { border-left: 3px solid var(--wip); }
+  tr[data-status="next"] td:nth-child(1) { border-left: 3px solid var(--next); }
+  tr[data-status="later"] td:nth-child(1) { border-left: 3px solid var(--later); }
+  .st { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  [data-status="done"] .st { background: var(--done-bg); color: var(--done-ink); }
+  [data-status="wip"] .st { background: var(--wip-bg); color: var(--wip-ink); }
+  [data-status="next"] .st { background: var(--next-bg); color: var(--next-ink); }
+  [data-status="later"] .st { background: var(--later-bg); color: var(--later-ink); }
+  .empty { display: none; color: var(--muted); padding: 24px; text-align: center; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 16px; }
+  @media (max-width: 640px) { td:nth-child(4), th:nth-child(4) { display: none; } .search { margin-left: 0; flex: 1 1 100%; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Solite roadmap</h1>
+<p class="lead">A small home-automation box (a Sonoff Dongle Max) that runs an annex or a small home on its own,
+with no server and no cloud, and joins Sowel when there is one. The goal: pair a sensor, pick its room, and the
+box proposes a fitting automation.</p>
+
+<div class="progress" id="bar" aria-hidden="true"></div>
+<p class="legend" id="legend"></p>
+
+<div class="toolbar" role="toolbar" aria-label="Filter by status">
+  <button class="chip" data-filter="all" aria-pressed="true">All <span class="n"></span></button>
+  <button class="chip" data-filter="done" aria-pressed="false"><span class="dot" style="background:var(--done)"></span>Done <span class="n"></span></button>
+  <button class="chip" data-filter="wip" aria-pressed="false"><span class="dot" style="background:var(--wip)"></span>In progress <span class="n"></span></button>
+  <button class="chip" data-filter="next" aria-pressed="false"><span class="dot" style="background:var(--next)"></span>Next <span class="n"></span></button>
+  <button class="chip" data-filter="later" aria-pressed="false"><span class="dot" style="background:var(--later)"></span>Later <span class="n"></span></button>
+  <input class="search" id="q" type="search" placeholder="Search a feature…" aria-label="Search a feature">
+</div>
+
+<table>
+<thead><tr><th>Feature</th><th>What you can do</th><th>Status</th><th>Specs</th></tr></thead>
+<tbody id="rows">
+
+<tr class="group"><td colspan="4">Done</td></tr>
+<tr data-status="done"><td>Zigbee sensors</td><td>Pair a sensor and see its readings: temperature, humidity, battery, motion, door contact, water leak, smoke.</td><td><span class="st">Done</span></td><td>004–009</td></tr>
+<tr data-status="done"><td>Rooms and equipments</td><td>Make rooms, put lights, sensors and switches in them; each room shows its average temperature and whether someone is there.</td><td><span class="st">Done</span></td><td>010</td></tr>
+<tr data-status="done"><td>Lights and relays</td><td>Switch lights and relays on and off and dim them, from the interface.</td><td><span class="st">Done</span></td><td>011</td></tr>
+<tr data-status="done"><td>Colour bulbs</td><td>Set a bulb's colour and its warm-to-cold white.</td><td><span class="st">Done</span></td><td>031</td></tr>
+<tr data-status="done"><td>Live interface</td><td>Open the box's page in a browser and see every change as it happens, in Sowel's look.</td><td><span class="st">Done</span></td><td>013, 014, 037, 047</td></tr>
+<tr data-status="done"><td>The box on its own</td><td>The box runs the home by itself, computer off, over Wi-Fi, and serves its own interface.</td><td><span class="st">Done</span></td><td>020–023</td></tr>
+<tr data-status="done"><td>Set up from the browser</td><td>Add a device, make rooms and equipments, set the automations: all from the interface, no command line.</td><td><span class="st">Done</span></td><td>017–019, 024, 030</td></tr>
+<tr data-status="done"><td>Home settings</td><td>Give the home's location and time zone; automations know sunrise and sunset (for example, no light by day).</td><td><span class="st">Done</span></td><td>026</td></tr>
+<tr data-status="done"><td>Password</td><td>The box is protected by your own password, set at first start; factory reset.</td><td><span class="st">Done</span></td><td>029</td></tr>
+<tr data-status="done"><td>Backup</td><td>Save the whole box (devices, rooms, automations, Zigbee network, Wi-Fi) to one encrypted file and restore it.</td><td><span class="st">Done</span></td><td>035</td></tr>
+<tr data-status="done"><td>Updates</td><td>Update the box from the interface with one click from the latest public release; a bad update rolls back by itself.</td><td><span class="st">Done</span></td><td>032, 038–040, 043</td></tr>
+<tr data-status="done"><td>Self-repair</td><td>On a serious error the box restarts by itself, and stops in a safe mode if it keeps failing.</td><td><span class="st">Done</span></td><td>036</td></tr>
+<tr data-status="done"><td>Automations from a catalogue</td><td>Install, update and remove automations ("recipes") from an online catalogue, with no new firmware. They are Sowel's own recipes.</td><td><span class="st">Done</span></td><td>041, 042, 045</td></tr>
+<tr data-status="done"><td>Recipe: light on motion</td><td>A light turns on when someone moves, and off after a delay; not by day if you choose.</td><td><span class="st">Done</span></td><td>012, 046</td></tr>
+<tr data-status="done"><td>More kinds of devices</td><td>Smart plugs with power and energy, buttons and remotes, roller shutters, thermostats and radiator valves, recognised from the Zigbee standard, with no list of models.</td><td><span class="st">Done</span></td><td>048–051</td></tr>
+<tr data-status="done"><td>Recipe: button for a light</td><td>A press on a button toggles its lights.</td><td><span class="st">Done</span></td><td>052</td></tr>
+<tr data-status="done"><td>Bigger recipes, more of them</td><td>Up to 4 different recipes, each used up to 4 times (16 in all); room for Sowel's larger recipes.</td><td><span class="st">Done</span></td><td>053</td></tr>
+<tr data-status="done"><td>Foundations</td><td>Not visible to users: the checks, the tests in an emulator, the memory budget and its limits, the flash wear budget, the match with Sowel's model, the box's test session.</td><td><span class="st">Done</span></td><td>001–003, 015, 016, 025, 027, 028, 033, 034, 044</td></tr>
+
+<tr class="group"><td colspan="4">Next</td></tr>
+<tr data-status="next"><td>Dimmable light on motion</td><td>Like light on motion, for dimmable lights: a brightness per time slot.</td><td><span class="st">Next</span></td><td></td></tr>
+<tr data-status="next"><td>Same API as Sowel</td><td>Every address of the box's API is Sowel's, so a tool or script made for Sowel works with the box as it is; recipes first, under Sowel's plugins.</td><td><span class="st">Planned</span></td><td></td></tr>
+<tr data-status="next"><td>Schedule on and off</td><td>Turn an equipment on and off at set times or at sunrise and sunset, up to 3 windows a day.</td><td><span class="st">Planned</span></td><td></td></tr>
+<tr data-status="next"><td>Light on a state</td><td>Turn lights on for a set time when an equipment changes state (the gate opens at night).</td><td><span class="st">Planned</span></td><td></td></tr>
+<tr data-status="next"><td>Thermostat on presence</td><td>Set a thermostat to comfort when someone is in the room, lower when it is empty; night mode and preheating.</td><td><span class="st">Planned</span></td><td></td></tr>
+<tr data-status="next"><td>Watch a state</td><td>Raise an alarm when something stays in a state too long (a door left open).</td><td><span class="st">Planned</span></td><td></td></tr>
+
+<tr class="group"><td colspan="4">Later, in this order</td></tr>
+<tr data-status="later"><td>Wi-Fi with no computer</td><td>A new box opens its own Wi-Fi hotspot; pick your network from a phone. Ethernet cable as an alternative.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>More equipment types</td><td>Water heater, electric heater, water valve, ventilation; with the heater, the "heater on presence" recipe.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Modes</td><td>Day, night and away modes that recipes follow.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>The box proposes</td><td>Pair a sensor, pick its room, and the box proposes a recipe that fits; accept it in one click.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Link with Sowel</td><td>The box's equipments appear in a full Sowel installation.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Monitoring</td><td>A health card in the interface; you are told when an update is available, running or failed.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Daily use</td><td>24-hour history, MQTT export, an app on the phone's home screen, more languages, radio firmware update, recipe journals kept across a restart.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Even more devices</td><td>Brand-specific devices (Tuya, Philips, Legrand, Sonoff, Aqara, Schneider Electric) and more alarm sensors.</td><td><span class="st">Later</span></td><td></td></tr>
+<tr data-status="later"><td>Notifications</td><td>Messages on Telegram or the phone.</td><td><span class="st">Not a priority</span></td><td></td></tr>
+
+<tr class="group"><td colspan="4">Goal</td></tr>
+<tr data-status="later"><td>A month on its own</td><td>A box runs a real annex for a month with no intervention.</td><td><span class="st">Target</span></td><td></td></tr>
+</tbody>
+</table>
+<p class="empty" id="empty">No feature matches.</p>
+<footer>Updated 2026-11-28. Details: docs/roadmap.md and docs/specs-index.md.</footer>
+</main>
+<script>
+(function () {
+  var rows = [].slice.call(document.querySelectorAll('#rows tr[data-status]'));
+  var colours = { done: 'var(--done)', wip: 'var(--wip)', next: 'var(--next)', later: 'var(--later)' };
+  var names = { done: 'done', wip: 'in progress', next: 'next', later: 'later' };
+  var count = { all: rows.length, done: 0, wip: 0, next: 0, later: 0 };
+  rows.forEach(function (r) { count[r.dataset.status]++; });
+  document.querySelectorAll('.chip').forEach(function (c) { c.querySelector('.n').textContent = count[c.dataset.filter]; });
+  var bar = document.getElementById('bar'), parts = [];
+  ['done', 'wip', 'next', 'later'].forEach(function (s) {
+    if (!count[s]) return;
+    var span = document.createElement('span');
+    span.style.width = (100 * count[s] / rows.length) + '%';
+    span.style.background = colours[s];
+    bar.appendChild(span);
+    parts.push(count[s] + ' ' + names[s]);
+  });
+  document.getElementById('legend').textContent = parts.join(' · ') + ' — ' + Math.round(100 * count.done / rows.length) + ' % of the features done';
+
+  var filter = (location.hash.slice(1) in count) ? location.hash.slice(1) : 'all';
+  var q = document.getElementById('q');
+  function apply() {
+    var text = q.value.trim().toLowerCase(), shown = 0;
+    rows.forEach(function (r) {
+      var ok = (filter === 'all' || r.dataset.status === filter) && (!text || r.textContent.toLowerCase().indexOf(text) >= 0);
+      r.hidden = !ok; if (ok) shown++;
+    });
+    document.querySelectorAll('#rows tr.group').forEach(function (g) {
+      var n = g.nextElementSibling, any = false;
+      while (n && !n.classList.contains('group')) { if (!n.hidden) any = true; n = n.nextElementSibling; }
+      g.hidden = !any;
+    });
+    document.querySelectorAll('.chip').forEach(function (c) { c.setAttribute('aria-pressed', String(c.dataset.filter === filter)); });
+    document.getElementById('empty').style.display = shown ? 'none' : 'block';
+  }
+  document.querySelectorAll('.chip').forEach(function (c) {
+    c.addEventListener('click', function () { filter = c.dataset.filter; history.replaceState(null, '', filter === 'all' ? location.pathname : '#' + filter); apply(); });
+  });
+  q.addEventListener('input', apply);
+  apply();
+})();
+</script>
+</body>
+</html>

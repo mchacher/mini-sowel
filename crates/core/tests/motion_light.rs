@@ -1188,13 +1188,13 @@ fn the_echo_window_is_counted_on_the_wall_clock() {
     assert_eq!(sent.len(), 1, "the script switches on: {sent:?}");
 }
 
-// ---- At most 8 instances (R5) ----
+// ---- At most 4 instances (R5) ----
 
 #[test]
-fn a_ninth_instance_of_motion_light_is_refused_in_any_zone() {
+fn a_fifth_instance_of_motion_light_is_refused_in_any_zone() {
     let mut rig = Rig::new();
     let g = rig.garage();
-    for _ in 0..8 {
+    for _ in 0..4 {
         rig.garage_instance(&g, json!({}));
     }
     let other_zone = rig.zone("Elsewhere");
@@ -1204,7 +1204,7 @@ fn a_ninth_instance_of_motion_light_is_refused_in_any_zone() {
         refused(&mut rig, json!({"zone": other_zone, "lights": [light]})),
         (
             400,
-            "Too many instances of motion-light (max 8)".to_string()
+            "Too many instances of motion-light (max 4)".to_string()
         )
     );
 }
@@ -1286,7 +1286,7 @@ fn an_instance_with_only_the_legacy_light_key_stays_stopped_with_sowels_text() {
 }
 
 #[test]
-fn at_boot_the_ninth_instance_and_the_later_ones_stay_stopped() {
+fn at_boot_the_fifth_instance_and_the_later_ones_stay_stopped() {
     let mut rig = Rig::new();
     let g = rig.garage();
     rig.load_motion_light();
@@ -1295,14 +1295,14 @@ fn at_boot_the_ninth_instance_and_the_later_ones_stay_stopped() {
     rig.home
         .load_recipes(ids.iter().map(|id| stored(id, params.clone())).collect());
     rig.home.start_recipes(rig.now, rig.now);
-    for id in &ids[..8] {
+    for id in &ids[..4] {
         assert!(running(&rig, id), "{id}");
     }
-    for id in &ids[8..] {
+    for id in &ids[4..] {
         assert!(!running(&rig, id), "{id}");
         assert_eq!(
             rig.messages(id).last().unwrap(),
-            "Failed to restore: Too many instances of motion-light (max 8)"
+            "Failed to restore: Too many instances of motion-light (max 4)"
         );
     }
 }
@@ -1359,6 +1359,9 @@ fn the_lux_threshold_is_a_number_and_it_behaves() {
             "zone": g.zone, "lights": [g.light], "luxThreshold": value
         }));
         assert_eq!(status, 201, "{value}: {body}");
+        // At most 4 instances of the script: each one made here is deleted again.
+        let id = body["id"].as_str().unwrap().to_string();
+        assert_eq!(rig.delete(&format!("/api/v1/recipe-instances/{id}")).0, 204);
     }
     for value in [json!("abc"), json!(-0.5), json!("5 lux"), json!(true)] {
         assert_eq!(

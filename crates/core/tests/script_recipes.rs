@@ -46,6 +46,13 @@ fn ticking() -> (ScriptClock, Arc<AtomicU64>) {
     )
 }
 
+/// The same clock moving `step` milliseconds at each reading: with 4 instances of a script at most
+/// (D85), a turn of 300 ms is spent by fewer readings than with 8.
+fn ticking_by(step: u64) -> ScriptClock {
+    let reads = Arc::new(AtomicU64::new(0));
+    Arc::new(move || reads.fetch_add(step, Ordering::SeqCst))
+}
+
 fn load(
     rig: &mut Rig,
     source: &str,
@@ -248,7 +255,7 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
     let long_id = "a".repeat(65);
     let too_big = format!(
         "// {}\n{}",
-        "x".repeat(16 * 1024),
+        "x".repeat(32 * 1024),
         script(&format!("{{api: 1, id: 'big', name: 'Big', {OK_START}}}"))
     );
     let cases: Vec<(String, &str)> = vec![
@@ -291,7 +298,7 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
 }
 
 #[test]
-fn a_script_with_a_loaded_id_is_refused_and_a_third_script_too() {
+fn a_script_with_a_loaded_id_is_refused_and_a_fifth_script_too() {
     let mut rig = Rig::new();
     load(&mut rig, PROBE).unwrap();
     assert_eq!(
@@ -325,32 +332,32 @@ fn a_script_with_a_loaded_id_is_refused_and_a_third_script_too() {
         .iter()
         .map(|r| r["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["probe", "script-2"]);
+    assert_eq!(ids, ["probe", "script-2", "script-3", "script-4"]);
 }
 
 #[test]
-fn a_script_recipe_holds_eight_instances_and_a_ninth_is_refused_another_scripts_not_counted() {
+fn a_script_recipe_holds_four_instances_and_a_fifth_is_refused_another_scripts_not_counted() {
     let (mut rig, g) = loaded(PROBE);
     // The instances of another script (`motion-light`) do not count against this one's bound.
     let _ = rig.garage_instance(&g, json!({}));
     for _ in 0..MAX_INSTANCES_PER_SCRIPT {
         probe_instance(&mut rig, &g);
     }
-    assert_eq!(MAX_INSTANCES_PER_SCRIPT, 8);
+    assert_eq!(MAX_INSTANCES_PER_SCRIPT, 4);
     assert_eq!(
         reason(
             &mut rig,
             "probe",
             json!({"zone": g.zone, "lights": [g.light]})
         ),
-        (400, "Too many instances of probe (max 8)".to_string())
+        (400, "Too many instances of probe (max 4)".to_string())
     );
     let (_, list) = rig.get("/api/v1/recipe-instances");
-    assert_eq!(list.as_array().unwrap().len(), 9);
+    assert_eq!(list.as_array().unwrap().len(), 5);
 }
 
 #[test]
-fn on_restore_the_ninth_instance_of_a_script_fails_to_restore_and_stays_stopped_not_dropped() {
+fn on_restore_the_fifth_instance_of_a_script_fails_to_restore_and_stays_stopped_not_dropped() {
     use solite_core::recipes::RecipeInstance;
     let (mut rig, g) = loaded(PROBE);
     let params = json!({"zone": g.zone, "lights": [g.light]}).to_string();
@@ -368,14 +375,14 @@ fn on_restore_the_ninth_instance_of_a_script_fails_to_restore_and_stays_stopped_
     for n in 0..MAX_INSTANCES_PER_SCRIPT as u8 {
         assert!(running(&rig, &Id::from_random([n + 1; 16]).to_string()));
     }
-    let ninth = Id::from_random([MAX_INSTANCES_PER_SCRIPT as u8 + 1; 16]).to_string();
-    assert!(!running(&rig, &ninth));
+    let fifth = Id::from_random([MAX_INSTANCES_PER_SCRIPT as u8 + 1; 16]).to_string();
+    assert!(!running(&rig, &fifth));
     assert_eq!(
-        rig.messages(&ninth).last().unwrap(),
-        "Failed to restore: Too many instances of probe (max 8)"
+        rig.messages(&fifth).last().unwrap(),
+        "Failed to restore: Too many instances of probe (max 4)"
     );
     let (_, all) = rig.get("/api/v1/recipe-instances");
-    assert_eq!(all.as_array().unwrap().len(), 9);
+    assert_eq!(all.as_array().unwrap().len(), 5);
 }
 
 // ---- slots ----
@@ -1896,8 +1903,8 @@ fn a_turn_gives_scripts_300_ms_and_carries_the_rest_to_the_next_turn() {
     let mut rig = Rig::new();
     let g = rig.garage();
     // A clock that moves 1 ms at each reading: one call of the script reads it about 60 times,
-    // so 8 instances take about half a second, far over the 300 ms of a turn.
-    let (clock, _) = ticking();
+    // so 4 instances read 2 ms each time take about half a second, far over the 300 ms of a turn.
+    let clock = ticking_by(2);
     rig.home
         .load_script_recipe(SPIN, Arc::new(SystemRuntimes), clock)
         .unwrap();
@@ -1942,8 +1949,8 @@ recipe({
 fn the_starts_after_a_restart_stop_when_the_turns_budget_is_spent_and_go_on_next_turn() {
     let mut rig = Rig::new();
     let g = rig.garage();
-    // A clock that moves 1 ms at each reading: a start reads it about 60 times.
-    let (clock, _) = ticking();
+    // A clock that moves 2 ms at each reading: a start reads it about 60 times.
+    let clock = ticking_by(2);
     rig.home
         .load_script_recipe(SLOW_START, Arc::new(SystemRuntimes), clock)
         .unwrap();
@@ -2265,7 +2272,7 @@ fn a_throw_inside_a_then_is_a_script_error_and_a_stack_overflow_there_fails_the_
 }
 
 #[test]
-fn a_restored_ninth_instance_stays_stopped_when_the_recipe_restarts_by_itself() {
+fn a_restored_fifth_instance_stays_stopped_when_the_recipe_restarts_by_itself() {
     use solite_core::recipes::RecipeInstance;
     let (mut rig, g) = loaded(CASES);
     let params = json!({"zone": g.zone, "lights": [g.light], "case": "on-loop"}).to_string();
@@ -2284,8 +2291,8 @@ fn a_restored_ninth_instance_stays_stopped_when_the_recipe_restarts_by_itself() 
         .collect();
     rig.home.load_recipes(list);
     rig.home.start_recipes(rig.now, rig.now);
-    let ninth = ids[MAX_INSTANCES_PER_SCRIPT].to_string();
-    assert!(!running(&rig, &ninth));
+    let fifth = ids[MAX_INSTANCES_PER_SCRIPT].to_string();
+    assert!(!running(&rig, &fifth));
     // The recipe fails (the first instance loops on a motion change) and comes back a minute later.
     let mut on = false;
     toggle_motion(&mut rig, &mut on);
@@ -2296,10 +2303,10 @@ fn a_restored_ninth_instance_stays_stopped_when_the_recipe_restarts_by_itself() 
         .filter(|id| running(&rig, &id.to_string()))
         .count();
     assert_eq!(up, MAX_INSTANCES_PER_SCRIPT);
-    assert!(!running(&rig, &ninth));
+    assert!(!running(&rig, &fifth));
     assert_eq!(
-        rig.messages(&ninth).last().unwrap(),
-        "Failed to restart: Too many instances of cases (max 8)"
+        rig.messages(&fifth).last().unwrap(),
+        "Failed to restart: Too many instances of cases (max 4)"
     );
 }
 
@@ -2357,16 +2364,16 @@ fn the_bounds_of_a_script_are_exact_32_slots_and_16_kb() {
         load(&mut rig, &with(33)).unwrap_err(),
         "Script recipe invalid: more than 32 slots"
     );
-    // 16,384 bytes of source are accepted, 16,385 refused.
+    // 32,768 bytes of source are accepted, 32,769 refused.
     let base = script(&format!("{{api: 1, id: 'a', name: 'A', {OK_START}}}"));
     let sized = |bytes: usize| format!("{base}//{}", "x".repeat(bytes - base.len() - 2));
     let mut rig = Rig::new();
-    let exact = sized(16 * 1024);
-    assert_eq!(exact.len(), 16 * 1024);
+    let exact = sized(32 * 1024);
+    assert_eq!(exact.len(), 32 * 1024);
     load(&mut rig, &exact).unwrap();
     let mut rig = Rig::new();
     assert_eq!(
-        load(&mut rig, &sized(16 * 1024 + 1)).unwrap_err(),
-        "Script recipe invalid: too large (16385 bytes, at most 16384)"
+        load(&mut rig, &sized(32 * 1024 + 1)).unwrap_err(),
+        "Script recipe invalid: too large (32769 bytes, at most 32768)"
     );
 }

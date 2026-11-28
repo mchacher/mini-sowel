@@ -2205,7 +2205,7 @@ fn phase_line(internal_min: u32, engine: u32, script: u32) -> String {
 
 fn sizes_line(peak3: u64) -> String {
     format!(
-        "I (9500) solite_firmware::simulated::script_phase: script sizes: motion-light loaded 100000 B, 3 instances 130000 B (peak {peak3} B), 8 instances 190000 B (peak 200000 B)\n"
+        "I (9500) solite_firmware::simulated::script_phase: script sizes: motion-light loaded 100000 B, 3 instances 130000 B (peak {peak3} B), 6 instances 160000 B (peak 170000 B)\nI (9600) solite_firmware::simulated::script_phase: script sizes: big-recipe 32142 B of source, loaded 120000 B, 6 instances 190000 B (peak 200000 B)\n"
     )
 }
 
@@ -2218,6 +2218,19 @@ fn the_script_phase_needs_its_line_the_internal_ram_and_both_stacks() {
         "{}",
         script_phase_check(&fine).1
     );
+    // The 32 KB script's line missing, or its peak over the limit.
+    let without_big: String = fine
+        .lines()
+        .filter(|line| !line.contains("big-recipe"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let (ok, reason) = script_phase_check(&without_big);
+    assert!(!ok);
+    assert!(reason.contains("big-recipe"), "{reason}");
+    let over = fine.replace("(peak 200000 B)", &format!("(peak {} B)", limit + 1));
+    let (ok, reason) = script_phase_check(&over);
+    assert!(!ok);
+    assert!(reason.contains("above the"), "{reason}");
     // The line missing.
     let (ok, reason) = script_phase_check(&sizes_line(limit * 70 / 100));
     assert!(!ok);

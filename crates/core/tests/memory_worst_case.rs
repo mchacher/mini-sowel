@@ -28,8 +28,8 @@
 //!   bytes (8192 in all, a vehicle id of 64 characters and a padded object in each), held beside
 //!   the home since the API cannot set an object; the 1024 bytes of one equipment are far under
 //!   the total's share, the total is the bound that counts.
-//! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances, 8 of the `motion-light` script and 8 of a copy
-//!   of it under another id (a script recipe holds 8, D74); a 17th is refused.
+//! - `recipes/mod.rs::MAX_INSTANCES`: 16 instances, 4 of the `motion-light` script and 4 of each of
+//!   three copies of it under other ids (a script recipe holds 4, D85); a 17th is refused.
 //! - `recipes/mod.rs::MAX_PARAMS_BYTES`: params of 2 KB each (nested padding, as
 //!   `recipe_params_memory.rs`); the API refuses more, so this is the largest accepted size.
 //! - `recipes/mod.rs::MAX_LOG_ENTRIES`: 20 entries in each instance's log, by button presses.
@@ -41,16 +41,16 @@
 //!   `recipes/script/limits.rs::MAX_ALIAS_BYTES`, `recipes/script/limits.rs::MAX_END_LINE_BYTES`
 //!   (the end of a script's call, checked by the engine: aliases of 64 bytes, log lines of 1600),
 //!   `recipes/script/slots.rs::MAX_SLOT_EQUIPMENTS`, `recipes/script/slots.rs::MAX_SLOTS`
-//!   (spec 041, script recipes): the script runtimes (2 of 224 KB on the box, 448 KB under the 512 KB ceiling) are QuickJS's
+//!   (spec 041, script recipes): the script runtimes (4 of 224 KB on the box, 896 KB) are QuickJS's
 //!   own memory, which the counting allocator below does not see (QuickJS allocates through the
-//!   C library), on their own line of the budget. The engine's worst case runs 16 instances of two
+//!   C library), on their own line of the budget. The engine's worst case runs 16 instances of four
 //!   loaded `motion-light` scripts (spec 046, D81): it counts their Rust side (slots, listen sets,
 //!   states, logs), not their runtimes; the script's own worst case is the third test of this
-//!   file (`two_scripts_pushed_to_their_limit_with_eight_instances_each`), which loads
+//!   file (`scripts_pushed_to_their_limit_with_four_instances_each`), which loads
 //!   `MAX_SCRIPT_RECIPES` scripts, each with a ballast that takes it to about 85 % of its limit, and
 //!   starts `MAX_INSTANCES_PER_SCRIPT` instances in each. The Mac's limit is `SYSTEM_MEMORY_LIMIT`,
 //!   twice the box's (64-bit pointers): the line it prints is the Mac's, bounded by 2 times that
-//!   limit; the box's 448 KB, under its 512 KB ceiling, is checked in QEMU. The bounds are
+//!   limit; the box's 4 x 224 KB is checked in QEMU. The bounds are
 //!   tested in `script_recipes.rs`.
 //! - `recipes/mod.rs::MAX_CARRIED_EVENTS`: events left for the next turn when scripts ran out of
 //!   time (at most 128, the home's own queue bound); empty while no script is slow, as in this
@@ -109,10 +109,10 @@
 //!   `recipes/install/file.rs::MAX_SOURCE_BYTES`, `recipes/install/mod.rs::MAX_REFUSED`,
 //!   `recipes/script/load.rs::MAX_INSTALLED_ID_CHARS` (spec 042, installed script recipes): the
 //!   catalogue is read whole (32 KB) and held as 32 entries of at most that many bytes; a recipe
-//!   job holds the signed file (16 KB) and its source (16 KB) for the length of the job, one job
+//!   job holds the signed file (32 KB) and its source (32 KB) for the length of the job, one job
 //!   at a time (`Releases`' mark); the refused files are 8 names and reasons. By arithmetic, not
 //!   driven here (`tests/recipe_install.rs` tests each bound): `INSTALL_ESTIMATE_BYTES`, added to
-//!   the peak, rounded up to 128 KB (they sit in PSRAM, beside the engine's, and the two scripts'
+//!   the peak, rounded up to 152 KB (they sit in PSRAM, beside the engine's, and the two scripts'
 //!   runtimes on their own line).
 //! - `update/release.rs::MAX_MANIFEST_BYTES`, `update/release.rs::MAX_URL_CHARS`,
 //!   `update/release.rs::MAX_REDIRECTS` (spec 039): a manifest of 16 KB is held by one check or
@@ -193,9 +193,9 @@ const HTTP_WORKERS: usize = 4;
 /// reads, 64 routes) about 5 KB. Rounded up to 48 KB.
 const RADIO_ESTIMATE_BYTES: usize = 48 * 1024;
 /// The recipe installs (spec 042), by arithmetic: the catalogue's 32 KB body while it is parsed and
-/// its 32 entries held (about 48 KB), one job's signed file and source (32 KB), the refused
-/// files' names and reasons (under 2 KB). Rounded up to 128 KB.
-const INSTALL_ESTIMATE_BYTES: usize = 128 * 1024;
+/// its 32 entries held (about 48 KB), one job's signed file and source (64 KB), the refused
+/// files' names and reasons (under 2 KB). Rounded up to 152 KB (spec 053: 128 KB before the files grew to 32 KB; the sum is 146 KB).
+const INSTALL_ESTIMATE_BYTES: usize = 152 * 1024;
 
 fn request<'a>(method: &'a str, path: &'a str, body: &'a [u8]) -> Request<'a> {
     Request {
@@ -490,10 +490,15 @@ fn the_engine_with_every_bound_at_its_maximum_stays_under_1_mb() {
     assert!(extras.iter().all(|e| e.json_len() <= MAX_EXTRAS_BYTES));
 
     // Recipes: 16 instances, each with 16 lights, 16 buttons and params padded to 2 KB. A script
-    // recipe holds 8 instances (D74): the `motion-light` script and a copy of it under another id.
+    // recipe holds 4 instances (D85): the `motion-light` script and three copies of it under other ids.
     // The Rust side of the instances is what this counts; QuickJS's own memory is not seen here.
     let motion_light = include_str!("../../../recipes/scripts/motion-light.js");
-    let recipe_ids = ["motion-light", "motion-light-b"];
+    let recipe_ids = [
+        "motion-light",
+        "motion-light-b",
+        "motion-light-c",
+        "motion-light-d",
+    ];
     for id in recipe_ids {
         let text = motion_light.replace("id: \"motion-light\"", &format!("id: \"{id}\""));
         let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
@@ -896,7 +901,7 @@ fn every_memory_bound_is_listed_in_the_header() {
 /// instances in each (spec 041, R6.5): their memory, QuickJS's own, on its own line.
 #[cfg(feature = "script-recipes")]
 #[test]
-fn two_scripts_pushed_to_their_limit_with_eight_instances_each() {
+fn scripts_pushed_to_their_limit_with_four_instances_each() {
     use solite_core::recipes::native::{NativeHost, RecipeName};
     use solite_core::recipes::script::{
         SYSTEM_MEMORY_LIMIT, ScriptRecipe, ScriptRuntimes, SystemRuntimes,
@@ -990,11 +995,40 @@ fn two_scripts_pushed_to_their_limit_with_eight_instances_each() {
     let held: Vec<usize> = recipes.iter().map(ScriptRecipe::held_bytes).collect();
     let total: usize = held.iter().sum();
     println!(
-        "script memory: {MAX_SCRIPT_RECIPES} scripts at their limit, {instances} instances: {held:?}, {total} B in all (the Mac's limit is {SYSTEM_MEMORY_LIMIT} B each, the box's limit 224 KB each, under its 512 KB ceiling)"
+        "script memory: {MAX_SCRIPT_RECIPES} scripts at their limit, {instances} instances: {held:?}, {total} B in all (the Mac's limit is {SYSTEM_MEMORY_LIMIT} B each, the box's limit 224 KB each)"
     );
     for bytes in &held {
         assert!(*bytes <= SYSTEM_MEMORY_LIMIT / 100 * 90, "{held:?}");
         assert!(*bytes >= SYSTEM_MEMORY_LIMIT / 100 * 80, "{held:?}");
     }
     assert!(total < MAX_SCRIPT_RECIPES * SYSTEM_MEMORY_LIMIT, "{total}");
+
+    // A script of about 32 KB of real code (spec 053), loaded with no ballast and 4 instances: the
+    // source, its bytecode and the instances stay under one runtime's limit.
+    let big = include_str!("fixtures/scripts/big-recipe.js");
+    assert!(
+        big.len() > 32_000 && big.len() <= 32 * 1024,
+        "{}",
+        big.len()
+    );
+    let (mut recipe, _) = ScriptRecipe::load(big, &runtimes, &clock).unwrap();
+    let loaded = recipe.held_bytes();
+    let name = RecipeName {
+        id: "big-recipe".into(),
+        name: "Big Recipe".into(),
+    };
+    let host = NativeHost::new(&home, Id::ROOT_ZONE, &name, T0, T0);
+    for handle in 0..per_recipe {
+        let clock = Clock { mono: T0, wall: T0 };
+        recipe
+            .start(&host, u32::try_from(handle).unwrap(), &params, clock)
+            .unwrap();
+    }
+    assert_eq!(recipe.instance_count(), MAX_INSTANCES_PER_SCRIPT);
+    let held = recipe.held_bytes();
+    println!(
+        "big script memory: {} B of source, loaded {loaded} B, {MAX_INSTANCES_PER_SCRIPT} instances {held} B (the limit is {SYSTEM_MEMORY_LIMIT} B)",
+        big.len()
+    );
+    assert!(held < SYSTEM_MEMORY_LIMIT / 100 * 90, "{held}");
 }

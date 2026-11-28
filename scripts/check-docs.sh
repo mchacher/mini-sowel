@@ -123,4 +123,26 @@ if [ -n "$paths" ]; then
   printf '%s\n' "$paths" | sed 's/^/  /' >&2
   status=1
 fi
+# docs/roadmap.html, the roadmap for its users: dated no earlier than the last spec of the index.
+if [ -f docs/specs-index.md ]; then
+  last=$(grep -oE '^\| *[0-9]{3} *\|.*\| *(20[0-9]{2}-[0-9]{2}-[0-9]{2}) *\|' docs/specs-index.md \
+    | grep -oE '20[0-9]{2}-[0-9]{2}-[0-9]{2}' | sort | tail -n 1)
+  shown=$(grep -oE 'Updated 20[0-9]{2}-[0-9]{2}-[0-9]{2}' docs/roadmap.html 2>/dev/null | grep -oE '20[0-9-]+')
+  if [ -z "$shown" ] || [ "$shown" \< "$last" ]; then
+    echo "check-docs: docs/roadmap.html is dated ${shown:-nowhere}, before the last spec ($last)." >&2
+    echo "  Update its rows to what is built and planned, and its 'Updated <date>' line." >&2
+    status=1
+  fi
+  # Every spec of the index is in a row's "Specs" cell (004–009 counts for 004 to 009).
+  covered=$(grep -oE '<td>[0-9][0-9, –-]*</td></tr>' docs/roadmap.html 2>/dev/null \
+    | sed -e 's/<[^>]*>//g' -e 's/–/-/g' | tr ',' '\n' | awk -F- '
+      { gsub(/ /, ""); if ($0 == "") next; a = $1 + 0; b = ($2 == "" ? a : $2 + 0);
+        for (k = a; k <= b; k++) printf "%03d\n", k }')
+  for num in $(grep -oE '^\| *[0-9]{3} *\|' docs/specs-index.md | grep -oE '[0-9]{3}'); do
+    printf '%s\n' "$covered" | grep -qx "$num" && continue
+    echo "check-docs: spec $num is in no row of docs/roadmap.html (its Specs cell)." >&2
+    status=1
+  done
+fi
+
 exit $status

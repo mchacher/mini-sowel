@@ -381,7 +381,7 @@ fn enable_still_starts_a_disabled_instance_that_validates() {
 }
 
 #[test]
-fn a_light_named_by_eight_instances_of_sixteen_lights_is_pruned_from_all_in_one_change() {
+fn a_light_named_by_four_instances_of_sixteen_lights_is_pruned_from_all_in_one_change() {
     let mut rig = Rig::new();
     let g = rig.garage();
     let mut lights = vec![g.light.clone()];
@@ -389,8 +389,8 @@ fn a_light_named_by_eight_instances_of_sixteen_lights_is_pruned_from_all_in_one_
         let relay = rig.relay(0x90 + n);
         lights.push(rig.equipment(&format!("Light {n}"), "light_onoff", &g.zone, &[&relay]));
     }
-    // At most 8 instances of one script recipe (D74, spec 046).
-    let ids: Vec<String> = (0..8)
+    // At most 4 instances of one script recipe (D85).
+    let ids: Vec<String> = (0..4)
         .map(|_| rig.garage_instance(&g, json!({"lights": lights})))
         .collect();
     let (status, _) = rig.delete(&format!("/api/v1/equipments/{}", lights[15]));

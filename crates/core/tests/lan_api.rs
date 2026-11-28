@@ -212,7 +212,7 @@ fn the_pairing_route_answers_under_loopback_as_before() {
 }
 
 #[test]
-fn a_body_of_16384_bytes_is_parsed_and_one_of_16385_is_413_on_the_lan() {
+fn a_body_of_the_bound_is_parsed_and_one_byte_more_is_413_on_the_lan() {
     let mut home = home();
     let post = |home: &mut Home, size: usize| {
         call(

@@ -31,12 +31,26 @@ fn script(dir: &Path, name: &str, text: &str) -> String {
 }
 
 fn run(args: &[&str], dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_solite-host"))
+    // The host must stop by itself (these runs end in a refusal): one that is still serving after
+    // 30 s is killed and the test fails, instead of hanging.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args(["--sim", GARAGE, "--serve", "18099", "--data"])
         .arg(dir.join("data"))
         .args(args)
-        .output()
-        .expect("the host program starts")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the host program starts");
+    let started = std::time::Instant::now();
+    while child.try_wait().expect("the host is waited for").is_none() {
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the host was still running after 30 s with {args:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    child.wait_with_output().expect("the host's output")
 }
 
 fn stderr(output: &Output) -> String {
@@ -84,8 +98,8 @@ fn a_refused_script_stops_the_host_with_script_recipe_invalid_and_exit_2() {
             stderr(&output)
         );
     }
-    // Too large: 16 KB + 1.
-    let big = script(&dir, "big.js", &format!("// {}\n", "x".repeat(16 * 1024)));
+    // Too large: 32 KB + 1.
+    let big = script(&dir, "big.js", &format!("// {}\n", "x".repeat(32 * 1024)));
     let output = run(&["--recipe-script", &big], &dir);
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr(&output).contains("Script recipe invalid: too large"));
@@ -108,9 +122,9 @@ fn the_same_script_twice_is_refused_by_its_loaded_id() {
 }
 
 #[test]
-fn a_third_script_is_refused_and_so_is_the_flag_without_serve() {
+fn a_fifth_script_is_refused_and_so_is_the_flag_without_serve() {
     let dir = folder();
-    let files: Vec<String> = (0..3)
+    let files: Vec<String> = (0..5)
         .map(|n| {
             script(
                 &dir,
@@ -127,7 +141,7 @@ fn a_third_script_is_refused_and_so_is_the_flag_without_serve() {
     }
     let output = run(&args, &dir);
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("at most 2"), "{}", stderr(&output));
+    assert!(stderr(&output).contains("at most 4"), "{}", stderr(&output));
 
     let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args([

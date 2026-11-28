@@ -1,6 +1,6 @@
 //! `switch-light`, Sowel's recipe 1.0.0 as the script `recipes/scripts/switch-light.js` (spec 052):
 //! its info (pinned from Sowel's source), Sowel's validation texts, the toggle by a button's
-//! `action` (spec 049), the failsafe, and the memory of 8 instances.
+//! `action` (spec 049), the failsafe, and the memory of 6 instances.
 //!
 //! These tests need the `script-recipes` feature (the host program turns it on, so
 //! `cargo test --workspace` runs them).
@@ -302,7 +302,7 @@ impl ScriptRuntimes for Roomy {
 }
 
 #[test]
-fn eight_instances_of_the_script_stay_within_its_memory() {
+fn six_instances_of_the_script_stay_within_its_memory() {
     let w = World::new();
     let runtimes: Arc<dyn ScriptRuntimes> = Arc::new(Roomy);
     let clock: ScriptClock = Arc::new(|| 0);
@@ -344,7 +344,7 @@ fn eight_instances_of_the_script_stay_within_its_memory() {
     }
     let held = recipe.held_bytes();
     println!(
-        "switch-light: {} bytes of source, {empty} bytes loaded, {held} bytes with 8 instances (the box's limit is {SCRIPT_MEMORY_LIMIT})",
+        "switch-light: {} bytes of source, {empty} bytes loaded, {held} bytes with 6 instances (the box's limit is {SCRIPT_MEMORY_LIMIT})",
         SWITCH_LIGHT.len()
     );
     assert!(held < SCRIPT_MEMORY_LIMIT, "{held}");

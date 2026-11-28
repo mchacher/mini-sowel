@@ -84,9 +84,14 @@ fn sixteen_instances_with_2_kb_of_nested_params_keep_only_their_text() {
         "{}",
         params.len()
     );
-    // A script recipe holds 8 instances (D74, spec 046): the script and a copy under another id.
+    // A script recipe holds 4 instances (D85): the script and three copies under other ids.
     let script = include_str!("../../../recipes/scripts/motion-light.js");
-    let recipes = ["motion-light", "motion-light-b"];
+    let recipes = [
+        "motion-light",
+        "motion-light-b",
+        "motion-light-c",
+        "motion-light-d",
+    ];
     for id in recipes {
         let clock: solite_core::recipes::ScriptClock = std::sync::Arc::new(|| 0);
         home.load_script_recipe(
@@ -100,7 +105,7 @@ fn sixteen_instances_with_2_kb_of_nested_params_keep_only_their_text() {
     let base = ALLOCATOR.current_usage();
     ALLOCATOR.reset_peak_usage();
     for n in 0..16 {
-        let body = format!(r#"{{"recipeId":"{}","params":{params}}}"#, recipes[n / 8]);
+        let body = format!(r#"{{"recipeId":"{}","params":{params}}}"#, recipes[n / 4]);
         let created = handle(
             &mut home,
             &request("POST", "/api/v1/recipe-instances", body.as_bytes()),

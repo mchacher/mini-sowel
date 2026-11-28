@@ -266,7 +266,7 @@ fw_check_recipe_install() {
 # least INTERNAL_MIN_KB, the engine thread and the `script` thread keep at least SCRIPT_STACK_MARGIN
 # bytes of their stack unused, the home's heap with the realistic home's three instances running
 # (`heap peak <n> KB` of the line: free before the engine started minus the lowest free of the phase)
-# is at most SCRIPT_PHASE_HEAP_LIMIT_KB, the depth script called the engine at its deepest on both (and the
+# is at most SCRIPT_PHASE_HEAP_LIMIT_KB, the 32 KB script's instances (`script sizes: big-recipe`, spec 053) peak under the limit, the depth script called the engine at its deepest on both (and the
 # create on the script thread answered 201), and the three instances' peak (`script sizes:` line, in bytes) is at
 # most 75 % of the script memory limit (SCRIPT_MEMORY_LIMIT in the core). Prints the reason and
 # returns 1 otherwise.
@@ -303,6 +303,10 @@ fw_check_script_phase() {
   sizes=$(grep -a 'script sizes: motion-light' "$1" | tail -n 1)
   peak3=$(echo "$sizes" | sed -n 's/.*3 instances [0-9]* B (peak \([0-9]*\) B).*/\1/p')
   [ -n "$peak3" ] || { echo "cannot read the three instances' peak from the sizes line: $sizes"; return 1; }
+  big=$(grep -a 'script sizes: big-recipe' "$1" | tail -n 1)
+  peak_big=$(echo "$big" | sed -n 's/.*instances [0-9]* B (peak \([0-9]*\) B).*/\1/p')
+  [ -n "$peak_big" ] || { echo "cannot read the peak of the 32 KB script's instances from its sizes line (script sizes: big-recipe): $big"; return 1; }
+  [ "$peak_big" -le $((limit * 1024)) ] || { echo "the 32 KB script with its instances peaks at $peak_big bytes, above the $limit KB script memory limit (spec 053)."; return 1; }
   [ $((peak3 * 100)) -le $((limit * 1024 * 75)) ] || { echo "three motion-light instances peak at $peak3 bytes, above 75 % of the $limit KB script memory limit."; return 1; }
   return 0
 }

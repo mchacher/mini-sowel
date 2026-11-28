@@ -248,7 +248,7 @@ cd ui && npx vitest run src/<path>/<Name>.test.tsx              # one UI test fi
 | Changes what the tool does | `docs/living-spec/` (done in 3.2.1) |
 | Changes the structure, adds a block or a dependency | `docs/architecture.md` |
 | Involves a choice someone could question later | `docs/decisions.md`: a new decision |
-| Was on the roadmap, or reveals new items | `docs/roadmap.md` |
+| Was on the roadmap, or reveals new items | `docs/roadmap.md` and `docs/roadmap.html` |
 | Changes how to install, run or use the tool | `README.md` |
 | Changes a command or a rule Claude must know | `CLAUDE.md` |
 | Adds a colour, a token or a component, or changes the interface's budget | `docs/design-system.md`, and the token or theme file in `ui/src/styles/` |

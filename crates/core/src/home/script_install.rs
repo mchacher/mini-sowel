@@ -95,7 +95,7 @@ impl Home {
 
     /// An id to install: not a built-in recipe's (409 `<id> is built in`), not installed (409
     /// `<id> is installed: update it`), and room for one more file (409 `Too many script recipes
-    /// (at most 2)`).
+    /// (at most 4)`).
     pub(crate) fn check_install_id(&self, id: &str) -> Outcome<()> {
         if self.recipes.is_built_in(id) {
             return Err(Failure::new(409, format!("{id} is built in")));

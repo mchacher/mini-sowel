@@ -226,16 +226,16 @@ fn bodies_that_are_not_what_the_route_takes_are_a_400_invalid_body() {
 
 #[test]
 fn the_seventeenth_instance_and_params_over_2_kb_are_refused() {
-    // 16 instances in all: 9 stored ones of a recipe nobody provides (kept stopped) and 7 of the
-    // script, which holds 8 at most (D74): the eighth hits the bound of all recipes together.
+    // 16 instances in all: 13 stored ones of a recipe nobody provides (kept stopped) and 3 of the
+    // script, which holds 4 at most (D85): the fourth hits the bound of all recipes together.
     let mut rig = Rig::new();
     let g = rig.garage();
-    let stored: Vec<RecipeInstance> = (1..=9u8)
+    let stored: Vec<RecipeInstance> = (1..=13u8)
         .map(|n| instance(n, "nope", json!({"zone": g.zone})))
         .collect();
     rig.home.load_recipes(stored);
     rig.home.start_recipes(rig.now, rig.now);
-    for _ in 0..7 {
+    for _ in 0..3 {
         rig.garage_instance(&g, json!({}));
     }
     let (status, body) = rig.instance(json!({"zone": g.zone, "lights": [g.light]}));

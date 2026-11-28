@@ -36,8 +36,9 @@ use crate::recipes::install::{Op, RecipeTicket};
 use crate::supervisor::Mode;
 use crate::update::release::ReleaseTicket;
 
-/// Request bodies over this many bytes are refused (413).
-pub const MAX_BODY_BYTES: usize = 16 * 1024;
+/// Request bodies over this many bytes are refused (413): 32 KB, the longest script, and the 128
+/// bytes of its signed file's header (spec 053), so that a signed file of 32 KB of source passes.
+pub const MAX_BODY_BYTES: usize = 32 * 1024 + crate::update::HEADER_BYTES;
 
 /// How long the box's HTTP server (one task) waits for the next bytes of a request, in seconds
 /// (ESP-IDF's `recv_wait_timeout`). A client that sends its headers and never the body holds that
@@ -182,7 +183,7 @@ pub enum Reply {
     BackupExport(BackupTicket),
     /// `POST /recipes/install`, `/recipes/:id/update` or `/recipes/:id/uninstall` with its gate
     /// passed (spec 042 R3): the caller runs `RecipeTicket::run` on its job thread, the home's lock
-    /// being released. The file of an upload is an ordinary body (at most 16 KB), in the ticket.
+    /// being released. The file of an upload is an ordinary body (at most 32 KB and a header), in the ticket.
     RecipeJob(RecipeTicket),
     /// `POST /recipes/store/refresh` with its gate passed (spec 042 R2.4): the caller runs
     /// `RecipeTicket::run`, as for a job.
@@ -424,7 +425,7 @@ pub fn handle_guarded(home: &Mutex<Home>, request: &Request, now: u64, random: R
             None => Reply::Restart,
         };
     }
-    // The update's body is a file of megabytes, streamed by the caller: no 16 KB or JSON check,
+    // The update's body is a file of megabytes, streamed by the caller: no size or JSON check,
     // and the home is let go before the caller reads it. An empty body is the pull (spec 039).
     if is_update_request(request.method, request.path) {
         if request.content_length == Some(0) {
@@ -675,7 +676,7 @@ fn dispatch(
     if let Some(refusal) = safe_mode_refusal(home, request) {
         return Reply::Whole(refusal);
     }
-    // The update route is the streaming handler's: refused here, before the 16 KB and JSON checks.
+    // The update route is the streaming handler's: refused here, before the size and JSON checks.
     if is_update_request(request.method, request.path) {
         return Reply::Whole(error(501, UPDATES_NEED_STREAMING));
     }

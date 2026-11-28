@@ -26,6 +26,9 @@ Read a large file by range, from the lines the caller named, rather than whole.
 - **Output out of the context**: every test, build, QEMU run, install or `validate.sh` goes
   through `sh scripts/quiet.sh <command>`, never bare. Read the full log only when its verdict
   lines are not enough. Targeted tests while you iterate; `sh scripts/validate.sh` once at the end.
+- **No hang**: a test you write or change that waits on a socket, a process or a thread has its own
+  timeout and fails instead of hanging. One test run at a time, never left in the background; a
+  run silent for more than 10 minutes is a hang: kill it, find the test, fix the cause.
 - **The spec, nothing else**: no unrelated refactor, no extra option, no "while I was there". If
   the spec turns out wrong or incomplete, stop and report what is missing: the session asks the
   user.
