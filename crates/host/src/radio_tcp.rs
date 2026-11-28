@@ -22,8 +22,10 @@ impl TcpTransport {
         for socket_address in addresses {
             match TcpStream::connect_timeout(&socket_address, CONNECT_TIMEOUT) {
                 Ok(stream) => {
-                    // Small frames: do not wait to batch them.
-                    stream.set_nodelay(true).map_err(|e| e.to_string())?;
+                    // Small frames: do not wait to batch them. Best effort: on macOS the option
+                    // fails (EINVAL) when the radio has already closed, which the first read
+                    // then reports as "connection closed".
+                    let _ = stream.set_nodelay(true);
                     return Ok(TcpTransport { stream });
                 }
                 Err(e) => last_error = e.to_string(),
@@ -36,9 +38,14 @@ impl TcpTransport {
 impl RadioTransport for TcpTransport {
     fn read(&mut self, buf: &mut [u8], timeout_ms: u64) -> Result<usize, TransportError> {
         let timeout = Duration::from_millis(timeout_ms.max(1));
-        self.stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|e| TransportError::Io(e.to_string()))?;
+        if let Err(e) = self.stream.set_read_timeout(Some(timeout)) {
+            // macOS answers EINVAL to a socket option once the peer has closed the connection.
+            return Err(if e.kind() == ErrorKind::InvalidInput {
+                TransportError::Closed
+            } else {
+                TransportError::Io(e.to_string())
+            });
+        }
         read_outcome(self.stream.read(buf))
     }
 
