@@ -58,3 +58,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 052 | switch-light | F3's first recipe: Sowel's `switch-light` 1.0.0 as a script (a press of any of its buttons toggles its lights), signed and in the catalogue | 2026-11-28 | done |
 | 053 | script-32kb | Script recipes up to 32 KB of source (a request body 32 KB + 128 bytes too, the box's 4 body buffers in PSRAM), 4 recipes of 4 instances each (16 in all), the worst case and a 32 KB script's memory measured, for Sowel's larger recipes | 2026-11-28 | done |
 | 054 | motion-light-dimmable | F3: Sowel's `motion-light-dimmable` as a script (dimmable lights on motion, a brightness per time slot), signed and in the catalogue | 2026-11-28 | in progress |
+| 055 | sowel-recipes-batch | F3: Sowel's `schedule-on-off`, `state-trigger-light`, `presence-thermostat` and `state-watch` as scripts, in one batch, signed and in the catalogue | 2026-11-28 | in progress |
