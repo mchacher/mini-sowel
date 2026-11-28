@@ -203,24 +203,16 @@ describe("PluginsPage", () => {
     ).toBeTruthy();
   });
 
-  it("uploads a signed file as an octet stream", async () => {
-    const api = mockApi({
+  it("offers no upload of a signed recipe", async () => {
+    mockApi({
       [STORE]: { body: store([]) },
       [REFRESH]: { body: store([]) },
-      [INSTALL]: { status: 201, body: { id: "a", version: "1.0.0" } },
       [RESOURCES]: { body: resources() },
     });
     render(<PluginsPage />);
     await screen.findByText("No plugins installed");
-    const file = new File([new Uint8Array([1, 2, 3])], "a.srs", {
-      type: "application/octet-stream",
-    });
-    fireEvent.change(screen.getByLabelText("Signed recipe file"), { target: { files: [file] } });
-    await screen.findByText("Recipe installed from the file.");
-    const call = api.calls.findIndex((c) => c.key === INSTALL);
-    expect(api.calls[call]?.body).toBe(file);
-    expect(api.headersOf[call]?.["Content-Type"]).toBe("application/octet-stream");
-    expect(screen.getByRole("button", { name: "Upload a signed recipe" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    expect(screen.queryByLabelText(/signed recipe/i)).toBeNull();
   });
 
   it("lists an uploaded recipe the catalogue lacks, and removes it", async () => {

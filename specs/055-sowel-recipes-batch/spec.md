@@ -67,7 +67,7 @@ ported as `motion-light-dimmable.js` was:
 - [x] Each under 32 KB; 4 instances of each under 224 KB (the Mac's count).
 - [x] A `text` slot is bounded and served; `hiddenWhen` is served as given and hides the slot in the
       recipe form (tested, Rust and Vitest).
-- [ ] Signed, in the catalogue's release; the box lists them and installs them.
+- [x] Signed, in the catalogue's release; the box lists them and installs them.
 - [x] validate green.
 
 ## Edge cases
@@ -79,3 +79,12 @@ The four repositories above: ids, slots, info and texts.
 
 ## How the user will check it
 Installed from the catalogue on the box, or `--recipe-script recipes/scripts/<id>.js` on the Mac.
+
+### Box check (2026-11-28, Solite 0.3.0, catalogue v2026.11.28.3)
+- All seven recipes install from the catalogue (5 to 7 s each) and are `ready`; a 5th is refused
+  409 "Too many script recipes (at most 4)". Held on the box: motion-light-dimmable 116,656 bytes,
+  schedule-on-off 107,208, presence-thermostat 114,084, state-trigger-light 104,160, state-watch
+  106,300 (no instance).
+- Internal RAM: about 80 KB free at rest with 4 recipes, but its lowest point fell to 28,348 bytes
+  (largest block 27,648) across the installs, under the 64 KB floor: the roadmap's engine study
+  takes it first.
