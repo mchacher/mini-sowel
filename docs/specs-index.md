@@ -54,3 +54,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 048 | power-metering | I1's first part: `power` (W), `energy` (kWh), `current` (A) from Electrical Measurement `0x0B04` and Metering `0x0702`, their scale read once per device, a simulated plug | 2026-11-27 | done |
 | 049 | button-action | I1's second part: a remote's output On/Off, Level and Scenes clusters bound to the coordinator, its commands decoded into `action` (generic names), each press an event, a simulated button | 2026-11-28 | done |
 | 050 | shutter | I1's third part: a Window Covering shutter's `position` (100 open, Sowel's convention) and its orders `shutter_move` (OPEN, CLOSE, STOP) and `set_shutter_position`, a simulated shutter | 2026-11-28 | done |
+| 051 | thermostat | I1's fourth part: a Thermostat (`0x0201`) device's `local_temperature` and heating `setpoint`, and the `set_setpoint` order (5 to 30 °C) as a Write Attributes, a simulated thermostat | 2026-11-28 | in progress |
