@@ -64,7 +64,7 @@ fn running() -> Version {
 }
 
 fn newer() -> Version {
-    Version::new(0, 2, 0)
+    Version::new(9, 9, 0)
 }
 
 /// An image of `len` bytes that is not all the same.
@@ -173,7 +173,7 @@ fn a_valid_file_is_installed_into_the_inactive_slot_and_booted_on_probation() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(
         body,
-        json!({"success": true, "message": "Installed 0.2.0, restarting"})
+        json!({"success": true, "message": "Installed 9.9.0, restarting"})
     );
     assert_eq!(adapter.slot, image);
     assert_eq!(adapter.count("finish"), 1);

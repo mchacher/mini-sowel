@@ -27,8 +27,8 @@ use solite_core::update::{HEADER_BYTES, SLOT_BYTES, Updates, Version, signed_byt
 use support::update_fake::FakeAdapter;
 use support::{HOST, PORT, T0, counter};
 
-const ASSET: &str = "https://github.com/o/r/releases/download/v0.2.0/solite-0.2.0.sup";
-const STORE: &str = "https://objects.example.com/signed/solite-0.2.0.sup";
+const ASSET: &str = "https://github.com/o/r/releases/download/v9.9.0/solite-9.9.0.sup";
+const STORE: &str = "https://objects.example.com/signed/solite-9.9.0.sup";
 const SECOND: u64 = 1000;
 
 // ---- Keys and files ----
@@ -53,8 +53,12 @@ fn running() -> Version {
     Version::parse(solite_core::VERSION).unwrap()
 }
 
+/// A release newer than any the tree runs (the running version is the crate's, which every
+/// release raises): fixed far above, so these tests need no change at a release.
+const NEWER: &str = "9.9.0";
+
 fn newer() -> Version {
-    Version::new(0, 2, 0)
+    Version::parse(NEWER).unwrap()
 }
 
 fn image(len: usize) -> Vec<u8> {
@@ -480,7 +484,7 @@ impl World {
     /// file (the length announced is the whole file's). Returns the file.
     fn serve_cut(&mut self, len: usize, at: usize, end: End) -> Vec<u8> {
         let sup = file(&self.signing, newer(), &image(len));
-        self.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+        self.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
         self.serve(
             ASSET,
             Answer::Body {
@@ -587,12 +591,12 @@ fn a_nominal_manifest_is_read_and_kept() {
     let sup = world.serve_release(newer(), 3000);
     let (status, info) = world.check();
     assert_eq!(status, 200, "{info}");
-    assert_eq!(info["latest"], "0.2.0");
+    assert_eq!(info["latest"], NEWER);
     assert_eq!(info["updateAvailable"], true);
     // The kept fields are the ones a pull then uses: size and hash of the file, no re-fetch.
     let (status, done) = world.pull();
     assert_eq!(status, 200, "{done}");
-    assert_eq!(done["message"], "Installed 0.2.0, restarting");
+    assert_eq!(done["message"], "Installed 9.9.0, restarting");
     assert_eq!(world.adapter.slot.len(), sup.len() - HEADER_BYTES);
 }
 
@@ -600,7 +604,7 @@ fn a_nominal_manifest_is_read_and_kept() {
 fn a_manifest_of_another_format_is_refused() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["format"] = json!(2);
     world.serve_manifest(&manifest);
     is_error(
@@ -614,7 +618,7 @@ fn a_manifest_of_another_format_is_refused() {
 fn a_manifest_that_breaks_a_rule_names_the_field() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let good = manifest_for(&sup, "0.2.0", ASSET);
+    let good = manifest_for(&sup, NEWER, ASSET);
     let slot_max = HEADER_BYTES as u64 + SLOT_BYTES;
     let cases: Vec<(&str, Value)> = vec![
         ("version", {
@@ -680,7 +684,7 @@ const MINUTE: u64 = 60 * SECOND;
 fn unknown_keys_and_long_notes_are_accepted_and_not_kept() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["notes"] = json!("n".repeat(8000));
     manifest["future"] = json!({"a": [1, 2, 3]});
     world.serve_manifest(&manifest);
@@ -693,7 +697,7 @@ fn unknown_keys_and_long_notes_are_accepted_and_not_kept() {
 fn a_manifest_of_16_kb_plus_one_is_too_large() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     // Exactly the limit passes, one more byte does not.
     let base = manifest.to_string().len();
     manifest["notes"] = json!("n".repeat(MAX_MANIFEST_BYTES - base + "\"notes\":\"\",".len() - 1));
@@ -716,15 +720,15 @@ fn a_manifest_of_16_kb_plus_one_is_too_large() {
 fn the_release_page_is_derived_from_a_github_asset_address_only() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     let (_, info) = world.check();
     assert_eq!(
         info["releaseUrl"],
-        "https://github.com/o/r/releases/tag/v0.2.0"
+        format!("https://github.com/o/r/releases/tag/v{NEWER}")
     );
     world.serve_manifest(&manifest_for(
         &sup,
-        "0.2.0",
+        NEWER,
         "https://example.com/a/solite.sup",
     ));
     world.elapse(2 * MINUTE);
@@ -737,7 +741,7 @@ fn the_release_page_is_derived_from_a_github_asset_address_only() {
 
 fn manifest_url_check(world: &mut World, url: &str) -> (u16, Value) {
     let sup = file(&world.signing, newer(), &image(2000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", url));
+    world.serve_manifest(&manifest_for(&sup, NEWER, url));
     world.elapse(2 * MINUTE);
     world.check()
 }
@@ -829,13 +833,13 @@ fn a_url_of_the_wrong_form_is_invalid() {
 fn one_and_two_redirects_are_followed_absolute_or_by_path() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let manifest = manifest_for(&sup, "0.2.0", ASSET).to_string();
+    let manifest = manifest_for(&sup, NEWER, ASSET).to_string();
     world.serve(
         DEFAULT_MANIFEST_URL,
-        redirect("https://github.com/mchacher/solite/releases/download/v0.2.0/manifest.json"),
+        redirect("https://github.com/mchacher/solite/releases/download/v9.9.0/manifest.json"),
     );
     world.serve(
-        "https://github.com/mchacher/solite/releases/download/v0.2.0/manifest.json",
+        "https://github.com/mchacher/solite/releases/download/v9.9.0/manifest.json",
         redirect("/final/manifest.json"),
     );
     world.serve(
@@ -929,7 +933,7 @@ fn a_status_other_than_200_names_the_url_and_keeps_the_cache() {
         500,
         &format!("Update check failed: {DEFAULT_MANIFEST_URL}: 404"),
     );
-    assert_eq!(world.version().1["latest"], "0.2.0");
+    assert_eq!(world.version().1["latest"], NEWER);
     world.elapse(2 * MINUTE);
     world.serve(
         DEFAULT_MANIFEST_URL,
@@ -948,16 +952,16 @@ fn a_status_other_than_200_names_the_url_and_keeps_the_cache() {
 fn a_newer_manifest_is_available_and_get_version_says_the_same() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     let (status, info) = world.check();
     assert_eq!(status, 200, "{info}");
     assert_eq!(
         info,
         json!({
             "current": solite_core::VERSION,
-            "latest": "0.2.0",
+            "latest": NEWER,
             "updateAvailable": true,
-            "releaseUrl": "https://github.com/o/r/releases/tag/v0.2.0",
+            "releaseUrl": format!("https://github.com/o/r/releases/tag/v{NEWER}"),
         })
     );
     assert_eq!(world.version(), (200, info));
@@ -985,12 +989,12 @@ fn an_equal_or_older_manifest_is_not_available() {
 fn a_min_version_above_the_running_one_is_not_available() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
-    manifest["minVersion"] = json!("0.1.9");
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
+    manifest["minVersion"] = json!("9.9.9");
     world.serve_manifest(&manifest);
     let (_, info) = world.check();
     assert_eq!(info["updateAvailable"], false);
-    assert_eq!(info["latest"], "0.2.0");
+    assert_eq!(info["latest"], NEWER);
     // Equal to the running version: available.
     manifest["minVersion"] = json!(running().to_string());
     world.serve_manifest(&manifest);
@@ -1222,7 +1226,7 @@ fn a_pull_installs_the_release_through_a_redirect() {
     assert_eq!(status, 200, "{done}");
     assert_eq!(
         done,
-        json!({"success": true, "message": "Installed 0.2.0, restarting"})
+        json!({"success": true, "message": "Installed 9.9.0, restarting"})
     );
     assert_eq!(world.adapter.count("finish"), 1);
     assert_eq!(world.adapter.slot, sup[HEADER_BYTES..]);
@@ -1294,7 +1298,7 @@ fn a_min_version_too_high_is_400() {
 fn a_min_version_equal_to_the_running_one_is_allowed() {
     let mut world = World::new();
     let sup = world.serve_release(newer(), 2000);
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["minVersion"] = json!(running().to_string());
     world.serve_manifest(&manifest);
     assert_eq!(world.pull().0, 200);
@@ -1304,7 +1308,7 @@ fn a_min_version_equal_to_the_running_one_is_allowed() {
 fn an_image_above_the_slot_is_413() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["image"]["size"] = json!(HEADER_BYTES as u64 + SLOT_BYTES);
     world.serve_manifest(&manifest);
     world.adapter.capacity = SLOT_BYTES - 1;
@@ -1316,7 +1320,7 @@ fn an_image_above_the_slot_is_413() {
 fn a_content_length_that_differs_from_the_manifest_is_refused_before_any_write() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(5000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(
         ASSET,
         Answer::Body {
@@ -1339,7 +1343,7 @@ fn a_wrong_signature_is_refused_before_begin() {
     let mut world = World::new();
     let other = SigningKey::from_bytes(&random_bytes::<32>());
     let sup = file(&other, newer(), &image(5000));
-    world.serve_release_file("0.2.0", &sup);
+    world.serve_release_file(NEWER, &sup);
     is_error(&world.pull(), 400, "Invalid signature");
     assert_eq!(world.adapter.count("begin"), 0);
     world.untouched();
@@ -1352,7 +1356,7 @@ fn a_changed_image_byte_fails_the_signed_hash_and_is_aborted() {
     let last = sup.len() - 1;
     sup[last] ^= 0xFF;
     // The manifest describes the changed file (size and hash agree with what is served).
-    world.serve_release_file("0.2.0", &sup);
+    world.serve_release_file(NEWER, &sup);
     is_error(&world.pull(), 400, "Image does not match its signature");
     assert_eq!(world.adapter.count("abort"), 1);
     world.untouched();
@@ -1362,7 +1366,7 @@ fn a_changed_image_byte_fails_the_signed_hash_and_is_aborted() {
 fn a_manifest_hash_of_another_file_is_refused_and_finish_never_runs() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(5000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["image"]["sha256"] = json!(hex(&sha256(b"another file")));
     world.serve_manifest(&manifest);
     world.serve(ASSET, body(&sup));
@@ -1378,7 +1382,7 @@ fn a_body_longer_than_the_manifest_says_is_refused() {
     let sup = file(&world.signing, newer(), &image(5000));
     let mut longer = sup.clone();
     longer.extend_from_slice(&[1, 2, 3]);
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(ASSET, body_no_length(&longer));
     let answer = world.pull();
     assert_eq!(answer.0, 400, "{}", answer.1);
@@ -1397,7 +1401,7 @@ fn a_header_that_disagrees_with_the_manifest_is_refused_before_begin() {
     let mut world = World::new();
     // The header's length + 128 differs from image.size.
     let sup = file(&world.signing, newer(), &image(5000));
-    let mut manifest = manifest_for(&sup, "0.2.0", ASSET);
+    let mut manifest = manifest_for(&sup, NEWER, ASSET);
     manifest["image"]["size"] = json!(sup.len() + 10);
     world.serve_manifest(&manifest);
     world.serve(ASSET, body_no_length(&sup));
@@ -1406,7 +1410,7 @@ fn a_header_that_disagrees_with_the_manifest_is_refused_before_begin() {
     // The header's version differs from the manifest's.
     let mut world = World::new();
     let sup = file(&world.signing, Version::new(0, 3, 0), &image(5000));
-    world.serve_release_file("0.2.0", &sup);
+    world.serve_release_file(NEWER, &sup);
     is_error(&world.pull(), 400, "Download does not match the manifest");
     assert_eq!(world.adapter.count("begin"), 0);
 }
@@ -1415,7 +1419,7 @@ fn a_header_that_disagrees_with_the_manifest_is_refused_before_begin() {
 fn a_server_that_does_not_resume_fails_the_pull_and_the_next_pull_starts_over() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(
         ASSET,
         Answer::Body {
@@ -1444,7 +1448,7 @@ fn a_server_that_does_not_resume_fails_the_pull_and_the_next_pull_starts_over() 
 fn a_body_that_ends_early_without_an_error_is_a_cut_too() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(ASSET, body_no_length(&sup[..5000]));
     // The resumed request is answered with the same short 200: nothing to resume from.
     world.download = Limits {
@@ -1464,7 +1468,7 @@ fn a_body_that_ends_early_without_an_error_is_a_cut_too() {
 fn a_read_timeout_every_time_is_a_download_failure_after_the_resumes() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(
         ASSET,
         Answer::Body {
@@ -1494,7 +1498,7 @@ fn a_read_timeout_every_time_is_a_download_failure_after_the_resumes() {
 fn the_total_time_is_bounded_on_the_monotonic_clock() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(20_000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     // Each read takes two seconds: past the ten seconds of the limit before the end.
     world.serve(
         ASSET,
@@ -1514,7 +1518,7 @@ fn the_total_time_is_bounded_on_the_monotonic_clock() {
 fn a_manifest_check_is_bounded_in_time_too() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(2000));
-    let text = manifest_for(&sup, "0.2.0", ASSET).to_string();
+    let text = manifest_for(&sup, NEWER, ASSET).to_string();
     world.serve(
         DEFAULT_MANIFEST_URL,
         Answer::Body {
@@ -2005,7 +2009,7 @@ fn a_changed_file_served_without_an_etag_is_caught_by_the_final_checks() {
 fn a_read_error_at_the_full_count_is_the_end_of_the_body() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(5000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(
         ASSET,
         Answer::Body {
@@ -2064,7 +2068,7 @@ fn any_other_status_on_the_range_request_fails_at_once() {
 fn a_redirect_to_plain_http_during_a_resume_fails_at_once() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(ASSET, redirect(STORE));
     world.serve(
         STORE,
@@ -2090,7 +2094,7 @@ fn a_redirect_to_plain_http_during_a_resume_fails_at_once() {
 fn a_206_to_the_first_download_request_or_to_the_manifest_is_a_status() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(3000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(ASSET, partial(&sup, 0));
     is_error(
         &world.pull(),
@@ -2151,7 +2155,7 @@ fn the_total_time_wins_over_a_resume() {
 fn each_range_request_starts_at_the_image_url_and_follows_its_redirects() {
     let mut world = World::new();
     let sup = file(&world.signing, newer(), &image(8000));
-    world.serve_manifest(&manifest_for(&sup, "0.2.0", ASSET));
+    world.serve_manifest(&manifest_for(&sup, NEWER, ASSET));
     world.serve(ASSET, redirect(STORE));
     world.serve(
         STORE,
@@ -2187,7 +2191,7 @@ fn a_fresh_home_has_no_latest_and_a_check_always_reaches_the_fetcher() {
     let sup = file(&world.signing, newer(), &image(2000));
     world.serve(
         url,
-        body(manifest_for(&sup, "0.2.0", ASSET).to_string().as_bytes()),
+        body(manifest_for(&sup, NEWER, ASSET).to_string().as_bytes()),
     );
     world.set_setting("update.manifestUrl", url);
     assert_eq!(world.check().0, 200);
@@ -2197,7 +2201,7 @@ fn a_fresh_home_has_no_latest_and_a_check_always_reaches_the_fetcher() {
     assert_eq!(world.check().0, 200);
     assert_eq!(world.fetched(), vec![url.to_string(), url.to_string()]);
     let lines = logged(&format!(
-        "update: check: latest 0.2.0, running {} ({url})",
+        "update: check: latest 9.9.0, running {} ({url})",
         solite_core::VERSION
     ));
     assert_eq!(lines.len(), 2, "{lines:?}");
@@ -2294,7 +2298,7 @@ fn an_automatic_check_fills_the_cache_and_never_writes() {
     };
     ticket.check_auto(&mut world.fetcher, &mut pacing, CHECK);
     let (_, info) = world.version();
-    assert_eq!(info["latest"], "0.2.0");
+    assert_eq!(info["latest"], NEWER);
     assert_eq!(info["updateAvailable"], true);
     assert!(world.adapter.calls.is_empty());
     assert_eq!(world.fetched(), vec![DEFAULT_MANIFEST_URL]);
@@ -2374,7 +2378,7 @@ fn the_ticket_uses_the_manifest_url_setting_else_the_default() {
     let sup = file(&world.signing, newer(), &image(2000));
     world.serve(
         "http://192.168.1.9:8000/m.json",
-        body(manifest_for(&sup, "0.2.0", ASSET).to_string().as_bytes()),
+        body(manifest_for(&sup, NEWER, ASSET).to_string().as_bytes()),
     );
     world.set_setting("update.manifestUrl", "http://192.168.1.9:8000/m.json");
     assert_eq!(world.check().0, 200);

@@ -30,7 +30,7 @@ const GARAGE: &str = "../../scenarios/garage.json";
 const PASSWORD: &str = "test-password-1234";
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/release.sh");
 /// Newer than the running host (0.1.0), as every update must be.
-const VERSION: &str = "0.2.0";
+const VERSION: &str = "9.9.0";
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 fn temp(name: &str) -> PathBuf {
