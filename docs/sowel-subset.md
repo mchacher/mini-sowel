@@ -269,7 +269,10 @@ test reads), each kept by D75 or D74:
 - **Left out**: `mode()` (no modes), the tariff period in `now()`, `energy.claim/release`, history
   reads, the observation mode, a per-instance order rate limit, `state.alarm` semantics; a script
   that calls `mode`, `energy` or `history` gets `Not available in Solite: <name>`. Slots of type
-  `text` and `data-key` are refused.
+  `data-key` is refused.
+- **Added** (spec 055): a slot of type `text` (a text of at most 64 bytes, checked by the recipe's own
+  `validate`, where Sowel checks nothing) and a slot's `hiddenWhen` (`{slot, equals}`, kept in the
+  info; only the interface uses it).
 - **Functions have no source**: QuickJS is built without keeping the source text of functions
   (`JS_NO_FUNCTION_SOURCE`, D74): `Function.prototype.toString` of a script's function answers
   `function f() { [native code] }`, where Sowel's engine gives the source.

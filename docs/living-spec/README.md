@@ -916,13 +916,57 @@ dimmable lights (`light_dimmable` or `light_color`), with a brightness.
   server's clock). The brightness is chosen when the lights are switched on, not while they stay
   on. The off timer, the lux threshold, the safety auto-off, the daylight rule, the buttons and
   the override are `motion-light`'s (the echo window is 5 s); a brightness reported with the
-  lights on, other than the one sent and after the window, puts the instance in override.
+  lights on, other than the one sent and after the window, puts the instance in override. While
+  the clock is not set (the box before its first sync) `now().localTime` is `null` and no slot
+  holds the time: the plain `brightness` is used.
 - **Validation texts** (Sowel's, in its order): those of `motion-light` for the zone, the lights
   (`... requires light_dimmable or light_color`), the duration, `luxThreshold` and the buttons,
   then `brightness must be between 1 and 254`, `Slot <n>: start, end, and brightness must all be
   provided or all omitted`, `slot<n>Start must be in HH:MM format`, `slot<n>End must be in HH:MM
   format`, `slot<n>Brightness must be between 1 and 254`.
 - **Bounds**: those of any script recipe; 4 instances use about 218 KB on the Mac.
+
+### Runs the schedule-on-off recipe
+
+`schedule-on-off` is a script recipe, the port of Sowel's `sowel-recipe-schedule-on-off` 2.0.2
+(`recipes/scripts/schedule-on-off.js`): Sowel's id, name, icon `CalendarClock`, settings (with their
+`group`s `slot1` to `slot3` and `hiddenWhen`), French texts, validation texts and behaviour, version
+`2.0.2`.
+
+- **Settings**: `zone`, `equipments` (on/off equipments: `switch`, `light_onoff`, `light_dimmable`,
+  `light_color`, `water_valve`, `pool_pump`, `water_heater`) and, for each of up to 3 windows N, a
+  start and an end: `slotN_start_kind` / `slotN_end_kind` (`time`, `sunrise` or `sunset`), `slotN_*_time`
+  (`HH:MM`, for a fixed time) and `slotN_*_offset` (minutes, -180 to 180, for the sun); window 1 is
+  required, windows 2 and 3 take both ends or none.
+- **What it does**: at the start of a window every equipment gets `state` `ON`, at its end `OFF`
+  (a window may pass midnight); the instance's state holds `status` (`idle` or `running`),
+  `currentSlot`, `nextStart` and `nextEnd`. Times are the home's (its time zone). A sun boundary uses
+  the day's sunrise or sunset plus its offset, read again when it fires and at midnight; where the
+  sun gives no time that day it is skipped, with a warning logged once. Equipments are named by the
+  first 8 characters of their id in the log (a script does not read names).
+- **Validation texts** (Sowel's, in its order): `Zone is required`, `At least one equipment is
+  required`, `Slot 1 start and end are required (a fixed time, or sunrise/sunset)`, `Slot <n> start
+  and end must both be set`.
+
+### Runs the state-trigger-light recipe
+
+`state-trigger-light` is a script recipe, the port of Sowel's `sowel-recipe-state-trigger-light`
+0.2.3 (`recipes/scripts/state-trigger-light.js`): Sowel's id, name, icon `Bell`, settings, French
+texts, validation texts and behaviour, version `0.2.3`.
+
+- **Settings**: `zone`, `trigger` (an equipment of any zone, with a `state` data), `stateValue` (a
+  text), `lights` (`light_onoff`, in the zone or its sub-zones), `duration` (default `5m`) and
+  `nightOnly` (default true).
+- **What it does**: when the trigger's `state` turns to exactly `stateValue` (after any other value:
+  a re-report of the target does not fire), and it is night (no daylight, or the sun unknown) unless
+  `nightOnly` is off, and no light is already on, the lights are switched on for `duration`, then
+  off; a light switched off by hand (after the 2 s echo window) cancels the timer; the end time is
+  kept in the state as `expiresAt` and an instance started again resumes it.
+- **Validation texts** (Sowel's, in its order): `Zone is required`, `Zone not found`, `Trigger
+  equipment is required`, `Trigger equipment not found`, `Trigger "<name>" has no "state" data
+  binding`, `Target state value is required`, `At least one light is required`, `Light <id> not
+  found`, `"<name>" is not a light_onoff equipment`, `Trigger equipment cannot also be a light
+  controlled by this recipe`, the duration texts and `Duration must be > 0`.
 
 ### Runs script recipes
 
@@ -938,7 +982,9 @@ same routes and from a room's page, with the same log, state and events.
   is reserved`: `/recipes/store` and `/recipes/install` sit beside Sowel's `/recipes/:recipeId`). An
   installed script must declare `version` as `x.y.z` (three numbers of 0 to 65535: `Script recipe
   invalid: version must be x.y.z`); the version of a script given by `--recipe-script` stays free. The slots are Sowel's (`zone`, `equipment`, `number`, `duration`, `time`,
-  `boolean`, `select`), written as an object by slot id; the slot `zone` is added first when missing.
+  `boolean`, `select`, `text`: a text of at most 64 bytes, `Invalid params: <slot> must be a text` or
+  `<slot>: at most 64 bytes`), written as an object by slot id, each with Sowel's optional `group`
+  and `hiddenWhen` (`{slot, equals}`, served in the info, used by the interface to hide a field); the slot `zone` is added first when missing.
   The settings are checked by the script's own `validate` first, if it has one, so that a refusal
   it makes carries its text (spec 046); then by the program from the slots (`Invalid params:
   <slot> is required`, `... must be a number between <min> and <max>`, `...: invalid duration`,
@@ -952,7 +998,7 @@ same routes and from a room's page, with the same log, state and events.
   `motionSensors`); `onMotionReport(fn)` at each report of a motion sensor of the zone, which
   Sowel's draft does not have; `get(slot, alias)`; `order(slot, alias, value)`, to every enabled
   equipment of the slot, answering the ones refused; timers `after` (at least 100 ms), `every` (at
-  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (`time`, the home's time of day `localTime` as `HH:MM` in its time zone (UTC when it has none), and the sun);
+  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (`time`, the home's time of day `localTime` as `HH:MM` in its time zone (UTC when it has none, `null` while the clock is not set), and the sun);
   `state.set/get/delete` (at most 512 bytes, served as the instance's `state`); `log`, `log.warn`,
   `log.error`, `console.log` (at most 20 lines per call). It names equipments only through its
   slots: a call with another name answers `Unknown slot`, and a script has no way to reach an

@@ -143,11 +143,12 @@
   var NO_MODE = na("mode"), NO_HISTORY = na("history"), NO_ENERGY = { claim: na("energy"), release: na("energy") };
   function now() {
     var sun = H.sun();
-    // The home's time of day, "HH:MM" in its time zone (UTC when it has none).
+    // The home's time of day, "HH:MM" in its time zone (UTC when it has none); null while the clock
+    // is not set (the box before its first sync), as `at()` waits then.
     var sec = (Math.floor(RT.wall / 1000) + H.offset(RT.wall)) % 86400;
     if (sec < 0) sec += 86400;
     var hh = Math.floor(sec / 3600), mm = Math.floor(sec % 3600 / 60);
-    return { time: new RealDate(RT.wall).toISOString(), localTime: (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm, isDaylight: sun.isDaylight, sunrise: sun.sunrise, sunset: sun.sunset };
+    return { time: new RealDate(RT.wall).toISOString(), localTime: !RT.set ? null : (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm, isDaylight: sun.isDaylight, sunrise: sun.sunrise, sunset: sun.sunset };
   }
 
   // ---- Timers ----

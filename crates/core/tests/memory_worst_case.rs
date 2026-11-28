@@ -40,7 +40,9 @@
 //!   `recipes/script/limits.rs::MAX_TIMERS`, `recipes/script/limits.rs::MAX_LOG_LINES_PER_CALL`,
 //!   `recipes/script/limits.rs::MAX_ALIAS_BYTES`, `recipes/script/limits.rs::MAX_END_LINE_BYTES`
 //!   (the end of a script's call, checked by the engine: aliases of 64 bytes, log lines of 1600),
-//!   `recipes/script/slots.rs::MAX_SLOT_EQUIPMENTS`, `recipes/script/slots.rs::MAX_SLOTS`
+//!   `recipes/script/slots.rs::MAX_SLOT_EQUIPMENTS`, `recipes/script/slots.rs::MAX_SLOTS`,
+//!   `recipes/script/slots.rs::MAX_TEXT_BYTES` (a `text` slot's value, 64 bytes, kept in the
+//!   instance's params, which `MAX_PARAMS_BYTES` already bounds; `motion-light` has no `text` slot)
 //!   (spec 041, script recipes): the script runtimes (4 of 224 KB on the box, 896 KB) are QuickJS's
 //!   own memory, which the counting allocator below does not see (QuickJS allocates through the
 //!   C library), on their own line of the budget. The engine's worst case runs 16 instances of four

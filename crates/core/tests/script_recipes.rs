@@ -277,7 +277,8 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
         (script(&format!("{{api: 1, id: 'a_b', name: 'A', {OK_START}}}")), "id must be 1 to 64 characters among a-z, 0-9 and -"),
         (script(&format!("{{api: 1, id: 'a', {OK_START}}}")), "name is required"),
         (script("{api: 1, id: 'a', name: 'A'}"), "no start function"),
-        (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'text'}}}}, {OK_START}}}")), "slot t: type \"text\" is not supported"),
+        (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'text', hiddenWhen: 5}}}}, {OK_START}}}")), "slot t: hiddenWhen is {slot, equals}"),
+        (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'text', hiddenWhen: {{slot: 'k', equals: 3}}}}}}, {OK_START}}}")), "slot t: hiddenWhen is {slot: a slot id, equals: a text or a list of texts}"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'data-key'}}}}, {OK_START}}}")), "slot t: type \"data-key\" is not supported"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'color'}}}}, {OK_START}}}")), "slot t: unknown type \"color\""),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: 5, {OK_START}}}")), "slots must be an object"),
@@ -485,6 +486,58 @@ fn the_host_checks_every_slot_with_its_own_texts() {
             assert_eq!(got, invalid(&message), "{params}");
         }
     }
+}
+
+/// A script with a `text` slot and a slot hidden by `hiddenWhen` (Sowel's shapes).
+const TEXTED: &str = "recipe({api: 1, id: 'texted', name: 'Texted', slots: {\
+    word: {type: 'text', name: 'Word', description: 'A word', required: true}, \
+    kind: {type: 'select', name: 'Kind', required: true, defaultValue: 'time', \
+      options: [{value: 'time', label: 'Fixed'}, {value: 'sunrise', label: 'Sunrise'}]}, \
+    at: {type: 'time', name: 'At', required: false, hiddenWhen: {slot: 'kind', equals: ['sunrise']}}, \
+    off: {type: 'number', name: 'Off', required: false, hiddenWhen: {slot: 'kind', equals: 'time'}}}, \
+    start: function () {}});";
+
+#[test]
+fn a_text_slot_is_a_bounded_text_and_hidden_when_is_served_as_given() {
+    let (mut rig, g) = loaded(TEXTED);
+    let (_, info) = rig.get("/api/v1/recipes/texted");
+    let slots = info["slots"].as_array().unwrap();
+    assert_eq!(slots[1]["type"], "text");
+    assert_eq!(
+        slots[3]["hiddenWhen"],
+        json!({"slot": "kind", "equals": ["sunrise"]})
+    );
+    assert_eq!(
+        slots[4]["hiddenWhen"],
+        json!({"slot": "kind", "equals": "time"})
+    );
+    assert!(slots[2].get("hiddenWhen").is_none());
+    let long = "x".repeat(65);
+    let cases = [
+        (json!({"zone": g.zone}), invalid("word is required")),
+        (
+            json!({"zone": g.zone, "word": ""}),
+            invalid("word is required"),
+        ),
+        (
+            json!({"zone": g.zone, "word": 5}),
+            invalid("word must be a text"),
+        ),
+        (
+            json!({"zone": g.zone, "word": long}),
+            invalid("word: at most 64 bytes"),
+        ),
+    ];
+    for (params, expected) in cases {
+        assert_eq!(
+            reason(&mut rig, "texted", params.clone()),
+            expected,
+            "{params}"
+        );
+    }
+    let ok = "x".repeat(64);
+    let (status, _) = create(&mut rig, "texted", json!({"zone": g.zone, "word": ok}));
+    assert_eq!(status, 201);
 }
 
 #[test]
@@ -1336,6 +1389,13 @@ fn now_gives_the_homes_time_of_day_in_its_zone_across_the_day_boundary() {
         local_time_at(Some("America/New_York"), MIDNIGHT + 2 * HOUR + 5 * MINUTE),
         "21:05"
     );
+}
+
+#[test]
+fn now_gives_no_local_time_while_the_clock_is_not_set() {
+    // The box before its first sync: the wall clock is near 0, and a time of day read from it
+    // would be wrong; `localTime` is null.
+    assert_eq!(local_time_at(None, 5 * MINUTE), "null");
 }
 
 // ---- state, log, errors ----

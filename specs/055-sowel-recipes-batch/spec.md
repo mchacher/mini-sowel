@@ -31,13 +31,26 @@ ported as `motion-light-dimmable.js` was:
   weekday, the date), `api.now()` gains it the same way (`localWeekday` 0 = Sunday as
   `Date.getDay()`, `localDate` "YYYY-MM-DD"), in the home's time zone.
 - Each fits the script limits (32 KB of source, 224 KB of memory with 4 instances, 200 ms a call).
+### R3: the slot type `text` and the slot field `hiddenWhen` (added 2026-11-28, with the user's yes through the session)
+`state-trigger-light` has a `text` slot (`stateValue`) and `schedule-on-off` hides slots with
+`hiddenWhen`; the script API refused the first and ignored the second (`docs/sowel-subset.md`).
+- Slot type `text` (Sowel's `RecipeSlotDef.type`, `src/shared/types.ts`): served as `"text"`; the host
+  checks a text of at most 64 bytes (`<slot> must be a text`, `<slot>: at most 64 bytes`; Sowel
+  checks nothing, the recipe's own `validate` decides the rest). `data-key` stays refused.
+- Slot field `hiddenWhen: { slot, equals: string | string[] }` (same file): kept as given and served
+  in the info; a malformed one is refused when the script loads. The host does nothing with it.
+- The recipe form (`ui/`) hides a slot while the slot it names holds one of `equals` (its value, or
+  its `defaultValue` while the form has none), as Sowel's `isSlotHidden` (`ui/src/lib/recipe-slots.ts`);
+  a hidden slot is never required and goes out empty. A `text` slot is a text field.
+
 ### R2: published
 - Signed with the recipe key and added to the catalogue in one release with the other recipes.
 
 ## Living spec delta
 ### docs/living-spec/README.md
 - The recipes section: the four recipes, Sowel's, installed from the catalogue; what each does.
-- The script API: any field added to `api.now()`.
+- The script API: any field added to `api.now()`; `now().localTime` is `null` while the clock is not
+  set; the slot type `text` and the slot field `hiddenWhen` (R3); `docs/sowel-subset.md`.
 ### No longer true
 - The roadmap's F3 line and `docs/roadmap.html`: the four recipes done.
 
@@ -48,6 +61,8 @@ ported as `motion-light-dimmable.js` was:
       off; a state change turning lights on for the duration; the setpoint by presence; the alarm
       after the watched duration.
 - [ ] Each under 32 KB; 4 instances of each under 224 KB (the Mac's count).
+- [ ] A `text` slot is bounded and served; `hiddenWhen` is served as given and hides the slot in the
+      recipe form (tested, Rust and Vitest).
 - [ ] Signed, in the catalogue's release; the box lists them and installs them.
 - [ ] validate green.
 

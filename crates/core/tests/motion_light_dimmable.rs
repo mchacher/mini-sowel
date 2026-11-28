@@ -319,6 +319,16 @@ fn motion_turns_the_lamp_on_at_the_brightness_of_the_homes_local_slot() {
 }
 
 #[test]
+fn while_the_clock_is_not_set_the_plain_brightness_is_used_not_a_slot() {
+    // The box before its first sync: the wall clock is near 0 (00:05 UTC would be the night slot).
+    let mut w = World::new(5 * MINUTE);
+    w.start(slots());
+    w.sent();
+    w.motion(true);
+    assert_eq!(w.sent(), vec![Command::On, Command::MoveToLevel(100)]);
+}
+
+#[test]
 fn without_a_brightness_the_lamp_is_only_turned_on() {
     let mut w = World::new(T0);
     let id = w.start(json!({}));
@@ -346,6 +356,28 @@ fn no_motion_for_the_delay_turns_the_lamp_off() {
     w.rig.advance(10 * SECOND);
     assert_eq!(w.sent(), vec![Command::Off]);
     assert!(w.log(&id).contains("No motion for 20s — lights turned off"));
+}
+
+#[test]
+fn a_rise_of_the_luminosity_with_motion_still_on_turns_the_lamp_off() {
+    // Sowel runs its zone handler on every zone change, luminosity included: the zone handler of
+    // the script gets each zone event, so the lamp goes off at threshold + 10 % with no motion
+    // change.
+    let mut w = World::new(MIDNIGHT + 10 * HOUR);
+    let id = w.start(json!({"luxThreshold": 50}));
+    w.sent();
+    w.rig.report(&luminosity(PIR, 40.0));
+    w.motion(true);
+    w.lamp(true);
+    assert_eq!(w.sent(), vec![Command::On]);
+    w.rig.report(&luminosity(PIR, 55.0));
+    assert_eq!(w.sent(), vec![], "55 is not above 50 + 10 %");
+    w.rig.report(&luminosity(PIR, 56.0));
+    assert_eq!(w.sent(), vec![Command::Off]);
+    assert!(
+        w.log(&id)
+            .contains("Luminosity above threshold — lights turned off")
+    );
 }
 
 #[test]

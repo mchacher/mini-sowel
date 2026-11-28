@@ -43,7 +43,10 @@ function minutesOf(text) {
 // ---- The brightness: the first slot that matches wins ----
 function targetBrightness(c) {
   if (c.bright === null) return null;
-  var now = minutesOf(c.api.now().localTime);
+  var local = c.api.now().localTime;
+  // The clock is not set (the box before its first sync): no time of day, so no slot.
+  if (local === null) return c.bright;
+  var now = minutesOf(local);
   for (var i = 0; i < c.slots.length; i++) {
     var s = c.slots[i], from = minutesOf(s.start), to = minutesOf(s.end);
     if (from <= to) {

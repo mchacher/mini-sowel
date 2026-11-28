@@ -210,7 +210,7 @@ export function RecipeForm({
   return (
     <form onSubmit={(e) => void submit(e)} noValidate className="space-y-3">
       <p className="text-small text-text-secondary">{recipeDescription(recipe, lang)}</p>
-      {shownSlots(recipe, ctx).map((slot) => (
+      {shownSlots(recipe, ctx, values).map((slot) => (
         <div key={slot.id}>
           {slot.type !== "boolean" && (
             <label htmlFor={`recipe-slot-${slot.id}`} className={FIELD_LABEL}>

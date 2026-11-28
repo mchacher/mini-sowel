@@ -14,6 +14,9 @@
 | validation | each of Sowel's refusals | Sowel's text |
 | behaviour | each recipe's main path, simulated clock | Sowel's result |
 | limits | 4 instances of each | under 224 KB; source under 32 KB |
+| slots (R3) | a `text` slot; `hiddenWhen` | a text over 64 bytes refused; `hiddenWhen` served as given, a malformed one refused at load |
+| form (R3) | `hiddenWhen`, a `text` slot | the slot hides and shows with the select it names; a text field |
+| clock | `now().localTime` while the clock is not set | `null`; `motion-light-dimmable` uses its plain `brightness` |
 
 ## Validation
 - `sh scripts/validate.sh --skip-slow` green.

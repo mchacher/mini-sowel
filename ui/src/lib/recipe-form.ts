@@ -1,8 +1,8 @@
 // Solite's own file (spec 024): the params logic of Sowel's AddRecipeForm and RecipeSettings
 // (ui/src/components/recipes/, Sowel commit 5da84dc1), cut down to pure functions that the form
 // calls: which slots show, which equipments a slot offers, the form's values from the slots'
-// defaults or from an instance's params, and the params from the values. No groups, no
-// `hiddenWhen`, no cross-zone equipments: the room's own equipments only (spec 024, R2).
+// defaults or from an instance's params, and the params from the values. `hiddenWhen` is kept
+// (spec 055); no groups, no cross-zone equipments: the room's own equipments only (spec 024, R2).
 import type { EquipmentType, RecipeInfo, RecipeSlotDef } from "../types";
 
 /** One field's value: a checkbox (boolean), the ticks of a list, or the text of any other field. */
@@ -25,9 +25,36 @@ export function isSlotShown(slot: RecipeSlotDef, ctx: FormContext): boolean {
   return true;
 }
 
-/** The slots shown as fields, in the recipe's order. */
-export function shownSlots(recipe: RecipeInfo, ctx: FormContext): RecipeSlotDef[] {
-  return recipe.slots.filter((slot) => isSlotShown(slot, ctx));
+/**
+ * Whether a slot is hidden by its `hiddenWhen` (Sowel's `isSlotHidden`, `ui/src/lib/recipe-slots.ts`):
+ * the sibling slot's value in the form, or its `defaultValue` while the form has none, is one of
+ * `equals`.
+ */
+export function isSlotHidden(
+  slot: RecipeSlotDef,
+  values: FormValues,
+  all: readonly RecipeSlotDef[],
+): boolean {
+  const rule = slot.hiddenWhen;
+  if (!rule) return false;
+  const typed = values[rule.slot];
+  const value =
+    typeof typed === "string" && typed !== ""
+      ? typed
+      : all.find((s) => s.id === rule.slot)?.defaultValue;
+  const expected = Array.isArray(rule.equals) ? rule.equals : [rule.equals];
+  return expected.includes(value as string);
+}
+
+/** The slots shown as fields, in the recipe's order (`values`: the form's, for `hiddenWhen`). */
+export function shownSlots(
+  recipe: RecipeInfo,
+  ctx: FormContext,
+  values: FormValues = {},
+): RecipeSlotDef[] {
+  return recipe.slots.filter(
+    (slot) => isSlotShown(slot, ctx) && !isSlotHidden(slot, values, recipe.slots),
+  );
 }
 
 /** The room's equipments whose type matches the slot's `constraints.equipmentType` (any when none). */
@@ -132,11 +159,13 @@ export function missingSlots(
   values: FormValues,
   ctx: FormContext,
 ): RecipeSlotDef[] {
-  return shownSlots(recipe, ctx).filter((slot) => slot.required && isEmpty(slot, values[slot.id]));
+  return shownSlots(recipe, ctx, values).filter(
+    (slot) => slot.required && isEmpty(slot, values[slot.id]),
+  );
 }
 
 /**
- * The params to send. The zone slot is the room's id; a slot that is not shown sends `""` (`[]` for
+ * The params to send. The zone slot is the room's id; a slot that is not shown, or hidden by its `hiddenWhen`, sends `""` (`[]` for
  * a list); a checkbox sends `true`/`false`, a list its array, anything else its text.
  */
 export function paramsFromValues(
@@ -150,7 +179,7 @@ export function paramsFromValues(
     const value = values[slot.id];
     if (slot.type === "zone") {
       params[slot.id] = zoneId;
-    } else if (!isSlotShown(slot, ctx)) {
+    } else if (!isSlotShown(slot, ctx) || isSlotHidden(slot, values, recipe.slots)) {
       params[slot.id] = slot.list ? [] : "";
     } else if (slot.type === "boolean") {
       params[slot.id] = value === true;
