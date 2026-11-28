@@ -5,7 +5,7 @@
 - [x] 2. The four scripts, from Sowel's sources, one after the other (targeted tests each).
 - [x] 3. Tests (info pinned, validation texts, behaviour, memory) per recipe.
 - [x] 4. validate once at the end; review.
-- [ ] 5. Signed, published in one catalogue release with spec 054's, installed on the box.
+- [x] 5. Signed, published in one catalogue release with spec 054's, installed on the box.
 
 ## Test plan
 | Module | Scenario | Expected |

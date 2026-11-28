@@ -55,7 +55,7 @@ the first to use spec 053's 32 KB. Models of a port: `recipes/scripts/motion-lig
 - [x] `api.now().localTime` is the home's time of day: with a zone that differs from UTC the slot
       is the local one, across the day boundary (tested: the field, and the recipe's slot).
 - [x] The script under 32 KB; its memory with 4 instances under 224 KB (the Mac's count and QEMU).
-- [ ] Signed, in the catalogue's release; the box lists it and installs it.
+- [x] Signed, in the catalogue's release; the box lists it and installs it.
 - [x] validate green.
 
 ## Edge cases
@@ -71,3 +71,12 @@ and texts.
 `--sim scenarios/garage.json --serve` with
 `--recipe-script recipes/scripts/motion-light-dimmable.js`, or installed from the catalogue on the
 box: an instance on the garage's motion sensor and a dimmable light.
+
+### Box check (2026-11-28, Solite 0.3.0, catalogue v2026.11.28.3)
+- All seven recipes install from the catalogue (5 to 7 s each) and are `ready`; a 5th is refused
+  409 "Too many script recipes (at most 4)". Held on the box: motion-light-dimmable 116,656 bytes,
+  schedule-on-off 107,208, presence-thermostat 114,084, state-trigger-light 104,160, state-watch
+  106,300 (no instance).
+- Internal RAM: about 80 KB free at rest with 4 recipes, but its lowest point fell to 28,348 bytes
+  (largest block 27,648) across the installs, under the 64 KB floor: the roadmap's engine study
+  takes it first.
