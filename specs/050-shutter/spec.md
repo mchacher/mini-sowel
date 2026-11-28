@@ -48,14 +48,14 @@ orders: the Window Covering cluster (`0x0102`) appears in no code.
 - The roadmap's I1 count (19 → 20 data, order categories 4 → 6); its note on `shutter`.
 
 ## Acceptance criteria
-- [ ] A lift percentage of 30 reported: `position` 70 (tested).
-- [ ] `state` `OPEN`, `CLOSE`, `STOP` send commands 0x00, 0x01, 0x02 (tested).
-- [ ] `position` 25 sends Go To Lift Percentage 75 (tested).
-- [ ] A wrong value (`state` `UP`, `position` 120) refused (tested).
-- [ ] Sowel's zone order `allShuttersClose` reaches the shutter (tested, if the zone orders route
-      exists in Solite; else stated).
-- [ ] The simulated shutter moves and reports (tested).
-- [ ] validate green.
+- [x] A lift percentage of 30 reported: `position` 70 (tested).
+- [x] `state` `OPEN`, `CLOSE`, `STOP` send commands 0x00, 0x01, 0x02 (tested).
+- [x] `position` 25 sends Go To Lift Percentage 75 (tested).
+- [x] A wrong value (`state` `UP`, `position` 120) refused (tested).
+- [x] Sowel's zone order `allShuttersClose` reaches the shutter: Solite has no zone orders (no
+      `allLightsOn` or `allShuttersClose` in the code), so there is nothing to test; stated.
+- [x] The simulated shutter moves and reports (tested).
+- [x] validate green.
 
 ## Edge cases
 - A lift percentage above 100 (0xFF "unknown"): dropped.

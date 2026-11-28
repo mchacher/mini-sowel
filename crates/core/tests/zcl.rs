@@ -705,3 +705,20 @@ fn a_remote_press_is_answered_success_and_an_unknown_cluster_command_unsupported
     let answer = solite_core::radio::zcl::default_response(0x0006, &other).expect("an answer");
     assert_eq!(answer[2..], [0x0B, 0x41, 0x81]);
 }
+
+// ---- A shutter's commands (spec 050) ----
+
+#[test]
+fn a_shutters_commands_are_up_down_stop_and_go_to_lift_percentage_on_the_window_covering() {
+    for (command, id) in [
+        (Command::ShutterOpen, 0x00),
+        (Command::ShutterClose, 0x01),
+        (Command::ShutterStop, 0x02),
+    ] {
+        assert_eq!(command.frame(0x09), vec![0x01, 0x09, id]);
+        assert_eq!((command.cluster(), command.id()), (0x0102, id));
+    }
+    let go_to = Command::GoToLiftPercentage(75);
+    assert_eq!(go_to.frame(0x0A), vec![0x01, 0x0A, 0x05, 75]);
+    assert_eq!((go_to.cluster(), go_to.id()), (0x0102, 0x05));
+}

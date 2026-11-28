@@ -8,9 +8,9 @@ use solite_core::radio::ash::{AshFrame, DecodeEvent, Decoder, encode};
 
 use crate::devices::{
     AWAKE_MS, Attr, CieAnswer, ConfigureAnswer, DeviceReport, Kind, MOTION_CLEAR_MS, PLUG_SCALE,
-    SimDevice, battery_report, button_command, color_raw, color_temp_report, color_xy_report,
-    electrical_report, humidity_report, level_report, metering_report, on_off_report,
-    temperature_report, zone_notification,
+    SHUTTER_POINTS_PER_SECOND, SimDevice, battery_report, button_command, color_raw,
+    color_temp_report, color_xy_report, electrical_report, humidity_report, level_report,
+    lift_report, metering_report, on_off_report, temperature_report, zone_notification,
 };
 use crate::memory::{self, Memory};
 use crate::scenario::{NetworkInit, Scenario};
@@ -149,8 +149,8 @@ const SL_FAIL: u32 = 1;
 const FIRST_NWK: u16 = 0x2000;
 
 /// The clusters the host sets up reporting for.
-const REPORTABLE: [u16; 9] = [
-    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0300, 0x0001,
+const REPORTABLE: [u16; 10] = [
+    0x0402, 0x0405, 0x0403, 0x0400, 0x0406, 0x0006, 0x0008, 0x0300, 0x0001, 0x0102,
 ];
 
 /// An EZSP callback frame (extended format, asynchronous callback flag).
@@ -359,7 +359,12 @@ impl Ncp {
 
     /// When the next timed callback is due, if any.
     pub fn next_due(&self) -> Option<u64> {
-        self.scheduled.iter().map(|(at, _)| *at).min()
+        let steps = self
+            .devices
+            .iter()
+            .filter(|d| d.lift_target.is_some())
+            .map(|d| d.lift_step_at);
+        self.scheduled.iter().map(|(at, _)| *at).chain(steps).min()
     }
 
     /// True while a pairing window is open.
@@ -447,6 +452,14 @@ impl Ncp {
                     frames.push((0x0300, color_xy_report(tsn, device.color_x, device.color_y)));
                 }
             }
+            if let Some(position) = report.position {
+                device.lift = 100 - position;
+                device.lift_target = None;
+                if device.reports_attribute(0x0102, 0x0008) {
+                    let tsn = device.next_tsn();
+                    frames.push((0x0102, lift_report(tsn, device.lift)));
+                }
+            }
             if let Some(name) = &report.action
                 && device.bound
             {
@@ -518,9 +531,43 @@ impl Ncp {
         self.scheduled.push((self.now, frame));
     }
 
+    /// The shutters on their way take the steps that are due: `SHUTTER_POINTS_PER_SECOND` of
+    /// lift a second (a second lasts `1000 / speed` ms of the radio's time), each step reported
+    /// when the host configured the reporting. A step is at most 10 points, so a run is at most
+    /// 11 steps.
+    fn move_shutters(&mut self, now: u64) {
+        let step_ms = (1000 / u64::from(self.speed.max(1))).max(1);
+        let mut frames = Vec::new();
+        for device in &mut self.devices {
+            while let Some(target) = device.lift_target
+                && device.lift_step_at <= now
+            {
+                let step = SHUTTER_POINTS_PER_SECOND;
+                device.lift = if device.lift < target {
+                    device.lift.saturating_add(step).min(target)
+                } else {
+                    device.lift.saturating_sub(step).max(target)
+                };
+                if device.lift == target {
+                    device.lift_target = None;
+                }
+                device.lift_step_at += step_ms;
+                if device.reports_attribute(0x0102, 0x0008) {
+                    let tsn = device.next_tsn();
+                    frames.push((device.nwk, lift_report(tsn, device.lift)));
+                }
+            }
+        }
+        for (nwk, frame) in frames {
+            let message = self.incoming(nwk, 0x0104, 0x0102, 1, &frame);
+            self.scheduled.push((now, message));
+        }
+    }
+
     /// Time passes: returns the callbacks that are due (ASH frames).
     pub fn on_tick(&mut self, now: u64) -> Vec<u8> {
         self.now = now;
+        self.move_shutters(now);
         let mut out = Vec::new();
         let mut later = Vec::new();
         for (at, payload) in std::mem::take(&mut self.scheduled) {
@@ -1100,6 +1147,70 @@ impl Ncp {
             {
                 device.enrolled = true;
                 self.dirty = true;
+            }
+        } else if sent.profile == 0x0104
+            && device.kind == Kind::Shutter
+            && sent.cluster == 0x0102
+            && match control & 0x03 {
+                // Up (0), Down (1), Stop (2), Go To Lift Percentage (5); Read Attributes.
+                0x01 => matches!(message.get(2), Some(0x00..=0x02 | 0x05)),
+                0x00 => message.get(2) == Some(&0x00),
+                _ => false,
+            }
+        {
+            let (Some(tsn), Some(command)) = (message.get(1).copied(), message.get(2).copied())
+            else {
+                reply.after.push(message_sent);
+                return;
+            };
+            if device.silent {
+                reply.after.push(message_sent);
+                return;
+            }
+            if control & 0x03 == 0x00 {
+                let mut frame = vec![0x18, tsn, 0x01];
+                for pair in message.get(3..).unwrap_or(&[]).as_chunks::<2>().0 {
+                    let attribute = u16::from_le_bytes(*pair);
+                    frame.extend_from_slice(&attribute.to_le_bytes());
+                    match attribute {
+                        0x0008 => frame.extend_from_slice(&[0x00, 0x20, device.lift]),
+                        _ => frame.push(0x86),
+                    }
+                }
+                answers.push(self.incoming(device.nwk, 0x0104, 0x0102, 1, &frame));
+            } else if let Some(status) = device.refuse_commands {
+                answers.push(self.incoming(
+                    device.nwk,
+                    0x0104,
+                    0x0102,
+                    1,
+                    &[0x18, tsn, 0x0B, command, status],
+                ));
+            } else {
+                let now = self.now;
+                let step_ms = (1000 / u64::from(self.speed.max(1))).max(1);
+                if let Some(d) = self.devices.get_mut(index) {
+                    d.lift_target = match command {
+                        0x00 => Some(0),
+                        0x01 => Some(100),
+                        0x02 => None,
+                        _ => Some(message.get(3).copied().unwrap_or(d.lift).min(100)),
+                    };
+                    if d.lift_target.is_some_and(|t| t != d.lift) {
+                        d.lift_step_at = now + step_ms;
+                    } else {
+                        d.lift_target = None;
+                    }
+                }
+                if control & 0x10 == 0 {
+                    answers.push(self.incoming(
+                        device.nwk,
+                        0x0104,
+                        0x0102,
+                        1,
+                        &[0x18, tsn, 0x0B, command, 0x00],
+                    ));
+                }
             }
         } else if sent.profile == 0x0104
             && matches!(

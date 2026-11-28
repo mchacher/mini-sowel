@@ -41,6 +41,7 @@ The categories the device catalog gives a device's data (Sowel's `DataCategory`)
 | `power` | Electrical Measurement cluster (0x0B04) ActivePower, else Metering (0x0702) InstantaneousDemand, in W |
 | `energy` | Metering cluster (0x0702) CurrentSummationDelivered, in kWh |
 | `current` | Electrical Measurement cluster (0x0B04) RMSCurrent, in A |
+| `shutter_position` | Window Covering cluster (0x0102) CurrentPositionLiftPercentage, as `100 - lift` (100 open), in % |
 | `generic` | IAS zone flags (`tamper`, `battery_low`) |
 
 ## Order categories
@@ -53,6 +54,8 @@ The categories of a device's orders (Sowel's `OrderCategory`).
 | `set_brightness` | Level cluster: move to level |
 | `set_color_temp` | Color Control cluster: move to color temperature |
 | `set_color` | Color Control cluster: move to color, move to hue and saturation |
+| `shutter_move` | Window Covering cluster (0x0102): `OPEN` (up), `CLOSE` (down), `STOP` (type `text`) |
+| `set_shutter_position` | Window Covering cluster: go to lift percentage `100 - value`, 0 to 100 (100 open) |
 
 ## Events
 

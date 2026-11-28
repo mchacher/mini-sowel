@@ -171,6 +171,93 @@ fn the_brightness_takes_a_whole_number_from_0_to_255_and_255_counts_as_254() {
     }
 }
 
+/// A shutter: the Window Covering cluster (spec 050).
+fn shutter(rig: &mut Rig, last: u8) -> String {
+    let e = eui(last);
+    rig.home.devices.announced(e, 0x8C, rig.now);
+    rig.home
+        .devices
+        .identified(e, Some("TEST"), Some("SHT01"), rig.now, &mut *rig.random)
+        .unwrap();
+    rig.home
+        .devices
+        .reporting_configured(e, &[0x0102], rig.now, &mut *rig.random)
+        .unwrap();
+    rig.device(last)
+}
+
+fn shutter_equipment() -> (Rig, String) {
+    let mut rig = Rig::new();
+    let zone = rig.zone("Salon");
+    let device = shutter(&mut rig, 0x7C);
+    let id = rig.equipment("Shutter", "shutter", &zone, &[&device]);
+    (rig, id)
+}
+
+#[test]
+fn a_shutters_state_open_close_and_stop_are_commands_up_down_and_stop() {
+    let (mut rig, id) = shutter_equipment();
+    for (body, command) in [
+        (r#"{"value":"OPEN"}"#, Command::ShutterOpen),
+        (r#"{"value":"CLOSE"}"#, Command::ShutterClose),
+        (r#"{"value":"STOP"}"#, Command::ShutterStop),
+        (r#"{"value":" close "}"#, Command::ShutterClose),
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "state", body),
+            Ok(vec![command]),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_shutters_position_counts_from_open_and_goes_to_the_lift_percentage_of_100_minus_it() {
+    let (mut rig, id) = shutter_equipment();
+    for (body, lift) in [
+        (r#"{"value":25}"#, 75),
+        (r#"{"value":0}"#, 100),
+        (r#"{"value":100}"#, 0),
+        (r#"{"value":"40"}"#, 60),
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "position", body),
+            Ok(vec![Command::GoToLiftPercentage(lift)]),
+            "{body:?}"
+        );
+    }
+}
+
+#[test]
+fn a_shutter_refuses_a_wrong_move_or_position() {
+    let (mut rig, id) = shutter_equipment();
+    for body in [
+        r#"{"value":"UP"}"#,
+        r#"{"value":""}"#,
+        r#"{"value":true}"#,
+        r#"{}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "state", body),
+            Err((400, "Invalid value for state".to_string())),
+            "{body:?}"
+        );
+    }
+    for body in [
+        r#"{"value":120}"#,
+        r#"{"value":-1}"#,
+        r#"{"value":12.5}"#,
+        r#"{"value":"a"}"#,
+        r#"{}"#,
+    ] {
+        assert_eq!(
+            commands(&mut rig, &id, "position", body),
+            Err((400, "Invalid value for position".to_string())),
+            "{body:?}"
+        );
+    }
+}
+
 #[test]
 fn an_unknown_equipment_a_disabled_one_and_an_unknown_alias_are_refused_with_sowels_texts() {
     let (mut rig, id) = light();

@@ -115,6 +115,7 @@ struct RawEvent {
     color: Option<Value>,
     #[serde(rename = "action")]
     press: Option<Value>,
+    position: Option<Value>,
     power: Option<Value>,
     current: Option<Value>,
     energy: Option<Value>,
@@ -289,7 +290,7 @@ fn devices_of(values: Vec<Value>) -> Result<Vec<DeviceSpec>, String> {
         let kind_text = required_text(spec.kind, &format!("{prefix}kind"))?;
         let kind = Kind::from_name(&kind_text).ok_or_else(|| {
             format!(
-                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light, button or plug)"
+                "{prefix}kind: unknown kind \"{kind_text}\" (temperature-humidity, motion, relay, dimmer, color-light, button, plug or shutter)"
             )
         })?;
         let eui_path = format!("{prefix}eui64");
@@ -320,6 +321,7 @@ fn allows(kind: Kind, field: &str) -> bool {
         Kind::Plug => matches!(field, "light_state" | "power" | "current" | "energy"),
         Kind::ColorLight => matches!(field, "light_state" | "color_temp" | "color"),
         Kind::Button => field == "action",
+        Kind::Shutter => field == "position",
     }
 }
 
@@ -373,6 +375,7 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
         ("color_temp", spec.color_temp),
         ("color", spec.color),
         ("action", spec.press),
+        ("position", spec.position),
         ("power", spec.power),
         ("current", spec.current),
         ("energy", spec.energy),
@@ -440,6 +443,17 @@ fn event_of(value: Value, i: usize, devices: &[DeviceSpec]) -> Result<Event, Str
                                     format!(
                                         "{path}: must be on, off, toggle, brightness_move_up or brightness_move_down"
                                     )
+                                })?,
+                        );
+                    }
+                    "position" => {
+                        report.position = Some(
+                            number_in(&value, 0.0, 100.0, &path)
+                                .ok()
+                                .filter(|n| n.fract() == 0.0)
+                                .map(|n| n as u8)
+                                .ok_or_else(|| {
+                                    format!("{path}: must be a whole number from 0 to 100")
                                 })?,
                         );
                     }

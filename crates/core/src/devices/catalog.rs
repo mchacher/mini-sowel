@@ -80,6 +80,7 @@ const ACTION: DataSpec = DataSpec {
     category: "action",
     unit: None,
 };
+const POSITION: DataSpec = number("position", "shutter_position", Some("%"));
 const BATTERY: DataSpec = number("battery", "battery", Some("%"));
 const VOLTAGE: DataSpec = number("voltage", "voltage", Some("mV"));
 const POWER: DataSpec = number("power", "power", Some("W"));
@@ -94,6 +95,24 @@ const STATE_ORDER: OrderSpec = OrderSpec {
     max: None,
     value_on: Some("ON"),
     value_off: Some("OFF"),
+};
+const SHUTTER_MOVE_ORDER: OrderSpec = OrderSpec {
+    key: "state",
+    value_type: ValueType::Text,
+    category: "shutter_move",
+    min: None,
+    max: None,
+    value_on: None,
+    value_off: None,
+};
+const SHUTTER_POSITION_ORDER: OrderSpec = OrderSpec {
+    key: "position",
+    value_type: ValueType::Number,
+    category: "set_shutter_position",
+    min: Some(0),
+    max: Some(100),
+    value_on: None,
+    value_off: None,
 };
 const BRIGHTNESS_ORDER: OrderSpec = OrderSpec {
     key: "brightness",
@@ -134,6 +153,7 @@ pub fn data_for_cluster(cluster: u16) -> &'static [DataSpec] {
         0x0006 => &[STATE],
         0x0008 => &[BRIGHTNESS],
         0x0300 => &[COLOR_TEMP, COLOR],
+        0x0102 => &[POSITION],
         0x0001 => &[BATTERY, VOLTAGE],
         // A remote's bound output clusters (spec 049), not a cluster of the specification.
         crate::radio::measures::REMOTE_ACTION => &[ACTION],
@@ -196,6 +216,7 @@ pub fn orders_for_cluster(cluster: u16) -> &'static [OrderSpec] {
         0x0006 => &[STATE_ORDER],
         0x0008 => &[BRIGHTNESS_ORDER],
         0x0300 => &[COLOR_TEMP_ORDER, COLOR_ORDER],
+        0x0102 => &[SHUTTER_MOVE_ORDER, SHUTTER_POSITION_ORDER],
         _ => &[],
     }
 }
@@ -213,6 +234,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
         "light_state" => "state",
         "light_brightness" => "brightness",
         "action" => "action",
+        "shutter_position" => "position",
         "light_color_temp" => "color_temp",
         "battery" => "battery",
         "voltage" => "voltage",
@@ -227,7 +249,7 @@ pub fn key_for_measure(kind: &str) -> Option<&'static str> {
 
 /// Where a data key comes in the table of spec 008 (R2): the order data are listed in.
 pub fn data_rank(key: &str) -> usize {
-    const ORDER: [&str; 20] = [
+    const ORDER: [&str; 21] = [
         "temperature",
         "humidity",
         "pressure",
@@ -248,18 +270,20 @@ pub fn data_rank(key: &str) -> usize {
         "tamper",
         "battery_low",
         "action",
+        "position",
     ];
     ORDER.iter().position(|k| *k == key).unwrap_or(ORDER.len())
 }
 
-/// Where an order key comes in the table: `state`, `brightness`, `color_temp`, then `color`.
+/// Where an order key comes in the table: `state`, `brightness`, `color_temp`, `color`, then `position`.
 pub fn order_rank(key: &str) -> usize {
     match key {
         "state" => 0,
         "brightness" => 1,
         "color_temp" => 2,
         "color" => 3,
-        _ => 4,
+        "position" => 4,
+        _ => 5,
     }
 }
 
@@ -286,6 +310,7 @@ static WORDS: &[&str] = &[
     "battery",
     "voltage",
     "action",
+    "position",
     "power",
     "energy",
     "current",
@@ -298,6 +323,7 @@ static WORDS: &[&str] = &[
     "light_brightness",
     "light_color_temp",
     "light_color",
+    "shutter_position",
     // Units.
     "°C",
     "%",
@@ -313,6 +339,8 @@ static WORDS: &[&str] = &[
     "set_brightness",
     "set_color_temp",
     "set_color",
+    "shutter_move",
+    "set_shutter_position",
     // Order values.
     "ON",
     "OFF",

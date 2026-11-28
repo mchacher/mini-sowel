@@ -7,7 +7,8 @@ use std::fmt;
 use super::zcl::{
     ATTRIBUTE_COLOR_TEMPERATURE, ATTRIBUTE_CURRENT_HUE, ATTRIBUTE_CURRENT_SATURATION,
     ATTRIBUTE_CURRENT_X, ATTRIBUTE_CURRENT_Y, ATTRIBUTE_ZONE_STATUS, Action, AttributeRecord,
-    CLUSTER_COLOR_CONTROL, CLUSTER_IAS_ZONE, CLUSTER_SCENES, ReportingRecord,
+    CLUSTER_COLOR_CONTROL, CLUSTER_IAS_ZONE, CLUSTER_SCENES, CLUSTER_WINDOW_COVERING,
+    ReportingRecord,
 };
 
 /// The number the setup reports (in the clusters set up) when a remote's output clusters are
@@ -32,6 +33,8 @@ const TYPE_INT24: u8 = 0x2A; // ZCL: int8 0x28, int16 0x29, int24 0x2A, int32 0x
 const CLUSTER_POWER: u16 = 0x0001;
 const CLUSTER_ON_OFF: u16 = 0x0006;
 const CLUSTER_LEVEL: u16 = 0x0008;
+/// Window Covering attribute CurrentPositionLiftPercentage (uint8, 100 is closed).
+const ATTR_LIFT_PERCENTAGE: u16 = 0x0008;
 const CLUSTER_COLOR: u16 = CLUSTER_COLOR_CONTROL;
 const CLUSTER_ILLUMINANCE: u16 = 0x0400;
 const CLUSTER_PRESSURE: u16 = 0x0403;
@@ -269,6 +272,12 @@ pub fn decode(cluster: u16, attribute: u16, data_type: u8, bytes: &[u8]) -> Opti
             measure.device_value = Some(f64::from(u8_value()?));
             Some(measure)
         }
+        // The ZCL's 100 is closed; Sowel's `shutter_position` has 100 open. Above 100 (0xFF:
+        // unknown) is no measure.
+        (CLUSTER_WINDOW_COVERING, ATTR_LIFT_PERCENTAGE, TYPE_UINT8) => {
+            let lift = u8_value()?;
+            (lift <= 100).then(|| number("shutter_position", f64::from(100 - lift), "%"))?
+        }
         (CLUSTER_COLOR, ATTRIBUTE_COLOR_TEMPERATURE, TYPE_UINT16) => {
             let mireds = u16_value()?;
             (1..=1000)
@@ -471,9 +480,9 @@ const fn record(
 }
 
 /// The clusters set up on pairing, in the order they are set up: a sleepy device is awake for a
-/// few seconds only, so the measures that matter most come first. Eleven entries: the bound of
+/// few seconds only, so the measures that matter most come first. Twelve entries: the bound of
 /// the setup's work per device.
-pub const REPORTING: [ReportingCluster; 11] = [
+pub const REPORTING: [ReportingCluster; 12] = [
     ReportingCluster {
         cluster: CLUSTER_TEMPERATURE,
         name: "temperature",
@@ -543,6 +552,11 @@ pub const REPORTING: [ReportingCluster; 11] = [
             // Measurement takes its power from `0x0B04` and this one is not published.
             record(ATTR_INSTANTANEOUS_DEMAND, TYPE_INT24, 10, 300, Some(1)),
         ],
+    },
+    ReportingCluster {
+        cluster: CLUSTER_WINDOW_COVERING,
+        name: "shutter_position",
+        attributes: &[record(ATTR_LIFT_PERCENTAGE, TYPE_UINT8, 1, 300, Some(1))],
     },
 ];
 
