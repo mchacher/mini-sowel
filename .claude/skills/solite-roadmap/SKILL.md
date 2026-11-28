@@ -34,7 +34,9 @@ one line each, the **inbox** of new needs not yet placed, what is done, and a lo
 Its view for users is `docs/roadmap.html`: one table, a row per feature in the words of an end
 user (what they can do), its status (done, in progress, next, later) and its specs; past and
 future, short, no jargon. It follows `docs/roadmap.md` in every change of it, and its
-`Updated <date>` line is checked against the last spec of the index (`scripts/check-docs.sh`).
+`Updated <date>` line is not older than the last spec of the index. `scripts/check-docs.sh` also
+refuses it when a spec of the index is in no row's Specs cell (from the day the spec is written),
+or when the done rows are not in build order (by the first spec of each row).
 It is the place for the future and for how far the work has got: a planned block or capability
 is written here, never in the docs that describe the tool (rule in `CLAUDE.md`, "Docs say what is
 true today").

@@ -143,6 +143,14 @@ if [ -f docs/specs-index.md ]; then
     echo "check-docs: spec $num is in no row of docs/roadmap.html (its Specs cell)." >&2
     status=1
   done
+  # The done rows are in the order they were built: by the first spec of their Specs cell.
+  order=$(grep -E '<tr data-status="done">' docs/roadmap.html \
+    | sed -nE 's/.*<td>([0-9]{3})[0-9, –-]*<\/td><\/tr>.*/\1/p')
+  if [ "$order" != "$(printf '%s\n' "$order" | sort)" ]; then
+    echo "check-docs: the done rows of docs/roadmap.html are not in build order (first spec of each row):" >&2
+    printf '%s\n' "$order" | tr '\n' ' ' | sed 's/^/  /' >&2; echo >&2
+    status=1
+  fi
 fi
 
 exit $status
