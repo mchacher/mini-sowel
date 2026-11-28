@@ -897,6 +897,43 @@ fn an_upload_over_32_kb_is_413_and_an_upload_of_exactly_32_kb_is_checked() {
 }
 
 #[test]
+fn a_signed_file_of_a_32_kb_script_of_real_code_uploads_and_loads() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    let source = include_str!("fixtures/scripts/big-recipe.js");
+    assert!(source.len() > 32_000 && source.len() <= MAX_FILE_BYTES - HEADER_BYTES);
+    let version = source
+        .split("version: \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    let file = signed_with(&signing, version, source);
+    assert!(file.len() <= MAX_FILE_BYTES);
+    let answer = world.upload(&file);
+    assert_eq!(answer.0, 201, "{}", answer.1);
+    assert_eq!(world.version_of("big-recipe"), Some(version.to_string()));
+}
+
+#[test]
+fn a_fourth_installed_runtime_is_409_when_the_psram_is_under_its_limit_and_the_reserve() {
+    let mut world = World::new();
+    let signing = world.signing.clone();
+    for id in ["a", "b", "c"] {
+        assert_eq!(world.upload(&signed(&signing, id, "1.0.0")).0, 201, "{id}");
+    }
+    // Three runtimes loaded, the PSRAM short of a fourth runtime's limit and the reserve.
+    let needed = SYSTEM_MEMORY_LIMIT + SCRIPT_PSRAM_RESERVE;
+    world.probe.set(64 * 1024, needed - 1);
+    let answer = world.upload(&signed(&signing, "d", "1.0.0"));
+    assert_eq!(answer.0, 409, "{}", answer.1);
+    assert!(error_of(&answer).starts_with("Not enough memory for d:"));
+    assert_eq!(world.version_of("d"), None);
+    // With the room, the fourth is admitted.
+    world.probe.set(64 * 1024, needed);
+    assert_eq!(world.upload(&signed(&signing, "d", "1.0.0")).0, 201);
+}
+
+#[test]
 fn an_installed_script_must_declare_its_version_as_x_y_z_and_the_header_must_agree() {
     let mut world = World::new();
     let signing = world.signing.clone();

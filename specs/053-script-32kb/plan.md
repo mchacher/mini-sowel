@@ -1,10 +1,10 @@
 # Plan: Spec 053
 
 ## Steps
-- [ ] 1. Living spec, memory budget, D85.
-- [ ] 2. The bounds, and what follows them.
-- [ ] 3. Tests at the bounds; a 32 KB test script; the measurements.
-- [ ] 4. validate (QEMU included); review.
+- [x] 1. Living spec, memory budget, D85.
+- [x] 2. The bounds, and what follows them.
+- [x] 3. Tests at the bounds; a 32 KB test script; the measurements.
+- [x] 4. validate (QEMU included); review.
 
 Not applicable: interface, Sowel types.
 
@@ -21,3 +21,12 @@ Not applicable: interface, Sowel types.
 
 ## Validation
 - `sh scripts/validate.sh` green, QEMU included.
+
+## Result (2026-11-28)
+- Done: script 32 KB, body and signed file 32 KB + 128 bytes, 4 script recipes of 4 instances,
+  16 in all (D85); the runtime cap stays 224 KB (208 KB refuses the 32 KB script in QEMU).
+- Worst case on the Mac: 1,043,684 bytes, 4.9 KB under the 1 MiB ceiling.
+- 32 KB script, 4 instances: 247,480 bytes on the Mac; peak 183,828 bytes in QEMU.
+- Four runtimes at their limit are 54 KB over the PSRAM on paper; the install admission rule
+  refuses the runtime that does not fit (tested: the 4th is 409).
+- validate green (QEMU included), review findings fixed.

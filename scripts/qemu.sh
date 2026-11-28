@@ -57,7 +57,7 @@ case "$1" in
   *) fail "usage: sh scripts/qemu.sh [--box]" ;;
 esac
 # Time allowed: the blank partition is formatted, then 12 s of scenario time on a slow emulator.
-# The script phase plays the scenario twice more (3 and 6 instances), then a script of 32 KB with 6.
+# The script phase plays the scenario twice more (3 and 4 instances), then a script of 32 KB with 4.
 if [ "$MODE" = sim ]; then TIMEOUT=600; else TIMEOUT=60; fi
 
 # QEMU's system libraries on macOS (Homebrew).

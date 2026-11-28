@@ -18,7 +18,7 @@
 //! 3. logs `recipes: script motion-light ...` (the memory taken by the phase, the lowest free
 //!    internal RAM, the two stacks), and the `scripts:` line the radio image prints.
 //!
-//! Then, outside that line's window, the same with `MAX_INSTANCES_PER_SCRIPT` instances (6, the most one
+//! Then, outside that line's window, the same with `MAX_INSTANCES_PER_SCRIPT` instances (4, the most one
 //! script recipe holds), to read the script's memory at the bound: `script sizes: ...`.
 //!
 //! `scripts/qemu.sh` fails when the line is missing, the three instances' peak (the `scripts:`
@@ -570,7 +570,7 @@ pub fn run(
     };
     log::info!("{}", script_phase_line(MOTION_SCRIPT, &phase));
 
-    // 4. Eight instances, the most one script recipe holds: its memory at the bound.
+    // 4. Four instances, the most one script recipe holds: its memory at the bound.
     delete_all(home, MOTION_SCRIPT);
     for i in 0..MAX_INSTANCES_PER_SCRIPT {
         let (_, params) = &originals[i % originals.len()];

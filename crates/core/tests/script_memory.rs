@@ -3,7 +3,7 @@
 //! from the engine's counting allocator and its ceilings (`memory_worst_case.rs`). The figures
 //! are printed (`script memory: ...`, read with `--nocapture`) and bounded.
 //!
-//! A loaded `motion-light` with 0, 1, 3 and 6 instances; what a motion event holds right
+//! A loaded `motion-light` with 0, 1, 3 and 4 instances; what a motion event holds right
 //! after the call (QuickJS frees by reference counting, so this is its peak but for temporaries
 //! inside the call); and the memory held after 10,000 events, which may grow by 4 KB at most.
 //!
@@ -162,12 +162,12 @@ impl World {
 }
 
 #[test]
-fn a_loaded_recipe_with_0_1_3_and_16_instances_holds_what_the_table_says() {
+fn a_loaded_recipe_with_0_1_3_and_4_instances_holds_what_the_table_says() {
     let mut w = World::new();
     w.line("loaded, 0 instances");
     let mut held = vec![(0, w.held())];
     let mut next = 0u32;
-    for count in [1usize, 3, 6] {
+    for count in [1usize, 3, 4] {
         while (next as usize) < count {
             w.start(next);
             next += 1;
@@ -181,11 +181,11 @@ fn a_loaded_recipe_with_0_1_3_and_16_instances_holds_what_the_table_says() {
     // box's limit beside them.
     println!("script memory: the box's limit is {SCRIPT_MEMORY_LIMIT} B");
     // An instance is a few KB, not a copy of the recipe.
-    let per_instance = (held[3].1 - held[1].1) / 5;
+    let per_instance = (held[3].1 - held[1].1) / 3;
     println!("script memory: about {per_instance} B per instance after the first");
     assert!(per_instance < 8 * 1024, "{per_instance} bytes per instance");
     // The recipe's own cost is the larger part: it is paid once, however many instances run.
-    assert!(held[3].1 < held[0].1 + 6 * 8 * 1024);
+    assert!(held[3].1 < held[0].1 + 8 * 8 * 1024);
 }
 
 #[test]

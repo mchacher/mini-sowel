@@ -10,7 +10,7 @@ use rquickjs::Runtime;
 
 use crate::recipes::ScriptClock;
 
-/// Source text of one script recipe, at most. Worst case: 2 scripts of 32 KB kept as text (the
+/// Source text of one script recipe, at most. Worst case: 4 scripts of 32 KB kept as text (the
 /// source stays, for the runtime to be made again).
 pub const MAX_SCRIPT_BYTES: usize = 32 * 1024;
 /// The memory limit per runtime on the box: the allocator's (`PsramAllocator` counts the usable
