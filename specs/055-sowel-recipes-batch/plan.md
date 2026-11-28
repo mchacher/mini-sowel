@@ -1,10 +1,10 @@
 # Plan: Spec 055
 
 ## Steps
-- [ ] 1. Living spec, roadmap (md and html).
-- [ ] 2. The four scripts, from Sowel's sources, one after the other (targeted tests each).
-- [ ] 3. Tests (info pinned, validation texts, behaviour, memory) per recipe.
-- [ ] 4. validate once at the end; review.
+- [x] 1. Living spec, roadmap (md and html).
+- [x] 2. The four scripts, from Sowel's sources, one after the other (targeted tests each).
+- [x] 3. Tests (info pinned, validation texts, behaviour, memory) per recipe.
+- [x] 4. validate once at the end; review.
 - [ ] 5. Signed, published in one catalogue release with spec 054's, installed on the box.
 
 ## Test plan

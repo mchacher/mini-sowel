@@ -279,7 +279,6 @@ fn a_script_that_is_not_a_recipe_is_refused_with_its_reason() {
         (script("{api: 1, id: 'a', name: 'A'}"), "no start function"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'text', hiddenWhen: 5}}}}, {OK_START}}}")), "slot t: hiddenWhen is {slot, equals}"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'text', hiddenWhen: {{slot: 'k', equals: 3}}}}}}, {OK_START}}}")), "slot t: hiddenWhen is {slot: a slot id, equals: a text or a list of texts}"),
-        (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'data-key'}}}}, {OK_START}}}")), "slot t: type \"data-key\" is not supported"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{t: {{type: 'color'}}}}, {OK_START}}}")), "slot t: unknown type \"color\""),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: 5, {OK_START}}}")), "slots must be an object"),
         (script(&format!("{{api: 1, id: 'a', name: 'A', slots: {{zone: {{type: 'number'}}}}, {OK_START}}}")), "slot zone must be of type zone"),
@@ -494,7 +493,8 @@ const TEXTED: &str = "recipe({api: 1, id: 'texted', name: 'Texted', slots: {\
     kind: {type: 'select', name: 'Kind', required: true, defaultValue: 'time', \
       options: [{value: 'time', label: 'Fixed'}, {value: 'sunrise', label: 'Sunrise'}]}, \
     at: {type: 'time', name: 'At', required: false, hiddenWhen: {slot: 'kind', equals: ['sunrise']}}, \
-    off: {type: 'number', name: 'Off', required: false, hiddenWhen: {slot: 'kind', equals: 'time'}}}, \
+    off: {type: 'number', name: 'Off', required: false, hiddenWhen: {slot: 'kind', equals: 'time'}}, \
+    key: {type: 'data-key', name: 'Key', required: false}}, \
     start: function () {}});";
 
 #[test]
@@ -512,6 +512,7 @@ fn a_text_slot_is_a_bounded_text_and_hidden_when_is_served_as_given() {
         json!({"slot": "kind", "equals": "time"})
     );
     assert!(slots[2].get("hiddenWhen").is_none());
+    assert_eq!(slots[5]["type"], "data-key");
     let long = "x".repeat(65);
     let cases = [
         (json!({"zone": g.zone}), invalid("word is required")),
@@ -535,8 +536,29 @@ fn a_text_slot_is_a_bounded_text_and_hidden_when_is_served_as_given() {
             "{params}"
         );
     }
+    // A `data-key` slot is a text of the same bound.
+    assert_eq!(
+        reason(
+            &mut rig,
+            "texted",
+            json!({"zone": g.zone, "word": "w", "key": 5})
+        ),
+        invalid("key must be a text")
+    );
+    assert_eq!(
+        reason(
+            &mut rig,
+            "texted",
+            json!({"zone": g.zone, "word": "w", "key": "x".repeat(65)})
+        ),
+        invalid("key: at most 64 bytes")
+    );
     let ok = "x".repeat(64);
-    let (status, _) = create(&mut rig, "texted", json!({"zone": g.zone, "word": ok}));
+    let (status, _) = create(
+        &mut rig,
+        "texted",
+        json!({"zone": g.zone, "word": ok, "key": "contact"}),
+    );
     assert_eq!(status, 201);
 }
 
@@ -1396,6 +1418,38 @@ fn now_gives_no_local_time_while_the_clock_is_not_set() {
     // The box before its first sync: the wall clock is near 0, and a time of day read from it
     // would be wrong; `localTime` is null.
     assert_eq!(local_time_at(None, 5 * MINUTE), "null");
+}
+
+fn weekday_at(zone: Option<&str>, now: u64) -> String {
+    let (mut rig, _) = loaded(LOCALTIME);
+    if let Some(zone) = zone {
+        let (status, _) = rig.put("/api/v1/settings", json!({"home.timezone": zone}));
+        assert_eq!(status, 200);
+    }
+    rig.now = now;
+    let id = created(&mut rig, "localtime", json!({"zone": ROOT}));
+    rig.messages(&id)
+        .iter()
+        .find_map(|m| m.strip_prefix("weekday ").map(str::to_string))
+        .unwrap_or_default()
+}
+
+#[test]
+fn now_gives_the_homes_weekday_with_zero_for_sunday_and_none_while_the_clock_is_not_set() {
+    // MIDNIGHT is Thursday the 26th of November 2026 at 00:00 UTC.
+    assert_eq!(weekday_at(None, MIDNIGHT + HOUR), "4");
+    // 23:30 UTC is already Friday in Paris.
+    let late = MIDNIGHT + 23 * HOUR + 30 * MINUTE;
+    assert_eq!(weekday_at(None, late), "4");
+    assert_eq!(weekday_at(Some("Europe/Paris"), late), "5");
+    assert_eq!(weekday_at(Some("Europe/Paris"), late + 24 * HOUR), "6");
+    assert_eq!(weekday_at(Some("Europe/Paris"), late + 48 * HOUR), "0");
+    // Behind UTC: still Wednesday at 02:05 UTC.
+    assert_eq!(
+        weekday_at(Some("America/New_York"), MIDNIGHT + 2 * HOUR + 5 * MINUTE),
+        "3"
+    );
+    assert_eq!(weekday_at(None, 5 * MINUTE), "null");
 }
 
 // ---- state, log, errors ----

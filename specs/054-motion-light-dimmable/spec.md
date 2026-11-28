@@ -47,16 +47,16 @@ the first to use spec 053's 32 KB. Models of a port: `recipes/scripts/motion-lig
 - The roadmap's F3 line and `docs/roadmap.html`: `motion-light-dimmable` done.
 
 ## Acceptance criteria
-- [ ] `GET /recipes/motion-light-dimmable` (with `--recipe-script`) gives Sowel's info, tested
+- [x] `GET /recipes/motion-light-dimmable` (with `--recipe-script`) gives Sowel's info, tested
       against a pinned file written from Sowel's source.
-- [ ] Each refusal of Sowel's validation answers Sowel's text (tested).
-- [ ] Motion in a time slot: lights on at that slot's brightness; no motion for the delay: off
+- [x] Each refusal of Sowel's validation answers Sowel's text (tested).
+- [x] Motion in a time slot: lights on at that slot's brightness; no motion for the delay: off
       (tested on the Mac with the simulated clock).
-- [ ] `api.now().localTime` is the home's time of day: with a zone that differs from UTC the slot
+- [x] `api.now().localTime` is the home's time of day: with a zone that differs from UTC the slot
       is the local one, across the day boundary (tested: the field, and the recipe's slot).
-- [ ] The script under 32 KB; its memory with 4 instances under 224 KB (the Mac's count and QEMU).
+- [x] The script under 32 KB; its memory with 4 instances under 224 KB (the Mac's count and QEMU).
 - [ ] Signed, in the catalogue's release; the box lists it and installs it.
-- [ ] validate green.
+- [x] validate green.
 
 ## Edge cases
 - A light deleted, a sensor deleted: the generic settle (as `motion-light`).

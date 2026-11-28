@@ -3,7 +3,7 @@
 // calls: which slots show, which equipments a slot offers, the form's values from the slots'
 // defaults or from an instance's params, and the params from the values. `hiddenWhen` is kept
 // (spec 055); no groups, no cross-zone equipments: the room's own equipments only (spec 024, R2).
-import type { EquipmentType, RecipeInfo, RecipeSlotDef } from "../types";
+import type { EquipmentType, EquipmentWithDetails, RecipeInfo, RecipeSlotDef } from "../types";
 
 /** One field's value: a checkbox (boolean), the ticks of a list, or the text of any other field. */
 export type FormValue = string | boolean | string[];
@@ -55,6 +55,22 @@ export function shownSlots(
   return recipe.slots.filter(
     (slot) => isSlotShown(slot, ctx) && !isSlotHidden(slot, values, recipe.slots),
   );
+}
+
+/**
+ * The data aliases a `data-key` slot offers (Sowel's RecipeSettings / AddRecipeForm): the data
+ * bindings of the equipment chosen in the recipe's first single `equipment` slot; none until one is
+ * chosen.
+ */
+export function dataKeyAliases(
+  recipe: RecipeInfo,
+  values: FormValues,
+  equipments: readonly Pick<EquipmentWithDetails, "id" | "dataBindings">[],
+): string[] {
+  const slot = recipe.slots.find((s) => s.type === "equipment" && !s.list);
+  const chosen = slot ? values[slot.id] : undefined;
+  const found = typeof chosen === "string" ? equipments.find((e) => e.id === chosen) : undefined;
+  return (found?.dataBindings ?? []).map((b) => b.alias);
 }
 
 /** The room's equipments whose type matches the slot's `constraints.equipmentType` (any when none). */

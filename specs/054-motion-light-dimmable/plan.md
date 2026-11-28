@@ -4,7 +4,7 @@
 - [x] 1. Living spec, roadmap (md and html).
 - [x] 2. The script, from Sowel's source.
 - [x] 3. Tests (info pinned, validation texts, the behaviour per slot, memory).
-- [ ] 4. validate; review.
+- [x] 4. validate; review.
 - [ ] 5. Signed, published in the catalogue, installed on the box.
 
 Not applicable: core types, API, interface (a script recipe uses the existing ones).

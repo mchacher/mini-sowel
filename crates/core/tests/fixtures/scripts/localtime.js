@@ -1,4 +1,4 @@
-// Logs the home's time of day, as `now().localTime` reads it, at the start.
+// Logs the home's time of day and weekday, as `now().localTime` and `localWeekday` read them, at the start.
 recipe({
   api: 1,
   id: "localtime",
@@ -6,6 +6,8 @@ recipe({
   description: "now().localTime",
   slots: {},
   start: function (api) {
-    api.log("local " + api.now().localTime);
+    var n = api.now();
+    api.log("local " + n.localTime);
+    api.log("weekday " + n.localWeekday);
   },
 });

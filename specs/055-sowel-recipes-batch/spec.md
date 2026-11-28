@@ -31,12 +31,16 @@ ported as `motion-light-dimmable.js` was:
   weekday, the date), `api.now()` gains it the same way (`localWeekday` 0 = Sunday as
   `Date.getDay()`, `localDate` "YYYY-MM-DD"), in the home's time zone.
 - Each fits the script limits (32 KB of source, 224 KB of memory with 4 instances, 200 ms a call).
-### R3: the slot type `text` and the slot field `hiddenWhen` (added 2026-11-28, with the user's yes through the session)
+### R3: the slot types `text` and `data-key` and the slot field `hiddenWhen` (added 2026-11-28, with the user's yes through the session)
 `state-trigger-light` has a `text` slot (`stateValue`) and `schedule-on-off` hides slots with
 `hiddenWhen`; the script API refused the first and ignored the second (`docs/sowel-subset.md`).
 - Slot type `text` (Sowel's `RecipeSlotDef.type`, `src/shared/types.ts`): served as `"text"`; the host
   checks a text of at most 64 bytes (`<slot> must be a text`, `<slot>: at most 64 bytes`; Sowel
-  checks nothing, the recipe's own `validate` decides the rest). `data-key` stays refused.
+  checks nothing, the recipe's own `validate` decides the rest). 
+- Slot type `data-key` (same file; added 2026-11-28, the session's decision, for `state-watch`): the data
+  alias of the equipment chosen in the recipe's first single `equipment` slot. Served as `"data-key"`;
+  checked as a `text` (at most 64 bytes); the recipe's own `validate` checks the alias exists.
+  The recipe form offers the data bindings' aliases of the chosen equipment, as Sowel's form does.
 - Slot field `hiddenWhen: { slot, equals: string | string[] }` (same file): kept as given and served
   in the info; a malformed one is refused when the script loads. The host does nothing with it.
 - The recipe form (`ui/`) hides a slot while the slot it names holds one of `equals` (its value, or
@@ -55,16 +59,16 @@ ported as `motion-light-dimmable.js` was:
 - The roadmap's F3 line and `docs/roadmap.html`: the four recipes done.
 
 ## Acceptance criteria
-- [ ] Each recipe's info matches a pinned file generated from Sowel's `createRecipe()` (tested).
-- [ ] Each of Sowel's validation refusals answers Sowel's text (tested).
-- [ ] Each recipe's main behaviour on the Mac with the simulated clock (tested): a window's on and
+- [x] Each recipe's info matches a pinned file generated from Sowel's `createRecipe()` (tested).
+- [x] Each of Sowel's validation refusals answers Sowel's text (tested).
+- [x] Each recipe's main behaviour on the Mac with the simulated clock (tested): a window's on and
       off; a state change turning lights on for the duration; the setpoint by presence; the alarm
       after the watched duration.
-- [ ] Each under 32 KB; 4 instances of each under 224 KB (the Mac's count).
-- [ ] A `text` slot is bounded and served; `hiddenWhen` is served as given and hides the slot in the
+- [x] Each under 32 KB; 4 instances of each under 224 KB (the Mac's count).
+- [x] A `text` slot is bounded and served; `hiddenWhen` is served as given and hides the slot in the
       recipe form (tested, Rust and Vitest).
 - [ ] Signed, in the catalogue's release; the box lists them and installs them.
-- [ ] validate green.
+- [x] validate green.
 
 ## Edge cases
 - A deleted equipment: the generic settle. A time zone other than UTC: the local slots.

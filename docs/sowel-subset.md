@@ -268,9 +268,8 @@ test reads), each kept by D75 or D74:
   where a Sowel recipe reads the server's `new Date()`; and a slot's `group`, kept in the info.
 - **Left out**: `mode()` (no modes), the tariff period in `now()`, `energy.claim/release`, history
   reads, the observation mode, a per-instance order rate limit, `state.alarm` semantics; a script
-  that calls `mode`, `energy` or `history` gets `Not available in Solite: <name>`. Slots of type
-  `data-key` is refused.
-- **Added** (spec 055): a slot of type `text` (a text of at most 64 bytes, checked by the recipe's own
+  that calls `mode`, `energy` or `history` gets `Not available in Solite: <name>`.
+- **Added** (spec 055): `now().localWeekday`, the home's weekday (0 = Sunday, `null` while the clock is not set), as `localTime`; a slot of type `data-key` (a text of at most 64 bytes naming a data of the equipment of the first single `equipment` slot; the form offers its aliases) and one of type `text` (a text of at most 64 bytes, checked by the recipe's own
   `validate`, where Sowel checks nothing) and a slot's `hiddenWhen` (`{slot, equals}`, kept in the
   info; only the interface uses it).
 - **Functions have no source**: QuickJS is built without keeping the source text of functions

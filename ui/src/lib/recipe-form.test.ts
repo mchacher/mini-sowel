@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { equipment, light, motionLightRecipe } from "../test-utils";
 import type { RecipeInfo } from "../types";
 import {
+  dataKeyAliases,
   defaultValues,
   durationMinutesText,
   isSlotHidden,
@@ -191,6 +192,46 @@ describe("recipe-form hiddenWhen", () => {
       kind: "sunrise",
       at: "",
       offset: "",
+    });
+  });
+});
+
+describe("recipe-form data-key", () => {
+  const watch: RecipeInfo = {
+    id: "watch",
+    name: "Watch",
+    description: "",
+    slots: [
+      { id: "zone", name: "Zone", description: "", type: "zone", required: true },
+      { id: "many", name: "Many", description: "", type: "equipment", required: false, list: true },
+      { id: "equipment", name: "Equipment", description: "", type: "equipment", required: true },
+      { id: "dataKey", name: "Key", description: "", type: "data-key", required: true },
+    ],
+  };
+  const lamp = light("l1", "Lamp", "g", true);
+  const remote = equipment("r1", "Remote", "button", "g", {
+    dataBindings: [
+      ...lamp.dataBindings.map((b) => ({ ...b, alias: "action" })),
+      ...lamp.dataBindings,
+    ],
+  });
+
+  it("offers the data aliases of the equipment chosen in the first single equipment slot", () => {
+    const home = [lamp, remote];
+    expect(dataKeyAliases(watch, { equipment: "l1" }, home)).toEqual(["state"]);
+    expect(dataKeyAliases(watch, { equipment: "r1" }, home)).toEqual(["action", "state"]);
+    // The list slot is not the one; none chosen, or one the room lacks: no alias.
+    expect(dataKeyAliases(watch, { many: ["l1"] }, home)).toEqual([]);
+    expect(dataKeyAliases(watch, { equipment: "gone" }, home)).toEqual([]);
+  });
+
+  it("a data-key goes out as its text", () => {
+    const values = { ...defaultValues(watch, "g"), equipment: "l1", dataKey: "state" };
+    expect(paramsFromValues(watch, values, "g", neither)).toEqual({
+      zone: "g",
+      many: [],
+      equipment: "l1",
+      dataKey: "state",
     });
   });
 });

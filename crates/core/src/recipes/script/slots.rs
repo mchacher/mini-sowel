@@ -24,6 +24,9 @@ pub enum SlotKind {
     Select,
     /// Free text (Sowel's `text`): its value is checked by the recipe's own `validate`.
     Text,
+    /// A data alias of the equipment chosen in the recipe's first single `equipment` slot (Sowel's
+    /// `data-key`): a text like `Text`; the recipe's own `validate` checks the alias exists.
+    DataKey,
 }
 
 impl SlotKind {
@@ -37,6 +40,7 @@ impl SlotKind {
             "boolean" => SlotKind::Boolean,
             "select" => SlotKind::Select,
             "text" => SlotKind::Text,
+            "data-key" => SlotKind::DataKey,
             _ => return None,
         })
     }
@@ -51,6 +55,7 @@ impl SlotKind {
             SlotKind::Boolean => "boolean",
             SlotKind::Select => "select",
             SlotKind::Text => "text",
+            SlotKind::DataKey => "data-key",
         }
     }
 }
@@ -123,9 +128,6 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
         let type_text = raw.get("type").and_then(Value::as_str).unwrap_or("");
         let kind = match SlotKind::parse(type_text) {
             Some(kind) => kind,
-            None if type_text == "data-key" => {
-                return Err(bad(&format!("type \"{type_text}\" is not supported")));
-            }
             None => return Err(bad(&format!("unknown type \"{type_text}\""))),
         };
         if matches!(kind, SlotKind::Equipment | SlotKind::Zone)
@@ -409,7 +411,7 @@ pub fn validate_params(defs: &[SlotDef], host: &dyn Host, params: &Value) -> Res
                     return Err(format!("{} must be true or false", def.id));
                 }
             }
-            SlotKind::Text => match value.as_str() {
+            SlotKind::Text | SlotKind::DataKey => match value.as_str() {
                 Some(text) if text.len() <= MAX_TEXT_BYTES => {}
                 Some(_) => {
                     return Err(format!("{}: at most {MAX_TEXT_BYTES} bytes", def.id));
