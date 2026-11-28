@@ -7,7 +7,7 @@
 
 // ---- What the home says ----
 function isOn(value) {
-  return value === true || (typeof value === "string" && value.toUpperCase() === "ON");
+  return value === true || value === "ON";
 }
 function anyLightOn(c) {
   var values = c.api.get("lights", "state");

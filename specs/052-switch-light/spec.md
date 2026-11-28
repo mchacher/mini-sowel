@@ -40,13 +40,13 @@ remotes or smart buttons. Solite can now feed it: a button's `action` (spec 049)
 - The roadmap's F3 line: `switch-light` done.
 
 ## Acceptance criteria
-- [ ] `GET /recipes/switch-light` (with `--recipe-script`) gives Sowel's info: id, name, slots,
+- [x] `GET /recipes/switch-light` (with `--recipe-script`) gives Sowel's info: id, name, slots,
       i18n (tested against a pinned file written from Sowel's source).
-- [ ] Each refusal of Sowel's validation answers Sowel's text (tested).
-- [ ] A simulated button's `toggle`, then another press: lights on, then off (tested on the Mac).
-- [ ] The memory of the script with 8 instances under the 224 KB limit (QEMU or the Mac's count).
-- [ ] Signed, in the catalogue's release; the box lists it.
-- [ ] validate green.
+- [x] Each refusal of Sowel's validation answers Sowel's text (tested).
+- [x] A simulated button's `toggle`, then another press: lights on, then off (tested on the Mac).
+- [x] The memory of the script with 8 instances under the 224 KB limit (QEMU or the Mac's count).
+- [x] Signed, in the catalogue's release; the box lists it.
+- [x] validate green.
 
 ## Edge cases
 - A button that is not in the slot: ignored.
@@ -57,5 +57,17 @@ remotes or smart buttons. Solite can now feed it: a button's `action` (spec 049)
 Sowel's `switch-light` 1.0.0 (`mchacher/sowel-recipe-switch-light`): id, slots, info and texts.
 
 ## How the user will check it
-`--sim scenarios/button.json --serve` with `--recipe-script recipes/scripts/switch-light.js`:
+`--sim scenarios/button-light.json --serve` with `--recipe-script recipes/scripts/switch-light.js`:
 an instance on the simulated button and light; the button's presses toggle the light.
+
+### Result (2026-11-28)
+- `validate --skip-slow` green (1903 tests); 8 tests in `crates/core/tests/switch_light.rs`; with
+  8 instances the Mac counts 205,904 bytes (the limit 229,376); the engine unchanged (the script
+  API had all it needed).
+- Signed (6,479 bytes, key `4f7a09ab`) and published in the catalogue's release `v2026.11.28.2`
+  with `motion-light` 1.1.2; on the Dongle Max (0.2.1) the catalogue lists it and it installs
+  from it (201), `ready`, 96 KB held; internal RAM 98 KB free, 87 KB at the lowest.
+- Code review (Sonnet): no blocking finding; the on-state test made Sowel's exactly (`true` or
+  `"ON"`); a test deleting an instance while its failsafe is armed is not written (the generic
+  settle cancels the instance's timers, as for `motion-light`).
+- Not run with a real button: none paired on the box.

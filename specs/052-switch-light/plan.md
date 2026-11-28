@@ -1,11 +1,11 @@
 # Plan: Spec 052
 
 ## Steps
-- [ ] 1. Living spec, roadmap.
-- [ ] 2. The script, from Sowel's source.
-- [ ] 3. Tests (info pinned, validation texts, the toggle, memory).
-- [ ] 4. validate; review.
-- [ ] 5. Signed, published in the catalogue.
+- [x] 1. Living spec, roadmap.
+- [x] 2. The script, from Sowel's source.
+- [x] 3. Tests (info pinned, validation texts, the toggle, memory).
+- [x] 4. validate; review.
+- [x] 5. Signed, published in the catalogue.
 
 Not applicable: core types, API, interface (a script recipe uses the existing ones).
 

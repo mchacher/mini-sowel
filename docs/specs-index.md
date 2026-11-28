@@ -55,4 +55,4 @@ Every change ever specified. One row per folder in `specs/`.
 | 049 | button-action | I1's second part: a remote's output On/Off, Level and Scenes clusters bound to the coordinator, its commands decoded into `action` (generic names), each press an event, a simulated button | 2026-11-28 | done |
 | 050 | shutter | I1's third part: a Window Covering shutter's `position` (100 open, Sowel's convention) and its orders `shutter_move` (OPEN, CLOSE, STOP) and `set_shutter_position`, a simulated shutter | 2026-11-28 | done |
 | 051 | thermostat | I1's fourth part: a Thermostat (`0x0201`) device's `local_temperature` and heating `setpoint`, and the `set_setpoint` order (5 to 30 °C) as a Write Attributes, a simulated thermostat | 2026-11-28 | done |
-| 052 | switch-light | F3's first recipe: Sowel's `switch-light` 1.0.0 as a script (a press of any of its buttons toggles its lights), signed and in the catalogue | 2026-11-28 | in progress |
+| 052 | switch-light | F3's first recipe: Sowel's `switch-light` 1.0.0 as a script (a press of any of its buttons toggles its lights), signed and in the catalogue | 2026-11-28 | done |
