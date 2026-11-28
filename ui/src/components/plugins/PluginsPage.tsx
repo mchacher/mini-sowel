@@ -5,7 +5,7 @@
 // button are cut (Solite installs no integration; the catalogue is read when the page opens; Remove
 // stays on the row, with Sowel's two-step confirmation, as there is no detail sheet). Kept:
 // the Installed and Store tabs with their counts, the search field, the row look (`card`), Install,
-// Update and Remove. Added: the "Upload a signed recipe" button, the files refused at start, the
+// Update and Remove. Added: the files refused at start, the
 // error of the last read, and the server's own words for a refusal. The catalogue is Solite's
 // (`/recipes/*`), a 429 at opening leaves the list held.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -16,7 +16,6 @@ import {
   getRecipeInstances,
   getResources,
   installRecipe,
-  installRecipeFile,
   refreshRecipeStore,
   uninstallRecipe,
   updateRecipe,
@@ -61,7 +60,6 @@ export function PluginsPage() {
   /** How many instances the recipe being confirmed has: they are deleted with it (R3.6). */
   const [instanceCount, setInstanceCount] = useState(0);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
-  const upload = useRef<HTMLInputElement>(null);
   const alive = useRef(true);
 
   const keep = useCallback((next: RecipeStore) => {
@@ -133,17 +131,11 @@ export function PluginsPage() {
     if (alive.current) setBusy(null);
   };
 
-  const chosen = (file: File | undefined) => {
-    if (!file) return;
-    void act("upload", () => installRecipeFile(file), t("recipeStore.uploaded"));
-    if (upload.current) upload.current.value = "";
-  };
-
   const recipes = store?.recipes ?? [];
   const catalogueIds = new Set(recipes.map((r) => r.id));
   const searching = query.trim().length > 0;
   const installed = recipes.filter((r) => r.installed !== null && matches(r, query));
-  // Files the catalogue does not list (an upload, or a file refused at start): by their id.
+  // Files the catalogue does not list (one from the API, or a file refused at start): by their id.
   const others = files.filter(
     (f) =>
       (f.state === "refused" || !catalogueIds.has(f.id)) &&
@@ -361,24 +353,6 @@ export function PluginsPage() {
           <div>
             <h1 className="text-display font-semibold text-text">{t("plugins.title")}</h1>
             <p className="text-caption text-text-tertiary mt-1">{t("recipeStore.description")}</p>
-          </div>
-          <div className="shrink-0">
-            <input
-              ref={upload}
-              type="file"
-              accept=".srs"
-              aria-label={t("recipeStore.uploadFile")}
-              className="hidden"
-              onChange={(event) => chosen(event.currentTarget.files?.[0])}
-            />
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => upload.current?.click()}
-              className={BUTTON_SECONDARY}
-            >
-              {t("recipeStore.upload")}
-            </button>
           </div>
         </div>
 

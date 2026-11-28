@@ -1425,8 +1425,8 @@ copy embedded in the radio image at build time.
   files refused at start with their reason, and the installed files the catalogue does not list,
   with Remove) and **Store** (the catalogue, with Install, or the "Installed" mark and Update; a
   recipe the program provides itself marked "Provided by Solite" with no button; the error of the
-  last read), a search field over the id, name and description of the tab shown, and an "Upload a
-  signed recipe" button (the file goes as `application/octet-stream`). It asks the refresh when it
+  last read), a search field over the id, name and description of the tab shown; it offers no upload of a signed
+  file (that stays the API's route, `POST /api/v1/recipes/install`, for the developer). It asks the refresh when it
   opens and shows the list held when that answers 429; the server's own words show for a refusal.
   French and English.
   The **Restart** card (after the Firmware update card): a "Restart" button, a confirmation ("Restart

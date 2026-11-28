@@ -47,15 +47,6 @@ export async function installRecipe(id: string): Promise<void> {
   });
 }
 
-/** A signed file (`.srs`, at most 32 KB and its header) as the body: an ordinary request body. */
-export async function installRecipeFile(file: File): Promise<void> {
-  await fetchJSON<unknown>(`${API_BASE}/recipes/install`, {
-    method: "POST",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: file,
-  });
-}
-
 export async function updateRecipe(id: string): Promise<void> {
   await fetchJSON<unknown>(`${API_BASE}/recipes/${encodeURIComponent(id)}/update`, {
     method: "POST",
