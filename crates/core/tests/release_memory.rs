@@ -23,7 +23,7 @@ static ALLOCATOR: PeakAlloc = PeakAlloc;
 const IMAGE_BYTES: usize = 1024 * 1024;
 const PEAK_BOUND: usize = 32 * 1024;
 const T0: u64 = 1_795_252_323_120;
-const ASSET: &str = "https://example.com/solite-0.2.0.sup";
+const ASSET: &str = "https://example.com/solite-9.9.0.sup";
 
 fn byte(index: usize) -> u8 {
     u8::try_from((index * 31 + index / 7) % 256).unwrap()
@@ -107,7 +107,7 @@ fn a_one_megabyte_pull_peaks_under_32_kb_of_heap() {
     (0..IMAGE_BYTES).for_each(|i| hash.update([byte(i)]));
     let digest: [u8; 32] = hash.finalize().into();
     let signed = signed_bytes(
-        Version::new(0, 2, 0),
+        Version::new(9, 9, 0),
         u32::try_from(IMAGE_BYTES).unwrap(),
         &digest,
     );
@@ -124,7 +124,7 @@ fn a_one_megabyte_pull_peaks_under_32_kb_of_heap() {
         .map(|b| format!("{b:02x}"))
         .collect();
     let manifest = format!(
-        r#"{{"format":1,"version":"0.2.0","minVersion":null,"image":{{"size":{},"sha256":"{file_digest}","url":"{ASSET}"}}}}"#,
+        r#"{{"format":1,"version":"9.9.0","minVersion":null,"image":{{"size":{},"sha256":"{file_digest}","url":"{ASSET}"}}}}"#,
         HEADER_BYTES + IMAGE_BYTES
     );
 

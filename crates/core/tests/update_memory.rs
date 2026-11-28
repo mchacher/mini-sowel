@@ -63,7 +63,7 @@ fn a_one_megabyte_installation_peaks_under_32_kb_of_heap() {
     (0..IMAGE_BYTES).for_each(|i| hash.update([byte(i)]));
     let digest: [u8; 32] = hash.finalize().into();
     let signed = signed_bytes(
-        Version::new(0, 2, 0),
+        Version::new(9, 9, 0),
         u32::try_from(IMAGE_BYTES).unwrap(),
         &digest,
     );

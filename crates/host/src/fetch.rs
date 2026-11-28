@@ -974,11 +974,11 @@ mod tests {
     #[test]
     fn a_pull_through_two_redirects_writes_the_slot() {
         let mut rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         let (status, body) = rig.quick();
         assert_eq!(status, 200, "{body}");
-        assert_eq!(body["message"], "Installed 0.2.0, restarting");
+        assert_eq!(body["message"], "Installed 9.9.0, restarting");
         let slot = std::fs::read(rig.data.join("update/slot-1.bin")).unwrap();
         assert_eq!(slot, sup[HEADER_BYTES..]);
         assert_eq!(rig.adapter.boot_slot(), 1);
@@ -987,8 +987,8 @@ mod tests {
     #[test]
     fn a_cut_connection_leaves_the_slot_not_bootable() {
         let mut rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         rig.server.route(
             "/c",
             Behaviour::Raw(http(
@@ -1012,8 +1012,8 @@ mod tests {
     #[test]
     fn a_wrong_hash_a_wrong_signature_and_an_old_version_are_refused() {
         let mut rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        let mut manifest = rig.manifest(&sup, "0.2.0");
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        let mut manifest = rig.manifest(&sup, "9.9.0");
         manifest["image"]["sha256"] = json!(hex(&image_digest(b"other")));
         rig.serve(&manifest, &sup);
         let answer = rig.quick();
@@ -1025,10 +1025,10 @@ mod tests {
 
         let mut rig = Rig::new();
         let other = SigningKey::from_bytes(&[9u8; 32]);
-        let mut sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        let signed = signed_bytes(Version::new(0, 2, 0), 20_000, &image_digest(&image(20_000)));
+        let mut sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        let signed = signed_bytes(Version::new(9, 9, 0), 20_000, &image_digest(&image(20_000)));
         sup[64..128].copy_from_slice(&other.sign(&signed).to_bytes());
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         assert_eq!(error_of(&rig.quick()), (400, "Invalid signature"));
         rig.untouched();
 
@@ -1065,8 +1065,8 @@ mod tests {
     #[test]
     fn a_download_larger_than_the_manifest_says_is_refused() {
         let mut rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        let mut manifest = rig.manifest(&sup, "0.2.0");
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        let mut manifest = rig.manifest(&sup, "9.9.0");
         manifest["image"]["size"] = json!(sup.len() - 100);
         rig.serve(&manifest, &sup);
         // The server says its length: refused before any write.
@@ -1077,7 +1077,7 @@ mod tests {
         rig.untouched();
         // The server says none (close-delimited): the count catches it.
         let mut rig = Rig::new();
-        let mut manifest = rig.manifest(&sup, "0.2.0");
+        let mut manifest = rig.manifest(&sup, "9.9.0");
         manifest["image"]["size"] = json!(sup.len() - 100);
         rig.serve(&manifest, &sup);
         rig.server
@@ -1090,8 +1090,8 @@ mod tests {
     #[test]
     fn a_slow_server_hits_the_idle_then_the_total_timeout() {
         let mut rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         rig.server.route(
             "/c",
             Behaviour::Stall(
@@ -1118,8 +1118,8 @@ mod tests {
         let mut rig = Rig::new();
         // The file is signed by this rig's own key: the signature of its header checks out, and
         // only the total time limit can stop the trickle.
-        let sup = rig.sup(Version::new(0, 2, 0), &image(20_000));
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        let sup = rig.sup(Version::new(9, 9, 0), &image(20_000));
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         let mut slow = http("200 OK", &[&format!("Content-Length: {}", sup.len())], b"");
         slow.extend_from_slice(&sup);
         rig.server.route("/c", Behaviour::Trickle(slow, 5));
@@ -1134,13 +1134,13 @@ mod tests {
     #[test]
     fn a_check_through_real_sockets_fills_the_version() {
         let rig = Rig::new();
-        let sup = rig.sup(Version::new(0, 2, 0), &image(5000));
-        rig.serve(&rig.manifest(&sup, "0.2.0"), &sup);
+        let sup = rig.sup(Version::new(9, 9, 0), &image(5000));
+        rig.serve(&rig.manifest(&sup, "9.9.0"), &sup);
         let ticket = rig.home.release_ticket(true, T0).unwrap();
         let response = ticket.check(&mut HttpFetcher::new(), &mut HostPacing, Limits::CHECK);
         assert_eq!(response.status, 200);
         let info: Value = serde_json::from_str(&response.body.unwrap()).unwrap();
-        assert_eq!(info["latest"], "0.2.0");
+        assert_eq!(info["latest"], "9.9.0");
         assert_eq!(info["updateAvailable"], true);
         let _ = HostPacing.now_ms();
     }

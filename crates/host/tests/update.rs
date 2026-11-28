@@ -329,11 +329,11 @@ fn a_signed_file_of_64_kb_is_streamed_installed_and_booted_on_probation() {
         serving.shown
     );
     let bytes = image(64 * 1024);
-    let answer = serving.upload(&sign(&bytes, "0.2.0"), true);
+    let answer = serving.upload(&sign(&bytes, "9.9.0"), true);
     assert_eq!(answer.status, 200, "{}", answer.body);
     assert_eq!(
         serde_json::from_str::<Value>(&answer.body).unwrap(),
-        json!({"success": true, "message": "Installed 0.2.0, restarting"})
+        json!({"success": true, "message": "Installed 9.9.0, restarting"})
     );
     let boot = std::fs::read_to_string(data.join("update/boot.json")).unwrap();
     assert_eq!(boot.trim(), r#"{"boot":1,"pending":true}"#);
@@ -343,7 +343,7 @@ fn a_signed_file_of_64_kb_is_streamed_installed_and_booted_on_probation() {
     );
     assert_eq!(
         wait_for_line(&mut serving, "written to slot"),
-        "update: 0.2.0 written to slot 1; restart the host to put it on probation"
+        "update: 9.9.0 written to slot 1; restart the host to put it on probation"
     );
     // Another file before the restart: refused, and nothing changes.
     let again = serving.upload(&sign(&bytes, "0.3.0"), true);
@@ -383,7 +383,7 @@ fn a_file_with_one_changed_byte_is_refused_and_leaves_nothing_in_the_slot() {
     let host = keyed_host();
     let data = temp("altered");
     let serving = serve(&host.binary, &data);
-    let mut file = sign(&image(20_000), "0.2.0");
+    let mut file = sign(&image(20_000), "9.9.0");
     file[128 + 10_000] ^= 1;
     let answer = serving.upload(&file, true);
     assert_eq!(answer.status, 400, "{}", answer.body);
@@ -392,7 +392,7 @@ fn a_file_with_one_changed_byte_is_refused_and_leaves_nothing_in_the_slot() {
     assert!(!data.join("update/slot-1.bin").exists());
     assert!(!data.join("update/slot-1.bin.part").exists());
     // The state is idle again: the right file goes through.
-    let good = serving.upload(&sign(&image(20_000), "0.2.0"), true);
+    let good = serving.upload(&sign(&image(20_000), "9.9.0"), true);
     assert_eq!(good.status, 200, "{}", good.body);
 }
 
@@ -401,7 +401,7 @@ fn without_a_token_the_upload_is_401_the_connection_closes_and_the_image_is_not_
     let host = keyed_host();
     let data = temp("no-token");
     let serving = serve(&host.binary, &data);
-    let answer = serving.upload(&sign(&image(64 * 1024), "0.2.0"), false);
+    let answer = serving.upload(&sign(&image(64 * 1024), "9.9.0"), false);
     assert_eq!(answer.status, 401, "{}", answer.body);
     assert_eq!(
         answer.answers, 1,
@@ -518,7 +518,7 @@ fn an_upload_that_stops_mid_image_ends_within_the_idle_timeout_and_the_next_one_
     let host = keyed_host();
     let data = temp("stall");
     let serving = serve(&host.binary, &data);
-    let file = sign(&image(40_000), "0.2.0");
+    let file = sign(&image(40_000), "9.9.0");
     let head = format!(
         "POST /api/v1/system/update HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/octet-stream\r\nAuthorization: Bearer {}\r\nContent-Length: {}\r\n\r\n",
         serving.port,
@@ -625,8 +625,8 @@ fn a_check_then_an_empty_post_pulls_the_release_through_two_redirects() {
     let host = keyed_host();
     let data = temp("pull");
     let mut serving = serve(&host.binary, &data);
-    let sup = sign(&image(40 * 1024), "0.2.0");
-    let port = serve_release(&sup, "0.2.0");
+    let sup = sign(&image(40 * 1024), "9.9.0");
+    let port = serve_release(&sup, "9.9.0");
     set_manifest_url(&serving, port);
 
     let check = serving.request(
@@ -638,7 +638,7 @@ fn a_check_then_an_empty_post_pulls_the_release_through_two_redirects() {
     );
     assert_eq!(check.status, 200, "{}", check.body);
     let info: Value = serde_json::from_str(&check.body).unwrap();
-    assert_eq!(info["latest"], "0.2.0");
+    assert_eq!(info["latest"], "9.9.0");
     assert_eq!(info["updateAvailable"], true);
     let version = serving.request(
         "GET",
@@ -659,11 +659,11 @@ fn a_check_then_an_empty_post_pulls_the_release_through_two_redirects() {
     assert_eq!(pull.status, 200, "{}", pull.body);
     assert_eq!(
         serde_json::from_str::<Value>(&pull.body).unwrap()["message"],
-        "Installed 0.2.0, restarting"
+        "Installed 9.9.0, restarting"
     );
     let line = wait_for_line(&mut serving, "written to slot");
     assert!(
-        line.starts_with("update: 0.2.0 written to slot 1"),
+        line.starts_with("update: 9.9.0 written to slot 1"),
         "{line}"
     );
     assert_eq!(
@@ -880,12 +880,12 @@ fn a_cut_download_is_resumed_through_the_redirects_and_installs() {
     let host = keyed_host();
     let data = temp("resume");
     let mut serving = serve(&host.binary, &data);
-    let sup = sign(&image(40 * 1024), "0.2.0");
-    let (port, ranges) = serve_cutting(&sup, "0.2.0", 15_000, Then::Resumes);
+    let sup = sign(&image(40 * 1024), "9.9.0");
+    let (port, ranges) = serve_cutting(&sup, "9.9.0", 15_000, Then::Resumes);
     set_manifest_url(&serving, port);
     let (status, body) = pull(&serving);
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["message"], "Installed 0.2.0, restarting");
+    assert_eq!(body["message"], "Installed 9.9.0, restarting");
     // Every hop of the chain carried the range, from the byte read.
     assert_eq!(
         *ranges.lock().unwrap(),
@@ -911,8 +911,8 @@ fn a_server_without_range_support_fails_the_pull_cleanly() {
     let host = keyed_host();
     let data = temp("resume-norange");
     let serving = serve(&host.binary, &data);
-    let sup = sign(&image(40 * 1024), "0.2.0");
-    let (port, _) = serve_cutting(&sup, "0.2.0", 15_000, Then::IgnoresRange);
+    let sup = sign(&image(40 * 1024), "9.9.0");
+    let (port, _) = serve_cutting(&sup, "9.9.0", 15_000, Then::IgnoresRange);
     set_manifest_url(&serving, port);
     let (status, body) = pull(&serving);
     assert_eq!(status, 500, "{body}");
@@ -928,8 +928,8 @@ fn a_file_changed_between_the_two_requests_fails_the_pull_cleanly() {
     let host = keyed_host();
     let data = temp("resume-changed");
     let serving = serve(&host.binary, &data);
-    let sup = sign(&image(40 * 1024), "0.2.0");
-    let (port, _) = serve_cutting(&sup, "0.2.0", 15_000, Then::OtherEtag);
+    let sup = sign(&image(40 * 1024), "9.9.0");
+    let (port, _) = serve_cutting(&sup, "9.9.0", 15_000, Then::OtherEtag);
     set_manifest_url(&serving, port);
     let (status, body) = pull(&serving);
     assert_eq!(status, 500, "{body}");
@@ -946,8 +946,8 @@ fn a_server_that_cuts_every_time_fails_after_three_resumes_waiting_2_4_and_8_sec
     let host = keyed_host();
     let data = temp("resume-exhausted");
     let serving = serve(&host.binary, &data);
-    let sup = sign(&image(40 * 1024), "0.2.0");
-    let (port, ranges) = serve_cutting(&sup, "0.2.0", 15_000, Then::CutsAgain);
+    let sup = sign(&image(40 * 1024), "9.9.0");
+    let (port, ranges) = serve_cutting(&sup, "9.9.0", 15_000, Then::CutsAgain);
     set_manifest_url(&serving, port);
     let started = Instant::now();
     let (status, body) = pull(&serving);

@@ -141,12 +141,12 @@ fn a_file_signed_with_the_generated_key_is_accepted_by_the_core_with_the_printed
         .map(|i| u8::try_from(i % 253).unwrap())
         .collect();
     let out = dir.join("image.sup");
-    let output = sign(&image_file(&dir, &image), "0.2.0", &key_file, &out);
+    let output = sign(&image_file(&dir, &image), "9.9.0", &key_file, &out);
     assert!(output.status.success(), "{output:?}");
     let text = stdout(&output);
     assert!(
         text.contains(&format!(
-            "signed: {}, version 0.2.0, 30000 bytes, key {}",
+            "signed: {}, version 9.9.0, 30000 bytes, key {}",
             out.display(),
             &public[..8]
         )),
@@ -206,16 +206,16 @@ fn sign_refuses_what_it_cannot_sign_and_writes_nothing() {
     let taken = dir.join("taken.sup");
     std::fs::write(&taken, "mine").unwrap();
     let cases = [
-        ("empty image", sign(&empty, "0.2.0", &key_file, &out)),
-        ("image over 4 MB", sign(&big, "0.2.0", &key_file, &out)),
+        ("empty image", sign(&empty, "9.9.0", &key_file, &out)),
+        ("image over 4 MB", sign(&big, "9.9.0", &key_file, &out)),
         ("version 1.2", sign(&image, "1.2", &key_file, &out)),
         (
             "version 70000.0.0",
             sign(&image, "70000.0.0", &key_file, &out),
         ),
-        ("a short key file", sign(&image, "0.2.0", &short_key, &out)),
-        ("a key with a +", sign(&image, "0.2.0", &plus_key, &out)),
-        ("an existing out", sign(&image, "0.2.0", &key_file, &taken)),
+        ("a short key file", sign(&image, "9.9.0", &short_key, &out)),
+        ("a key with a +", sign(&image, "9.9.0", &plus_key, &out)),
+        ("an existing out", sign(&image, "9.9.0", &key_file, &taken)),
     ];
     for (what, output) in cases {
         assert_eq!(output.status.code(), Some(2), "{what}: {output:?}");
@@ -229,14 +229,14 @@ fn sign_refuses_what_it_cannot_sign_and_writes_nothing() {
 fn the_version_is_tied_to_the_application_descriptor_of_an_esp32_image() {
     let dir = temp();
     let (key_file, _) = key(&dir);
-    let image = image_file(&dir, &esp_image("0.2.0"));
+    let image = image_file(&dir, &esp_image("9.9.0"));
     let wrong = dir.join("wrong.sup");
     let output = sign(&image, "0.3.0", &key_file, &wrong);
     assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(stderr(&output).contains("0.2.0"), "{}", stderr(&output));
+    assert!(stderr(&output).contains("9.9.0"), "{}", stderr(&output));
     assert!(!wrong.exists());
     let right = dir.join("right.sup");
-    let output = sign(&image, "0.2.0", &key_file, &right);
+    let output = sign(&image, "9.9.0", &key_file, &right);
     assert!(output.status.success(), "{output:?}");
     assert!(right.exists());
     assert!(!stdout(&output).contains("no application descriptor"));
@@ -255,12 +255,12 @@ fn the_update_tools_refuse_to_be_mixed_with_the_radio_options_or_to_be_incomplet
             out.as_os_str(),
             "--listen".as_ref(),
         ],
-        vec!["--version".as_ref(), "0.2.0".as_ref()],
+        vec!["--version".as_ref(), "9.9.0".as_ref()],
         vec![
             "--update-sign".as_ref(),
             image.as_os_str(),
             "--version".as_ref(),
-            "0.2.0".as_ref(),
+            "9.9.0".as_ref(),
             "--key".as_ref(),
             key_file.as_os_str(),
             "--out".as_ref(),
@@ -284,14 +284,14 @@ fn verify(file: &Path, public: &str) -> Output {
     ])
 }
 
-/// A file signed as 0.2.0 by a fresh key: the file, its public key, the image it holds.
+/// A file signed as 9.9.0 by a fresh key: the file, its public key, the image it holds.
 fn signed_file(dir: &Path) -> (PathBuf, String, Vec<u8>) {
     let (key_file, public) = key(dir);
     let image: Vec<u8> = (0..20_000u32)
         .map(|i| u8::try_from(i % 251).unwrap())
         .collect();
     let out = dir.join("image.sup");
-    let output = sign(&image_file(dir, &image), "0.2.0", &key_file, &out);
+    let output = sign(&image_file(dir, &image), "9.9.0", &key_file, &out);
     assert!(output.status.success(), "{output:?}");
     (out, public, image)
 }
@@ -312,7 +312,7 @@ fn verify_accepts_a_file_signed_by_the_matching_key() {
     assert!(output.status.success(), "{output:?}");
     assert!(
         stdout(&output).contains(&format!(
-            "verified: {}, version 0.2.0, {} bytes, key {}",
+            "verified: {}, version 9.9.0, {} bytes, key {}",
             file.display(),
             image.len(),
             &public[..8]
