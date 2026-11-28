@@ -124,43 +124,30 @@ pub struct Refused {
     pub reason: String,
 }
 
-/// A block the catalogue is kept in is at least this long: the box's allocator puts every block of
-/// 4 KB or less in the internal RAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096`), and the catalogue
-/// must stay in PSRAM (R6.5).
-pub const CATALOGUE_MIN_BLOCK: usize = 4 * 1024 + 64;
-
-/// The catalogue the home holds: the last good list, when it was read (wall clock) and the
-/// reason the last read failed. The list is kept as one block of JSON text, not a tree of small
-/// strings (the box's internal RAM, as spec 041's `ScriptMeta.info`), and parsed when asked for.
+/// The catalogue the home holds: the last good list (typed, at most 32 entries, read once per
+/// catalogue read and never parsed again), when it was read (wall clock) and the reason the last
+/// read failed. The box's allocator keeps the blocks over `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`
+/// bytes in PSRAM (spec 056).
 #[derive(Debug, Default, Clone)]
 pub struct CatalogueState {
-    json: Vec<u8>,
+    entries: Vec<Entry>,
     pub read_at: Option<u64>,
     pub error: Option<String>,
 }
 
 impl CatalogueState {
-    /// A list read: its JSON in one block of at least `CATALOGUE_MIN_BLOCK` bytes.
-    pub fn new(entries: &[Entry], read_at: u64) -> CatalogueState {
-        let mut json = Vec::with_capacity(CATALOGUE_MIN_BLOCK);
-        if serde_json::to_writer(&mut json, entries).is_err() {
-            json.clear();
-        }
+    /// A list read.
+    pub fn new(entries: Vec<Entry>, read_at: u64) -> CatalogueState {
         CatalogueState {
-            json,
+            entries,
             read_at: Some(read_at),
             error: None,
         }
     }
 
-    /// The entries held, parsed now (a request's own, dropped with it).
-    pub fn entries(&self) -> Vec<Entry> {
-        serde_json::from_slice(&self.json).unwrap_or_default()
-    }
-
-    /// The block's capacity, in bytes.
-    pub fn block_capacity(&self) -> usize {
-        self.json.capacity()
+    /// The entries held.
+    pub fn entries(&self) -> &[Entry] {
+        &self.entries
     }
 }
 

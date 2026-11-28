@@ -166,6 +166,18 @@ impl RecipeTicket {
         }
     }
 
+    /// Logs the internal RAM at a step of a job (spec 056 R1): free now / lowest since boot.
+    /// Nothing on a platform that reads no memory.
+    fn step(&self, what: &str) {
+        if let Some(reading) = self.installs.probe().read() {
+            log::info!(
+                "recipe install: {what} internal {}/{}",
+                reading.stats.internal_free,
+                reading.internal_min
+            );
+        }
+    }
+
     // ---- The catalogue ----
 
     /// Reads the catalogue and keeps it, or keeps the reason it failed.
@@ -178,7 +190,11 @@ impl RecipeTicket {
             MAX_CATALOGUE_BYTES,
             "Catalogue too large",
         )
-        .and_then(|body| catalogue::parse(&body));
+        .and_then(|body| {
+            self.step("catalogue downloaded");
+            catalogue::parse(&body)
+        });
+        self.step("catalogue read");
         let mut home = lock(home);
         match read {
             Ok(entries) => {
@@ -254,11 +270,13 @@ impl RecipeTicket {
             FileError::Failed(reason) => Failure::new(502, format!("Download failed: {reason}")),
             FileError::Differs(reason) => Failure::new(400, reason),
         })?;
+        self.step("download");
         let key = self
             .installs
             .key()
             .ok_or_else(|| Failure::new(503, super::NOT_CONFIGURED))?;
         let signed = file::check(&bytes, key).map_err(|reason| Failure::new(400, reason))?;
+        self.step("check");
         if Some(signed.version) != entry.version() {
             return Err(Failure::new(
                 400,
@@ -285,6 +303,7 @@ impl RecipeTicket {
         let summary = hop(env, || {
             lock(home).install_load(id, &signed.source, signed.version, &runtimes, &clock)
         })??;
+        self.step("load");
         if summary.id != id {
             hop(env, || lock(home).install_abort(&summary.id, wall))?;
             return Err(Failure::new(
@@ -299,6 +318,7 @@ impl RecipeTicket {
             return Err(Failure::new(500, "Could not save the recipe"));
         }
         note_storage(home, env);
+        self.step("store");
         let info = hop(env, || lock(home).install_commit(id, wall))?;
         Ok(json(201, &recipe_answer(info, signed.version)))
     }
@@ -317,6 +337,7 @@ impl RecipeTicket {
         let replaced = hop(env, || {
             lock(home).update_swap(id, &signed.source, signed.version, &runtimes, &clock, wall)
         })??;
+        self.step("update load");
         let name = script_file(id);
         if let Err(reason) = env.storage.write_bytes(&name, bytes) {
             log::error!("recipes: {id}: {reason}");
@@ -334,6 +355,7 @@ impl RecipeTicket {
             });
         }
         note_storage(home, env);
+        self.step("update store");
         let info = hop(env, || lock(home).update_commit(id, wall))?;
         Ok(json(200, &recipe_answer(info, signed.version)))
     }
@@ -374,9 +396,11 @@ impl RecipeTicket {
     fn uninstall(&self, home: &Mutex<Home>, env: &mut JobEnv<'_>, id: &str) -> Outcome<Response> {
         let wall = self.wall;
         hop(env, || lock(home).uninstall_step(id, wall))?;
+        self.step("removal unloaded");
         match env.storage.remove(&script_file(id)) {
             Ok(()) => {
                 note_storage(home, env);
+                self.step("removal stored");
                 Ok(no_content())
             }
             Err(reason) => {

@@ -75,7 +75,7 @@ impl Home {
 
     /// Keeps a catalogue read: the list, when, and no error.
     pub(crate) fn keep_catalogue(&mut self, entries: Vec<Entry>, wall: u64) {
-        self.install.catalogue = CatalogueState::new(&entries, wall);
+        self.install.catalogue = CatalogueState::new(entries, wall);
     }
 
     /// A read that failed: the last list is kept, with the reason.
@@ -88,8 +88,9 @@ impl Home {
         self.install
             .catalogue
             .entries()
-            .into_iter()
+            .iter()
             .find(|entry| entry.id == id)
+            .cloned()
     }
 
     /// True when a catalogue read is held (even an empty list).

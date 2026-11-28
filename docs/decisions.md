@@ -1734,3 +1734,29 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: a limit under 224 KB (the load of a 32 KB script needs more); 3 recipes (the
   arithmetic would fit: 3 x 224 KB); the installs' admission rule (a runtime's limit and a 512 KB
   reserve free in PSRAM) keeps the real PSRAM from running out meanwhile.
+
+
+## D86: Allocations over 512 bytes go to PSRAM (replaces D23's 4096-byte threshold, spec 056)
+
+- **Date**: 2026-11-28
+- **Choice**: `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512` (4096 before). A `malloc` of at most 512 bytes
+  stays in internal RAM, a larger one goes to PSRAM. The 64 KB reserve (`RESERVE_INTERNAL`) is
+  unchanged. The recipe catalogue is held as typed entries, once per read, instead of a JSON block
+  parsed at each request. Each step of a recipe job logs the internal RAM (`recipe install: ...`).
+- **Why**: on the box with 4 script recipes the internal RAM fell to 28 KB at its lowest across
+  installs (85 KB at rest), under the 64 KB floor. QuickJS and mbedTLS were already in PSRAM; what
+  remained was the Rust heap's small blocks (the engine's data, each recipe's Rust side, an
+  install's transient blocks), all internal at 4096.
+- **Review of what must stay internal** (spec 056, D59): the UART driver's rings, its object and
+  its semaphores take `MALLOC_CAP_INTERNAL` when `CONFIG_UART_ISR_IN_IRAM=y` (the radio image sets
+  it), whatever the threshold; Wi-Fi's own buffers, FreeRTOS objects, thread stacks (pthread's
+  default caps) and the job threads (`MallocCap::Internal`) are allocated with explicit caps;
+  lwIP and the FAT layer already prefer PSRAM (`SPIRAM_TRY_ALLOCATE_WIFI_LWIP`, `ff_memalloc`);
+  the flash read and write copy a buffer outside the internal RAM through a bounce buffer
+  (`esp_flash_read` and `esp_flash_write`), as they already did for the 32 KB files. No buffer given
+  to a driver by `malloc` was found; nothing needed a new explicit capability.
+- **Alternatives**: 256 (the next step if 512 is not enough); a custom allocator in Rust for the
+  install only (unstable `allocator_api`); a shared QuickJS runtime (saves PSRAM, not internal RAM:
+  spec 056's part 2).
+- **Measured**: QEMU, 50 devices and 3 recipes: internal free after the engine's load 233 KB
+  (min 135) at 4096, 276 KB (min 166) at 512. The box's figures: spec 056's result.

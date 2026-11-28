@@ -1,10 +1,10 @@
 # Plan: Spec 056
 
 ## Steps
-- [ ] 1. R1: the install's step lines (firmware), seen in QEMU.
-- [ ] 2. R3: the catalogue typed (core), tests.
-- [ ] 3. R2: review of internal buffers; the threshold at 512; QEMU memory figures before/after.
-- [ ] 4. Living spec, memory budget, D86; validate.
+- [x] 1. R1: the install's step lines (firmware), seen in QEMU.
+- [x] 2. R3: the catalogue typed (core), tests.
+- [x] 3. R2: review of internal buffers; the threshold at 512; QEMU memory figures before/after.
+- [x] 4. Living spec, memory budget, D86; validate.
 - [ ] 5. On the box: OTA of a test build, installs and removals of 4 recipes, the lowest figure;
       pairing and reading a device.
 

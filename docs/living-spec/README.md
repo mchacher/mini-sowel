@@ -1095,7 +1095,14 @@ same routes and from a room's page, with the same log, state and events.
   the update URL rule (https, or http on the home network). Its address is the setting
   `recipes.catalogue` (at most 512 characters, the same rule, 400 at the save; empty or unset
   means `https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json`). It is
-  held in RAM only.
+  held in RAM only, as typed entries read once per catalogue read (the texts of each language
+  typed, a field the store does not show dropped), not parsed again at each request.
+- **The install's steps in the log** (the box): each step of a recipe job logs `recipe install:
+  <step> internal <free>/<lowest>`, the internal RAM free now and its lowest since boot, in bytes;
+  the steps are `catalogue downloaded`, `catalogue read`, `download`, `check`, `load`, `store` (an
+  install), `update load`, `update store` (an update), `removal unloaded`, `removal stored` (a
+  removal). The engine's allocations of 512 bytes or less stay in internal RAM, larger ones are in
+  PSRAM (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512`, D86).
 - **Routes** (Solite's own, administrator): `GET /api/v1/recipes/store` answers what is held,
   never the network: `{"recipes": [<entry> + "installed", "refused", "builtIn"], "readAt",
   "error"}` (`{"recipes": [], "readAt": null, "error": null}` before any read);

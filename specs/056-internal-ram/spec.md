@@ -61,3 +61,32 @@ heap's small blocks: ESP-IDF keeps every `malloc` of at most `CONFIG_SPIRAM_MALL
 
 ## How the user will check it
 The box's Resources card (internal RAM, lowest) after installing and removing recipes.
+
+## Result (steps 1 to 4; the box, step 5, comes after)
+- **R1**: `RecipeTicket::step` (`crates/core/src/recipes/install/job.rs`) logs `recipe install:
+  <step> internal <free>/<lowest>` through the memory probe; seen in QEMU (catalogue downloaded,
+  catalogue read, download, check, load, store, removal unloaded, removal stored).
+- **R3**: `CatalogueState` holds `Vec<Entry>`, typed (`i18n` as `LangPack`/`SlotText`, unknown
+  fields dropped, so the store no longer serves them); tests in `catalogue.rs`
+  (`a_catalogue_of_32_entries_is_read_typed_with_its_i18n`, `unknown_fields_are_ignored_and_not_served`),
+  the API answers checked by `recipe_install.rs` unchanged. A catalogue whose `i18n` is not that shape
+  is now refused as a whole (it was kept as any JSON).
+- **R2, QEMU** (sim image with scripts, 50 devices, 3 recipes): internal free after the engine's
+  load 233 KB (min 135 KB) at 4096, 276 KB (min 166 KB) at 512; lowest during the install and the
+  removal 186,427 / 170,667 B at 4096, 237,115 / 231,955 B at 512. Boot free 347 KB both.
+- **Review of what stays internal** (ESP-IDF v5.5.5 sources read):
+  1. UART (`radio_uart.rs`, `console.rs`): the driver's object, FIFO buffer, rx/tx rings and
+     semaphores use `UART_MALLOC_CAPS` = internal 8-bit when `CONFIG_UART_ISR_IN_IRAM=y` (the radio
+     image, checked by `validate.sh`); the Rust side hands only stack or `Vec` memory to
+     `uart_read_bytes`/`uart_write_bytes`, which copy. No change needed.
+  2. Wi-Fi: its OS adapter allocates with explicit caps (internal for queues, `prefer` PSRAM for
+     the rest with `SPIRAM_TRY_ALLOCATE_WIFI_LWIP`); lwIP `mem_clib_malloc` prefers PSRAM already.
+  3. Flash (`storage.rs`, `ota.rs`, backup): `esp_flash_read`/`esp_flash_write` copy a buffer outside
+     internal DRAM through a bounce buffer; the FAT layer's `ff_memalloc` prefers PSRAM; the wear
+     levelling temp buffer (4096, via `malloc`) moves to PSRAM, which is safe by the same path. The
+     stacks of threads that touch the flash stay internal (`MallocCap::Internal`, D59).
+  4. FreeRTOS objects (`pvPortMalloc`) and pthread stacks: explicit internal. mbedTLS: PSRAM already.
+  5. The firmware's own `heap_caps_malloc` (OTA chunk, HTTP body buffers): PSRAM on purpose.
+  No buffer needed a new explicit capability; the only unverifiable-here item is Ethernet (none
+  in this firmware) and the real Wi-Fi/radio behaviour, for the box run.
+

@@ -3,7 +3,7 @@
 //! over a bound, not JSON, of another format, or when an entry's address breaks the URL rule.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::file::MAX_FILE_BYTES;
 use crate::update::Version;
@@ -19,6 +19,26 @@ pub const MAX_ENTRY_URL_CHARS: usize = 2048;
 pub const DEFAULT_CATALOGUE_URL: &str =
     "https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json";
 
+/// The texts of one language of an entry (`i18n.<lang>`): what the store's page shows, nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LangPack {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<BTreeMap<String, SlotText>>,
+}
+
+/// The name and description of one slot in one language.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SlotText {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 /// One recipe of the catalogue, as `recipes.json` writes it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +48,7 @@ pub struct Entry {
     pub name: String,
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub i18n: Option<Value>,
+    pub i18n: Option<BTreeMap<String, LangPack>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     /// The signed file's size, in bytes: at most 32 KB and a header.
@@ -113,4 +133,44 @@ pub fn parse(body: &[u8]) -> Result<Vec<Entry>, String> {
         }
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn entry(n: usize) -> serde_json::Value {
+        json!({
+            "id": format!("r{n}"), "version": "1.0.0", "name": "N", "description": "D",
+            "size": 100, "sha256": "ab".repeat(32),
+            "url": format!("https://example.com/r{n}.solite"),
+            "i18n": {"fr": {"name": "Nom", "description": "Desc", "extra": 1,
+                "slots": {"zone": {"name": "Zone", "description": "La zone", "x": true}}}},
+            "unknownField": {"a": [1, 2]}
+        })
+    }
+
+    fn body(entries: Vec<serde_json::Value>) -> Vec<u8> {
+        serde_json::to_vec(&json!({"format": 1, "recipes": entries})).unwrap()
+    }
+
+    #[test]
+    fn a_catalogue_of_32_entries_is_read_typed_with_its_i18n() {
+        let entries = parse(&body((0..32).map(entry).collect())).unwrap();
+        assert_eq!(entries.len(), 32);
+        let fr = &entries[3].i18n.as_ref().unwrap()["fr"];
+        assert_eq!(fr.name.as_deref(), Some("Nom"));
+        let slot = &fr.slots.as_ref().unwrap()["zone"];
+        assert_eq!(slot.description.as_deref(), Some("La zone"));
+    }
+
+    #[test]
+    fn unknown_fields_are_ignored_and_not_served() {
+        let entries = parse(&body(vec![entry(1)])).unwrap();
+        let served = serde_json::to_value(&entries[0]).unwrap();
+        assert!(served.get("unknownField").is_none());
+        assert!(served["i18n"]["fr"].get("extra").is_none());
+        assert_eq!(served["i18n"]["fr"]["slots"]["zone"]["name"], "Zone");
+    }
 }
