@@ -545,3 +545,4 @@ Every change to this roadmap: date, what changed, why.
 - 2026-11-28: spec 051 done (I1, fourth part): a thermostat's `local_temperature` and `setpoint`, and the `setpoint` order as a Write Attributes (Thermostat); `contact_window` remains in I1.
 - 2026-11-28: the host's radio test starts the program once untimed before its timed runs (a freshly linked binary waited for macOS's check, 5 s on a new Mac); the inbox line placed and done.
 - 2026-11-28: the recipe catalogue `mchacher/solite-recipes` made (its first release holds `recipes.json` and `motion-light` 1.1.2 signed; its CI secret is the recipe key); release 0.2.0 (after the box's test build 0.1.2, whose inbox line goes); I1's `contact_window` dropped: the equipment says door or window (user).
+- 2026-11-28: 0.2.0 tagged, its build failed in the release workflow (QuickJS's bindings before ESP-IDF's download), never published; fixed (#71), released as 0.2.1.
