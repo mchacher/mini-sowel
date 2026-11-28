@@ -53,7 +53,7 @@ describe("recipe-form", () => {
       zone: "garage",
       lights: ["a", "b"],
       timeout: "20m",
-      luxThreshold: "50",
+      luxThreshold: 50,
       buttons: [],
       dark: true,
       note: "hi",
@@ -63,6 +63,19 @@ describe("recipe-form", () => {
     expect(params.lights).toEqual([]);
     expect(params.timeout).toBe("");
     expect(params.dark).toBe(false);
+  });
+
+  it("a number slot sends a number, an empty one an empty text", () => {
+    const base = { ...defaultValues(recipe, "g"), lights: ["a"] };
+    expect(
+      paramsFromValues(recipe, { ...base, luxThreshold: " 21.5 " }, "g", both).luxThreshold,
+    ).toBe(21.5);
+    expect(paramsFromValues(recipe, { ...base, luxThreshold: "0" }, "g", both).luxThreshold).toBe(
+      0,
+    );
+    expect(paramsFromValues(recipe, { ...base, luxThreshold: "" }, "g", both).luxThreshold).toBe(
+      "",
+    );
   });
 
   it("a hidden slot sends an empty text, or an empty list", () => {

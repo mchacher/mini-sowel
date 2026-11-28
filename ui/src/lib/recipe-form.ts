@@ -182,7 +182,7 @@ export function missingSlots(
 
 /**
  * The params to send. The zone slot is the room's id; a slot that is not shown, or hidden by its `hiddenWhen`, sends `""` (`[]` for
- * a list); a checkbox sends `true`/`false`, a list its array, anything else its text.
+ * a list); a checkbox sends `true`/`false`, a number slot its number (`""` when empty), a list its array, anything else its text.
  */
 export function paramsFromValues(
   recipe: RecipeInfo,
@@ -201,6 +201,10 @@ export function paramsFromValues(
       params[slot.id] = value === true;
     } else if (slot.list) {
       params[slot.id] = Array.isArray(value) ? value : [];
+    } else if (slot.type === "number") {
+      const text = typeof value === "string" ? value.trim() : "";
+      const n = Number(text);
+      params[slot.id] = text !== "" && Number.isFinite(n) ? n : text;
     } else {
       params[slot.id] = typeof value === "string" ? value : "";
     }

@@ -1056,7 +1056,7 @@ same routes and from a room's page, with the same log, state and events.
   Sowel's draft does not have; `get(slot, alias)`; `order(slot, alias, value)`, to every enabled
   equipment of the slot, answering the ones refused; timers `after` (at least 100 ms), `every` (at
   least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (`time`, the home's time of day `localTime` as `HH:MM` in its time zone (UTC when it has none, `null` while the clock is not set) and its weekday `localWeekday` (0 = Sunday, as `Date.getDay()`, `null` then too), and the sun);
-  `state.set/get/delete` (at most 512 bytes, served as the instance's `state`); `log`, `log.warn`,
+  `state.set/get/delete` (at most 512 bytes, served as the instance's `state`, kept in memory only: it goes when the instance stops, as Sowel's `stop()` clears it, and a script has no stop hook); `log`, `log.warn`,
   `log.error`, `console.log` (at most 20 lines per call). It names equipments only through its
   slots: a call with another name answers `Unknown slot`, and a script has no way to reach an
   equipment the user did not put in its settings. Instances of the same script recipe share its

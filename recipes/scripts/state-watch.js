@@ -140,6 +140,8 @@ function restoreState(c) {
   var since = st.get("watchStartedAt");
   if (c.delay !== null && c.delay > 0 && typeof since === "string") {
     var remaining = c.delay - (Date.now() - Date.parse(since));
+    // A start written while the clock was not set can be decades off: never wait longer than the delay.
+    if (remaining > c.delay) remaining = c.delay;
     if (remaining <= 0) raiseAlarm(c);
     else armDelay(c, remaining);
   } else {

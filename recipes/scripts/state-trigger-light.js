@@ -238,6 +238,9 @@ recipe({
       var expires = Date.parse(kept);
       if (isFinite(expires)) {
         var remaining = expires - Date.now();
+        // A clock that was not set when the deadline was written makes it decades away: never
+        // wait longer than the configured duration.
+        if (remaining > c.duration) remaining = c.duration;
         if (remaining > 0) {
           armOffTimer(c, remaining);
           api.log("Resumed off-timer with " + formatDuration(remaining) + " remaining");

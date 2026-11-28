@@ -308,6 +308,21 @@ fn every_refused_setting_answers_sowels_text_in_sowels_order() {
     assert_eq!(refused(&mut w, with(json!({"thermostat": light}))).0, 400);
 }
 
+/// What the settings form sends (spec 055 review): the numbers as numbers, an empty optional slot
+/// as `""` and an empty list as `[]`.
+#[test]
+fn the_settings_forms_payload_is_accepted() {
+    let mut w = World::new(T0);
+    let params = json!({
+        "zone": w.g.zone, "thermostat": w.thermostat,
+        "comfortTemp": 21.5, "ecoTemp": 17, "timeout": "10m",
+        "nightTemp": "", "nightStart": "", "nightEnd": "", "preheatStart": "", "preheatEnd": "",
+        "weekendPreheatStart": "", "weekendPreheatEnd": "", "buttons": [], "cocoonTemp": "",
+    });
+    let (status, body) = w.create(params);
+    assert_eq!(status, 201, "{body}");
+}
+
 // ---- behaviour ----
 
 #[test]
