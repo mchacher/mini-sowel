@@ -37,7 +37,20 @@ fn serve(ncp: Ncp) -> (SocketAddr, JoinHandle<Vec<u8>>) {
     (address, handle)
 }
 
+/// Starts the host program once, untimed, before the first timed run: on macOS the first launch of
+/// a freshly linked binary waits for the system's check of it (about 5 s seen on a new Mac), which
+/// is not the program's time. `--help` exits at once (its usage, exit 2).
+fn warm_up() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = Command::new(env!("CARGO_BIN_EXE_solite-host"))
+            .arg("--help")
+            .output();
+    });
+}
+
 fn run(args: &[&str]) -> (Output, Duration) {
+    warm_up();
     let start = Instant::now();
     let output = Command::new(env!("CARGO_BIN_EXE_solite-host"))
         .args(args)
