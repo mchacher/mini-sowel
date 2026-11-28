@@ -24,8 +24,9 @@ use catalogue::Entry;
 /// The thread a recipe job runs on has a stack of this many bytes in internal RAM (the firmware's
 /// `FETCH_STACK_BYTES`: the same 20 KB as the release check's thread).
 pub const FETCH_STACK_BYTES: usize = 20 * 1024;
-/// What a recipe job's TLS session takes from the internal RAM besides its thread: the HTTP
-/// client's 5 KB and mbedTLS's 8 KB of small allocations, rounded up (R4.2).
+/// What a recipe job's TLS session takes from the internal RAM besides its thread: mbedTLS's 8 KB
+/// of small allocations and the HTTP client's small structures (its 4 KB and 1 KB buffers are in
+/// PSRAM since spec 056), rounded up (R4.2).
 pub const RECIPE_INTERNAL_MARGIN: usize = 16 * 1024;
 /// What an install leaves free in PSRAM after the runtime's limit (R4.1, decided 2026-11-27).
 pub const SCRIPT_PSRAM_RESERVE: usize = 512 * 1024;
@@ -124,8 +125,8 @@ pub struct Refused {
     pub reason: String,
 }
 
-/// The catalogue the home holds: the last good list (typed, at most 32 entries, read once per
-/// catalogue read and never parsed again), when it was read (wall clock) and the reason the last
+/// The catalogue the home holds: the last good list (at most 32 entries, each one's `i18n` kept
+/// as raw JSON text, read once per catalogue read and never parsed again), when it was read (wall clock) and the reason the last
 /// read failed. The box's allocator keeps the blocks over `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`
 /// bytes in PSRAM (spec 056).
 #[derive(Debug, Default, Clone)]

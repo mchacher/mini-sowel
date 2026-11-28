@@ -258,25 +258,26 @@ impl RecipeTicket {
         let digest = entry
             .digest()
             .ok_or_else(|| Failure::new(400, "Invalid catalogue"))?;
-        let bytes = download_file(
+        let downloaded = download_file(
             &mut *env.fetcher,
             &entry.url,
             entry.size,
             digest,
             env.download_limits,
             &mut *env.pacing,
-        )
-        .map_err(|e| match e {
+        );
+        self.step("download");
+        let bytes = downloaded.map_err(|e| match e {
             FileError::Failed(reason) => Failure::new(502, format!("Download failed: {reason}")),
             FileError::Differs(reason) => Failure::new(400, reason),
         })?;
-        self.step("download");
         let key = self
             .installs
             .key()
             .ok_or_else(|| Failure::new(503, super::NOT_CONFIGURED))?;
-        let signed = file::check(&bytes, key).map_err(|reason| Failure::new(400, reason))?;
+        let checked = file::check(&bytes, key);
         self.step("check");
+        let signed = checked.map_err(|reason| Failure::new(400, reason))?;
         if Some(signed.version) != entry.version() {
             return Err(Failure::new(
                 400,
@@ -300,10 +301,11 @@ impl RecipeTicket {
     ) -> Outcome<Response> {
         let (runtimes, clock, wall) =
             (Arc::clone(&env.runtimes), Arc::clone(&env.clock), self.wall);
-        let summary = hop(env, || {
+        let loaded = hop(env, || {
             lock(home).install_load(id, &signed.source, signed.version, &runtimes, &clock)
-        })??;
+        });
         self.step("load");
+        let summary = loaded??;
         if summary.id != id {
             hop(env, || lock(home).install_abort(&summary.id, wall))?;
             return Err(Failure::new(
@@ -312,13 +314,14 @@ impl RecipeTicket {
             ));
         }
         let name = script_file(id);
-        if let Err(reason) = env.storage.write_bytes(&name, bytes) {
+        let written = env.storage.write_bytes(&name, bytes);
+        self.step("store");
+        if let Err(reason) = written {
             log::error!("recipes: {id}: {reason}");
             hop(env, || lock(home).install_abort(id, wall))?;
             return Err(Failure::new(500, "Could not save the recipe"));
         }
         note_storage(home, env);
-        self.step("store");
         let info = hop(env, || lock(home).install_commit(id, wall))?;
         Ok(json(201, &recipe_answer(info, signed.version)))
     }
@@ -334,12 +337,15 @@ impl RecipeTicket {
     ) -> Outcome<Response> {
         let (runtimes, clock, wall) =
             (Arc::clone(&env.runtimes), Arc::clone(&env.clock), self.wall);
-        let replaced = hop(env, || {
+        let swapped = hop(env, || {
             lock(home).update_swap(id, &signed.source, signed.version, &runtimes, &clock, wall)
-        })??;
+        });
         self.step("update load");
+        let replaced = swapped??;
         let name = script_file(id);
-        if let Err(reason) = env.storage.write_bytes(&name, bytes) {
+        let written = env.storage.write_bytes(&name, bytes);
+        self.step("update store");
+        if let Err(reason) = written {
             log::error!("recipes: {id}: {reason}");
             let restored = hop(env, || {
                 lock(home).update_abort(id, &replaced, &runtimes, &clock, wall)
@@ -355,7 +361,6 @@ impl RecipeTicket {
             });
         }
         note_storage(home, env);
-        self.step("update store");
         let info = hop(env, || lock(home).update_commit(id, wall))?;
         Ok(json(200, &recipe_answer(info, signed.version)))
     }
@@ -397,10 +402,11 @@ impl RecipeTicket {
         let wall = self.wall;
         hop(env, || lock(home).uninstall_step(id, wall))?;
         self.step("removal unloaded");
-        match env.storage.remove(&script_file(id)) {
+        let removed = env.storage.remove(&script_file(id));
+        self.step("removal stored");
+        match removed {
             Ok(()) => {
                 note_storage(home, env);
-                self.step("removal stored");
                 Ok(no_content())
             }
             Err(reason) => {

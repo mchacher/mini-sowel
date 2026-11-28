@@ -1,9 +1,11 @@
 //! The catalogue of recipes, `recipes.json` (spec 042 R2): unsigned, each file it points to being
 //! signed and pinned by its SHA-256. Read whole into RAM (at most 32 KB), refused as a whole when
-//! over a bound, not JSON, of another format, or when an entry's address breaks the URL rule.
+//! over a bound, not JSON, of another format, when an entry's address breaks the URL rule, or when
+//! an entry's `i18n` is not a JSON object. The `i18n` of an entry is kept as its raw JSON text,
+//! unparsed and served as it came (one block per entry, so in PSRAM on the box).
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use serde_json::value::RawValue;
 
 use super::file::MAX_FILE_BYTES;
 use crate::update::Version;
@@ -19,28 +21,8 @@ pub const MAX_ENTRY_URL_CHARS: usize = 2048;
 pub const DEFAULT_CATALOGUE_URL: &str =
     "https://github.com/mchacher/solite-recipes/releases/latest/download/recipes.json";
 
-/// The texts of one language of an entry (`i18n.<lang>`): what the store's page shows, nothing else.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct LangPack {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub slots: Option<BTreeMap<String, SlotText>>,
-}
-
-/// The name and description of one slot in one language.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct SlotText {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
 /// One recipe of the catalogue, as `recipes.json` writes it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
     pub id: String,
@@ -48,7 +30,8 @@ pub struct Entry {
     pub name: String,
     pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub i18n: Option<BTreeMap<String, LangPack>>,
+    /// The raw JSON text of the entry's `i18n` (an object), kept and served unparsed.
+    pub i18n: Option<Box<RawValue>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     /// The signed file's size, in bytes: at most 32 KB and a header.
@@ -122,6 +105,11 @@ pub fn parse(body: &[u8]) -> Result<Vec<Entry>, String> {
         if entry.min_version.is_some() && entry.min_version().is_none() {
             return Err(bad("minVersion"));
         }
+        if let Some(i18n) = &entry.i18n
+            && !i18n.get().trim_start().starts_with('{')
+        {
+            return Err(bad("i18n"));
+        }
         if entry.digest().is_none() {
             return Err(bad("sha256"));
         }
@@ -156,21 +144,32 @@ mod tests {
     }
 
     #[test]
-    fn a_catalogue_of_32_entries_is_read_typed_with_its_i18n() {
+    fn a_catalogue_of_32_entries_keeps_each_i18n_raw() {
         let entries = parse(&body((0..32).map(entry).collect())).unwrap();
         assert_eq!(entries.len(), 32);
-        let fr = &entries[3].i18n.as_ref().unwrap()["fr"];
-        assert_eq!(fr.name.as_deref(), Some("Nom"));
-        let slot = &fr.slots.as_ref().unwrap()["zone"];
-        assert_eq!(slot.description.as_deref(), Some("La zone"));
+        let raw = entries[3].i18n.as_ref().unwrap().get();
+        let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed["fr"]["slots"]["zone"]["description"], "La zone");
     }
 
     #[test]
-    fn unknown_fields_are_ignored_and_not_served() {
+    fn i18n_is_served_whole_and_other_unknown_fields_are_not() {
         let entries = parse(&body(vec![entry(1)])).unwrap();
         let served = serde_json::to_value(&entries[0]).unwrap();
         assert!(served.get("unknownField").is_none());
-        assert!(served["i18n"]["fr"].get("extra").is_none());
-        assert_eq!(served["i18n"]["fr"]["slots"]["zone"]["name"], "Zone");
+        assert_eq!(served["i18n"], entry(1)["i18n"]);
+    }
+
+    #[test]
+    fn an_i18n_that_is_not_an_object_refuses_the_catalogue_and_null_is_absent() {
+        for bad in [json!("x"), json!([1]), json!(3), json!(true)] {
+            let mut e = entry(1);
+            e["i18n"] = bad;
+            let err = parse(&body(vec![e])).unwrap_err();
+            assert_eq!(err, "Invalid catalogue: r1: i18n");
+        }
+        let mut e = entry(1);
+        e["i18n"] = json!(null);
+        assert!(parse(&body(vec![e])).unwrap()[0].i18n.is_none());
     }
 }

@@ -66,12 +66,15 @@ The box's Resources card (internal RAM, lowest) after installing and removing re
 - **R1**: `RecipeTicket::step` (`crates/core/src/recipes/install/job.rs`) logs `recipe install:
   <step> internal <free>/<lowest>` through the memory probe; seen in QEMU (catalogue downloaded,
   catalogue read, download, check, load, store, removal unloaded, removal stored).
-- **R3**: `CatalogueState` holds `Vec<Entry>`, typed (`i18n` as `LangPack`/`SlotText`, unknown
-  fields dropped, so the store no longer serves them); tests in `catalogue.rs`
-  (`a_catalogue_of_32_entries_is_read_typed_with_its_i18n`, `unknown_fields_are_ignored_and_not_served`),
-  the API answers checked by `recipe_install.rs` unchanged. A catalogue whose `i18n` is not that shape
-  is now refused as a whole (it was kept as any JSON).
-- **R2, QEMU** (sim image with scripts, 50 devices, 3 recipes): internal free after the engine's
+- **R3**: `CatalogueState` holds `Vec<Entry>`, each entry's `i18n` kept as its raw JSON text
+  (`Box<RawValue>`, one block per entry, unparsed) and served as it came, `groups` and `options`
+  included; other unknown fields are dropped as before. An `i18n` that is not a JSON object refuses
+  the catalogue as a whole (`Invalid catalogue: <id>: i18n`). `GET /recipes/store` answers by
+  serialising the entries straight into the body. Tests: `catalogue.rs` unit tests and
+  `recipe_install.rs` (`the_store_serves_the_i18n_of_a_sowel_catalogue_whole_with_groups_and_options`,
+  `an_i18n_that_is_not_an_object_refuses_the_catalogue_and_keeps_the_last_list`). Every step of a
+  job logs its line whether it succeeds or fails.
+- **R2, QEMU** (the figures are per-phase minima: the QEMU run restarts the monitor at each phase, not since boot) (sim image with scripts, 50 devices, 3 recipes): internal free after the engine's
   load 233 KB (min 135 KB) at 4096, 276 KB (min 166 KB) at 512; lowest during the install and the
   removal 186,427 / 170,667 B at 4096, 237,115 / 231,955 B at 512. Boot free 347 KB both.
 - **Review of what stays internal** (ESP-IDF v5.5.5 sources read):

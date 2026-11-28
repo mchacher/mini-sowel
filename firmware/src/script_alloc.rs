@@ -1,7 +1,7 @@
 //! The allocator of the script recipes' QuickJS runtimes (feature `scripts`, spec 041 R3.4, D74)
 //! and the firmware's `ScriptRuntimes`: every QuickJS block goes to PSRAM (`heap_caps_*` with
-//! `MALLOC_CAP_SPIRAM`), where ESP-IDF's default `malloc` would keep every block of 4 KB or less in
-//! the internal RAM, the tight resource.
+//! `MALLOC_CAP_SPIRAM`), where ESP-IDF's default `malloc` would keep every block of 512 bytes or less
+//! (`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL`) in the internal RAM, the tight resource.
 //!
 //! ESP-IDF's libc has no `malloc_usable_size`, so QuickJS's own accounting (what its memory limit
 //! counts) would see every block as 0 bytes: the allocator reports `heap_caps_get_allocated_size`,
