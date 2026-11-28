@@ -553,6 +553,13 @@ own_builder() {
   (
     . "$HOME/export-esp.sh"
     cd "$ROOT/firmware" || exit 1
+    # ESP-IDF and its Xtensa tools first, alone: on a machine without firmware/.embuild (the
+    # release workflow's runner), QuickJS's bindings (vendor/rquickjs-sys) are made in parallel
+    # with ESP-IDF's download and need its headers (the build of v0.2.0 failed so). Nothing to do
+    # when they are there.
+    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=target/release-radio \
+      ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
+      cargo build --release -p esp-idf-sys || exit 1
     SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=target/release-radio \
       ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
       cargo build --release --features radio || exit 1
