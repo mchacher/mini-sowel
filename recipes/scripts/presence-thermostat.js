@@ -499,3 +499,5 @@ return {
 };
 }
 recipe(define(tables()));
+// The definition is made: its builders are not needed again, and their code and texts are freed.
+tables = define = undefined;

@@ -105,35 +105,35 @@ function fireOff(c, w) {
 }
 
 // ---- The timers ----
-// `timers[w.index]` is the id of the boundary's `at` timer; a sun boundary is armed again when it
-// fires (the sun moves a few minutes a day) and at midnight.
-function schedule(c, now, timers, w, b, fire, tag) {
-  if (timers[w.index] !== undefined && timers[w.index] !== null) c.api.cancel(timers[w.index]);
-  timers[w.index] = null;
+// A boundary `b` holds its window `w`, whether it starts the window, the id of its `at` timer and
+// whether its missing sun time was reported. A sun boundary is armed again when it fires (the sun
+// moves a few minutes a day) and at midnight. The timer's function holds `c` and `b` only: each
+// timer costs the instance memory.
+function schedule(c, now, b) {
+  if (b.timer !== null) c.api.cancel(b.timer);
+  b.timer = null;
   var hhmm = resolve(now, b);
   if (hhmm === null) {
     // Sun time unavailable today: armed again at midnight.
-    var key = w.index + "-" + tag;
-    if (!c.warned[key]) {
-      c.api.log.warn("Créneau " + w.index + " : " + boundaryLabel(b) + " indisponible aujourd'hui, borne ignorée");
-      c.warned[key] = true;
+    if (!b.warned) {
+      c.api.log.warn("Créneau " + b.w.index + " : " + boundaryLabel(b) + " indisponible aujourd'hui, borne ignorée");
+      b.warned = true;
     }
     return;
   }
-  delete c.warned[w.index + "-" + tag];
-  timers[w.index] = c.api.at(hhmm, function () {
-    fire(c, w);
+  b.warned = false;
+  b.timer = c.api.at(hhmm, function () {
+    (b.starts ? fireOn : fireOff)(c, b.w);
     var later = c.api.now();
-    if (b.kind !== "time") schedule(c, later, timers, w, b, fire, tag);
+    if (b.kind !== "time") schedule(c, later, b);
     updateNextLabels(c, later);
   });
 }
 function armAll(c) {
   var now = c.api.now();
   for (var i = 0; i < c.windows.length; i++) {
-    var w = c.windows[i];
-    schedule(c, now, c.startTimers, w, w.start, fireOn, "start");
-    schedule(c, now, c.endTimers, w, w.end, fireOff, "end");
+    schedule(c, now, c.windows[i].start);
+    schedule(c, now, c.windows[i].end);
   }
   updateNextLabels(c, now);
 }
@@ -142,8 +142,8 @@ function rearmSun(c) {
   var now = c.api.now();
   for (var i = 0; i < c.windows.length; i++) {
     var w = c.windows[i];
-    if (w.start.kind !== "time") schedule(c, now, c.startTimers, w, w.start, fireOn, "start");
-    if (w.end.kind !== "time") schedule(c, now, c.endTimers, w, w.end, fireOff, "end");
+    if (w.start.kind !== "time") schedule(c, now, w.start);
+    if (w.end.kind !== "time") schedule(c, now, w.end);
   }
   updateNextLabels(c, now);
 }
@@ -284,15 +284,17 @@ function define(T) {
       var c = {
         api: api,
         ids: toIdList(p.equipments),
-        windows: [],
-        startTimers: {},
-        endTimers: {},
-        warned: {}
+        windows: []
       };
       for (n = 1; n <= 3; n++) {
         var start = readBoundary(p, "slot" + n + "_start"), end = readBoundary(p, "slot" + n + "_end");
         if (configured(start) && configured(end)) {
-          c.windows.push({ index: n, start: start, end: end });
+          var w = { index: n, start: start, end: end };
+          start.w = end.w = w;
+          start.starts = true;
+          start.timer = end.timer = null;
+          start.warned = end.warned = false;
+          c.windows.push(w);
           if (start.kind !== "time" || end.kind !== "time") hasSun = true;
         }
       }
@@ -313,3 +315,5 @@ function define(T) {
   };
 }
 recipe(define(tables()));
+// The definition is made: its builders are not needed again, and their code and texts are freed.
+tables = define = undefined;
