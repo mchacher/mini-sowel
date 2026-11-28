@@ -547,6 +547,9 @@ SLOT_BYTES=$(fw_bytes "$SLOT_RAW")
 # flash.bin. Its output is the log's.
 own_builder() {
   _v=$1 _k=$2 _dir=$3
+  # Its own folder on a computer, so the release's key never lands in target/radio, which
+  # box.sh flash takes (D63); the release workflow's runner shares target/radio's cache (D84).
+  RELEASE_TARGET=${SOLITE_RELEASE_TARGET_DIR:-target/release-radio}
   [ -d "$ROOT/ui/node_modules" ] || { echo "ui/node_modules is missing: cd ui && npm ci"; return 1; }
   [ -f "$HOME/export-esp.sh" ] || { echo "the ESP32 toolchain is not set up (espup install, see README.md)"; return 1; }
   (cd "$ROOT/ui" && npm run build) || return 1
@@ -557,13 +560,13 @@ own_builder() {
     # release workflow's runner), QuickJS's bindings (vendor/rquickjs-sys) are made in parallel
     # with ESP-IDF's download and need its headers (the build of v0.2.0 failed so). Nothing to do
     # when they are there.
-    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=target/release-radio \
+    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=$RELEASE_TARGET \
       ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
       cargo build --release -p esp-idf-sys || exit 1
-    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=target/release-radio \
+    SOLITE_UPDATE_PUBLIC_KEY=$_k SOLITE_RECIPE_PUBLIC_KEY=$RECIPE_PUB CARGO_TARGET_DIR=$RELEASE_TARGET \
       ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.radio.defaults" \
       cargo build --release --features radio || exit 1
-    _image_dir=$ROOT/firmware/target/release-radio/xtensa-esp32-espidf/release
+    _image_dir=$ROOT/firmware/$RELEASE_TARGET/xtensa-esp32-espidf/release
     _elf=$_image_dir/solite-firmware
     [ -f "$_elf" ] || fw_fail "$_elf not found after the build."
     grep -aqF 'radio: uart ' "$_elf" || fw_fail "the build is not the radio image (feature radio)."

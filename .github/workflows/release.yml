@@ -57,7 +57,7 @@ jobs:
       - name: Build the radio image
         run: |
           . "$HOME/export-esp.sh"
-          sh scripts/release.sh "${GITHUB_REF_NAME#v}" --build-only --out "$RUNNER_TEMP/build"
+          SOLITE_RELEASE_TARGET_DIR=target/radio sh scripts/release.sh "${GITHUB_REF_NAME#v}" --build-only --out "$RUNNER_TEMP/build"
 
       - uses: actions/upload-artifact@v4
         with:

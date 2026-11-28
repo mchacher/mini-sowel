@@ -104,6 +104,7 @@ jobs:
         with:
           workspaces: |
             firmware -> target
+            firmware -> target/radio
           shared-key: firmware
 
       # The Xtensa toolchain espup installs (about 1.4 GB, a minute to download and unpack) and its
@@ -134,7 +135,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: firmware/.embuild
-          key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml', 'firmware/Cargo.lock') }}
+          # The exact key changes with Cargo.lock (a version bump does); restore-keys then takes the
+          # last download of the same ESP-IDF (its version is in config.toml), D84.
+          key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}-${{ hashFiles('firmware/Cargo.lock') }}
+          restore-keys: |
+            esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}-
 
       # QEMU has its own cache: the ESP-IDF cache key above does not change when QEMU is added, so
       # it would be downloaded on every run. On a miss, scripts/qemu.sh installs it (after the

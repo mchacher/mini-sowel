@@ -1690,3 +1690,23 @@ Newest last. A decision is never edited: a new one replaces it and says so.
 - **Alternatives**: the Rust side's small blocks of a script recipe or an instance in PSRAM
   (`SPIRAM_MALLOC_ALWAYSINTERNAL`), only if the minimum falls under about 80 KB; the engine thread's
   stack in PSRAM (it writes the flash: refused, D59).
+
+## D84: The CI's caches survive a version bump; the release workflow builds in `target/radio`
+
+- **Date**: 2026-11-28
+- **Choice**: the ESP-IDF download cache (`firmware/.embuild`) keeps its exact key (the IDF's
+  settings and `firmware/Cargo.lock`) but falls back (`restore-keys`) to the last download of the
+  same `firmware/.cargo/config.toml`, so a release's version bump, which changes `Cargo.lock`,
+  no longer downloads ESP-IDF again; the Rust cache of the firmware also holds `target/radio`,
+  the radio image's own folder, which had none. The release workflow's runner builds the radio
+  image in `target/radio` (`SOLITE_RELEASE_TARGET_DIR`) to restore that cache; on a computer
+  `scripts/release.sh` keeps `target/release-radio` (D63's reason: `box.sh flash` takes
+  `target/radio`, and the runner has no box).
+- **Why**: the firmware job took about 7 minutes, mostly in builds with no cache for the radio
+  image, and the release of 0.2.0 found no ESP-IDF cache after its version bump (and failed in
+  the window that left, #71).
+- **Alternatives**: a cache key without `Cargo.lock` (a new `esp-idf-sys` could need tools the
+  old download lacks: the fallback restores, the build completes the download, the exact key is
+  saved); the release built from the CI's artifact (the build must stay in the job with no
+  secret, D63).
+

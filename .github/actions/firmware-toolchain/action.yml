@@ -38,6 +38,7 @@ runs:
       with:
         workspaces: |
           firmware -> target
+          firmware -> target/radio
         shared-key: firmware
         save-if: "false"
 
@@ -75,4 +76,6 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: firmware/.embuild
-        key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml', 'firmware/Cargo.lock') }}
+        key: esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}-${{ hashFiles('firmware/Cargo.lock') }}
+        restore-keys: |
+          esp-idf-${{ runner.os }}-${{ hashFiles('firmware/.cargo/config.toml') }}-
