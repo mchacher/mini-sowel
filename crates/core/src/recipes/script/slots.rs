@@ -71,6 +71,8 @@ pub struct SlotDef {
     pub max: Option<f64>,
     pub cross_zone: bool,
     pub include_descendants: bool,
+    /// Sowel's `group`: the form shows the slots of one group together (a text, served as given).
+    pub group: Option<String>,
 }
 
 fn text_of(value: Option<&Value>, default: &str) -> Result<String, ()> {
@@ -185,6 +187,7 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
                 from_constraints("includeDescendants"),
                 Some(Value::Bool(true))
             ),
+            group: raw.get("group").and_then(Value::as_str).map(str::to_string),
         });
     }
     match defs.iter().find(|d| d.id == "zone") {
@@ -209,6 +212,7 @@ pub fn parse_slots(declared: &[(String, Value)]) -> Result<Vec<SlotDef>, String>
                 max: None,
                 cross_zone: false,
                 include_descendants: false,
+                group: None,
             },
         ),
     }
@@ -268,6 +272,9 @@ pub fn info_slots(defs: &[SlotDef]) -> Value {
                 }
                 if !constraints.is_empty() {
                     slot.insert("constraints".into(), Value::Object(constraints));
+                }
+                if let Some(group) = &def.group {
+                    slot.insert("group".into(), json!(group));
                 }
                 Value::Object(slot)
             })

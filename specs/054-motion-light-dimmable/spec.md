@@ -30,9 +30,19 @@ the first to use spec 053's 32 KB. Models of a port: `recipes/scripts/motion-lig
 - Signed with the recipe key and added to the catalogue `mchacher/solite-recipes` (a release with
   `recipes.json` holding `motion-light`, `switch-light` and `motion-light-dimmable`).
 
+### R3: the home's time of day (decided by the session, 2026-11-28)
+- Sowel's code reads the time of the slots with `new Date().getHours()` and `getMinutes()`, the
+  server's local time. A script's `Date` has the process's time zone (UTC on the box), so the
+  script API gets `api.now().localTime`: the home's time of day as `"HH:MM"` in its time zone
+  (`home.timezone`; UTC when none is set), computed from the home's offset at that instant. The
+  port reads it where Sowel reads `new Date()`: this is its one adaptation of Sowel's behaviour.
+- Sowel's slot field `group` (and `i18n.<lang>.groups`, already served) is kept in the slots'
+  info, as Sowel serves it.
+
 ## Living spec delta
 ### docs/living-spec/README.md
 - The recipes section: `motion-light-dimmable`, Sowel's, installed from the catalogue; what it does.
+- The script API section: `now()` gives `time`, `localTime` and the sun; a slot may carry `group`.
 ### No longer true
 - The roadmap's F3 line and `docs/roadmap.html`: `motion-light-dimmable` done.
 
@@ -42,6 +52,8 @@ the first to use spec 053's 32 KB. Models of a port: `recipes/scripts/motion-lig
 - [ ] Each refusal of Sowel's validation answers Sowel's text (tested).
 - [ ] Motion in a time slot: lights on at that slot's brightness; no motion for the delay: off
       (tested on the Mac with the simulated clock).
+- [ ] `api.now().localTime` is the home's time of day: with a zone that differs from UTC the slot
+      is the local one, across the day boundary (tested: the field, and the recipe's slot).
 - [ ] The script under 32 KB; its memory with 4 instances under 224 KB (the Mac's count and QEMU).
 - [ ] Signed, in the catalogue's release; the box lists it and installs it.
 - [ ] validate green.

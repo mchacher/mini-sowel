@@ -896,6 +896,34 @@ texts and behaviour, version `1.0.0`, from the catalogue (or a signed file), or 
 - **Bounds**: those of any script recipe (4 instances, 32 KB of source, 224 KB of memory); 4
   instances of a script of 32 KB use about 242 KB on the Mac.
 
+### Runs the motion-light-dimmable recipe
+
+`motion-light-dimmable` is a script recipe, the port of Sowel's `sowel-recipe-motion-light-dimmable`
+1.0.2 (`recipes/scripts/motion-light-dimmable.js`): Sowel's id, name, icon, settings (a slot may
+carry Sowel's `group`, served in the info, with the French `groups`), French texts, validation
+texts and behaviour, version `1.0.2`, from the catalogue (or a signed file), or on the Mac through
+`--recipe-script recipes/scripts/motion-light-dimmable.js`. It is `motion-light`'s behaviour for
+dimmable lights (`light_dimmable` or `light_color`), with a brightness.
+
+- **Settings**: those of `motion-light` (`zone`, `lights`, `timeout`, `luxThreshold`,
+  `maxOnDuration`, `buttons`, `disableWhenDaylight`), and `brightness` (1 to 254, the level when
+  no slot matches) and three time slots `slotNStart`, `slotNEnd` (`HH:MM`) and `slotNBrightness`
+  (all three or none).
+- **What it does**: motion in its zone switches its lights on, then sets their brightness to that
+  of the first slot that holds the time (a slot can pass midnight; `end` is excluded), else to
+  `brightness`; with no `brightness` nothing but the switch-on is sent. The time is the home's
+  (`now().localTime`, its time zone: the one adaptation of Sowel's behaviour, which reads the
+  server's clock). The brightness is chosen when the lights are switched on, not while they stay
+  on. The off timer, the lux threshold, the safety auto-off, the daylight rule, the buttons and
+  the override are `motion-light`'s (the echo window is 5 s); a brightness reported with the
+  lights on, other than the one sent and after the window, puts the instance in override.
+- **Validation texts** (Sowel's, in its order): those of `motion-light` for the zone, the lights
+  (`... requires light_dimmable or light_color`), the duration, `luxThreshold` and the buttons,
+  then `brightness must be between 1 and 254`, `Slot <n>: start, end, and brightness must all be
+  provided or all omitted`, `slot<n>Start must be in HH:MM format`, `slot<n>End must be in HH:MM
+  format`, `slot<n>Brightness must be between 1 and 254`.
+- **Bounds**: those of any script recipe; 4 instances use about 218 KB on the Mac.
+
 ### Runs script recipes
 
 A recipe can also be a **script**: one JavaScript text in Sowel's script-recipe format (Sowel's
@@ -924,7 +952,7 @@ same routes and from a room's page, with the same log, state and events.
   `motionSensors`); `onMotionReport(fn)` at each report of a motion sensor of the zone, which
   Sowel's draft does not have; `get(slot, alias)`; `order(slot, alias, value)`, to every enabled
   equipment of the slot, answering the ones refused; timers `after` (at least 100 ms), `every` (at
-  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (time, sun);
+  least 1 s), `at("HH:MM")` in the home's time zone, `cancel`, at most 16; `now()` (`time`, the home's time of day `localTime` as `HH:MM` in its time zone (UTC when it has none), and the sun);
   `state.set/get/delete` (at most 512 bytes, served as the instance's `state`); `log`, `log.warn`,
   `log.error`, `console.log` (at most 20 lines per call). It names equipments only through its
   slots: a call with another name answers `Unknown slot`, and a script has no way to reach an

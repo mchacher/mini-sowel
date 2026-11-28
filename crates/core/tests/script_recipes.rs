@@ -31,6 +31,7 @@ const TIMERS: &str = include_str!("fixtures/scripts/timers.js");
 const READS: &str = include_str!("fixtures/scripts/reads.js");
 const DEPTH: &str = include_str!("fixtures/scripts/depth.js");
 const SPIN: &str = include_str!("fixtures/scripts/spin.js");
+const LOCALTIME: &str = include_str!("fixtures/scripts/localtime.js");
 const GARBAGE: &str = include_str!("fixtures/scripts/garbage.js");
 
 // ---- Helpers ----
@@ -1307,6 +1308,34 @@ fn an_at_timer_waits_while_the_clock_is_not_set_and_follows_a_change_of_zone() {
     rig.advance(1000);
     assert_eq!(fired_at(&rig, &id), 1);
     let _ = SEVEN;
+}
+
+fn local_time_at(zone: Option<&str>, now: u64) -> String {
+    let (mut rig, _) = loaded(LOCALTIME);
+    if let Some(zone) = zone {
+        let (status, _) = rig.put("/api/v1/settings", json!({"home.timezone": zone}));
+        assert_eq!(status, 200);
+    }
+    rig.now = now;
+    let id = created(&mut rig, "localtime", json!({"zone": ROOT}));
+    rig.messages(&id)
+        .iter()
+        .find_map(|m| m.strip_prefix("local ").map(str::to_string))
+        .unwrap_or_default()
+}
+
+#[test]
+fn now_gives_the_homes_time_of_day_in_its_zone_across_the_day_boundary() {
+    let late = MIDNIGHT + 23 * HOUR + 30 * MINUTE;
+    // No zone set: UTC.
+    assert_eq!(local_time_at(None, late), "23:30");
+    // Paris is an hour ahead in November: the next day.
+    assert_eq!(local_time_at(Some("Europe/Paris"), late), "00:30");
+    // A zone behind UTC: the day before.
+    assert_eq!(
+        local_time_at(Some("America/New_York"), MIDNIGHT + 2 * HOUR + 5 * MINUTE),
+        "21:05"
+    );
 }
 
 // ---- state, log, errors ----

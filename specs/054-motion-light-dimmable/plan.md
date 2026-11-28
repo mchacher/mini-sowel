@@ -1,9 +1,9 @@
 # Plan: Spec 054
 
 ## Steps
-- [ ] 1. Living spec, roadmap (md and html).
-- [ ] 2. The script, from Sowel's source.
-- [ ] 3. Tests (info pinned, validation texts, the behaviour per slot, memory).
+- [x] 1. Living spec, roadmap (md and html).
+- [x] 2. The script, from Sowel's source.
+- [x] 3. Tests (info pinned, validation texts, the behaviour per slot, memory).
 - [ ] 4. validate; review.
 - [ ] 5. Signed, published in the catalogue, installed on the box.
 
